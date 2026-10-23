@@ -1,0 +1,23 @@
+# Build & test outputs
+**/bin/
+**/obj/
+.artifacts/
+TestResults/
+
+# IDE & OS files
+.vs/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+
+# Nightweaver runtime directories
+worktrees/
+logs/
+tmp/
+.scratch/
+
+# Beads (stealth mode + workspace gate locks)
+.beads/
+*.gate.lock*

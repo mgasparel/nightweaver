@@ -1,0 +1,3 @@
+# Beads-native Agent handoff and thin Orchestrator
+
+Instead of sandboxed JSON workers, local state file persistence, or `bd formula` sub-bead molecules, Nightweaver keeps the **Orchestrator** as a thin, stateless dispatcher while **Agents** (`Planner`, `Plan Challenger`, `Implementer`, `Reviewer`, `QA`, `Merger`) directly execute `bd`, `git`, and `gh` operations within their role boundaries. All workflow state, stage transitions (`stage:*` labels), and review/QA/merge findings live directly on the **Product Bead** and **Plan Bead** via `bd` labels and comments, enabling human observability in the tracker and crash-stateless recovery on startup without a separate local state store.

@@ -1,0 +1,3 @@
+# Two-tier Product and Plan Beads
+
+Instead of mutating a single Bead in place through triage labels (`needs-triage` -> `ready-for-agent`), Nightweaver separates user-authored **Product Beads** (`--type feature,bug`) from Planner-authored **Plan Beads** (`--type task`, linked back via `--deps discovered-from:<product-bead-id>`). This allows the **Planning** stage to keep user-facing requirement discussions and `product-decision-required` Q&A cleanly isolated on the Product Bead while decomposing large features into multiple independently deployable **Plan Beads** whose execution order (`blocks`) and parallel **Delivery** are natively managed by `bd ready`.
