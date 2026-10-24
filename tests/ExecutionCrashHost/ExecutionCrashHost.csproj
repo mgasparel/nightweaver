@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>ExecutionCrashHost</AssemblyName>
+    <RootNamespace>Nightweaver.Tests.ExecutionCrashHost</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Nightweaver/Nightweaver.csproj" />
+  </ItemGroup>
+</Project>

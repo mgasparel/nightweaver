@@ -1,6 +1,10 @@
 namespace Nightweaver;
 
-internal abstract class NightweaverException(string message) : Exception(message);
+internal abstract class NightweaverException : Exception
+{
+    protected NightweaverException(string message) : base(message) { }
+    protected NightweaverException(string message, Exception innerException) : base(message, innerException) { }
+}
 
 internal sealed class UsageException(string message) : NightweaverException(message);
 

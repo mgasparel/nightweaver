@@ -14,6 +14,8 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <ProjectReference Include="../../src/Nightweaver/Nightweaver.csproj" />
+    <ProjectReference Include="../AgentInvocationFixture/AgentInvocationFixture.csproj" />
+    <ProjectReference Include="../ExecutionCrashHost/ExecutionCrashHost.csproj" />
   </ItemGroup>
   <ItemGroup>
     <AssemblyMetadata Include="NightweaverAppDir" Value="$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../../src/Nightweaver/bin/$(Configuration)/net10.0'))" />
