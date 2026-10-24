@@ -99,6 +99,44 @@ public sealed class WorktreeProvisionerIntegrationTests
     }
 
     [Fact]
+    public async Task RetryResetFailureDoesNotRunGitCleanOrMutateTheWorktree()
+    {
+        using var fixture = new ProvisioningGitFixture();
+        var provisioned = await fixture.Provisioner().ProvisionAsync(fixture.Paths, fixture.Project, fixture.Repository,
+            fixture.BeadId, WorktreePurpose.Delivery, TestContext.Current.CancellationToken);
+        File.AppendAllText(Path.Combine(provisioned.Path, "README.md"), "dirty retry sentinel\n");
+        File.WriteAllText(Path.Combine(provisioned.Path, "retry-untracked.txt"), "preserve on reset failure");
+        var rootBefore = fixture.TargetCheckout();
+        var resetCalls = 0;
+        var systemRunner = new SystemProcessRunner();
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            if (request.FileName == "git" && request.Arguments.SequenceEqual(["reset", "--hard", "HEAD"]))
+            {
+                resetCalls++;
+                return new ProcessResult(73, "", "controlled retry reset failure");
+            }
+            return await systemRunner.RunAsync(request, token);
+        });
+
+        var exception = await Assert.ThrowsAsync<ToolExecutionException>(() => new WorktreeRetryResetter(runner).ResetAsync(
+            fixture.Paths, fixture.Project, fixture.Repository, fixture.BeadId, WorktreePurpose.Delivery,
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("git reset --hard HEAD", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("controlled retry reset failure", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(1, resetCalls);
+        Assert.DoesNotContain(runner.Requests, request => request.FileName == "git"
+            && request.Arguments.SequenceEqual(["clean", "-fd"]));
+        Assert.Contains(runner.Requests, request => request.FileName == "git"
+            && request.WorkingDirectory == provisioned.Path
+            && request.Arguments.SequenceEqual(["reset", "--hard", "HEAD"]));
+        Assert.Contains("dirty retry sentinel", File.ReadAllText(Path.Combine(provisioned.Path, "README.md")), StringComparison.Ordinal);
+        Assert.Equal("preserve on reset failure", File.ReadAllText(Path.Combine(provisioned.Path, "retry-untracked.txt")));
+        Assert.Equal(rootBefore, fixture.TargetCheckout());
+    }
+
+    [Fact]
     public async Task MissingDefaultFetchCannotReturnResultOrChangeRootCheckout()
     {
         using var fixture = new ProvisioningGitFixture();
