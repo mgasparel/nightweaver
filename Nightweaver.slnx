@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/Nightweaver/Nightweaver.csproj" />
+  <Project Path="tests/Nightweaver.Tests/Nightweaver.Tests.csproj" />
+</Solution>
