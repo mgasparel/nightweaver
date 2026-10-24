@@ -8,4 +8,12 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Nightweaver.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="../../prompts/planner.md" Link="prompts/planner.md" TargetPath="prompts/planner.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../prompts/plan-challenger.md" Link="prompts/plan-challenger.md" TargetPath="prompts/plan-challenger.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../prompts/implementer.md" Link="prompts/implementer.md" TargetPath="prompts/implementer.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../prompts/reviewer.md" Link="prompts/reviewer.md" TargetPath="prompts/reviewer.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../prompts/qa.md" Link="prompts/qa.md" TargetPath="prompts/qa.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../prompts/merger.md" Link="prompts/merger.md" TargetPath="prompts/merger.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

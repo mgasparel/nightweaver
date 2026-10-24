@@ -33,6 +33,8 @@ internal sealed class ProjectConfigurationException : NightweaverException
 
 internal sealed class TargetRepositoryException(string message) : NightweaverException(message);
 
+internal sealed class AgentInvocationPreparationException(string message) : NightweaverException(message);
+
 internal sealed class ToolExecutionException(string message, string? standardError = null) : NightweaverException(message)
 {
     internal string? StandardError { get; } = standardError;
