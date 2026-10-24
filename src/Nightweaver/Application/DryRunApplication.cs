@@ -29,7 +29,7 @@ internal static class DryRunApplication
         var expectedName = selector is ProjectSelector.BySlug bySlug ? bySlug.Slug : (ProjectSlug?)null;
         var config = ProjectConfigLoader.Load(configPath, expectedName, hostPaths);
         var repository = await new TargetRepositoryValidator(processRunner)
-            .ValidateAsync(config.TargetRepository, cancellationToken);
+            .ValidateAsync(config.TargetRepository, config.ConfigFilePath, cancellationToken);
 
         var header = new ProjectHeader(
             config.Name.Value,
@@ -41,7 +41,10 @@ internal static class DryRunApplication
             hostPaths.WorktreesRoot(config.Name),
             hostPaths.TmpRoot(config.Name),
             hostPaths.LogsRoot(config.Name));
-        var report = new DryRunReport(header);
+        var report = new DryRunReport(
+            header,
+            new ConfigurationSection(config.Concurrency, config.Limits),
+            new AgentRolesSection(config.AgentDefaults, config.Roles));
         environment.Out.Write(DryRunReportWriter.Render(report));
     }
 }

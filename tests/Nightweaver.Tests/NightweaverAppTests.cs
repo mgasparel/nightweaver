@@ -73,6 +73,65 @@ public sealed class NightweaverAppTests
     }
 
     [Fact]
+    public async Task InvalidSchemaReportsEveryErrorInDocumentOrderBeforeGitRuns()
+    {
+        using var temp = new TempDirectory();
+        var host = temp.CreateDirectory("host");
+        var caller = temp.CreateDirectory("caller");
+        var config = temp.WriteFile("broken.json", """
+            {"name":"demo","concurrency":{"unknown":1,"max_concurrent_planning":0},"agent_defaults":{"cli":"gemini","timeout_minutes":0},"target_repository":{"path":"missing","default_branch":"main"}}
+            """);
+        var runner = new RecordingProcessRunner((_, _) => throw new InvalidOperationException("invalid config must not launch a tool"));
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var code = await NightweaverApp.RunAsync(
+            ["--config", config, "--dry-run"],
+            CreateAppEnvironment(host, caller, output, error),
+            runner,
+            CancellationToken.None);
+
+        Assert.Equal(2, code);
+        Assert.Equal(string.Empty, output.ToString());
+        var lines = error.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(4, lines.Length);
+        Assert.Equal(
+            ["$.concurrency.unknown", "$.concurrency.max_concurrent_planning", "$.agent_defaults.cli", "$.agent_defaults.timeout_minutes"],
+            lines.Select(line => line.Split(": ", StringSplitOptions.None)[3]));
+        Assert.All(lines, line => Assert.StartsWith($"nightweaver: error: {Path.GetFullPath(config)}: ", line, StringComparison.Ordinal));
+        Assert.Empty(runner.Requests);
+    }
+
+    [Fact]
+    public async Task InvalidDefaultBranchLaunchesGitAndReportsAConfigurationError()
+    {
+        using var temp = new TempDirectory();
+        var host = temp.CreateDirectory("host");
+        var caller = temp.CreateDirectory("caller");
+        var config = temp.WriteFile("project.json", JsonSerializer.Serialize(new
+        {
+            name = "demo",
+            target_repository = new { path = Path.Combine(temp.Path, "missing repository"), default_branch = "bad..branch" }
+        }));
+        var runner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(1, string.Empty, "invalid branch name")));
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var code = await NightweaverApp.RunAsync(
+            ["--config", config, "--dry-run"],
+            CreateAppEnvironment(host, caller, output, error),
+            runner,
+            CancellationToken.None);
+
+        Assert.Equal(2, code);
+        Assert.Equal(string.Empty, output.ToString());
+        Assert.Contains($"{Path.GetFullPath(config)}: $.target_repository.default_branch: 'bad..branch' is not a valid Git branch name", error.ToString(), StringComparison.Ordinal);
+        var request = Assert.Single(runner.Requests);
+        Assert.Equal(["check-ref-format", "--branch", "bad..branch"], request.Arguments);
+        Assert.Equal(Path.GetTempPath(), request.WorkingDirectory);
+    }
+
+    [Fact]
     public async Task TargetRepositoryGitFailureMapsToInspectionExitCodeAndKeepsStdoutEmpty()
     {
         using var temp = new TempDirectory();
@@ -84,7 +143,10 @@ public sealed class NightweaverAppTests
             name = "demo",
             target_repository = new { path = plainDirectory }
         }));
-        var runner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(128, string.Empty, "fatal: not a git repository\n")));
+        var runner = new RecordingProcessRunner((request, _) => Task.FromResult(
+            request.Arguments.Contains("check-ref-format")
+                ? new ProcessResult(0, string.Empty, string.Empty)
+                : new ProcessResult(128, string.Empty, "fatal: not a git repository\n")));
         var output = new StringWriter();
         var error = new StringWriter();
 
@@ -94,7 +156,9 @@ public sealed class NightweaverAppTests
         Assert.Equal(string.Empty, output.ToString());
         Assert.Contains("is not a Git working tree", error.ToString(), StringComparison.Ordinal);
         Assert.Contains("fatal: not a git repository", error.ToString(), StringComparison.Ordinal);
-        Assert.Single(runner.Requests);
+        Assert.Equal(2, runner.Requests.Count);
+        Assert.Contains("check-ref-format", runner.Requests[0].Arguments);
+        Assert.Contains("rev-parse", runner.Requests[1].Arguments);
     }
 
     [Fact]
@@ -125,7 +189,23 @@ public sealed class NightweaverAppTests
             "  recovery_actor: nightweaver:demo\n" +
             $"  worktrees_dir: {Path.Combine(host, "worktrees", "demo")}\n" +
             $"  tmp_dir: {Path.Combine(host, "tmp", "demo")}\n" +
-            $"  logs_dir: {Path.Combine(host, "logs", "demo")}\n";
+            $"  logs_dir: {Path.Combine(host, "logs", "demo")}\n" +
+            "\nConfiguration\n" +
+            "  max_concurrent_planning: 2\n" +
+            "  max_concurrent_delivery: 3\n" +
+            "  merger_slots: 1\n" +
+            "  max_active_plan_beads: 5\n" +
+            "  max_repair_cycles: 3\n" +
+            "  max_operational_retries: 2\n" +
+            "\nAgent roles\n" +
+            "  agent_defaults: cli=claude model=(agent-cli-default) effort=high timeout_minutes=30\n" +
+            "  planner: cli=claude model=(agent-cli-default) effort=high timeout_minutes=30\n" +
+            "  plan_challenger: cli=claude model=(agent-cli-default) effort=high timeout_minutes=30\n" +
+            "  implementer: cli=claude model=(agent-cli-default) effort=high timeout_minutes=30\n" +
+            "  reviewer: cli=claude model=(agent-cli-default) effort=high timeout_minutes=30\n" +
+            "  qa: cli=claude model=(agent-cli-default) effort=high timeout_minutes=30\n" +
+            "  merger: cli=claude model=(agent-cli-default) effort=high timeout_minutes=30\n" +
+            "  classifier: cli=claude model=(agent-cli-default) effort=high timeout_minutes=30\n";
 
         Assert.Equal(0, firstCode);
         Assert.Equal(0, secondCode);
@@ -133,13 +213,58 @@ public sealed class NightweaverAppTests
         Assert.Equal(expected, secondOutput.ToString());
         Assert.Equal(string.Empty, firstError.ToString());
         Assert.Equal(string.Empty, secondError.ToString());
-        Assert.Equal(2, runner.Requests.Count);
-        Assert.All(runner.Requests, request =>
+        Assert.Equal(4, runner.Requests.Count);
+        Assert.All(runner.Requests, request => Assert.Equal("git", request.FileName));
+        Assert.Equal(2, runner.Requests.Count(request => request.Arguments.Contains("check-ref-format")));
+        Assert.Equal(2, runner.Requests.Count(request => request.Arguments.Contains("rev-parse")));
+        Assert.All(runner.Requests, request => Assert.Equal("0", request.Environment["GIT_OPTIONAL_LOCKS"]));
+    }
+
+    [Fact]
+    public async Task DryRunPrintsResolvedRoleSettingsInCanonicalOrder()
+    {
+        using var temp = new TempDirectory();
+        using var repository = new GitFixture();
+        var host = temp.CreateDirectory("host");
+        var caller = temp.CreateDirectory("caller");
+        var configPath = Path.Combine(host, "projects", "demo.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+        File.WriteAllText(configPath, JsonSerializer.Serialize(new
         {
-            Assert.Equal("git", request.FileName);
-            Assert.Contains("rev-parse", request.Arguments);
-            Assert.Equal("0", request.Environment["GIT_OPTIONAL_LOCKS"]);
-        });
+            name = "demo",
+            target_repository = new { path = repository.Path },
+            agent_defaults = new { cli = "codex", model = "base-model", effort = "low", timeout_minutes = 12 },
+            roles = new
+            {
+                plan_challenger = new { cli = "claude", model = (string?)null, timeout_minutes = 20 },
+                classifier = new { effort = "high" }
+            }
+        }));
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var runner = new RecordingProcessRunner((request, token) => new SystemProcessRunner().RunAsync(request, token));
+
+        var code = await NightweaverApp.RunAsync(
+            ["--project", "demo", "--dry-run"],
+            CreateAppEnvironment(host, caller, output, error),
+            runner,
+            CancellationToken.None);
+
+        Assert.Equal(0, code);
+        Assert.Equal(string.Empty, error.ToString());
+        var marker = output.ToString().IndexOf("\nAgent roles\n", StringComparison.Ordinal);
+        Assert.True(marker >= 0);
+        Assert.Equal(
+            "\nAgent roles\n" +
+            "  agent_defaults: cli=codex model=base-model effort=low timeout_minutes=12\n" +
+            "  planner: cli=codex model=base-model effort=low timeout_minutes=12\n" +
+            "  plan_challenger: cli=claude model=(agent-cli-default) effort=low timeout_minutes=20\n" +
+            "  implementer: cli=codex model=base-model effort=low timeout_minutes=12\n" +
+            "  reviewer: cli=codex model=base-model effort=low timeout_minutes=12\n" +
+            "  qa: cli=codex model=base-model effort=low timeout_minutes=12\n" +
+            "  merger: cli=codex model=base-model effort=low timeout_minutes=12\n" +
+            "  classifier: cli=codex model=base-model effort=high timeout_minutes=12\n",
+            output.ToString()[marker..]);
     }
 
     [Fact]

@@ -23,7 +23,7 @@ public sealed class ProjectConfigLoaderTests
     }
 
     [Fact]
-    public void LoaderPreservesExplicitBranchAndIgnoresLaterConfigurationSections()
+    public void LoaderPreservesExplicitBranchAndLoadsLaterConfigurationSections()
     {
         using var temp = new TempDirectory();
         var host = temp.CreateDirectory("host");
@@ -42,6 +42,14 @@ public sealed class ProjectConfigLoaderTests
 
         Assert.Equal(repository, config.TargetRepository.Path);
         Assert.Equal("release/test", config.TargetRepository.DefaultBranch);
+        Assert.Equal(2, config.Concurrency.MaxConcurrentPlanning);
+        Assert.Equal(3, config.Concurrency.MaxConcurrentDelivery);
+        Assert.Equal(5, config.Concurrency.MaxActivePlanBeads);
+        Assert.Equal(3, config.Limits.MaxRepairCycles);
+        Assert.Equal(2, config.Limits.MaxOperationalRetries);
+        Assert.Equal(AgentCli.Claude, config.AgentDefaults.Cli);
+        Assert.Equal("high", config.Roles[AgentRole.Planner].Effort);
+        Assert.Equal(7, config.Roles.InCanonicalOrder().Count());
     }
 
     [Fact]

@@ -32,14 +32,17 @@ internal static class NightweaverApp
         }
         catch (ProjectConfigurationException exception)
         {
-            var parts = new List<string> { exception.ConfigFilePath };
-            if (!string.IsNullOrEmpty(exception.JsonPath))
+            foreach (var error in exception.Errors)
             {
-                parts.Add(exception.JsonPath);
-            }
+                var parts = new List<string> { exception.ConfigFilePath };
+                if (!string.IsNullOrEmpty(error.JsonPath))
+                {
+                    parts.Add(error.JsonPath);
+                }
 
-            parts.Add(exception.Message);
-            environment.Err.WriteLine($"nightweaver: error: {string.Join(": ", parts)}");
+                parts.Add(error.Message);
+                environment.Err.WriteLine($"nightweaver: error: {string.Join(": ", parts)}");
+            }
             return ExitCodes.UsageOrConfiguration;
         }
         catch (TargetRepositoryException exception)

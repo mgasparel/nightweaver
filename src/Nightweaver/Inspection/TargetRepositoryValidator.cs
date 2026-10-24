@@ -6,9 +6,22 @@ internal sealed class TargetRepositoryValidator(IProcessRunner processRunner)
 {
     internal async Task<ValidatedTargetRepository> ValidateAsync(
         TargetRepositoryConfig targetRepository,
+        string configFilePath,
         CancellationToken cancellationToken)
     {
         var path = targetRepository.Path;
+        var branchCheck = GitCommand.Create(
+            ["check-ref-format", "--branch", targetRepository.DefaultBranch],
+            Path.GetTempPath());
+        var branchResult = await processRunner.RunAsync(branchCheck, cancellationToken);
+        if (branchResult.ExitCode != 0)
+        {
+            throw new ProjectConfigurationException(
+                $"'{targetRepository.DefaultBranch}' is not a valid Git branch name",
+                "$.target_repository.default_branch",
+                configFilePath);
+        }
+
         if (!Directory.Exists(path))
         {
             throw new TargetRepositoryException($"Target Repository path does not exist or is not a directory: {path}");

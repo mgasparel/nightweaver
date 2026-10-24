@@ -1,3 +1,9 @@
+using Nightweaver.Configuration;
+
 namespace Nightweaver.Reporting;
 
-internal sealed record DryRunReport(ProjectHeader Project);
+internal sealed record ConfigurationSection(ConcurrencyConfig Concurrency, LimitsConfig Limits);
+
+internal sealed record AgentRolesSection(AgentSettings AgentDefaults, RoleSettings Roles);
+
+internal sealed record DryRunReport(ProjectHeader Project, ConfigurationSection Configuration, AgentRolesSection AgentRoles);
