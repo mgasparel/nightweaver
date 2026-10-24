@@ -74,5 +74,13 @@ public sealed class BeadsInspectionTests
         Assert.Null(minimal.Assignee);
         Assert.Empty(minimal.Labels);
     }
+
+    [Fact]
+    public void ParsesUpDependencyRowsFromTheQueriedProductTowardDependentTasks()
+    {
+        using var document = JsonDocument.Parse("[{\"id\":\"task-child\",\"dependency_type\":\"discovered-from\",\"title\":\"Plan task\"}]");
+        var dependencies = BeadsReader.ParseUpDependencies(document.RootElement, "product");
+        Assert.Equal([new Execution.BeadDependency("task-child", "product", "discovered-from")], dependencies);
+    }
 }
 

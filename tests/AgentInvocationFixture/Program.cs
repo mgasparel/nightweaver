@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Diagnostics;
 
 namespace Nightweaver.Tests.AgentInvocationFixture;
 
@@ -14,6 +15,8 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        var stageAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION");
+        if (stageAction is not null) return RunStageAction(stageAction);
         if (args.Length == 0) return 64;
         switch (args[0])
         {
@@ -89,6 +92,119 @@ internal static class Program
             default:
                 return 66;
         }
+    }
+
+    private static int RunStageAction(string action)
+    {
+        Console.OpenStandardInput().CopyTo(Stream.Null);
+        var beadId = Environment.GetEnvironmentVariable("NIGHTWEAVER_BEAD_ID")
+            ?? throw new InvalidOperationException("NIGHTWEAVER_BEAD_ID is missing.");
+        var pidPath = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE");
+        if (!string.IsNullOrWhiteSpace(pidPath)) File.WriteAllText(pidPath, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        switch (action)
+        {
+            case "plan-challenge":
+                UpdateLabels(beadId, "stage:plan", "stage:plan-challenge");
+                break;
+            case "plan-commit":
+                UpdateLabels(beadId, "stage:plan", "stage:plan-challenge");
+                Run("git", ["commit", "--allow-empty", "-m", "fixture read-only mutation"]);
+                break;
+            case "challenge-commit":
+                UpdateLabels(beadId, "stage:plan-challenge", "stage:plan-approved");
+                Run("git", ["commit", "--allow-empty", "-m", "fixture read-only mutation"]);
+                break;
+            case "challenge":
+                UpdateLabels(beadId, "stage:plan-challenge", "stage:plan-approved");
+                break;
+            case "planned-materialization":
+            {
+                using var created = JsonDocument.Parse(Run("bd", ["create", "--title", "Fixture plan bead", "--type", "task", "--json"]));
+                var childId = created.RootElement.GetProperty("id").GetString()!;
+                Run("bd", ["dep", "add", childId, beadId, "--type", "discovered-from"]);
+                UpdateLabels(beadId, "stage:plan-approved", "planned");
+                break;
+            }
+            case "review":
+                UpdateLabels(beadId, "stage:implement", "stage:review");
+                break;
+            case "review-nonzero":
+                UpdateLabels(beadId, "stage:implement", "stage:review");
+                Console.WriteLine("fixture returned a nonzero exit after a legal Bead transition");
+                return 19;
+            case "review-dirty":
+                UpdateLabels(beadId, "stage:implement", "stage:review");
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "fixture-dirty.txt"), "dirty\n");
+                break;
+            case "review-commit":
+                UpdateLabels(beadId, "stage:implement", "stage:review");
+                Run("git", ["commit", "--allow-empty", "-m", "fixture read-only mutation"]);
+                break;
+            case "review-qa-commit":
+                UpdateLabels(beadId, "stage:review", "stage:qa");
+                Run("git", ["commit", "--allow-empty", "-m", "fixture read-only mutation"]);
+                break;
+            case "review-qa":
+                UpdateLabels(beadId, "stage:review", "stage:qa");
+                break;
+            case "qa-merge-commit":
+                UpdateLabels(beadId, "stage:qa", "stage:merge");
+                Run("git", ["commit", "--allow-empty", "-m", "fixture read-only mutation"]);
+                break;
+            case "qa-merge":
+                UpdateLabels(beadId, "stage:qa", "stage:merge");
+                break;
+            case "reject-without-increment":
+                UpdateLabels(beadId, "stage:review", "stage:implement");
+                break;
+            case "reject-with-increment":
+                Run("bd", ["update", beadId, "--remove-label", "stage:review", "--add-label", "stage:implement", "--set-metadata", "repair_cycles=1"]);
+                break;
+            case "noop":
+                break;
+            case "timeout":
+                Console.WriteLine("fixture waiting for executor timeout");
+                Console.Out.Flush();
+                while (true) Thread.Sleep(1000);
+            case "close":
+                Run("bd", ["close", beadId]);
+                break;
+            case "close-commit":
+                Run("git", ["commit", "--allow-empty", "-m", "fixture Merger commit"]);
+                Run("bd", ["close", beadId]);
+                break;
+            default:
+                throw new InvalidOperationException($"Unknown fixture Agent action '{action}'.");
+        }
+
+        Console.WriteLine($"fixture action completed: {action}");
+        return 0;
+    }
+
+    private static void UpdateLabels(string beadId, string oldLabel, string newLabel) =>
+        Run("bd", ["update", beadId, "--remove-label", oldLabel, "--add-label", newLabel]);
+
+    private static string Run(string fileName, IReadOnlyList<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            WorkingDirectory = Environment.CurrentDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start '{fileName}'.");
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        process.WaitForExit();
+        Task.WaitAll(stdoutTask, stderrTask);
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"{fileName} {string.Join(' ', arguments)} exited {process.ExitCode}: {stderrTask.Result}{stdoutTask.Result}");
+        return stdoutTask.Result;
     }
 
     private static void SpawnProcess(string mode, params string[] arguments)

@@ -39,6 +39,15 @@ internal sealed class TargetRepositoryException(string message) : NightweaverExc
 
 internal sealed class AgentInvocationPreparationException(string message) : NightweaverException(message);
 
+internal sealed class AgentStageInputException(string message) : NightweaverException(message);
+
+internal sealed class AgentPostExitVerificationException(string invocationId, string logFilePath, string message)
+    : NightweaverException($"Agent invocation '{invocationId}' (log '{logFilePath}') could not be fully verified: {message}")
+{
+    internal string InvocationId { get; } = invocationId;
+    internal string LogFilePath { get; } = logFilePath;
+}
+
 internal sealed class ToolExecutionException(string message, string? standardError = null) : NightweaverException(message)
 {
     internal string? StandardError { get; } = standardError;

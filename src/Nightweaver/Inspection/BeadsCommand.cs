@@ -17,6 +17,9 @@ internal static class BeadsCommand
     internal static ProcessRequest CreateRecoverableReadiness(string workingDirectory, string recoveryActor)
         => Create(workingDirectory, ["--readonly", "--sandbox", "list", "--ready", "--status", "in_progress", "--assignee", recoveryActor, "--limit", "0", "--json"]);
 
+    internal static ProcessRequest CreateUpDependencies(string workingDirectory, string beadId)
+        => Create(workingDirectory, ["--readonly", "--sandbox", "dep", "list", beadId, "--direction", "up", "--json"]);
+
     private static ProcessRequest Create(string workingDirectory, IReadOnlyList<string> arguments)
     {
         var environment = new Dictionary<string, string?>(GitCommand.Create([], workingDirectory).Environment, StringComparer.OrdinalIgnoreCase);

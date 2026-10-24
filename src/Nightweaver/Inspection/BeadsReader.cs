@@ -176,4 +176,61 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         return new BeadsInventory(beads);
     }
 
+    internal async Task<IReadOnlyList<Execution.BeadDependency>> ReadUpDependenciesAsync(
+        ValidatedTargetRepository repository,
+        string beadId,
+        CancellationToken cancellationToken)
+    {
+        var context = $"bd --readonly --sandbox dep list '{beadId}' --direction up in Target Repository '{repository.Path}'";
+        var json = await RunQueryAsync(repository, BeadsCommand.CreateUpDependencies(repository.Path, beadId), context, cancellationToken);
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                throw new JsonException("$: expected an array");
+
+            return ParseUpDependencies(document.RootElement, beadId);
+        }
+        catch (JsonException exception)
+        {
+            throw new ToolExecutionException($"{context}: incompatible or malformed bd dependency JSON: {exception.Message}");
+        }
+    }
+
+    internal static IReadOnlyList<Execution.BeadDependency> ParseUpDependencies(JsonElement root, string beadId)
+    {
+        if (root.ValueKind != JsonValueKind.Array) throw new JsonException("$: expected an array");
+        var dependencies = new List<Execution.BeadDependency>();
+        var row = 0;
+        foreach (var item in root.EnumerateArray())
+        {
+            var path = $"$[{row++}]";
+            if (item.ValueKind != JsonValueKind.Object) throw new JsonException($"{path}: expected an object");
+            var values = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var property in item.EnumerateObject())
+            {
+                if (property.Name is not ("issue_id" or "depends_on_id" or "type" or "id" or "dependency_type")) continue;
+                if (!values.TryAdd(property.Name, property.Value.ValueKind == JsonValueKind.String
+                        ? property.Value.GetString()! : throw new JsonException($"{path}.{property.Name}: expected a string")))
+                    throw new JsonException($"{path}.{property.Name}: duplicate property");
+            }
+
+            if (values.TryGetValue("issue_id", out var issueId))
+            {
+                if (!values.TryGetValue("depends_on_id", out var dependsOnId) || !values.TryGetValue("type", out var type))
+                    throw new JsonException($"{path}: edge row must include depends_on_id and type");
+                dependencies.Add(new Execution.BeadDependency(issueId, dependsOnId, type));
+                continue;
+            }
+
+            if (!values.TryGetValue("id", out var dependentId) || !values.TryGetValue("dependency_type", out var dependencyType))
+                throw new JsonException($"{path}: bd dep list row must include id and dependency_type");
+            dependencies.Add(new Execution.BeadDependency(dependentId, beadId, dependencyType));
+        }
+        if (dependencies.Any(dependency => string.IsNullOrWhiteSpace(dependency.IssueId)
+            || string.IsNullOrWhiteSpace(dependency.DependsOnId) || string.IsNullOrWhiteSpace(dependency.Type)))
+            throw new JsonException("$: dependency fields must be nonblank strings");
+        return dependencies.AsReadOnly();
+    }
+
 }
