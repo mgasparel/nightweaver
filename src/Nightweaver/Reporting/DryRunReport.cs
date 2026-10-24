@@ -8,4 +8,4 @@ internal sealed record ConfigurationSection(ConcurrencyConfig Concurrency, Limit
 internal sealed record AgentRolesSection(AgentSettings AgentDefaults, RoleSettings Roles);
 
 internal sealed record DryRunReport(ProjectHeader Project, ConfigurationSection Configuration, AgentRolesSection AgentRoles,
-    StartupPlan StartupPlan, PlanningPoolPlan PlanningPoolPlan);
+    StartupPlan StartupPlan, PlanningPoolPlan PlanningPoolPlan, DeliveryDiscoveryPlan DeliveryDiscoveryPlan);

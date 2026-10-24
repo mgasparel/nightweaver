@@ -169,6 +169,7 @@ public sealed class NightweaverAppTests
         var host = temp.CreateDirectory("nightweaver host");
         var caller = temp.CreateDirectory("unrelated caller");
         var configPath = WriteProjectConfig(host, "demo", repository.Path);
+        var control = BeadsReader.Parse(repository.Run("bd", BeadsCommand.Create(repository.Path).Arguments)).ById[repository.ControlBeadId];
         var runner = new RecordingProcessRunner((request, token) => new SystemProcessRunner().RunAsync(request, token));
 
         var firstOutput = new StringWriter();
@@ -193,6 +194,8 @@ public sealed class NightweaverAppTests
             "\nStartup claim releases (hypothetical)\n  (none)\n\nWorktree removals (hypothetical)\n  (none)\n\nRetained worktrees\n  (none)\n\nOrphan tmp deletions (hypothetical)\n  (none)\n\nStartup diagnostics\n  (none)\n" +
             "\nActive Plan Beads\n  count: 1\n  threshold: 5\n  backpressure: inactive\n  backpressure_reason: none\n" +
             "\nPlanning selected\n  (none)\n\nPlanning waiting\n  (none)\n\nPlanning excluded diagnostics\n  (none)\n" +
+            $"\nDelivery selected (capacity=3)\n  rank=1 {JsonSerializer.Serialize(control.Id)}; role=implementer; priority={control.Priority}; created_at={JsonSerializer.Serialize(control.CreatedAt.ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture))}; source=native_unassigned_ready\n" +
+            "\nDelivery waiting\n  (none)\n\nMerger selected (capacity=1)\n  (none)\n\nMerger waiting\n  (none)\n\nDelivery and Merger excluded task-stage diagnostics\n  (none)\n" +
             "\nConfiguration\n" +
             "  max_concurrent_planning: 2\n" +
             "  max_concurrent_delivery: 3\n" +
