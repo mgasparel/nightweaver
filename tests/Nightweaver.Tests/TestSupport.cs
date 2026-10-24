@@ -174,3 +174,49 @@ internal static class Snapshot
         return stdout;
     }
 }
+
+// A real, isolated embedded Dolt tracker. Setup writes are outside measured runs.
+internal sealed class BeadsFixture : IDisposable
+{
+    private readonly TempDirectory temp = new();
+    internal string Path { get; }
+    internal IReadOnlyDictionary<string, string?> Environment { get; }
+
+    internal BeadsFixture(string relativePath = "repo")
+    {
+        Path = temp.CreateDirectory(relativePath);
+        var home = temp.CreateDirectory("isolated user");
+        var environment = new Dictionary<string, string?>(BeadsCommand.Create(Path).Environment)
+        {
+            ["HOME"] = home, ["USERPROFILE"] = home, ["APPDATA"] = home, ["XDG_CONFIG_HOME"] = home,
+            ["GIT_CONFIG_GLOBAL"] = System.IO.Path.Combine(home, "gitconfig"), ["GIT_CONFIG_NOSYSTEM"] = "1",
+            ["GIT_AUTHOR_NAME"] = "Fixture", ["GIT_AUTHOR_EMAIL"] = "fixture@example.invalid",
+            ["GIT_COMMITTER_NAME"] = "Fixture", ["GIT_COMMITTER_EMAIL"] = "fixture@example.invalid"
+        };
+        Environment = environment;
+        Run("git", ["init", "-b", "main"]);
+        Run("bd", ["init", "--prefix", "fixture", "--non-interactive", "--skip-agents", "--skip-hooks"]);
+        // A genuine fixture write establishes bd's physical-root gate, which init
+        // alone omits. Production refuses such unprepared trackers without writes.
+        Create("Fixture control");
+    }
+
+    internal string Run(string tool, IReadOnlyList<string> args)
+    {
+        var result = new SystemProcessRunner().RunAsync(new ProcessRequest(tool, args, Path, Environment, TimeSpan.FromSeconds(30)), CancellationToken.None).GetAwaiter().GetResult();
+        if (result.ExitCode != 0) throw new InvalidOperationException($"Required real-tool fixture prerequisite {tool} failed: {result.StandardError}");
+        return result.StandardOutput;
+    }
+
+    internal string Create(string title, string? actor = null, string status = "open", string type = "task")
+    {
+        var args = new List<string> { "create", "--title", title, "--type", type, "--json" };
+        if (actor is not null) { args.Add("--assignee"); args.Add(actor); }
+        using var document = System.Text.Json.JsonDocument.Parse(Run("bd", args));
+        var id = document.RootElement.GetProperty("id").GetString()!;
+        if (status != "open") Run("bd", ["update", id, "--status", status]);
+        return id;
+    }
+
+    public void Dispose() => temp.Dispose();
+}

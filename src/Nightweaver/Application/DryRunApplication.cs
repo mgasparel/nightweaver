@@ -2,6 +2,7 @@ using Nightweaver.Cli;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 using Nightweaver.Reporting;
+using Nightweaver.Planning;
 
 namespace Nightweaver.Application;
 
@@ -31,6 +32,9 @@ internal static class DryRunApplication
         var repository = await new TargetRepositoryValidator(processRunner)
             .ValidateAsync(config.TargetRepository, config.ConfigFilePath, cancellationToken);
 
+        var inventory = await new BeadsReader(processRunner).ReadSnapshotAsync(repository, cancellationToken);
+        var startupPlan = StartupPlanner.Plan(config.RecoveryActor, inventory);
+
         var header = new ProjectHeader(
             config.Name.Value,
             config.ConfigFilePath,
@@ -44,7 +48,7 @@ internal static class DryRunApplication
         var report = new DryRunReport(
             header,
             new ConfigurationSection(config.Concurrency, config.Limits),
-            new AgentRolesSection(config.AgentDefaults, config.Roles));
+            new AgentRolesSection(config.AgentDefaults, config.Roles), startupPlan);
         environment.Out.Write(DryRunReportWriter.Render(report));
     }
 }

@@ -165,7 +165,7 @@ public sealed class NightweaverAppTests
     public async Task DryRunWritesTheExactHeaderAndIsByteStable()
     {
         using var temp = new TempDirectory();
-        using var repository = new GitFixture("repo with spaces");
+        using var repository = new BeadsFixture("repo with spaces");
         var host = temp.CreateDirectory("nightweaver host");
         var caller = temp.CreateDirectory("unrelated caller");
         var configPath = WriteProjectConfig(host, "demo", repository.Path);
@@ -190,6 +190,7 @@ public sealed class NightweaverAppTests
             $"  worktrees_dir: {Path.Combine(host, "worktrees", "demo")}\n" +
             $"  tmp_dir: {Path.Combine(host, "tmp", "demo")}\n" +
             $"  logs_dir: {Path.Combine(host, "logs", "demo")}\n" +
+            "\nStartup claim releases (hypothetical)\n  (none)\n\nStartup diagnostics\n  (none)\n" +
             "\nConfiguration\n" +
             "  max_concurrent_planning: 2\n" +
             "  max_concurrent_delivery: 3\n" +
@@ -213,8 +214,8 @@ public sealed class NightweaverAppTests
         Assert.Equal(expected, secondOutput.ToString());
         Assert.Equal(string.Empty, firstError.ToString());
         Assert.Equal(string.Empty, secondError.ToString());
-        Assert.Equal(4, runner.Requests.Count);
-        Assert.All(runner.Requests, request => Assert.Equal("git", request.FileName));
+        Assert.Equal(6, runner.Requests.Count);
+        Assert.Equal(2, runner.Requests.Count(request => request.FileName == "bd"));
         Assert.Equal(2, runner.Requests.Count(request => request.Arguments.Contains("check-ref-format")));
         Assert.Equal(2, runner.Requests.Count(request => request.Arguments.Contains("rev-parse")));
         Assert.All(runner.Requests, request => Assert.Equal("0", request.Environment["GIT_OPTIONAL_LOCKS"]));
@@ -224,7 +225,7 @@ public sealed class NightweaverAppTests
     public async Task DryRunPrintsResolvedRoleSettingsInCanonicalOrder()
     {
         using var temp = new TempDirectory();
-        using var repository = new GitFixture();
+        using var repository = new BeadsFixture();
         var host = temp.CreateDirectory("host");
         var caller = temp.CreateDirectory("caller");
         var configPath = Path.Combine(host, "projects", "demo.json");
@@ -271,7 +272,7 @@ public sealed class NightweaverAppTests
     public async Task DryRunAndFailureLeaveHostAndTargetFilesystemsUnchanged()
     {
         using var temp = new TempDirectory();
-        using var repository = new GitFixture();
+        using var repository = new BeadsFixture();
         var host = temp.CreateDirectory("host");
         var caller = temp.CreateDirectory("caller");
         WriteProjectConfig(host, "demo", repository.Path);
@@ -322,7 +323,7 @@ public sealed class NightweaverAppTests
         }
 
         using var temp = new TempDirectory();
-        using var repository = new GitFixture("repo with spaces");
+        using var repository = new BeadsFixture("repo with spaces");
         var host = temp.CreateDirectory("copied apphost");
         var caller = temp.CreateDirectory("unrelated caller");
         var appDirectory = GetNightweaverAppDirectory();

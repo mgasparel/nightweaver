@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using Nightweaver.Planning;
 using System.Globalization;
 using Nightweaver.Configuration;
 
@@ -21,6 +23,25 @@ internal static class DryRunReportWriter
         AppendField(builder, "worktrees_dir", project.WorktreesDirectory);
         AppendField(builder, "tmp_dir", project.TmpDirectory);
         AppendField(builder, "logs_dir", project.LogsDirectory);
+
+        builder.Append("\nStartup claim releases (hypothetical)\n");
+        if (report.StartupPlan.Releases.Count == 0) builder.Append("  (none)\n");
+        foreach (var release in report.StartupPlan.Releases)
+        {
+            builder.Append("  ").Append(JsonSerializer.Serialize(release.BeadId)).Append(": in_progress -> open; assignee ")
+                .Append(JsonSerializer.Serialize(release.ExpectedAssignee)).Append(" -> unassigned\n");
+        }
+        builder.Append("\nStartup diagnostics\n");
+        if (report.StartupPlan.Diagnostics.Count == 0) builder.Append("  (none)\n");
+        foreach (var diagnostic in report.StartupPlan.Diagnostics)
+        {
+            builder.Append("  ").Append(JsonSerializer.Serialize(diagnostic.BeadId)).Append(": ");
+            if (diagnostic.Code == StartupDiagnosticCode.ForeignInProgressClaim)
+                builder.Append("foreign_in_progress_claim; assignee ").Append(JsonSerializer.Serialize(diagnostic.Assignee));
+            else
+                builder.Append("unassigned_in_progress_claim");
+            builder.Append('\n');
+        }
 
         builder.Append('\n').Append("Configuration\n");
         AppendField(builder, "max_concurrent_planning", report.Configuration.Concurrency.MaxConcurrentPlanning.ToString(CultureInfo.InvariantCulture));

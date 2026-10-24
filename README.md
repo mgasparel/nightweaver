@@ -10,3 +10,9 @@ Nightweaver is a standalone, discovery-driven autonomous software factory. It mo
 - **[Glossary](GLOSSARY.md)**: Canonical domain vocabulary.
 - **[Architecture Decision Records](docs/adr/)**: Recorded design decisions and trade-offs.
 - **[Agent Guidelines](AGENTS.md)**: Repository instructions for AI agents and contributors.
+
+## Current dry-run support
+
+`nightweaver (--project <slug> | --config <path>) --dry-run` reads the complete bd inventory and reports hypothetical startup claim releases plus foreign or unassigned `in_progress` claims. It performs no releases.
+
+Inspection is verified with bd 1.3.1 and a local embedded Dolt tracker. Other backend layouts fail explicitly. A freshly initialized tracker may lack bd's persistent gate-lock files; complete tracker setup outside dry-run before inspection. Nightweaver refuses unprepared trackers because even a strict read would create those files. Git and bd must be on PATH.
