@@ -10,6 +10,7 @@ internal delegate Task<OperationalRetryOutcome> DeliveryRoleRunner(
     string beadId,
     AgentRole role,
     string expectedAssignee,
+    BeadWorkflowState expectedState,
     CancellationToken cancellationToken,
     Action<OperationalRetryProgress>? progress);
 
@@ -28,9 +29,11 @@ internal sealed record DeliverySlotOutcome(
     AgentRole? LastRole,
     OperationalRetryOutcome? LastStage,
     bool ClaimHandoffCompleted,
-    string? Diagnostic)
+    string? Diagnostic,
+    NeedsHumanEscalationResult? EscalationProgress = null)
 {
     internal bool MergeReady => Disposition == DeliverySlotDisposition.MergeReady && ClaimHandoffCompleted;
+    internal bool ClaimReleased => EscalationProgress?.ClaimReleased ?? ClaimHandoffCompleted;
 }
 
 /// <summary>Runs the successful Implementer -> Reviewer -> QA path under one guarded claim.</summary>
@@ -50,7 +53,8 @@ internal sealed class DeliverySlotCoordinator
         if (runRole is null)
         {
             var retries = new OperationalRetryCoordinator(processRunner);
-            this.runRole = retries.RunAsync;
+            this.runRole = (hostPaths, config, target, id, role, actor, expectedState, token, stageProgress) =>
+                retries.RunAsync(hostPaths, config, target, id, role, actor, token, stageProgress, expectedState);
         }
         else
         {
@@ -74,7 +78,8 @@ internal sealed class DeliverySlotCoordinator
 
         BeadWorkflowState? initial = null;
         BeadSnapshot? claimed = null;
-        var claimWriteStarted = false;
+        var claimAcquisitionAttempted = false;
+        var claimAcquired = false;
         var executionStarted = false;
         AgentRole? lastRole = null;
         OperationalRetryOutcome? lastStage = null;
@@ -100,9 +105,10 @@ internal sealed class DeliverySlotCoordinator
                 return Result(DeliverySlotDisposition.Refused, initial, null, null, false, refusal);
 
             cancellationToken.ThrowIfCancellationRequested();
-            claimWriteStarted = true;
+            claimAcquisitionAttempted = true;
             await writer.AcquireDispatchClaimAsync(repository, beadId, project.RecoveryActor, cancellationToken)
                 .ConfigureAwait(false);
+            claimAcquired = true;
 
             var claimedInventory = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
             var claimedReadiness = await reader.ReadReadinessAsync(repository, claimedInventory, project.RecoveryActor,
@@ -143,8 +149,32 @@ internal sealed class DeliverySlotCoordinator
 
                 lastRole = role;
                 executionStarted = true;
-                lastStage = await runRole(paths, project, repository, beadId, role, project.RecoveryActor,
-                    cancellationToken, progress).ConfigureAwait(false);
+                lastStage = null;
+                try
+                {
+                    lastStage = await runRole(paths, project, repository, beadId, role, project.RecoveryActor,
+                        currentState, cancellationToken, progress).ConfigureAwait(false);
+                }
+                catch (OperationalRetryEscalationIncompleteException exception)
+                {
+                    lastStage = exception.Outcome;
+                    var disposition = exception.InnerException is OperationCanceledException
+                        ? DeliverySlotDisposition.StoppedAtUnsupportedOutcome
+                        : DeliverySlotDisposition.Failed;
+                    return Result(disposition,
+                        exception.Outcome.StageResult.VerifiedState ?? currentState, role, lastStage, false,
+                        exception.Message, exception.Progress);
+                }
+                catch (NeedsHumanEscalationException exception)
+                {
+                    return Result(DeliverySlotDisposition.Failed, currentState, role, null, false,
+                        exception.Message, exception.Progress);
+                }
+                catch (OperationCanceledException exception) when (TryGetEscalationProgress(exception, out var escalation))
+                {
+                    return Result(DeliverySlotDisposition.StoppedAtUnsupportedOutcome, currentState, role, null, false,
+                        exception.Message, escalation);
+                }
 
                 if (lastStage.Status == OperationalRetryStatus.Escalated)
                 {
@@ -212,14 +242,38 @@ internal sealed class DeliverySlotCoordinator
                 if (!nextReadiness.RecoverableOwnedReady.Contains(beadId))
                     return Result(DeliverySlotDisposition.Failed, after, role, lastStage, false,
                         "Bead is no longer in bd's recoverable-owned ready set before the next role; no follow-on Agent was launched.");
-                currentState = after;
+
+                var preDispatchInventory = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
+                if (!preDispatchInventory.ById.TryGetValue(beadId, out var preDispatchBead))
+                    return Result(DeliverySlotDisposition.Failed, after, role, lastStage, false,
+                        "Bead disappeared after interstage readiness verification; no follow-on Agent was launched.");
+
+                BeadWorkflowState preDispatchState;
+                try { preDispatchState = BeadWorkflowState.Parse(preDispatchBead); }
+                catch (FormatException exception)
+                {
+                    return Result(DeliverySlotDisposition.Failed, null, role, lastStage, false,
+                        $"Bead workflow became invalid before the next role: {exception.Message}");
+                }
+
+                if (preDispatchBead.Status != "in_progress"
+                    || !string.Equals(preDispatchBead.Assignee, project.RecoveryActor, StringComparison.Ordinal))
+                    return Result(DeliverySlotDisposition.Failed, preDispatchState, role, lastStage, false,
+                        $"Claim ownership changed before the next role; observed status '{preDispatchBead.Status}' and assignee '{preDispatchBead.Assignee ?? "(none)"}'.");
+                if (preDispatchState != after)
+                    return Result(DeliverySlotDisposition.Failed, preDispatchState, role, lastStage, false,
+                        "Bead workflow identity changed during interstage readiness verification; no follow-on Agent was launched.");
+                currentState = preDispatchState;
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            if (claimWriteStarted && !executionStarted)
+            if (claimAcquired && !executionStarted)
                 return await RefuseAfterClaimAsync(project, repository, beadId, claimed,
                     "Delivery slot was cancelled before role execution.", null).ConfigureAwait(false);
+            if (claimAcquisitionAttempted && !claimAcquired)
+                return Result(DeliverySlotDisposition.StoppedAtUnsupportedOutcome, initial, null, null, false,
+                    "Guarded claim acquisition was cancelled before ownership was confirmed; ownership is uncertain and no release was attempted.");
             return Result(DeliverySlotDisposition.StoppedAtUnsupportedOutcome, null, lastRole, lastStage, false,
                 executionStarted
                     ? "Delivery slot was cancelled after role execution began; no follow-on role or blind claim release was attempted."
@@ -227,9 +281,12 @@ internal sealed class DeliverySlotCoordinator
         }
         catch (Exception exception)
         {
-            if (claimWriteStarted && !executionStarted)
+            if (claimAcquired && !executionStarted)
                 return await RefuseAfterClaimAsync(project, repository, beadId, claimed,
                     $"Delivery admission failed: {exception.Message}", null).ConfigureAwait(false);
+            if (claimAcquisitionAttempted && !claimAcquired)
+                return Result(DeliverySlotDisposition.Refused, initial, null, null, false,
+                    $"Guarded claim acquisition failed before ownership was confirmed; no release was attempted: {exception.Message}");
             return Result(DeliverySlotDisposition.Failed, null, lastRole, lastStage, false,
                 executionStarted
                     ? $"Delivery stage execution or handoff failed; no follow-on role or blind claim release was attempted: {exception.Message}"
@@ -360,6 +417,18 @@ internal sealed class DeliverySlotCoordinator
 
     private static bool IsRoleInput(AgentRole role, BeadWorkflowState state) => AuthorityMatrix.ValidateInput(role, state) is null;
 
+    private static bool TryGetEscalationProgress(OperationCanceledException exception,
+        out NeedsHumanEscalationResult progress)
+    {
+        if (exception.Data[nameof(NeedsHumanEscalationResult)] is NeedsHumanEscalationResult observed)
+        {
+            progress = observed;
+            return true;
+        }
+        progress = null!;
+        return false;
+    }
+
     private static bool IsUnsupportedLegalOutcome(AgentRole role, BeadWorkflowState before, BeadWorkflowState after)
     {
         if (after.ProductDecisionRequired || after.NeedsHuman) return true;
@@ -369,6 +438,7 @@ internal sealed class DeliverySlotCoordinator
     }
 
     private static DeliverySlotOutcome Result(DeliverySlotDisposition disposition, BeadWorkflowState? state,
-        AgentRole? role, OperationalRetryOutcome? stage, bool handoff, string? diagnostic) =>
-        new(disposition, state, role, stage, handoff, diagnostic);
+        AgentRole? role, OperationalRetryOutcome? stage, bool handoff, string? diagnostic,
+        NeedsHumanEscalationResult? escalationProgress = null) =>
+        new(disposition, state, role, stage, handoff, diagnostic, escalationProgress);
 }

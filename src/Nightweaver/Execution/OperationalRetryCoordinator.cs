@@ -43,9 +43,24 @@ internal sealed record OperationalRetryOutcome(
 
 internal sealed class OperationalRetryEscalationIncompleteException : NightweaverException
 {
-    internal OperationalRetryEscalationIncompleteException(string message, NeedsHumanEscalationResult progress)
-        : base(message) => Progress = progress;
+    internal OperationalRetryEscalationIncompleteException(string message, OperationalRetryOutcome outcome)
+        : base(message)
+    {
+        Outcome = outcome;
+        Progress = outcome.Escalation
+            ?? throw new ArgumentException("Incomplete escalation outcome must include escalation progress.", nameof(outcome));
+    }
 
+    internal OperationalRetryEscalationIncompleteException(string message, OperationalRetryOutcome outcome,
+        Exception innerException)
+        : base(message, innerException)
+    {
+        Outcome = outcome;
+        Progress = outcome.Escalation
+            ?? throw new ArgumentException("Incomplete escalation outcome must include escalation progress.", nameof(outcome));
+    }
+
+    internal OperationalRetryOutcome Outcome { get; }
     internal NeedsHumanEscalationResult Progress { get; }
 }
 
@@ -96,7 +111,8 @@ internal sealed class OperationalRetryCoordinator
         AgentRole role,
         string expectedAssignee,
         CancellationToken cancellationToken,
-        Action<OperationalRetryProgress>? progress = null)
+        Action<OperationalRetryProgress>? progress = null,
+        BeadWorkflowState? expectedState = null)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(project);
@@ -112,7 +128,7 @@ internal sealed class OperationalRetryCoordinator
         cancellationToken.ThrowIfCancellationRequested();
 
         var session = await stages.OpenSessionAsync(paths, project, repository, beadId, role,
-            expectedAssignee, cancellationToken).ConfigureAwait(false);
+            expectedAssignee, cancellationToken, expectedState).ConfigureAwait(false);
         var attemptCount = 1L;
         var beforeState = session.InitialState;
         var beforeHead = session.Worktree.HeadSha;
@@ -316,13 +332,56 @@ internal sealed class OperationalRetryCoordinator
         };
         var request = new NeedsHumanRequest(session.BeadId, expectedAssignee, cause, session.Role,
             reason, findings, latest.InvocationId, logPaths, cleanupPurpose);
-        var progress = await escalate(session.HostPaths, session.Project, session.Repository, request, cancellationToken)
-            .ConfigureAwait(false);
+        NeedsHumanEscalationResult progress;
+        try
+        {
+            progress = await escalate(session.HostPaths, session.Project, session.Repository, request, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (NeedsHumanEscalationException exception)
+        {
+            throw IncompleteEscalation(exception.Message, latest, attempts, cause, exception.Progress,
+                classification, exception);
+        }
+        catch (OperationCanceledException exception) when (TryGetEscalationProgress(exception, out var observed))
+        {
+            throw IncompleteEscalation(exception.Message, latest, attempts, cause, observed, classification,
+                exception);
+        }
         if (!progress.Succeeded)
-            throw new OperationalRetryEscalationIncompleteException(
+            throw IncompleteEscalation(
                 $"Needs-human escalation for '{session.BeadId}' was incomplete after invocation '{latest.InvocationId}' "
-                + $"(log '{latest.LogFilePath}'): {string.Join("; ", progress.Failures)}", progress);
+                + $"(log '{latest.LogFilePath}'): {string.Join("; ", progress.Failures)}",
+                latest, attempts, cause, progress, classification);
         return new(OperationalRetryStatus.Escalated, latest, attempts, cause, progress, classification);
+    }
+
+    private static OperationalRetryEscalationIncompleteException IncompleteEscalation(
+        string message,
+        AgentStageResult latest,
+        long attempts,
+        NeedsHumanCause cause,
+        NeedsHumanEscalationResult progress,
+        DuplicateFailureClassificationResult? classification,
+        Exception? innerException = null)
+    {
+        var outcome = new OperationalRetryOutcome(OperationalRetryStatus.Escalated, latest, attempts, cause,
+            progress, classification);
+        return innerException is null
+            ? new OperationalRetryEscalationIncompleteException(message, outcome)
+            : new OperationalRetryEscalationIncompleteException(message, outcome, innerException);
+    }
+
+    private static bool TryGetEscalationProgress(OperationCanceledException exception,
+        out NeedsHumanEscalationResult progress)
+    {
+        if (exception.Data[nameof(NeedsHumanEscalationResult)] is NeedsHumanEscalationResult observed)
+        {
+            progress = observed;
+            return true;
+        }
+        progress = null!;
+        return false;
     }
 
     private static System.Collections.ObjectModel.ReadOnlyCollection<string> RetryFindings(

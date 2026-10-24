@@ -655,8 +655,10 @@ public sealed class AgentStageIntegrationTests
                 Environment.SetEnvironmentVariable("PATH", FakeCliRoot + System.IO.Path.PathSeparator + (oldPath ?? ""));
                 var stages = new AgentStageCoordinator(runner, prepare: Prepare, execute: Execute);
                 var retries = new OperationalRetryCoordinator(runner, stages: stages);
-                var slotRunner = new DeliveryRoleRunner((paths, config, repository, requestedBead, role, expectedAssignee, token, progress) =>
-                    retries.RunAsync(paths, config, repository, requestedBead, role, expectedAssignee, token, progress));
+                var slotRunner = new DeliveryRoleRunner((paths, config, repository, requestedBead, role, expectedAssignee,
+                    expectedState, token, progress) =>
+                    retries.RunAsync(paths, config, repository, requestedBead, role, expectedAssignee, token, progress,
+                        expectedState));
                 var slot = new DeliverySlotCoordinator(runner, slotRunner);
                 var outcome = await slot.RunAsync(Host, project, new(TargetPath, "main"), beadId,
                     TestContext.Current.CancellationToken);

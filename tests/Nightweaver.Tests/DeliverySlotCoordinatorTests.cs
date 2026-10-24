@@ -22,6 +22,13 @@ public sealed class DeliverySlotCoordinatorTests
 
         Assert.True(outcome.MergeReady, outcome.Diagnostic);
         Assert.Equal([AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa], roles);
+        Assert.Equal(new string?[] { null, "stage:review", "stage:qa" },
+            fixture.ExpectedStates.Select(state => state.Stage));
+        Assert.All(fixture.ExpectedStates, state =>
+        {
+            Assert.Equal("in_progress", state.Status);
+            Assert.Equal(0, state.RepairCycles);
+        });
         Assert.Equal("stage:merge", outcome.FinalState!.Stage);
         Assert.Equal("open", outcome.FinalState.Status);
         Assert.True(outcome.ClaimHandoffCompleted);
@@ -108,6 +115,137 @@ public sealed class DeliverySlotCoordinatorTests
         Assert.Single(SlotFixture.ClaimWrites(runner.Requests, bead));
         Assert.Equal("in_progress", fixture.ReadBead(bead).Status);
         Assert.Equal("other:worker", fixture.ReadBead(bead).Assignee);
+    }
+
+    [Fact]
+    public async Task SameActorClaimWinnerIsNotReleasedWhenGuardedAcquireReturnsExitThirteen()
+    {
+        using var fixture = new SlotFixture();
+        var bead = fixture.CreateTask();
+        var roles = new List<AgentRole>();
+        var runner = new MutatingProcessRunner(SlotFixture.IsRecoverableReadiness,
+            () => fixture.SimulateClaimAsync(bead, fixture.RecoveryActor));
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            throw new InvalidOperationException("A losing same-actor claim must not launch an Agent.");
+        }, runner);
+
+        Assert.Equal(DeliverySlotDisposition.Refused, outcome.Disposition);
+        Assert.Contains("exited 13", outcome.Diagnostic!, StringComparison.Ordinal);
+        Assert.Empty(roles);
+        Assert.False(outcome.ClaimHandoffCompleted);
+        Assert.Single(SlotFixture.ClaimWrites(runner.Requests, bead));
+        Assert.Equal("in_progress", fixture.ReadBead(bead).Status);
+        Assert.Equal(fixture.RecoveryActor, fixture.ReadBead(bead).Assignee);
+    }
+
+    [Theory]
+    [InlineData(3, "Reviewer")]
+    [InlineData(4, "Qa")]
+    public async Task RepairCounterChangeDuringInterstageReadinessStopsBeforeTheNextRole(
+        int readinessQueryToMutate, string roleThatMustNotRun)
+    {
+        using var fixture = new SlotFixture();
+        var bead = fixture.CreateTask();
+        var roles = new List<AgentRole>();
+        var recoverableReadinessCount = 0;
+        var runner = new MutatingProcessRunner(request =>
+                SlotFixture.IsRecoverableReadiness(request)
+                && Interlocked.Increment(ref recoverableReadinessCount) == readinessQueryToMutate,
+            () =>
+            {
+                fixture.Target.Run("bd", ["update", bead, "--set-metadata", "repair_cycles=1"]);
+                return Task.CompletedTask;
+            });
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            fixture.Advance(bead, role);
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, runner);
+
+        Assert.Equal(DeliverySlotDisposition.Failed, outcome.Disposition);
+        Assert.Contains("workflow identity changed", outcome.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(Enum.Parse<AgentRole>(roleThatMustNotRun), roles);
+        AgentRole[] expectedRoles = roleThatMustNotRun == "Reviewer"
+            ? [AgentRole.Implementer]
+            : [AgentRole.Implementer, AgentRole.Reviewer];
+        Assert.Equal(expectedRoles, roles);
+        Assert.Equal(1, outcome.FinalState!.RepairCycles);
+        Assert.Single(SlotFixture.ClaimWrites(runner.Requests, bead));
+        Assert.Equal("in_progress", fixture.ReadBead(bead).Status);
+        Assert.Equal(fixture.RecoveryActor, fixture.ReadBead(bead).Assignee);
+    }
+
+    [Theory]
+    [InlineData("operational")]
+    [InlineData("operational-cancelled")]
+    [InlineData("needs-human")]
+    [InlineData("cancelled")]
+    public async Task IncompleteEscalationProgressSurvivesAndIsNotReleasedAgain(string failureKind)
+    {
+        using var fixture = new SlotFixture();
+        var bead = fixture.CreateTask();
+        var roles = new List<AgentRole>();
+        var progress = new NeedsHumanEscalationResult(true, true, false, true, ["worktree cleanup failed"]);
+
+        var outcome = await fixture.RunAsync(bead, async (role, _) =>
+        {
+            roles.Add(role);
+            if (role == AgentRole.Implementer)
+            {
+                fixture.Advance(bead, role);
+                return Success(role, bead, fixture.ReadState(bead));
+            }
+
+            await fixture.SimulateEscalationAsync(bead);
+            var knownState = fixture.ReadState(bead);
+            switch (failureKind)
+            {
+                case "operational":
+                    throw new OperationalRetryEscalationIncompleteException(
+                        "operational escalation cleanup failed", FailureOutcome(role, bead, knownState, progress));
+                case "operational-cancelled":
+                    throw new OperationalRetryEscalationIncompleteException(
+                        "operational escalation cancelled", FailureOutcome(role, bead, knownState, progress),
+                        new OperationCanceledException("escalation cancelled"));
+                case "needs-human":
+                    throw new NeedsHumanEscalationException("needs-human escalation cleanup failed", progress,
+                        new InvalidOperationException("cleanup failed"));
+                case "cancelled":
+                    var cancellation = new OperationCanceledException("escalation cancelled");
+                    cancellation.Data[nameof(NeedsHumanEscalationResult)] = progress;
+                    throw cancellation;
+                default:
+                    throw new InvalidOperationException($"Unknown fixture failure kind '{failureKind}'.");
+            }
+        });
+
+        Assert.Equal(failureKind is "cancelled" or "operational-cancelled"
+            ? DeliverySlotDisposition.StoppedAtUnsupportedOutcome
+            : DeliverySlotDisposition.Failed, outcome.Disposition);
+        Assert.Equal([AgentRole.Implementer, AgentRole.Reviewer], roles);
+        Assert.Equal(AgentRole.Reviewer, outcome.LastRole);
+        Assert.Equal(progress, outcome.EscalationProgress);
+        Assert.True(outcome.ClaimReleased);
+        Assert.False(outcome.ClaimHandoffCompleted);
+        if (failureKind is "operational" or "operational-cancelled")
+        {
+            Assert.Equal("review-invocation", outcome.LastStage!.StageResult.InvocationId);
+            Assert.Equal("review.log", outcome.LastStage.StageResult.LogFilePath);
+        }
+        else
+        {
+            Assert.Null(outcome.LastStage);
+        }
+        Assert.Equal("stage:review", outcome.FinalState!.Stage);
+        Assert.Single(fixture.ClaimWrites(bead));
+        Assert.Equal("open", fixture.ReadBead(bead).Status);
+        Assert.Null(fixture.ReadBead(bead).Assignee);
+        Assert.True(fixture.ReadState(bead).NeedsHuman);
     }
 
     [Fact]
@@ -316,6 +454,16 @@ public sealed class DeliverySlotCoordinatorTests
         return new(OperationalRetryStatus.Succeeded, result, 1, null, null, null);
     }
 
+    private static OperationalRetryOutcome FailureOutcome(AgentRole role, string beadId,
+        BeadWorkflowState verifiedState, NeedsHumanEscalationResult progress)
+    {
+        var failure = new AgentOperationalFailure(AgentOperationalFailureKind.NonZeroExit, "fixture stage failed");
+        var result = new AgentStageResult(role, beadId, "review-invocation", "review.log", failure,
+            ["latest review invocation failed"], verifiedState);
+        return new(OperationalRetryStatus.Escalated, result, 2, NeedsHumanCause.OperationalRetriesExhausted,
+            progress, null);
+    }
+
     private sealed class SlotFixture : IDisposable
     {
         private readonly TempDirectory hostTemp = new();
@@ -333,6 +481,7 @@ public sealed class DeliverySlotCoordinatorTests
 
         internal BeadsFixture Target { get; }
         internal HostPaths Host { get; }
+        internal string RecoveryActor => project.RecoveryActor;
         internal CancellationToken? CancellationTokenOverride { get; set; }
         private IReadOnlyList<ProcessRequest> LastRequests { get; set; } = [];
         private ValidatedTargetRepository Repository => new(Target.Path, "main");
@@ -393,6 +542,14 @@ public sealed class DeliverySlotCoordinatorTests
                 throw new InvalidOperationException($"Fixture competing claim failed ({result.ExitCode}): {result.StandardError}{result.StandardOutput}");
         }
 
+        internal async Task SimulateClaimAsync(string beadId, string actor)
+        {
+            var request = BeadsCommand.CreateWrite(Target.Path, ["update", beadId, "--claim"], actor);
+            var result = await new SystemProcessRunner().RunAsync(request, CancellationToken.None);
+            if (result.ExitCode != 0)
+                throw new InvalidOperationException($"Fixture claim failed ({result.ExitCode}): {result.StandardError}{result.StandardOutput}");
+        }
+
         internal async Task<DeliverySlotOutcome> RunAsync(string beadId,
             Func<AgentRole, CancellationToken, Task<OperationalRetryOutcome>> roleRunner,
             IProcessRunner? processRunner = null)
@@ -405,9 +562,10 @@ public sealed class DeliverySlotCoordinatorTests
                 MutatingProcessRunner mutating => mutating.Requests,
                 _ => []
             };
-            var stageRunner = new DeliveryRoleRunner((_, _, _, requestedBead, role, _, token, _) =>
+            var stageRunner = new DeliveryRoleRunner((_, _, _, requestedBead, role, _, expectedState, token, _) =>
             {
                 Assert.Equal(beadId, requestedBead);
+                ExpectedStates.Add(expectedState);
                 return roleRunner(role, token);
             });
             return await new DeliverySlotCoordinator(runner, stageRunner)
@@ -417,6 +575,12 @@ public sealed class DeliverySlotCoordinatorTests
 
         internal static bool IsAcquire(string bead, ProcessRequest request) => IsClaimWrite(bead, request, "open");
         internal static bool IsRelease(string bead, ProcessRequest request) => IsClaimWrite(bead, request, "in_progress");
+        internal static bool IsRecoverableReadiness(ProcessRequest request) => request.FileName == "bd"
+            && request.Arguments.Contains("--ready", StringComparer.Ordinal)
+            && request.Arguments.Contains("--assignee", StringComparer.Ordinal)
+            && request.Arguments.Contains("in_progress", StringComparer.Ordinal);
+
+        internal List<BeadWorkflowState> ExpectedStates { get; } = [];
 
         internal ProcessRequest[] ClaimWrites(string bead) => ClaimWrites(LastRequests, bead);
 

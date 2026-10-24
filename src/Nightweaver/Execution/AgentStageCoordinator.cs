@@ -66,7 +66,8 @@ internal sealed class AgentStageCoordinator
         string beadId,
         AgentRole role,
         string? expectedAssignee,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        BeadWorkflowState? expectedState = null)
     {
         ArgumentNullException.ThrowIfNull(hostPaths);
         ArgumentNullException.ThrowIfNull(project);
@@ -81,6 +82,8 @@ internal sealed class AgentStageCoordinator
         var initial = await ReadRequestedStateAsync(repository, beadId, cancellationToken);
         EnsureValidInput(role, initial.State);
         if (expectedAssignee is not null) EnsureExpectedClaim(initial, expectedAssignee, requireInProgress: true);
+        if (expectedState is not null && initial.State != expectedState)
+            throw new AgentStageInputException($"Bead '{beadId}' workflow state changed before stage opening; refusing to dispatch against stale verified state.");
 
         var purpose = role is AgentRole.Planner or AgentRole.PlanChallenger
             ? WorktreePurpose.Planning : WorktreePurpose.Delivery;
