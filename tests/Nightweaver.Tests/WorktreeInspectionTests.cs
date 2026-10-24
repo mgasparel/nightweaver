@@ -174,7 +174,11 @@ public sealed class WorktreeInspectionTests
             start.ArgumentList.Add("/c"); start.ArgumentList.Add("mklink"); start.ArgumentList.Add("/J"); start.ArgumentList.Add(path); start.ArgumentList.Add(target);
             using var process = System.Diagnostics.Process.Start(start)!;
             process.WaitForExit();
-            Assert.Equal(0, process.ExitCode);
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.ExitCode == 0,
+                $"Could not create Windows junction for reparse-point coverage (exit {process.ExitCode}). "
+                + $"Check junction capability and permissions. stdout: {stdout}; stderr: {stderr}");
         }
         else Directory.CreateSymbolicLink(path, target);
     }
