@@ -272,6 +272,43 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
             throw Failure("revalidate isolated worktree", destination, "worktree registration identity changed before a destructive operation");
     }
 
+    internal async Task ValidateRetryWorktreeAsync(
+        HostPaths hostPaths,
+        ProjectSlug project,
+        ValidatedTargetRepository repository,
+        string beadId,
+        WorktreePurpose purpose,
+        CancellationToken cancellationToken)
+    {
+        var destination = GetDestination(hostPaths, project, repository, beadId);
+        var branchRef = $"refs/heads/nightweaver/{beadId}";
+        var state = await ValidateWorkspaceAsync(hostPaths, project, repository, destination, beadId, branchRef,
+            purpose, cancellationToken);
+        if (state.Registration is null)
+            throw Failure("revalidate retry worktree", destination, "canonical worktree registration is missing");
+        if (state.Registration.Locked || state.Registration.Prunable || state.Registration.Main || state.Registration.Bare)
+            throw Failure("revalidate retry worktree", destination, "registration is locked, prunable, main, or bare");
+        if (purpose == WorktreePurpose.Planning && (!state.Registration.Detached || state.Registration.Branch is not null))
+            throw Failure("revalidate retry worktree", destination, "Planning worktree is not detached");
+        if (purpose == WorktreePurpose.Delivery
+            && !string.Equals(state.Registration.Branch, branchRef, StringComparison.Ordinal))
+            throw Failure("revalidate retry worktree", destination, $"Delivery worktree is not on owned branch '{branchRef}'");
+    }
+
+    internal Task<ProvisionedWorktree> VerifyRetryWorktreeAsync(
+        HostPaths hostPaths,
+        ProjectSlug project,
+        ValidatedTargetRepository repository,
+        string beadId,
+        WorktreePurpose purpose,
+        CancellationToken cancellationToken)
+    {
+        var destination = GetDestination(hostPaths, project, repository, beadId);
+        var branchRef = $"refs/heads/nightweaver/{beadId}";
+        return VerifyAndReturnAsync(hostPaths, project, repository, destination, beadId, branchRef,
+            purpose, expectedPlanningHead: null, cancellationToken);
+    }
+
     private async Task<ProvisionedWorktree> VerifyAndReturnAsync(
         HostPaths hostPaths,
         ProjectSlug project,

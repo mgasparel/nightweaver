@@ -16,6 +16,119 @@ public sealed class AgentStageNativeIntegration { }
 public sealed class AgentStageIntegrationTests
 {
     [Fact]
+    public async Task OperationalRetryRunsRealAgentJobAfterResettingTheSameClaimedWorktree()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead("Operational retry integration", "task", "stage:implement");
+
+        var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer, ["nonzero-dirty", "review"], verifyResetSentinels: true);
+
+        Assert.True(outcome.Succeeded, outcome.StageResult.Failure?.Reason);
+        Assert.Equal(2, outcome.AttemptCount);
+        Assert.Equal("stage:review", target.ReadState(bead).Stage);
+        Assert.Equal(4, target.ReadState(bead).RepairCycles);
+        var beadSnapshot = target.ReadBead(bead);
+        Assert.Equal("in_progress", beadSnapshot.Status);
+        Assert.Equal("nightweaver:demo", beadSnapshot.Assignee);
+
+        var worktree = target.WorktreePath(bead);
+        Assert.Equal("fixture base\n", File.ReadAllText(System.IO.Path.Combine(worktree, "README.md")).Replace("\r\n", "\n", StringComparison.Ordinal));
+        Assert.False(File.Exists(System.IO.Path.Combine(worktree, "retry-untracked.txt")));
+        Assert.Equal("ignored sentinel\n", File.ReadAllText(System.IO.Path.Combine(worktree, ".nightweaver-ignored", "keep.bin")));
+        Assert.Equal(2, Directory.GetFiles(System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead), "*.log").Length);
+        Assert.True(File.Exists(outcome.StageResult.LogFilePath), outcome.StageResult.LogFilePath);
+        var retryCommands = target.LastRetryRequests.Where(request => request.FileName == "git"
+            && request.WorkingDirectory == worktree && request.Arguments.SequenceEqual(["reset", "--hard", "HEAD"])).ToArray();
+        Assert.Equal(2, retryCommands.Length); // initial provision plus one same-worktree pre-retry reset
+        Assert.Equal(2, target.LastRetryRequests.Count(request => request.FileName == "git"
+            && request.WorkingDirectory == worktree && request.Arguments.SequenceEqual(["clean", "-fd"])));
+    }
+
+    [Fact]
+    public async Task PlanningRetryKeepsWarmProvisionedWorktreeDetachedAndRetainsClaim()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead("Planning retry integration", "feature", "stage:plan");
+
+        var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Planner, ["failure", "plan-challenge"]);
+
+        Assert.True(outcome.Succeeded, outcome.StageResult.Failure?.Reason);
+        Assert.Equal(2, outcome.AttemptCount);
+        Assert.Equal("stage:plan-challenge", target.ReadState(bead).Stage);
+        Assert.Equal(4, target.ReadState(bead).RepairCycles);
+        Assert.Equal("nightweaver:demo", target.ReadBead(bead).Assignee);
+        Assert.Equal("", target.CurrentBranch(bead));
+        Assert.Equal(2, Directory.GetFiles(System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead), "*.log").Length);
+    }
+
+    [Fact]
+    public async Task DuplicateRetryFailureUsesRealClassifierAndEscalatorThenCleansDeliveryEnvironment()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead("Duplicate retry escalation integration", "task", "stage:implement");
+
+        var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer,
+            ["failure", "failure", "review"], classifierAction: "duplicate");
+
+        Assert.Equal(OperationalRetryStatus.Escalated, outcome.Status);
+        Assert.Equal(2, outcome.AttemptCount);
+        Assert.Equal(NeedsHumanCause.DuplicateFailure, outcome.EscalationCause);
+        Assert.Equal(DuplicateFailureVerdict.Duplicate, outcome.LastClassification!.Verdict);
+        var state = target.ReadState(bead);
+        Assert.Equal("stage:implement", state.Stage);
+        Assert.True(state.NeedsHuman);
+        var beadSnapshot = target.ReadBead(bead);
+        Assert.Equal("open", beadSnapshot.Status);
+        Assert.Null(beadSnapshot.Assignee);
+        Assert.False(Directory.Exists(target.WorktreePath(bead)));
+        Assert.False(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
+        Assert.Equal(1, GitFixture.RunGit(target.Path, ["show-ref", "--verify", "--quiet", $"refs/heads/nightweaver/{bead}"], allowFailure: true));
+        var logs = Directory.GetFiles(System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead), "*.log");
+        Assert.Equal(3, logs.Length);
+        Assert.Contains(outcome.StageResult.LogFilePath, logs, StringComparer.Ordinal);
+        var comments = target.ReadComments(bead);
+        using var commentsJson = JsonDocument.Parse(comments);
+        var diagnosticText = StringValues(commentsJson.RootElement)
+            .Single(value => value.Contains("nightweaver-needs-human-v1", StringComparison.Ordinal));
+        using var diagnostic = JsonDocument.Parse(diagnosticText);
+        Assert.Equal("duplicate-failure", diagnostic.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead),
+            diagnostic.RootElement.GetProperty("log_directory").GetString());
+        Assert.Contains("attempts completed: 2", diagnostic.RootElement.GetProperty("latest_findings").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, target.LastRetryLifecycleCount);
+    }
+
+    [Fact]
+    public async Task DistinctRetryFailuresExhaustDefaultBudgetAfterThreeNativeAttempts()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead("Retry exhaustion integration", "task", "stage:implement");
+
+        var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer,
+            ["failure", "failure", "failure"], classifierAction: "different");
+
+        Assert.Equal(OperationalRetryStatus.Escalated, outcome.Status);
+        Assert.Equal(3, outcome.AttemptCount);
+        Assert.Equal(NeedsHumanCause.OperationalRetriesExhausted, outcome.EscalationCause);
+        Assert.Equal(DuplicateFailureVerdict.Different, outcome.LastClassification!.Verdict);
+        Assert.Equal(3, target.LastRetryLifecycleCount);
+        var state = target.ReadState(bead);
+        Assert.Equal("stage:implement", state.Stage);
+        Assert.True(state.NeedsHuman);
+        Assert.Equal("open", target.ReadBead(bead).Status);
+        Assert.Null(target.ReadBead(bead).Assignee);
+        Assert.False(Directory.Exists(target.WorktreePath(bead)));
+        Assert.False(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
+        Assert.Equal(1, GitFixture.RunGit(target.Path, ["show-ref", "--verify", "--quiet", $"refs/heads/nightweaver/{bead}"], allowFailure: true));
+        var logs = Directory.GetFiles(System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead), "*.log");
+        Assert.Equal(4, logs.Length); // three lifecycle invocations and one comparison
+    }
+
+    [Fact]
     public async Task RealGitBdAndWindowsJobsRunPlanningDeliveryAndAllOperationalClassifications()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
@@ -129,6 +242,25 @@ public sealed class AgentStageIntegrationTests
         Assert.True(File.Exists(result.LogFilePath), result.LogFilePath);
     }
 
+    private static IEnumerable<string> StringValues(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            yield return element.GetString()!;
+            yield break;
+        }
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+                foreach (var value in StringValues(item)) yield return value;
+        }
+        else if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+                foreach (var value in StringValues(property.Value)) yield return value;
+        }
+    }
+
     private sealed class AgentStageTargetFixture : IDisposable
     {
         private readonly TempDirectory temp = new();
@@ -144,7 +276,8 @@ public sealed class AgentStageIntegrationTests
             Run("git", ["config", "user.name", "Nightweaver Fixture"], TargetPath);
             Run("git", ["config", "user.email", "fixture@example.invalid"], TargetPath);
             File.WriteAllText(System.IO.Path.Combine(TargetPath, "README.md"), "fixture base\n", new UTF8Encoding(false));
-            Run("git", ["add", "README.md"], TargetPath);
+            File.WriteAllText(System.IO.Path.Combine(TargetPath, ".gitignore"), ".nightweaver-ignored/\n", new UTF8Encoding(false));
+            Run("git", ["add", "README.md", ".gitignore"], TargetPath);
             Run("git", ["commit", "-m", "fixture base"], TargetPath);
             Run("git", ["remote", "add", "origin", OriginPath], TargetPath);
             Run("git", ["push", "--set-upstream", "origin", "main"], TargetPath);
@@ -180,13 +313,16 @@ public sealed class AgentStageIntegrationTests
 
         private string TargetPath { get; }
         private string OriginPath { get; }
-        private HostPaths Host { get; }
+        internal HostPaths Host { get; }
         private string FakeCliRoot { get; }
         private string UserHome { get; }
         private IReadOnlyDictionary<string, string?> BeadsEnvironment { get; }
+        internal IReadOnlyList<ProcessRequest> LastRetryRequests { get; private set; } = [];
+        internal int LastRetryLifecycleCount { get; private set; }
 
         internal string Path => TargetPath;
         internal string WorktreePath(string beadId) => System.IO.Path.Combine(Host.WorktreesRoot(ProjectSlug.Parse("demo")), beadId);
+        internal string CurrentBranch(string beadId) => Run("git", ["branch", "--show-current"], WorktreePath(beadId)).Trim();
 
         internal void SeedRootSentinels()
         {
@@ -215,6 +351,9 @@ public sealed class AgentStageIntegrationTests
             var inventory = BeadsReader.Parse(Run("bd", BeadsCommand.Create(TargetPath).Arguments, TargetPath, BeadsEnvironment));
             return inventory.ById[beadId];
         }
+
+        internal string ReadComments(string beadId) => Run("bd",
+            ["--readonly", "--sandbox", "comments", beadId, "--json"], TargetPath, BeadsEnvironment);
 
         internal async Task<AgentStageResult> RunAgentAsync(string beadId, AgentRole role, string action, AgentCli cli)
         {
@@ -272,6 +411,105 @@ public sealed class AgentStageIntegrationTests
             }
             AssertFixtureExited(pidFile);
             return result;
+        }
+
+        internal async Task<OperationalRetryOutcome> RunRetryAgentAsync(
+            string beadId,
+            AgentRole role,
+            IReadOnlyList<string> actions,
+            bool verifyResetSentinels = false,
+            string? classifierAction = null)
+        {
+            const string actor = "nightweaver:demo";
+            var claimEnvironment = new Dictionary<string, string?>(BeadsEnvironment, StringComparer.OrdinalIgnoreCase)
+            {
+                ["BD_ACTOR"] = actor
+            };
+            Run("bd", ["update", beadId, "--claim"], TargetPath, claimEnvironment);
+            Run("bd", ["update", beadId, "--set-metadata", "repair_cycles=4"], TargetPath, claimEnvironment);
+
+            var project = CreateProject(AgentCli.Codex);
+            var systemRunner = new SystemProcessRunner();
+            var runner = new RecordingProcessRunner((request, token) => systemRunner.RunAsync(request, token));
+            var preparer = new AgentInvocationPreparer();
+            var pidFiles = new List<string>();
+            var actionIndex = 0;
+            async Task<PreparedAgentInvocation> Prepare(HostPaths hostPaths, ProjectConfig projectConfig, AgentRole invocationRole,
+                AgentDispatchContext context, string worktreePath, CancellationToken token)
+            {
+                var invocation = await preparer.PrepareAsync(hostPaths, projectConfig, invocationRole, context, worktreePath, token);
+                var canonical = System.IO.Path.GetFullPath(System.IO.Path.Combine(hostPaths.WorktreesRoot(projectConfig.Name), context.BeadId));
+                Assert.Equal(canonical, worktreePath);
+                Assert.Equal(canonical, invocation.WorkingDirectory);
+                return invocation;
+            }
+
+            Task<AgentExecutionResult> Execute(HostPaths hostPaths, ProjectSlug projectSlug,
+                PreparedAgentInvocation invocation, CancellationToken token)
+            {
+                var index = Interlocked.Increment(ref actionIndex) - 1;
+                Assert.True(index < actions.Count, "Retry coordinator launched more native Agents than the test provided actions.");
+                var pidFile = System.IO.Path.Combine(temp.Path, "retry-pids", index.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".txt");
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(pidFile)!);
+                pidFiles.Add(pidFile);
+                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION", actions[index]);
+                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE", pidFile);
+                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", null);
+                if (index == 1 && verifyResetSentinels)
+                {
+                    Assert.Equal("fixture base\n", File.ReadAllText(System.IO.Path.Combine(invocation.WorkingDirectory, "README.md"))
+                        .Replace("\r\n", "\n", StringComparison.Ordinal));
+                    Assert.False(File.Exists(System.IO.Path.Combine(invocation.WorkingDirectory, "retry-untracked.txt")));
+                    Assert.True(File.Exists(System.IO.Path.Combine(invocation.WorkingDirectory, ".nightweaver-ignored", "keep.bin")));
+                }
+                return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation, token);
+            }
+
+            var oldActor = Environment.GetEnvironmentVariable("BD_ACTOR");
+            var oldAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION");
+            var oldPidFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE");
+            var oldClassifierAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION");
+            var oldPath = Environment.GetEnvironmentVariable("PATH");
+            try
+            {
+                Environment.SetEnvironmentVariable("BD_ACTOR", actor);
+                Environment.SetEnvironmentVariable("PATH", FakeCliRoot + System.IO.Path.PathSeparator + (oldPath ?? ""));
+                var stageCoordinator = new AgentStageCoordinator(runner, prepare: Prepare, execute: Execute);
+                DuplicateFailureClassifier? classifier = null;
+                if (classifierAction is not null)
+                {
+                    classifier = new DuplicateFailureClassifier(execute: async (hostPaths, projectSlug, invocation, limit, token) =>
+                    {
+                        var priorAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION");
+                        Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", classifierAction);
+                        try
+                        {
+                            return await AgentInvocationExecutor.ExecuteWithStandardOutputCaptureAsync(
+                                hostPaths, projectSlug, invocation, limit, token);
+                        }
+                        finally
+                        {
+                            Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", priorAction);
+                        }
+                    });
+                }
+                var retryCoordinator = new OperationalRetryCoordinator(runner, stages: stageCoordinator, classifier: classifier);
+                var outcome = await retryCoordinator.RunAsync(Host, project, new(TargetPath, "main"), beadId, role, actor,
+                    TestContext.Current.CancellationToken);
+                LastRetryRequests = runner.Requests.ToArray();
+                Assert.True(pidFiles.Count <= actions.Count);
+                LastRetryLifecycleCount = pidFiles.Count;
+                foreach (var pidFile in pidFiles) AssertFixtureExited(pidFile);
+                return outcome;
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("BD_ACTOR", oldActor);
+                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION", oldAction);
+                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE", oldPidFile);
+                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", oldClassifierAction);
+                Environment.SetEnvironmentVariable("PATH", oldPath);
+            }
         }
 
         internal string CaptureRootState()

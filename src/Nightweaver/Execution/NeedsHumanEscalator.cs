@@ -10,7 +10,8 @@ internal enum NeedsHumanCause
 {
     OperationalRetriesExhausted,
     DuplicateFailure,
-    RepairBudgetExhausted
+    RepairBudgetExhausted,
+    EnvironmentBlocked
 }
 
 internal sealed record NeedsHumanRequest(
@@ -21,7 +22,8 @@ internal sealed record NeedsHumanRequest(
     string Reason,
     IReadOnlyList<string> LatestFindings,
     string? InvocationId = null,
-    IReadOnlyList<string>? LogFilePaths = null);
+    IReadOnlyList<string>? LogFilePaths = null,
+    WorktreePurpose? CleanupPurpose = null);
 
 internal sealed record NeedsHumanEscalationResult(
     bool PauseRecorded,
@@ -90,7 +92,7 @@ internal sealed class NeedsHumanEscalator
 
         var initialBead = await ReadBeadAsync(repository, request.BeadId, cancellationToken);
         var initialState = ParseState(initialBead);
-        var purpose = ValidateRoleAndType(initialBead, initialState, request.Role);
+        var purpose = ResolvePurpose(initialBead, initialState, request);
         var initialClaimOwned = ValidateInitialClaim(initialBead, initialState, request);
         var initialUnclaimedPause = initialState.NeedsHuman && initialState.Status == "open" && initialBead.Assignee is null;
         var expectedStage = initialState.Stage;
@@ -247,7 +249,7 @@ internal sealed class NeedsHumanEscalator
     {
         var bead = await ReadBeadAsync(repository, request.BeadId, cancellationToken);
         var state = ParseState(bead);
-        _ = ValidateRoleAndType(bead, state, request.Role);
+        _ = ResolvePurpose(bead, state, request);
         if (state.IssueType != (purpose == WorktreePurpose.Planning ? "feature" : "task")
             && !(purpose == WorktreePurpose.Planning && state.IssueType == "bug"))
             throw new ToolExecutionException($"Bead '{request.BeadId}' changed type during needs-human escalation.");
@@ -296,6 +298,24 @@ internal sealed class NeedsHumanEscalator
             throw new AgentStageInputException($"Delivery role '{role}' requires a Plan Bead of type task; '{bead.Id}' is '{bead.IssueType}'.");
         return purpose;
     }
+
+    private static WorktreePurpose ResolvePurpose(BeadSnapshot bead, BeadWorkflowState state, NeedsHumanRequest request)
+    {
+        if (request.CleanupPurpose is not { } purpose)
+            return ValidateRoleAndType(bead, state, request.Role);
+        if (!IsLifecycleRole(request.Role))
+            throw new AgentStageInputException($"Unknown or non-lifecycle failed role '{request.Role}'.");
+        if (state.Status == "closed" || state.Status is not ("open" or "in_progress") || state.Planned)
+            throw new AgentStageInputException($"Bead '{bead.Id}' is terminal or planned and cannot be escalated to needs-human.");
+        if (purpose == WorktreePurpose.Planning && bead.IssueType is not ("feature" or "bug"))
+            throw new AgentStageInputException($"Planning cleanup requires a Product Bead; '{bead.Id}' is '{bead.IssueType}'.");
+        if (purpose == WorktreePurpose.Delivery && bead.IssueType != "task")
+            throw new AgentStageInputException($"Delivery cleanup requires a Plan Bead; '{bead.Id}' is '{bead.IssueType}'.");
+        return purpose;
+    }
+
+    private static bool IsLifecycleRole(AgentRole role) => role is AgentRole.Planner or AgentRole.PlanChallenger
+        or AgentRole.Implementer or AgentRole.Reviewer or AgentRole.Qa or AgentRole.Merger;
 
     private static bool ValidateInitialClaim(BeadSnapshot bead, BeadWorkflowState state, NeedsHumanRequest request)
     {
@@ -459,6 +479,7 @@ internal sealed class NeedsHumanEscalator
         NeedsHumanCause.OperationalRetriesExhausted => "operational-retries-exhausted",
         NeedsHumanCause.DuplicateFailure => "duplicate-failure",
         NeedsHumanCause.RepairBudgetExhausted => "repair-budget-exhausted",
+        NeedsHumanCause.EnvironmentBlocked => "environment-blocked",
         _ => throw new ArgumentOutOfRangeException(nameof(cause), cause, "Unknown needs-human cause")
     };
 

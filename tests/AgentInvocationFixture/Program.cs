@@ -204,6 +204,13 @@ internal static class Program
                 UpdateLabels(beadId, "stage:implement", "stage:review");
                 Console.WriteLine("fixture returned a nonzero exit after a legal Bead transition");
                 return 19;
+            case "nonzero-dirty":
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "README.md"), "retry must restore tracked content\n");
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "retry-untracked.txt"), "retry must remove this\n");
+                Directory.CreateDirectory(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored"));
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored", "keep.bin"), "ignored sentinel\n");
+                Console.WriteLine("fixture returned nonzero after creating retry cleanup sentinels");
+                return 19;
             case "review-dirty":
                 UpdateLabels(beadId, "stage:implement", "stage:review");
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "fixture-dirty.txt"), "dirty\n");
