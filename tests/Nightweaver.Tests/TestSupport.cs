@@ -220,6 +220,7 @@ internal sealed class BeadsFixture : IDisposable
     private readonly TempDirectory temp = new();
     internal string Path { get; }
     internal IReadOnlyDictionary<string, string?> Environment { get; }
+    internal string ControlBeadId { get; }
 
     internal BeadsFixture(string relativePath = "repo")
     {
@@ -237,7 +238,7 @@ internal sealed class BeadsFixture : IDisposable
         Run("bd", ["init", "--prefix", "fixture", "--non-interactive", "--skip-agents", "--skip-hooks"]);
         // A genuine fixture write establishes bd's physical-root gate, which init
         // alone omits. Production refuses such unprepared trackers without writes.
-        Create("Fixture control");
+        ControlBeadId = Create("Fixture control");
     }
 
     internal string Run(string tool, IReadOnlyList<string> args)

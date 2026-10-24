@@ -102,6 +102,31 @@ internal static class DryRunReportWriter
                 .Append(JsonNamingPolicy.SnakeCaseLower.ConvertName(exclusion.Code.ToString()))
                 .Append("; stages=").Append(JsonSerializer.Serialize(exclusion.StageLabels)).Append('\n');
 
+        builder.Append("\nDelivery selected (capacity=")
+            .Append(report.DeliveryDiscoveryPlan.MaxConcurrentDelivery.ToString(CultureInfo.InvariantCulture)).Append(")\n");
+        AppendTaskCandidates(builder, report.DeliveryDiscoveryPlan.DeliverySelected, "(none)");
+
+        builder.Append("\nDelivery waiting\n");
+        if (report.DeliveryDiscoveryPlan.DeliveryWaiting.Count == 0) builder.Append("  (none)\n");
+        foreach (var candidate in report.DeliveryDiscoveryPlan.DeliveryWaiting)
+            AppendTaskCandidate(builder, candidate, includeCapacityWait: true);
+
+        builder.Append("\nMerger selected (capacity=")
+            .Append(report.DeliveryDiscoveryPlan.MergerCapacity.ToString(CultureInfo.InvariantCulture)).Append(")\n");
+        AppendTaskCandidates(builder, report.DeliveryDiscoveryPlan.MergerSelected, "(none)");
+
+        builder.Append("\nMerger waiting\n");
+        if (report.DeliveryDiscoveryPlan.MergerWaiting.Count == 0) builder.Append("  (none)\n");
+        foreach (var candidate in report.DeliveryDiscoveryPlan.MergerWaiting)
+            AppendTaskCandidate(builder, candidate, includeCapacityWait: true);
+
+        builder.Append("\nDelivery and Merger excluded task-stage diagnostics\n");
+        if (report.DeliveryDiscoveryPlan.Excluded.Count == 0) builder.Append("  (none)\n");
+        foreach (var exclusion in report.DeliveryDiscoveryPlan.Excluded)
+            builder.Append("  ").Append(JsonSerializer.Serialize(exclusion.BeadId)).Append(": ")
+                .Append(TaskExclusionCode(exclusion.Code))
+                .Append("; stages=").Append(JsonSerializer.Serialize(exclusion.StageLabels)).Append('\n');
+
         builder.Append('\n').Append("Configuration\n");
         AppendField(builder, "max_concurrent_planning", report.Configuration.Concurrency.MaxConcurrentPlanning.ToString(CultureInfo.InvariantCulture));
         AppendField(builder, "max_concurrent_delivery", report.Configuration.Concurrency.MaxConcurrentDelivery.ToString(CultureInfo.InvariantCulture));
@@ -126,6 +151,31 @@ internal static class DryRunReportWriter
     private static string Checkout(Inspection.GitWorktreeSnapshot entry) => entry.Detached ? "detached HEAD" : "branch " + JsonSerializer.Serialize(entry.Branch);
 
     private static string Role(PlanningRole role) => role == PlanningRole.PlanChallenger ? "plan_challenger" : "planner";
+
+    private static void AppendTaskCandidates(StringBuilder builder, IReadOnlyList<TaskPoolCandidate> candidates, string emptyMarker)
+    {
+        if (candidates.Count == 0) builder.Append("  ").Append(emptyMarker).Append('\n');
+        foreach (var candidate in candidates) AppendTaskCandidate(builder, candidate, includeCapacityWait: false);
+    }
+
+    private static void AppendTaskCandidate(StringBuilder builder, TaskPoolCandidate candidate, bool includeCapacityWait)
+    {
+        builder.Append("  rank=").Append(candidate.Rank.ToString(CultureInfo.InvariantCulture)).Append(' ')
+            .Append(JsonSerializer.Serialize(candidate.Bead.Id)).Append("; role=")
+            .Append(AgentRoles.ToConfigKey(candidate.Role))
+            .Append("; priority=").Append(candidate.Bead.Priority.ToString(CultureInfo.InvariantCulture))
+            .Append("; created_at=").Append(JsonSerializer.Serialize(candidate.Bead.CreatedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)))
+            .Append("; source=").Append(candidate.RecoveredAfterClaimRelease ? "hypothetical_post_release" : "native_unassigned_ready");
+        if (includeCapacityWait) builder.Append("; reason=waiting_for_capacity");
+        builder.Append('\n');
+    }
+
+    private static string TaskExclusionCode(TaskStageExclusionCode code) => code switch
+    {
+        TaskStageExclusionCode.UnknownStage => "unknown_stage",
+        TaskStageExclusionCode.MultipleStages => "multiple_stages",
+        _ => throw new ArgumentOutOfRangeException(nameof(code), code, "Unknown task-stage exclusion code")
+    };
 
     private static string Source(PlanningPoolCandidate candidate) => candidate.RecoveredAfterClaimRelease
         ? "hypothetical_post_release" : "native_unassigned_ready";

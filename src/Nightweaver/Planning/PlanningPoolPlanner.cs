@@ -6,12 +6,15 @@ internal static class PlanningPoolPlanner
 {
     internal static PlanningPoolPlan Plan(StartupPlan startupPlan, BeadsReadiness readiness,
         int maxConcurrentPlanning, int maxActivePlanBeads)
+        => Plan(PostSweepReadinessProjector.Project(startupPlan, readiness), maxConcurrentPlanning, maxActivePlanBeads);
+
+    internal static PlanningPoolPlan Plan(PostSweepSnapshot snapshot, int maxConcurrentPlanning, int maxActivePlanBeads)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxConcurrentPlanning);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxActivePlanBeads);
 
-        var inventory = startupPlan.Inventory;
-        var postSweep = PostSweepReadinessProjector.Project(startupPlan, readiness);
+        var inventory = snapshot.Inventory;
+        var postSweep = snapshot.Readiness;
         var activeCount = inventory.ById.Values.Count(bead => bead.IssueType == "task"
             && bead.Status is "open" or "in_progress"
             && !HasPauseLabel(bead));
@@ -44,7 +47,7 @@ internal static class PlanningPoolPlanner
             candidates.Add((bead, role, recovered));
         }
 
-        candidates.Sort((left, right) => ProductBeadOrder.Compare(left.Bead, right.Bead));
+        candidates.Sort((left, right) => BeadCandidateOrder.Compare(left.Bead, right.Bead));
         var ranked = candidates.Select((candidate, index) => new PlanningPoolCandidate(candidate.Bead, candidate.Role, index + 1, candidate.Recovered)).ToArray();
         var selected = backpressure ? Array.Empty<PlanningPoolCandidate>() : ranked.Take(maxConcurrentPlanning).ToArray();
         var selectedIds = selected.Select(candidate => candidate.Bead.Id).ToHashSet(StringComparer.Ordinal);
@@ -65,7 +68,7 @@ internal static class PlanningPoolPlanner
         || bead.Labels.Contains("needs-human", StringComparer.Ordinal);
 }
 
-internal static class ProductBeadOrder
+internal static class BeadCandidateOrder
 {
     internal static int Compare(BeadSnapshot left, BeadSnapshot right)
     {

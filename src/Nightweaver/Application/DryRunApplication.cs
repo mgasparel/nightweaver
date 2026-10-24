@@ -38,8 +38,10 @@ internal static class DryRunApplication
         var registry = await new GitWorktreeReader(processRunner).ReadAsync(repository, cancellationToken);
         var runtime = RuntimeDirectoryReader.Read(hostPaths, config.Name);
         var startupPlan = StartupPlanner.Plan(config.RecoveryActor, inventory, registry, runtime.Worktrees, runtime.Tmp);
-        var planningPoolPlan = PlanningPoolPlanner.Plan(startupPlan, readiness,
+        var postSweep = PostSweepReadinessProjector.Project(startupPlan, readiness);
+        var planningPoolPlan = PlanningPoolPlanner.Plan(postSweep,
             config.Concurrency.MaxConcurrentPlanning, config.Concurrency.MaxActivePlanBeads);
+        var deliveryDiscoveryPlan = DeliveryDiscoveryPlanner.Plan(postSweep, config.Concurrency.MaxConcurrentDelivery);
 
         var header = new ProjectHeader(
             config.Name.Value,
@@ -54,7 +56,7 @@ internal static class DryRunApplication
         var report = new DryRunReport(
             header,
             new ConfigurationSection(config.Concurrency, config.Limits),
-            new AgentRolesSection(config.AgentDefaults, config.Roles), startupPlan, planningPoolPlan);
+            new AgentRolesSection(config.AgentDefaults, config.Roles), startupPlan, planningPoolPlan, deliveryDiscoveryPlan);
         environment.Out.Write(DryRunReportWriter.Render(report));
     }
 }
