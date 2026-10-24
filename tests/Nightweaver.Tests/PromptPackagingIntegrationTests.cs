@@ -17,6 +17,34 @@ public sealed class PromptPackagingIntegrationTests
     ];
 
     [Fact]
+    public async Task DeliveryRolePromptsContainTheSuccessfulPathHandoffInstructions()
+    {
+        var root = FindRepositoryRoot();
+        var implementer = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "implementer.md"), TestContext.Current.CancellationToken);
+        var reviewer = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "reviewer.md"), TestContext.Current.CancellationToken);
+        var qa = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "qa.md"), TestContext.Current.CancellationToken);
+
+        Assert.Contains("git branch --show-current", implementer, StringComparison.Ordinal);
+        Assert.Contains("gh pr list --head nightweaver/<bead-id>", implementer, StringComparison.Ordinal);
+        Assert.Contains("gh pr view <number-or-url>", implementer, StringComparison.Ordinal);
+        Assert.Contains("gh pr create --base <default_branch> --head nightweaver/<bead-id>", implementer, StringComparison.Ordinal);
+        Assert.Contains("Keep status `in_progress`", implementer, StringComparison.Ordinal);
+        Assert.Contains("stage:review", implementer, StringComparison.Ordinal);
+
+        Assert.Contains("full committed branch diff against `origin/<default_branch>`", reviewer, StringComparison.Ordinal);
+        Assert.Contains("do not build, run tests", reviewer, StringComparison.Ordinal);
+        Assert.Contains("stage:qa", reviewer, StringComparison.Ordinal);
+        Assert.Contains("Keep status `in_progress`", reviewer, StringComparison.Ordinal);
+
+        Assert.Contains("build and boot the software", qa, StringComparison.Ordinal);
+        Assert.Contains("exact commands plus observed behavior", qa, StringComparison.Ordinal);
+        Assert.Contains("Stop any test services", qa, StringComparison.Ordinal);
+        Assert.Contains("git status --porcelain` is empty", qa, StringComparison.Ordinal);
+        Assert.Contains("stage:merge", qa, StringComparison.Ordinal);
+        Assert.Contains("Keep status `in_progress`", qa, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DotnetBuildAndPublishCopyEditablePromptsAndPreparationReadsOutputCopies()
     {
         using var temp = new TempDirectory();

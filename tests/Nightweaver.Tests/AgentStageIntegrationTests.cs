@@ -102,6 +102,87 @@ public sealed class AgentStageIntegrationTests
     }
 
     [Fact]
+    public async Task DeliverySlotKeepsOneClaimAndPersistentWorktreeAcrossEverySupportedEntryStage()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var entries = new[]
+        {
+            (Label: (string?)null, Roles: new[] { AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa }),
+            (Label: (string?)"stage:implement", Roles: new[] { AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa }),
+            (Label: (string?)"stage:review", Roles: new[] { AgentRole.Reviewer, AgentRole.Qa }),
+            (Label: (string?)"stage:qa", Roles: new[] { AgentRole.Qa })
+        };
+
+        foreach (var entry in entries)
+        {
+            var bead = entry.Label is null
+                ? target.CreateBead($"Delivery slot {Guid.NewGuid():N}", "task")
+                : target.CreateBead($"Delivery slot {Guid.NewGuid():N}", "task", entry.Label);
+            var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-observations.jsonl");
+            var actions = entry.Roles.ToDictionary(role => role, role => role switch
+            {
+                AgentRole.Implementer => entry.Label is null ? "slot-implement-unlabeled" : "slot-implement",
+                AgentRole.Reviewer => "slot-review",
+                AgentRole.Qa => "slot-qa",
+                _ => throw new InvalidOperationException($"Unexpected Delivery role {role}.")
+            });
+
+            var outcome = await target.RunDeliverySlotAsync(bead, actions, observations);
+
+            var failureLog = outcome.LastStage is { } lastStage && File.Exists(lastStage.StageResult.LogFilePath)
+                ? File.ReadAllText(lastStage.StageResult.LogFilePath)
+                : "(no invocation log)";
+            Assert.True(outcome.MergeReady,
+                $"{outcome.Disposition}: {outcome.Diagnostic}; last role {outcome.LastRole}; "
+                + $"retry status {outcome.LastStage?.Status}; failure {outcome.LastStage?.StageResult.Failure?.Kind}: {outcome.LastStage?.StageResult.Failure?.Reason}; "
+                + $"logs {outcome.LastStage?.StageResult.LogFilePath}\n{failureLog}");
+            Assert.Equal(entry.Roles, target.LastSlotRoles);
+            var claimWrites = AgentStageTargetFixture.ClaimWrites(target.LastSlotRequests, bead);
+            Assert.Single(claimWrites, request => AgentStageTargetFixture.ClaimWriteStatus(request) == "open");
+            Assert.Single(claimWrites, request => AgentStageTargetFixture.ClaimWriteStatus(request) == "in_progress");
+            var final = target.ReadBead(bead);
+            Assert.Equal("open", final.Status);
+            Assert.Null(final.Assignee);
+            Assert.Equal("stage:merge", target.ReadState(bead).Stage);
+
+            var records = File.ReadAllLines(observations)
+                .Select(line => JsonSerializer.Deserialize<SlotObservation>(line)!)
+                .ToArray();
+            Assert.Equal(entry.Roles.Length, records.Length);
+            Assert.Equal(entry.Roles, records.Select(record => record.Role).ToArray());
+            Assert.All(records, record =>
+            {
+                Assert.Equal("in_progress", record.Status);
+                Assert.Equal("nightweaver:demo", record.Assignee);
+                Assert.Equal(target.WorktreePath(bead), record.Worktree);
+            });
+            Assert.Equal($"nightweaver/{bead}", records[^1].Branch);
+            Assert.All(records, record => Assert.Equal(records[0].Worktree, record.Worktree));
+            var expectedInputStages = entry.Label switch
+            {
+                null or "stage:implement" => new[] { entry.Label, "stage:review", "stage:qa" },
+                "stage:review" => new[] { "stage:review", "stage:qa" },
+                _ => new[] { "stage:qa" }
+            };
+            Assert.Equal(expectedInputStages, records.Select(record => record.Stage).ToArray());
+
+            var worktree = target.WorktreePath(bead);
+            Assert.Equal($"nightweaver/{bead}", target.CurrentBranch(bead));
+            var status = target.RunTarget("git", ["status", "--porcelain"], worktree);
+            Assert.True(status.Length == 0,
+                $"Entry {entry.Label ?? "(unlabeled)"} left worktree dirty:\n{status}"
+                + target.RunTarget("git", ["diff", "--", ".gitignore", "README.md"], worktree));
+            if (entry.Roles.Contains(AgentRole.Implementer))
+            {
+                Assert.True(File.Exists(System.IO.Path.Combine(worktree, "delivery-slot.txt")));
+                Assert.True(File.Exists(System.IO.Path.Combine(worktree, ".nightweaver-ignored", "slot-sentinel.bin")));
+                Assert.Contains("slot fixture implementation", target.RunTarget("git", ["log", "-1", "--format=%s"], worktree), StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DistinctRetryFailuresExhaustDefaultBudgetAfterThreeNativeAttempts()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
@@ -242,6 +323,9 @@ public sealed class AgentStageIntegrationTests
         Assert.True(File.Exists(result.LogFilePath), result.LogFilePath);
     }
 
+    private sealed record SlotObservation(string BeadId, AgentRole Role, string? Stage, string Status, string? Assignee,
+        string Worktree, string Branch, string Head, string Action);
+
     private static IEnumerable<string> StringValues(JsonElement element)
     {
         if (element.ValueKind == JsonValueKind.String)
@@ -273,6 +357,7 @@ public sealed class AgentStageIntegrationTests
             Directory.CreateDirectory(OriginPath);
             Run("git", ["init", "--bare", OriginPath], temp.Path);
             Run("git", ["init", "-b", "main"], TargetPath);
+            Run("git", ["config", "core.autocrlf", "false"], TargetPath);
             Run("git", ["config", "user.name", "Nightweaver Fixture"], TargetPath);
             Run("git", ["config", "user.email", "fixture@example.invalid"], TargetPath);
             File.WriteAllText(System.IO.Path.Combine(TargetPath, "README.md"), "fixture base\n", new UTF8Encoding(false));
@@ -313,14 +398,19 @@ public sealed class AgentStageIntegrationTests
 
         private string TargetPath { get; }
         private string OriginPath { get; }
+        internal string RootPath => temp.Path;
         internal HostPaths Host { get; }
         private string FakeCliRoot { get; }
         private string UserHome { get; }
         private IReadOnlyDictionary<string, string?> BeadsEnvironment { get; }
         internal IReadOnlyList<ProcessRequest> LastRetryRequests { get; private set; } = [];
         internal int LastRetryLifecycleCount { get; private set; }
+        internal IReadOnlyList<ProcessRequest> LastSlotRequests { get; private set; } = [];
+        internal IReadOnlyList<AgentRole> LastSlotRoles { get; private set; } = [];
 
         internal string Path => TargetPath;
+        internal string RunTarget(string tool, IReadOnlyList<string> arguments, string? workingDirectory = null) =>
+            Run(tool, arguments, workingDirectory ?? TargetPath, BeadsEnvironment);
         internal string WorktreePath(string beadId) => System.IO.Path.Combine(Host.WorktreesRoot(ProjectSlug.Parse("demo")), beadId);
         internal string CurrentBranch(string beadId) => Run("git", ["branch", "--show-current"], WorktreePath(beadId)).Trim();
 
@@ -510,6 +600,101 @@ public sealed class AgentStageIntegrationTests
                 Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", oldClassifierAction);
                 Environment.SetEnvironmentVariable("PATH", oldPath);
             }
+        }
+
+        internal async Task<DeliverySlotOutcome> RunDeliverySlotAsync(
+            string beadId,
+            Dictionary<AgentRole, string> actions,
+            string observationPath)
+        {
+            const string actor = "nightweaver:demo";
+            var project = CreateProject(AgentCli.Codex);
+            var systemRunner = new SystemProcessRunner();
+            var runner = new RecordingProcessRunner((request, token) => systemRunner.RunAsync(request, token));
+            var preparer = new AgentInvocationPreparer();
+            var invocationRoles = new Dictionary<string, AgentRole>(StringComparer.Ordinal);
+            var pidFiles = new List<string>();
+            var roles = new List<AgentRole>();
+            long sequence = 0;
+
+            async Task<PreparedAgentInvocation> Prepare(HostPaths hostPaths, ProjectConfig projectConfig,
+                AgentRole role, AgentDispatchContext context, string worktreePath, CancellationToken token)
+            {
+                var invocation = await preparer.PrepareAsync(hostPaths, projectConfig, role, context, worktreePath, token);
+                var canonical = System.IO.Path.GetFullPath(System.IO.Path.Combine(hostPaths.WorktreesRoot(projectConfig.Name), context.BeadId));
+                Assert.Equal(canonical, worktreePath);
+                Assert.Equal(canonical, invocation.WorkingDirectory);
+                Assert.Equal($"nightweaver/{context.BeadId}", Run("git", ["branch", "--show-current"], worktreePath).Trim());
+                invocationRoles.Add(invocation.InvocationId, role);
+                return invocation;
+            }
+
+            Task<AgentExecutionResult> Execute(HostPaths hostPaths, ProjectSlug projectSlug,
+                PreparedAgentInvocation invocation, CancellationToken token)
+            {
+                var role = invocationRoles[invocation.InvocationId];
+                if (!actions.TryGetValue(role, out var action))
+                    throw new InvalidOperationException($"No fixture action was provided for {role}.");
+                roles.Add(role);
+                var pidFile = System.IO.Path.Combine(temp.Path, "slot-pids", Interlocked.Increment(ref sequence).ToString(System.Globalization.CultureInfo.InvariantCulture) + ".txt");
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(pidFile)!);
+                pidFiles.Add(pidFile);
+                AppendSlotObservation(observationPath, beadId, role, invocation.WorkingDirectory, action);
+                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION", action);
+                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE", pidFile);
+                return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation, token);
+            }
+
+            var oldActor = Environment.GetEnvironmentVariable("BD_ACTOR");
+            var oldAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION");
+            var oldPidFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE");
+            var oldPath = Environment.GetEnvironmentVariable("PATH");
+            try
+            {
+                Environment.SetEnvironmentVariable("BD_ACTOR", actor);
+                Environment.SetEnvironmentVariable("PATH", FakeCliRoot + System.IO.Path.PathSeparator + (oldPath ?? ""));
+                var stages = new AgentStageCoordinator(runner, prepare: Prepare, execute: Execute);
+                var retries = new OperationalRetryCoordinator(runner, stages: stages);
+                var slotRunner = new DeliveryRoleRunner((paths, config, repository, requestedBead, role, expectedAssignee, token, progress) =>
+                    retries.RunAsync(paths, config, repository, requestedBead, role, expectedAssignee, token, progress));
+                var slot = new DeliverySlotCoordinator(runner, slotRunner);
+                var outcome = await slot.RunAsync(Host, project, new(TargetPath, "main"), beadId,
+                    TestContext.Current.CancellationToken);
+                LastSlotRequests = runner.Requests.ToArray();
+                LastSlotRoles = roles.ToArray();
+                foreach (var pidFile in pidFiles) AssertFixtureExited(pidFile);
+                return outcome;
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("BD_ACTOR", oldActor);
+                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION", oldAction);
+                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE", oldPidFile);
+                Environment.SetEnvironmentVariable("PATH", oldPath);
+            }
+        }
+
+        private void AppendSlotObservation(string path, string beadId, AgentRole role, string worktreePath, string action)
+        {
+            var bead = ReadBead(beadId);
+            var state = BeadWorkflowState.Parse(bead);
+            var observation = new SlotObservation(beadId, role, state.Stage, bead.Status, bead.Assignee,
+                worktreePath, Run("git", ["branch", "--show-current"], worktreePath).Trim(),
+                Run("git", ["rev-parse", "HEAD"], worktreePath).Trim(), action);
+            File.AppendAllText(path, JsonSerializer.Serialize(observation) + Environment.NewLine, new UTF8Encoding(false));
+        }
+
+        internal static ProcessRequest[] ClaimWrites(IReadOnlyList<ProcessRequest> requests, string beadId) =>
+            requests.Where(request => request.FileName == "bd"
+                && request.Arguments.ToList().IndexOf("update") is var updateIndex
+                && updateIndex >= 0 && updateIndex + 1 < request.Arguments.Count && request.Arguments[updateIndex + 1] == beadId
+                && request.Arguments.Contains("--if-assignee", StringComparer.Ordinal)
+                && request.Arguments.Contains("--if-status", StringComparer.Ordinal)).ToArray();
+
+        internal static string? ClaimWriteStatus(ProcessRequest request)
+        {
+            var index = request.Arguments.ToList().IndexOf("--if-status");
+            return index >= 0 && index + 1 < request.Arguments.Count ? request.Arguments[index + 1] : null;
         }
 
         internal string CaptureRootState()

@@ -88,6 +88,10 @@ Only Beads that are open, unassigned, and present in bd's native ready set can b
 
 Exit codes are `0` for a verified stage and completed claim handoff, `1` for an ineligible Bead, operational failure, escalation, incomplete handoff, or cancellation, and `2` for command usage or Project configuration errors. Start/progress/success messages go to standard output. Operational failures, escalation, and cancellation details go to standard error. Successful dispatch retains the managed worktree, branch, and logs for a later explicit dispatch. Cancellation after execution starts stops further retries and follow-on work; inspect the coordinator's resulting claim and runtime state before retrying. This command performs no full lifecycle scheduling or general pause cleanup.
 
+## Internal Delivery slot
+
+Nightweaver also has an internal `DeliverySlotCoordinator` seam for one Plan Bead. It claims a native-ready, unassigned task Bead, selects Implementer, Reviewer, or QA from its verified stage, and can carry one claim and the persistent `nightweaver/<bead-id>` worktree through the successful path to `stage:merge`. At merge readiness it verifies the stage and releases the claim to open/unassigned for the Merger Agent. Legal repair and product-decision outcomes stop the slot for their owning workflow. This coordinator is not exposed as a CLI command and does not provide a concurrent Delivery Pool or scheduler.
+
 Examples from an unrelated caller directory with spaces in the paths:
 
 ```powershell
