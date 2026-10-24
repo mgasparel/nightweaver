@@ -155,6 +155,8 @@ internal static class Snapshot
 
     internal static string FileTree(string root)
     {
+        var rootAttributes = File.GetAttributes(root);
+        var rootTimestamp = File.GetLastWriteTimeUtc(root).ToString("O", System.Globalization.CultureInfo.InvariantCulture);
         var entries = SafeEntries(root)
             .Select(path =>
             {
@@ -181,7 +183,18 @@ internal static class Snapshot
                 return $"F {relative} {info.Length} {hash} {attributes} {timestamp}";
             })
             .Order(StringComparer.Ordinal);
-        return string.Join("\n", entries);
+        return string.Join("\n", new[] { $"R . {rootAttributes} {rootTimestamp}" }.Concat(entries));
+    }
+
+    internal static string Location(string path)
+    {
+        if (Directory.Exists(path)) return FileTree(path);
+        if (!File.Exists(path)) return "(missing)";
+        var info = new FileInfo(path);
+        using var stream = File.OpenRead(path);
+        var hash = Convert.ToHexString(SHA256.HashData(stream));
+        var timestamp = File.GetLastWriteTimeUtc(path).ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+        return $"F . {info.Length} {hash} {File.GetAttributes(path)} {timestamp}";
     }
 
     internal static string GitStatus(string path)
@@ -219,17 +232,19 @@ internal sealed class BeadsFixture : IDisposable
 {
     private readonly TempDirectory temp = new();
     internal string Path { get; }
+    internal string Root => temp.Path;
+    internal string UserHome { get; }
     internal IReadOnlyDictionary<string, string?> Environment { get; }
     internal string ControlBeadId { get; }
 
     internal BeadsFixture(string relativePath = "repo")
     {
         Path = temp.CreateDirectory(relativePath);
-        var home = temp.CreateDirectory("isolated user");
+        UserHome = temp.CreateDirectory("isolated user");
         var environment = new Dictionary<string, string?>(BeadsCommand.Create(Path).Environment)
         {
-            ["HOME"] = home, ["USERPROFILE"] = home, ["APPDATA"] = home, ["XDG_CONFIG_HOME"] = home,
-            ["GIT_CONFIG_GLOBAL"] = System.IO.Path.Combine(home, "gitconfig"), ["GIT_CONFIG_NOSYSTEM"] = "1",
+            ["HOME"] = UserHome, ["USERPROFILE"] = UserHome, ["APPDATA"] = UserHome, ["XDG_CONFIG_HOME"] = UserHome,
+            ["GIT_CONFIG_GLOBAL"] = System.IO.Path.Combine(UserHome, "gitconfig"), ["GIT_CONFIG_NOSYSTEM"] = "1",
             ["GIT_AUTHOR_NAME"] = "Fixture", ["GIT_AUTHOR_EMAIL"] = "fixture@example.invalid",
             ["GIT_COMMITTER_NAME"] = "Fixture", ["GIT_COMMITTER_EMAIL"] = "fixture@example.invalid"
         };
@@ -244,7 +259,7 @@ internal sealed class BeadsFixture : IDisposable
     internal string Run(string tool, IReadOnlyList<string> args)
     {
         var result = new SystemProcessRunner().RunAsync(new ProcessRequest(tool, args, Path, Environment, TimeSpan.FromSeconds(30)), CancellationToken.None).GetAwaiter().GetResult();
-        if (result.ExitCode != 0) throw new InvalidOperationException($"Required real-tool fixture prerequisite {tool} failed: {result.StandardError}");
+        if (result.ExitCode != 0) throw new InvalidOperationException($"Required real-tool fixture prerequisite {tool} failed (exit {result.ExitCode}): {result.StandardError}{result.StandardOutput}");
         return result.StandardOutput;
     }
 

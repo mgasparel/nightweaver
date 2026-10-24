@@ -113,15 +113,26 @@ internal sealed class StartupSweepFixture : IDisposable
     internal IReadOnlyList<string> ActiveIds { get; }
     internal IReadOnlyList<string> OrphanIds { get; }
 
-    internal StartupSweepFixture()
+    internal StartupSweepFixture(string? publishedArtifactDirectory = null)
     {
         Host = temp.CreateDirectory("nightweaver host");
         Caller = temp.CreateDirectory("unrelated caller");
         External = temp.CreateDirectory("external");
         temp.WriteFile("external/sentinel", "never inspect or modify through a link");
-        var appDirectory = Assembly.GetExecutingAssembly().GetCustomAttributes<AssemblyMetadataAttribute>().Single(attribute => attribute.Key == "NightweaverAppDir").Value!;
-        foreach (var file in Directory.EnumerateFiles(appDirectory)) File.Copy(file, Path.Combine(Host, Path.GetFileName(file)));
-        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(Path.Combine(Host, "nightweaver"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var appDirectory = publishedArtifactDirectory ?? Assembly.GetExecutingAssembly().GetCustomAttributes<AssemblyMetadataAttribute>().Single(attribute => attribute.Key == "NightweaverAppDir").Value!;
+        foreach (var directory in Directory.EnumerateDirectories(appDirectory, "*", SearchOption.AllDirectories))
+            Directory.CreateDirectory(Path.Combine(Host, Path.GetRelativePath(appDirectory, directory)));
+        foreach (var file in Directory.EnumerateFiles(appDirectory, "*", SearchOption.AllDirectories))
+        {
+            var destination = Path.Combine(Host, Path.GetRelativePath(appDirectory, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(file, destination);
+            if (!OperatingSystem.IsWindows())
+            {
+                try { File.SetUnixFileMode(destination, File.GetUnixFileMode(file)); }
+                catch (PlatformNotSupportedException) { }
+            }
+        }
         Config = temp.WriteFile("nightweaver host/projects/demo.json", JsonSerializer.Serialize(new { name = "demo", target_repository = new { path = Target.Path } }));
         temp.WriteFile("nightweaver host/logs/demo/retained.log", "preserve logs");
         Target.Run("git", ["commit", "--allow-empty", "-m", "fixture base"]);
