@@ -20,6 +20,8 @@ public sealed class PublishedCliArtifactFixture : IDisposable
     public string PublishCommand { get; }
     public string AppHostPath => Path.Combine(PublishDirectory, OperatingSystem.IsWindows() ? "nightweaver.exe" : "nightweaver");
 
+    public void CopyPublishedAppTo(string destination) => CopyDirectory(PublishDirectory, destination);
+
     public PublishedCliArtifactFixture()
     {
         RepositoryRoot = FindRepositoryRoot();

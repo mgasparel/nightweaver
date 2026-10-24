@@ -53,6 +53,36 @@ public sealed class AuthorityMatrixTests
     }
 
     [Fact]
+    public void InfersLifecycleRoleFromTypeAndStage()
+    {
+        var cases = new (string Type, string? Stage, AgentRole Role)[]
+        {
+            ("task", null, AgentRole.Implementer),
+            ("task", "stage:implement", AgentRole.Implementer),
+            ("task", "stage:review", AgentRole.Reviewer),
+            ("task", "stage:qa", AgentRole.Qa),
+            ("task", "stage:merge", AgentRole.Merger),
+            ("feature", null, AgentRole.Planner),
+            ("feature", "stage:plan", AgentRole.Planner),
+            ("bug", "stage:plan-approved", AgentRole.Planner),
+            ("bug", "stage:plan-challenge", AgentRole.PlanChallenger)
+        };
+
+        foreach (var (type, stage, role) in cases)
+        {
+            Assert.True(AuthorityMatrix.TryInferLifecycleRole(State("mapped", type, stage, labels: ["ready-for-agent"]), out var actual, out var reason), reason);
+            Assert.Equal(role, actual);
+        }
+
+        Assert.False(AuthorityMatrix.TryInferLifecycleRole(State("mismatch", "task", "stage:plan"), out _, out var taskReason));
+        Assert.Contains("cannot be dispatched", taskReason, StringComparison.Ordinal);
+        Assert.False(AuthorityMatrix.TryInferLifecycleRole(State("mismatch", "feature", "stage:review"), out _, out var productReason));
+        Assert.Contains("cannot be dispatched", productReason, StringComparison.Ordinal);
+        Assert.False(AuthorityMatrix.TryInferLifecycleRole(State("mismatch", "epic"), out _, out var typeReason));
+        Assert.Contains("unsupported lifecycle type", typeReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RejectsWrongRoleTypeStageClosedAndPausedInputs()
     {
         Assert.Contains("feature or bug", AuthorityMatrix.ValidateInput(AgentRole.Planner, State("task", "task"))!, StringComparison.Ordinal);

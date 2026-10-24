@@ -58,17 +58,56 @@ public sealed class CommandLineAndPathTests
         var options = CommandLineParser.Parse(["--help", "--project", "demo", "--config", "other.json"]);
         Assert.True(options.Help);
         Assert.Throws<UsageException>(() => CommandLineParser.Parse(["--help", "--bogus"]));
-        const string expectedHelp =
-            "Usage: nightweaver (--project <project-slug> | --config <path-to-project-json>) --dry-run\n" +
-            "       nightweaver --help\n\n" +
-            "Options:\n" +
-            "  --project <project-slug>       Load <nightweaver-root>/projects/<project-slug>.json.\n" +
-            "  --config <path-to-project-json> Load a Project configuration file.\n" +
-            "  --dry-run                      Validate and print a hypothetical startup snapshot.\n" +
-            "  --help, -h                     Print this help.\n\n" +
-            "<nightweaver-root> is the directory containing the nightweaver executable.\n\n" +
-            "Exit codes: 0 success, 1 inspection failure, 2 usage or configuration error.\n";
-        Assert.Equal(expectedHelp, HelpText.Usage);
+        Assert.Contains("nightweaver dispatch <bead-id>", HelpText.Usage, StringComparison.Ordinal);
+        Assert.Contains("Exit codes: 0 success, 1 dispatch/inspection failure, 2 usage or configuration error.", HelpText.Usage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParserAcceptsDispatchSelectorsRoleOverridesAndHelp()
+    {
+        var automatic = CommandLineParser.Parse(["dispatch", "ns-du2.4", "--project=demo"]);
+        Assert.Equal("ns-du2.4", automatic.Dispatch!.BeadId);
+        Assert.Null(automatic.Dispatch.ExplicitRole);
+        Assert.IsType<ProjectSelector.BySlug>(automatic.Selector);
+
+        var explicitRole = CommandLineParser.Parse(["dispatch", "ns-du2.4", "--role", "reviewer", "--config=project.json"]);
+        Assert.Equal(AgentRole.Reviewer, explicitRole.Dispatch!.ExplicitRole);
+        Assert.IsType<ProjectSelector.ByConfigPath>(explicitRole.Selector);
+
+        var helpWithoutTarget = CommandLineParser.Parse(["dispatch", "--help"]);
+        Assert.True(helpWithoutTarget.Help);
+        Assert.Null(helpWithoutTarget.Dispatch!.BeadId);
+        var helpWithTarget = CommandLineParser.Parse(["dispatch", "ns-du2.4", "--help", "--project", "demo"]);
+        Assert.True(helpWithTarget.Help);
+        Assert.Equal("ns-du2.4", helpWithTarget.Dispatch!.BeadId);
+        Assert.Throws<UsageException>(() => CommandLineParser.Parse(["dispatch", "--help", "--unknown"]));
+        Assert.Throws<UsageException>(() => CommandLineParser.Parse(["dispatch", "ns-du2.4", "--help", "--role"]));
+    }
+
+    [Fact]
+    public void ParserRejectsInvalidDispatchSyntaxAndUnsafeIds()
+    {
+        var cases = new (string[] Args, string Error)[]
+        {
+            (["dispatch"], "requires one Bead ID"),
+            (["dispatch", "ns-du2.4"], "one of '--project"),
+            (["dispatch", "ns-du2.4", "extra", "--project", "demo"], "unexpected argument 'extra'"),
+            (["dispatch", "ns-du2.4", "--project", "demo", "--config", "x.json"], "cannot be used together"),
+            (["dispatch", "ns-du2.4", "--project=demo", "--project", "other"], "specified more than once"),
+            (["dispatch", "ns-du2.4", "--role"], "option '--role' requires a value"),
+            (["dispatch", "ns-du2.4", "--role="], "option '--role' requires a value"),
+            (["dispatch", "ns-du2.4", "--role", "Classifier"], "unknown lifecycle role"),
+            (["dispatch", "ns-du2.4", "--role", "classifier"], "not a lifecycle role"),
+            (["dispatch", "ns-du2.4", "--dry-run", "--project", "demo"], "cannot be combined"),
+            (["dispatch", "../escape", "--project", "demo"], "unsafe Bead ID"),
+            (["dispatch", "CON.notes", "--project", "demo"], "unsafe Bead ID"),
+            (["--project", "demo", "--role", "reviewer", "--dry-run"], "only valid with 'dispatch'")
+        };
+        foreach (var (args, error) in cases)
+        {
+            var exception = Assert.Throws<UsageException>(() => CommandLineParser.Parse(args));
+            Assert.Contains(error, exception.Message, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

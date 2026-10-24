@@ -21,7 +21,8 @@ internal sealed record AgentStageResult(
     string InvocationId,
     string LogFilePath,
     AgentOperationalFailure? Failure,
-    IReadOnlyList<string> Diagnostics)
+    IReadOnlyList<string> Diagnostics,
+    BeadWorkflowState? VerifiedState = null)
 {
     internal bool Succeeded => Failure is null;
 }
@@ -141,7 +142,7 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
             var primary = findings.OrderBy(failure => FailureOrder(failure.Kind)).First();
             foreach (var secondary in findings.Where(failure => !ReferenceEquals(failure, primary)))
                 diagnostics.Add($"{secondary.Kind}: {secondary.Reason}");
-            return new(role, before.Id, execution.InvocationId, execution.LogFilePath, primary, diagnostics.AsReadOnly());
+            return new(role, before.Id, execution.InvocationId, execution.LogFilePath, primary, diagnostics.AsReadOnly(), after);
         }
 
         if (diagnostics.Count > 0)
@@ -155,7 +156,7 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
                 "the post-exit Bead state could not be validated");
         }
 
-        return new(role, before.Id, execution.InvocationId, execution.LogFilePath, null, Array.Empty<string>());
+        return new(role, before.Id, execution.InvocationId, execution.LogFilePath, null, Array.Empty<string>(), after);
     }
 
     private async Task<ProcessResult> RunGitAsync(IReadOnlyList<string> arguments, string workingDirectory,

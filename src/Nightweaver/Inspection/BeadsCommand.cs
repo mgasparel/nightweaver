@@ -20,10 +20,11 @@ internal static class BeadsCommand
     internal static ProcessRequest CreateUpDependencies(string workingDirectory, string beadId)
         => Create(workingDirectory, ["--readonly", "--sandbox", "dep", "list", beadId, "--direction", "up", "--json"]);
 
-    internal static ProcessRequest CreateWrite(string workingDirectory, IReadOnlyList<string> arguments)
+    internal static ProcessRequest CreateWrite(string workingDirectory, IReadOnlyList<string> arguments, string? actor = null)
     {
         var environment = CreateEnvironment(workingDirectory, readOnly: false);
-        return new ProcessRequest("bd", ["--sandbox", "--dolt-auto-commit", "on", .. arguments], workingDirectory,
+        var actorArguments = actor is null ? Array.Empty<string>() : new[] { "--actor", actor };
+        return new ProcessRequest("bd", ["--sandbox", .. actorArguments, "--dolt-auto-commit", "on", .. arguments], workingDirectory,
             environment, TimeSpan.FromSeconds(30));
     }
 

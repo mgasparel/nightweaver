@@ -9,6 +9,27 @@ internal enum OperationalRetryStatus
     Escalated
 }
 
+internal enum OperationalRetryProgressKind
+{
+    AttemptStarted,
+    RetryPreparing,
+    ClassifierStarted,
+    ClassifierCompleted
+}
+
+internal sealed record OperationalRetryProgress(
+    OperationalRetryProgressKind Kind,
+    long Attempt,
+    long MaximumAttempts,
+    AgentOperationalFailureKind? FailureKind = null,
+    string? Reason = null,
+    DuplicateFailureVerdict? ClassifierVerdict = null,
+    string? ClassifierDiagnostic = null,
+    string? InvocationId = null,
+    string? LogFilePath = null,
+    string? ClassifierInvocationId = null,
+    string? ClassifierLogFilePath = null);
+
 internal sealed record OperationalRetryOutcome(
     OperationalRetryStatus Status,
     AgentStageResult StageResult,
@@ -74,7 +95,8 @@ internal sealed class OperationalRetryCoordinator
         string beadId,
         AgentRole role,
         string expectedAssignee,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<OperationalRetryProgress>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(project);
@@ -94,6 +116,7 @@ internal sealed class OperationalRetryCoordinator
         var attemptCount = 1L;
         var beforeState = session.InitialState;
         var beforeHead = session.Worktree.HeadSha;
+        progress?.Invoke(new(OperationalRetryProgressKind.AttemptStarted, attemptCount, maximumAttempts));
         var latest = await stages.RunAttemptAsync(session, beforeState, beforeHead, cancellationToken).ConfigureAwait(false);
         if (latest.Succeeded)
             return Success(latest, attemptCount);
@@ -124,8 +147,15 @@ internal sealed class OperationalRetryCoordinator
             {
                 // Compare adjacent failures with the original stage identity. The current failed
                 // worktree and settled logs are still present at this point.
+                progress?.Invoke(new(OperationalRetryProgressKind.ClassifierStarted, attemptCount, maximumAttempts,
+                    latest.Failure!.Kind, latest.Failure.Reason, InvocationId: latest.InvocationId,
+                    LogFilePath: latest.LogFilePath));
                 lastClassification = await compare(paths, project, session.DispatchContext,
                     role, session.Worktree.Path, previous, latest, cancellationToken).ConfigureAwait(false);
+                progress?.Invoke(new(OperationalRetryProgressKind.ClassifierCompleted, attemptCount, maximumAttempts,
+                    latest.Failure!.Kind, latest.Failure.Reason, lastClassification.Verdict, lastClassification.Diagnostic,
+                    latest.InvocationId, latest.LogFilePath, lastClassification.ClassifierInvocationId,
+                    lastClassification.ClassifierLogFilePath));
                 if (lastClassification.Verdict == DuplicateFailureVerdict.Duplicate)
                 {
                     var findings = RetryFindings(attemptCount, retries, latest, lastClassification,
@@ -149,6 +179,9 @@ internal sealed class OperationalRetryCoordinator
             ProvisionedWorktree resetWorktree;
             try
             {
+                progress?.Invoke(new(OperationalRetryProgressKind.RetryPreparing, attemptCount + 1, maximumAttempts,
+                    latest.Failure!.Kind, latest.Failure.Reason, InvocationId: latest.InvocationId,
+                    LogFilePath: latest.LogFilePath));
                 resetWorktree = await reset(paths, project.Name, repository, beadId, session.Purpose, cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -170,6 +203,9 @@ internal sealed class OperationalRetryCoordinator
             beforeHead = resetWorktree.HeadSha;
             previous = latest;
             attemptCount++;
+            progress?.Invoke(new(OperationalRetryProgressKind.AttemptStarted, attemptCount, maximumAttempts,
+                previous.Failure!.Kind, previous.Failure.Reason, InvocationId: previous.InvocationId,
+                LogFilePath: previous.LogFilePath));
             latest = await stages.RunAttemptAsync(session, beforeState, beforeHead, cancellationToken).ConfigureAwait(false);
             if (latest.Succeeded)
                 return new(OperationalRetryStatus.Succeeded, latest, attemptCount, null, null, lastClassification);
@@ -284,7 +320,8 @@ internal sealed class OperationalRetryCoordinator
             .ConfigureAwait(false);
         if (!progress.Succeeded)
             throw new OperationalRetryEscalationIncompleteException(
-                $"Needs-human escalation for '{session.BeadId}' was incomplete: {string.Join("; ", progress.Failures)}", progress);
+                $"Needs-human escalation for '{session.BeadId}' was incomplete after invocation '{latest.InvocationId}' "
+                + $"(log '{latest.LogFilePath}'): {string.Join("; ", progress.Failures)}", progress);
         return new(OperationalRetryStatus.Escalated, latest, attempts, cause, progress, classification);
     }
 

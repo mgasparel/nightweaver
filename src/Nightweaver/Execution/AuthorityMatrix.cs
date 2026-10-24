@@ -14,6 +14,42 @@ internal sealed record AuthorityMatrixResult(bool IsLegal, string? Reason)
 /// <summary>Pure validation of one role's allowed input and output transition.</summary>
 internal static class AuthorityMatrix
 {
+    internal static bool TryInferLifecycleRole(BeadWorkflowState state, out AgentRole role, out string? reason)
+    {
+        role = default;
+        reason = null;
+        if (state.IssueType == "task")
+        {
+            var inferred = state.Stage switch
+            {
+                null or "stage:implement" => AgentRole.Implementer,
+                "stage:review" => AgentRole.Reviewer,
+                "stage:qa" => AgentRole.Qa,
+                "stage:merge" => AgentRole.Merger,
+                _ => (AgentRole?)null
+            };
+            if (inferred is { } taskRole) { role = taskRole; return true; }
+            reason = $"Task Bead '{state.Id}' cannot be dispatched from stage '{state.Stage ?? "(none)"}'.";
+            return false;
+        }
+
+        if (state.IssueType is "feature" or "bug")
+        {
+            var inferred = state.Stage switch
+            {
+                null or "stage:plan" or "stage:plan-approved" => AgentRole.Planner,
+                "stage:plan-challenge" => AgentRole.PlanChallenger,
+                _ => (AgentRole?)null
+            };
+            if (inferred is { } productRole) { role = productRole; return true; }
+            reason = $"Product Bead '{state.Id}' cannot be dispatched from stage '{state.Stage ?? "(none)"}'.";
+            return false;
+        }
+
+        reason = $"Bead '{state.Id}' has unsupported lifecycle type '{state.IssueType}'; dispatch supports task, feature, and bug.";
+        return false;
+    }
+
     internal static string? ValidateInput(AgentRole role, BeadWorkflowState state)
     {
         var expectedProduct = role is AgentRole.Planner or AgentRole.PlanChallenger;

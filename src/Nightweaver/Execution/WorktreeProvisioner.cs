@@ -14,13 +14,6 @@ internal sealed record ProvisionedWorktree(string Path, string HeadSha);
 /// <summary>Creates or safely reuses the per-Bead isolated checkout.</summary>
 internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
 {
-    private static readonly HashSet<string> WindowsDeviceNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$",
-        "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
-    };
-
     internal async Task<ProvisionedWorktree> ProvisionAsync(
         HostPaths hostPaths,
         ProjectSlug project,
@@ -416,21 +409,7 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
         return destination;
     }
 
-    internal static bool IsSafeBeadId(string beadId) => !string.IsNullOrEmpty(beadId)
-        && !Path.IsPathRooted(beadId) && RuntimePaths.SafeId(beadId)
-        && !beadId.Any(character => character <= '\u001f' || "<>:\"/\\|?*".Contains(character))
-        && !beadId.EndsWith(' ') && !beadId.EndsWith('.') && !IsWindowsDeviceName(beadId);
-
-    private static bool IsWindowsDeviceName(string beadId)
-    {
-        var component = beadId.TrimEnd(' ', '.');
-        var stem = component.Split('.', 2)[0];
-        if (WindowsDeviceNames.Contains(stem)) return true;
-        return stem.Length == 4 && stem[..3].Equals("COM", StringComparison.OrdinalIgnoreCase)
-            && stem[3] is '¹' or '²' or '³'
-            || stem.Length == 4 && stem[..3].Equals("LPT", StringComparison.OrdinalIgnoreCase)
-                && stem[3] is '¹' or '²' or '³';
-    }
+    internal static bool IsSafeBeadId(string beadId) => BeadIdSafety.IsSafe(beadId);
 
     internal static bool PathsOverlap(string left, string right) => IsSameOrAncestor(left, right) || IsSameOrAncestor(right, left);
 
