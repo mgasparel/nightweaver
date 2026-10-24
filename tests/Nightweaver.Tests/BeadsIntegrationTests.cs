@@ -67,7 +67,7 @@ public sealed class BeadsIntegrationTests
         Assert.Contains($"\"{unassigned}\": unassigned_in_progress_claim", first, StringComparison.Ordinal);
         Assert.Contains($"\"{otherProject}\": foreign_in_progress_claim", first, StringComparison.Ordinal);
         Assert.DoesNotContain($"\"{decoy}\":", first, StringComparison.Ordinal);
-        Assert.Equal(6, runner.Requests.Count);
+        Assert.Equal(8, runner.Requests.Count);
         Assert.Equal(treeBefore, Snapshot.FileTree(target.Path));
         Assert.Equal(otherBefore, Snapshot.FileTree(other.Path));
         Assert.Equal(hostBefore, Snapshot.FileTree(host));

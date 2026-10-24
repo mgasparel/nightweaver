@@ -14,15 +14,15 @@ internal static class DryRunReportWriter
         var builder = new StringBuilder();
         builder.Append("Nightweaver dry run: hypothetical startup snapshot; no actions are performed.\n\n");
         builder.Append("Project\n");
-        AppendField(builder, "name", project.Name);
-        AppendField(builder, "config", project.ConfigFilePath);
-        AppendField(builder, "nightweaver_root", project.NightweaverRoot);
-        AppendField(builder, "target_repository", project.TargetRepositoryPath);
-        AppendField(builder, "default_branch", project.DefaultBranch);
-        AppendField(builder, "recovery_actor", project.RecoveryActor);
-        AppendField(builder, "worktrees_dir", project.WorktreesDirectory);
-        AppendField(builder, "tmp_dir", project.TmpDirectory);
-        AppendField(builder, "logs_dir", project.LogsDirectory);
+        AppendField(builder, "name", JsonSerializer.Serialize(project.Name));
+        AppendField(builder, "config", JsonSerializer.Serialize(project.ConfigFilePath));
+        AppendField(builder, "nightweaver_root", JsonSerializer.Serialize(project.NightweaverRoot));
+        AppendField(builder, "target_repository", JsonSerializer.Serialize(project.TargetRepositoryPath));
+        AppendField(builder, "default_branch", JsonSerializer.Serialize(project.DefaultBranch));
+        AppendField(builder, "recovery_actor", JsonSerializer.Serialize(project.RecoveryActor));
+        AppendField(builder, "worktrees_dir", JsonSerializer.Serialize(project.WorktreesDirectory));
+        AppendField(builder, "tmp_dir", JsonSerializer.Serialize(project.TmpDirectory));
+        AppendField(builder, "logs_dir", JsonSerializer.Serialize(project.LogsDirectory));
 
         builder.Append("\nStartup claim releases (hypothetical)\n");
         if (report.StartupPlan.Releases.Count == 0) builder.Append("  (none)\n");
@@ -31,6 +31,21 @@ internal static class DryRunReportWriter
             builder.Append("  ").Append(JsonSerializer.Serialize(release.BeadId)).Append(": in_progress -> open; assignee ")
                 .Append(JsonSerializer.Serialize(release.ExpectedAssignee)).Append(" -> unassigned\n");
         }
+        builder.Append("\nWorktree removals (hypothetical)\n");
+        if (report.StartupPlan.Removals.Count == 0) builder.Append("  (none)\n");
+        foreach (var removal in report.StartupPlan.Removals)
+            builder.Append("  ").Append(JsonSerializer.Serialize(removal.BeadId)).Append(": ").Append(JsonSerializer.Serialize(removal.Path))
+                .Append("; reasons ").Append(JsonSerializer.Serialize(removal.Reasons)).Append("; ").Append(Checkout(removal.Registration)).Append('\n');
+        builder.Append("\nRetained worktrees\n");
+        if (report.StartupPlan.SurvivingWorktrees.Count == 0) builder.Append("  (none)\n");
+        foreach (var retained in report.StartupPlan.SurvivingWorktrees)
+            builder.Append("  ").Append(JsonSerializer.Serialize(retained.BeadId)).Append(": ").Append(JsonSerializer.Serialize(retained.Registration.Path))
+                .Append(retained.Reusable ? "; reusable" : "; retained conservatively").Append("; presence ").Append(retained.Presence)
+                .Append("; ").Append(Checkout(retained.Registration)).Append('\n');
+        builder.Append("\nOrphan tmp deletions (hypothetical)\n");
+        if (report.StartupPlan.OrphanTmp.Count == 0) builder.Append("  (none)\n");
+        foreach (var orphan in report.StartupPlan.OrphanTmp)
+            builder.Append("  ").Append(JsonSerializer.Serialize(orphan.BeadId)).Append(": ").Append(JsonSerializer.Serialize(orphan.Path)).Append("; no surviving active worktree\n");
         builder.Append("\nStartup diagnostics\n");
         if (report.StartupPlan.Diagnostics.Count == 0) builder.Append("  (none)\n");
         foreach (var diagnostic in report.StartupPlan.Diagnostics)
@@ -38,8 +53,14 @@ internal static class DryRunReportWriter
             builder.Append("  ").Append(JsonSerializer.Serialize(diagnostic.BeadId)).Append(": ");
             if (diagnostic.Code == StartupDiagnosticCode.ForeignInProgressClaim)
                 builder.Append("foreign_in_progress_claim; assignee ").Append(JsonSerializer.Serialize(diagnostic.Assignee));
-            else
+            else if (diagnostic.Code == StartupDiagnosticCode.UnassignedInProgressClaim)
                 builder.Append("unassigned_in_progress_claim");
+            else
+            {
+                builder.Append(JsonNamingPolicy.SnakeCaseLower.ConvertName(diagnostic.Code.ToString()));
+                if (diagnostic.Path is not null) builder.Append("; path ").Append(JsonSerializer.Serialize(diagnostic.Path));
+                if (diagnostic.Reason is not null) builder.Append("; reason ").Append(JsonSerializer.Serialize(diagnostic.Reason));
+            }
             builder.Append('\n');
         }
 
@@ -63,6 +84,8 @@ internal static class DryRunReportWriter
 
     private static void AppendField(StringBuilder builder, string name, string value) =>
         builder.Append("  ").Append(name).Append(": ").Append(value).Append('\n');
+
+    private static string Checkout(Inspection.GitWorktreeSnapshot entry) => entry.Detached ? "detached HEAD" : "branch " + JsonSerializer.Serialize(entry.Branch);
 
     private static void AppendAgentSettings(StringBuilder builder, string name, AgentSettings settings)
     {

@@ -181,16 +181,16 @@ public sealed class NightweaverAppTests
         var expected =
             "Nightweaver dry run: hypothetical startup snapshot; no actions are performed.\n\n" +
             "Project\n" +
-            $"  name: demo\n" +
-            $"  config: {configPath}\n" +
-            $"  nightweaver_root: {host}\n" +
-            $"  target_repository: {repository.Path}\n" +
-            "  default_branch: main\n" +
-            "  recovery_actor: nightweaver:demo\n" +
-            $"  worktrees_dir: {Path.Combine(host, "worktrees", "demo")}\n" +
-            $"  tmp_dir: {Path.Combine(host, "tmp", "demo")}\n" +
-            $"  logs_dir: {Path.Combine(host, "logs", "demo")}\n" +
-            "\nStartup claim releases (hypothetical)\n  (none)\n\nStartup diagnostics\n  (none)\n" +
+            $"  name: \"demo\"\n" +
+            $"  config: {JsonSerializer.Serialize(configPath)}\n" +
+            $"  nightweaver_root: {JsonSerializer.Serialize(host)}\n" +
+            $"  target_repository: {JsonSerializer.Serialize(repository.Path)}\n" +
+            "  default_branch: \"main\"\n" +
+            "  recovery_actor: \"nightweaver:demo\"\n" +
+            $"  worktrees_dir: {JsonSerializer.Serialize(Path.Combine(host, "worktrees", "demo"))}\n" +
+            $"  tmp_dir: {JsonSerializer.Serialize(Path.Combine(host, "tmp", "demo"))}\n" +
+            $"  logs_dir: {JsonSerializer.Serialize(Path.Combine(host, "logs", "demo"))}\n" +
+            "\nStartup claim releases (hypothetical)\n  (none)\n\nWorktree removals (hypothetical)\n  (none)\n\nRetained worktrees\n  (none)\n\nOrphan tmp deletions (hypothetical)\n  (none)\n\nStartup diagnostics\n  (none)\n" +
             "\nConfiguration\n" +
             "  max_concurrent_planning: 2\n" +
             "  max_concurrent_delivery: 3\n" +
@@ -214,7 +214,7 @@ public sealed class NightweaverAppTests
         Assert.Equal(expected, secondOutput.ToString());
         Assert.Equal(string.Empty, firstError.ToString());
         Assert.Equal(string.Empty, secondError.ToString());
-        Assert.Equal(6, runner.Requests.Count);
+        Assert.Equal(8, runner.Requests.Count);
         Assert.Equal(2, runner.Requests.Count(request => request.FileName == "bd"));
         Assert.Equal(2, runner.Requests.Count(request => request.Arguments.Contains("check-ref-format")));
         Assert.Equal(2, runner.Requests.Count(request => request.Arguments.Contains("rev-parse")));
@@ -344,11 +344,11 @@ public sealed class NightweaverAppTests
         var missingArgumentsRun = await RunApphost(host, caller, []);
 
         Assert.Equal(0, projectRun.ExitCode);
-        Assert.Contains($"  nightweaver_root: {host}\n", projectRun.StandardOutput, StringComparison.Ordinal);
-        Assert.Contains($"  config: {Path.Combine(host, "projects", "demo.json")}\n", projectRun.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"  nightweaver_root: {JsonSerializer.Serialize(host)}\n", projectRun.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"  config: {JsonSerializer.Serialize(Path.Combine(host, "projects", "demo.json"))}\n", projectRun.StandardOutput, StringComparison.Ordinal);
         Assert.Equal(string.Empty, projectRun.StandardError);
         Assert.Equal(0, configRun.ExitCode);
-        Assert.Contains($"  config: {Path.GetFullPath(configFromCaller)}\n", configRun.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"  config: {JsonSerializer.Serialize(Path.GetFullPath(configFromCaller))}\n", configRun.StandardOutput, StringComparison.Ordinal);
         Assert.Equal(0, helpRun.ExitCode);
         Assert.Contains("Usage: nightweaver", helpRun.StandardOutput, StringComparison.Ordinal);
         Assert.Equal(2, missingArgumentsRun.ExitCode);

@@ -33,7 +33,9 @@ internal static class DryRunApplication
             .ValidateAsync(config.TargetRepository, config.ConfigFilePath, cancellationToken);
 
         var inventory = await new BeadsReader(processRunner).ReadSnapshotAsync(repository, cancellationToken);
-        var startupPlan = StartupPlanner.Plan(config.RecoveryActor, inventory);
+        var registry = await new GitWorktreeReader(processRunner).ReadAsync(repository, cancellationToken);
+        var runtime = RuntimeDirectoryReader.Read(hostPaths, config.Name);
+        var startupPlan = StartupPlanner.Plan(config.RecoveryActor, inventory, registry, runtime.Worktrees, runtime.Tmp);
 
         var header = new ProjectHeader(
             config.Name.Value,

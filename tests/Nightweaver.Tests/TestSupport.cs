@@ -37,10 +37,11 @@ internal sealed class TempDirectory : IDisposable
             return;
         }
 
-        foreach (var entry in Directory.EnumerateFileSystemEntries(Path, "*", SearchOption.AllDirectories))
+        foreach (var entry in Snapshot.SafeEntries(Path))
         {
             try
             {
+                if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0) continue;
                 File.SetAttributes(entry, FileAttributes.Normal);
             }
             catch (IOException)
@@ -53,7 +54,23 @@ internal sealed class TempDirectory : IDisposable
             }
         }
 
-        Directory.Delete(Path, recursive: true);
+        DeleteTree(Path);
+    }
+
+    private static void DeleteTree(string root)
+    {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(root))
+        {
+            var attributes = File.GetAttributes(entry);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                if ((attributes & FileAttributes.Directory) != 0) Directory.Delete(entry);
+                else File.Delete(entry);
+            }
+            else if ((attributes & FileAttributes.Directory) != 0) DeleteTree(entry);
+            else File.Delete(entry);
+        }
+        Directory.Delete(root);
     }
 }
 
@@ -125,21 +142,43 @@ internal sealed class GitFixture : IDisposable
 
 internal static class Snapshot
 {
+    internal static IEnumerable<string> SafeEntries(string root)
+    {
+        foreach (var path in Directory.EnumerateFileSystemEntries(root))
+        {
+            yield return path;
+            var attributes = File.GetAttributes(path);
+            if ((attributes & FileAttributes.Directory) != 0 && (attributes & FileAttributes.ReparsePoint) == 0)
+                foreach (var child in SafeEntries(path)) yield return child;
+        }
+    }
+
     internal static string FileTree(string root)
     {
-        var entries = Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories)
+        var entries = SafeEntries(root)
             .Select(path =>
             {
                 var relative = System.IO.Path.GetRelativePath(root, path);
+                var attributes = File.GetAttributes(path);
+                if ((attributes & FileAttributes.ReparsePoint) != 0) return $"L {relative} {new DirectoryInfo(path).LinkTarget}";
+                // bd 1.3.1 --readonly closes its chunk journal by rewriting
+                // identical bytes. The user explicitly accepts these backend
+                // timestamps; still compare paths, attributes, length and hashes.
+                var portable = "/" + relative.Replace('\\', '/');
+                var backendTimestamp = portable.Contains("/.beads/embeddeddolt/", StringComparison.Ordinal)
+                    && (portable.EndsWith("/.dolt/noms", StringComparison.Ordinal)
+                        || (portable.Contains("/.dolt/noms/", StringComparison.Ordinal)
+                            && System.IO.Path.GetFileName(path) is "manifest" or "journal.idx" or "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"));
+                var timestamp = backendTimestamp ? "(accepted bd backend timestamp)" : File.GetLastWriteTimeUtc(path).ToString("O", System.Globalization.CultureInfo.InvariantCulture);
                 if (Directory.Exists(path))
                 {
-                    return $"D {relative}";
+                    return $"D {relative} {attributes} {timestamp}";
                 }
 
                 var info = new FileInfo(path);
                 using var stream = File.OpenRead(path);
                 var hash = Convert.ToHexString(SHA256.HashData(stream));
-                return $"F {relative} {info.Length} {hash}";
+                return $"F {relative} {info.Length} {hash} {attributes} {timestamp}";
             })
             .Order(StringComparer.Ordinal);
         return string.Join("\n", entries);
