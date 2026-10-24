@@ -42,6 +42,37 @@ public sealed class BeadsApplicationTests
     }
 
     [Fact]
+    public async Task FailureOfRecoveryReadinessQueryPrintsNoPartialReport()
+    {
+        using var repository = new BeadsFixture();
+        using var temp = new TempDirectory();
+        var config = temp.WriteFile("project.json", JsonSerializer.Serialize(new { name = "demo", target_repository = new { path = repository.Path } }));
+        var inventoryArgs = BeadsCommand.Create(repository.Path).Arguments;
+        var nativeArgs = BeadsCommand.CreateUnassignedReadiness(repository.Path).Arguments;
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            if (request.FileName == "git") return new SystemProcessRunner().RunAsync(request, token);
+            var response = request.Arguments.SequenceEqual(inventoryArgs) || request.Arguments.SequenceEqual(nativeArgs)
+                ? new ProcessResult(0, "[]", "")
+                : new ProcessResult(2, "", "recovery readiness unavailable");
+            var environment = new Dictionary<string, string?>(repository.Environment);
+            foreach (var pair in request.Environment) environment[pair.Key] = pair.Value;
+            return Task.FromResult(response);
+        });
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var before = Snapshot.FileTree(repository.Path);
+
+        var code = await NightweaverApp.RunAsync(["--config", config, "--dry-run"], new(temp.Path, temp.Path, output, error), runner, CancellationToken.None);
+
+        Assert.Equal(1, code);
+        Assert.Equal("", output.ToString());
+        Assert.Contains("bd --readonly --sandbox list --ready --status in_progress --assignee nightweaver:demo", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("recovery readiness unavailable", error.ToString(), StringComparison.Ordinal);
+        Assert.Equal(before, Snapshot.FileTree(repository.Path));
+    }
+
+    [Fact]
     public async Task ReportsAreStableAcrossInventoryOrderAndEscapeToolText()
     {
         using var repository = new BeadsFixture();
@@ -55,7 +86,9 @@ public sealed class BeadsApplicationTests
         {
             var runner = new RecordingProcessRunner((request, token) => request.FileName == "git"
                 ? new SystemProcessRunner().RunAsync(request, token)
-                : Task.FromResult(new ProcessResult(0, "[" + string.Join(',', input) + "]", "")));
+                : request.Arguments.SequenceEqual(BeadsCommand.Create(repository.Path).Arguments)
+                    ? Task.FromResult(new ProcessResult(0, "[" + string.Join(',', input) + "]", ""))
+                    : Task.FromResult(new ProcessResult(0, "[]", "")));
             var output = new StringWriter();
             Assert.Equal(0, await NightweaverApp.RunAsync(["--config", config, "--dry-run"], new(temp.Path, temp.Path, output, new StringWriter()), runner, CancellationToken.None));
             return output.ToString();

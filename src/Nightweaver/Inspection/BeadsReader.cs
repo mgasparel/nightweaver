@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text.Json;
 
 namespace Nightweaver.Inspection;
@@ -7,49 +8,41 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
     internal async Task<BeadsInventory> ReadSnapshotAsync(ValidatedTargetRepository repository, CancellationToken cancellationToken)
     {
         var context = $"bd --readonly --sandbox list inventory in Target Repository '{repository.Path}'";
+        var json = await RunQueryAsync(repository, BeadsCommand.Create(repository.Path), context, cancellationToken);
         try
         {
-            // bd 1.3.1 creates persistent gate files before opening storage, even
-            // under --readonly. Inspect only the backend whose physical-root
-            // layout has been verified; never bootstrap it or warm up a first read.
-            var beadsDirectory = Path.Combine(repository.Path, ".beads");
-            if (Directory.Exists(beadsDirectory))
-            {
-                // bd loads target .env after discovery. Do not let selectors or
-                // output-file overrides reintroduce a scrubbed ambient setting.
-                var envPath = Path.Combine(beadsDirectory, ".env");
-                if (File.Exists(envPath))
-                {
-                    foreach (var line in File.ReadLines(envPath))
-                    {
-                        var assignment = line.Trim();
-                        if (assignment.StartsWith("export ", StringComparison.Ordinal)) assignment = assignment[7..].TrimStart();
-                        var separator = assignment.IndexOf('=');
-                        if (separator >= 0 && BeadsCommand.ScrubbedVariables.Contains(assignment[..separator].Trim(), StringComparer.Ordinal))
-                        {
-                            throw new ToolExecutionException("target .beads/.env contains routing or output-file overrides unsupported for mutation-free inspection");
-                        }
-                    }
-                }
-                using var metadata = JsonDocument.Parse(File.ReadAllText(Path.Combine(beadsDirectory, "metadata.json")));
-                if (File.Exists(Path.Combine(beadsDirectory, "redirect")) ||
-                    (metadata.RootElement.TryGetProperty("dolt_mode", out var mode) && mode.GetString() != "embedded"))
-                {
-                    throw new ToolExecutionException("this bd backend layout is unsupported for mutation-free inspection; a local embedded tracker is required");
-                }
-                if (!Directory.Exists(Path.Combine(beadsDirectory, "embeddeddolt")) ||
-                    !File.Exists(Path.Combine(repository.Path, ".beads.gate.lock")) ||
-                    !File.Exists(Path.Combine(beadsDirectory, "embeddeddolt.gate.lock")))
-                {
-                    throw new ToolExecutionException("embedded bd backend is not prepared for mutation-free inspection (missing gate-lock files or database); complete tracker setup with bd outside dry-run");
-                }
-            }
-            var result = await processRunner.RunAsync(BeadsCommand.Create(repository.Path), cancellationToken);
+            return Parse(json);
+        }
+        catch (JsonException exception)
+        {
+            throw new ToolExecutionException($"{context}: incompatible or malformed bd JSON: {exception.Message}");
+        }
+    }
+
+    internal async Task<BeadsReadiness> ReadReadinessAsync(ValidatedTargetRepository repository, BeadsInventory inventory,
+        string recoveryActor, CancellationToken cancellationToken)
+    {
+        var nativeContext = $"bd --readonly --sandbox ready --unassigned --limit 0 --json in Target Repository '{repository.Path}'";
+        var nativeJson = await RunQueryAsync(repository, BeadsCommand.CreateUnassignedReadiness(repository.Path), nativeContext, cancellationToken);
+        var native = ParseReadiness(nativeJson, inventory, nativeContext, bead => bead.Status == "open" && bead.Assignee is null);
+
+        var recoverableContext = $"bd --readonly --sandbox list --ready --status in_progress --assignee {recoveryActor} --limit 0 --json in Target Repository '{repository.Path}'";
+        var recoverableJson = await RunQueryAsync(repository, BeadsCommand.CreateRecoverableReadiness(repository.Path, recoveryActor), recoverableContext, cancellationToken);
+        var recoverable = ParseReadiness(recoverableJson, inventory, recoverableContext,
+            bead => bead.Status == "in_progress" && string.Equals(bead.Assignee, recoveryActor, StringComparison.Ordinal));
+        return BeadsReadiness.Create(native, recoverable);
+    }
+
+    private async Task<string> RunQueryAsync(ValidatedTargetRepository repository, ProcessRequest request, string context,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            EnsureMutationFreeBackend(repository);
+            var result = await processRunner.RunAsync(request, cancellationToken);
             if (result.ExitCode != 0)
-            {
                 throw new ToolExecutionException($"exited {result.ExitCode}; verify bd compatibility and initialized backend (no bootstrap is performed)", result.StandardError);
-            }
-            return Parse(result.StandardOutput);
+            return result.StandardOutput;
         }
         catch (ToolExecutionException exception)
         {
@@ -61,9 +54,70 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         }
         catch (JsonException exception)
         {
+            throw new ToolExecutionException($"{context}: incompatible or malformed bd metadata: {exception.Message}");
+        }
+    }
+
+    private static void EnsureMutationFreeBackend(ValidatedTargetRepository repository)
+    {
+        // bd 1.3.1 creates persistent gate files before opening storage, even
+        // under --readonly. Inspect only a prepared embedded backend.
+        var beadsDirectory = Path.Combine(repository.Path, ".beads");
+        if (!Directory.Exists(beadsDirectory)) return;
+        var envPath = Path.Combine(beadsDirectory, ".env");
+        if (File.Exists(envPath))
+        {
+            foreach (var line in File.ReadLines(envPath))
+            {
+                var assignment = line.Trim();
+                if (assignment.StartsWith("export ", StringComparison.Ordinal)) assignment = assignment[7..].TrimStart();
+                var separator = assignment.IndexOf('=');
+                if (separator >= 0 && BeadsCommand.ScrubbedVariables.Contains(assignment[..separator].Trim(), StringComparer.Ordinal))
+                    throw new ToolExecutionException("target .beads/.env contains routing or output-file overrides unsupported for mutation-free inspection");
+            }
+        }
+
+        using var metadata = JsonDocument.Parse(File.ReadAllText(Path.Combine(beadsDirectory, "metadata.json")));
+        if (File.Exists(Path.Combine(beadsDirectory, "redirect")) ||
+            (metadata.RootElement.TryGetProperty("dolt_mode", out var mode) && mode.GetString() != "embedded"))
+            throw new ToolExecutionException("this bd backend layout is unsupported for mutation-free inspection; a local embedded tracker is required");
+        if (!Directory.Exists(Path.Combine(beadsDirectory, "embeddeddolt")) ||
+            !File.Exists(Path.Combine(repository.Path, ".beads.gate.lock")) ||
+            !File.Exists(Path.Combine(beadsDirectory, "embeddeddolt.gate.lock")))
+            throw new ToolExecutionException("embedded bd backend is not prepared for mutation-free inspection (missing gate-lock files or database); complete tracker setup with bd outside dry-run");
+    }
+
+    private static FrozenSet<string> ParseReadiness(string json, BeadsInventory inventory, string context,
+        Func<BeadSnapshot, bool> queryPredicate)
+    {
+        try
+        {
+            var response = Parse(json);
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var bead in response.ById.Values.OrderBy(bead => bead.Id, StringComparer.Ordinal))
+            {
+                var path = $"readiness row '{bead.Id}'";
+                if (!inventory.ById.TryGetValue(bead.Id, out var authoritative))
+                    throw new JsonException($"{path}: ID is absent from the complete inventory");
+                if (bead.Status != authoritative.Status || bead.IssueType != authoritative.IssueType || bead.Assignee != authoritative.Assignee ||
+                    bead.Priority != authoritative.Priority || bead.CreatedAt != authoritative.CreatedAt ||
+                    !PolicyLabels(bead.Labels).SetEquals(PolicyLabels(authoritative.Labels)))
+                    throw new JsonException($"{path}: readiness fields disagree with the complete inventory");
+                if (!queryPredicate(bead))
+                    throw new JsonException($"{path}: row does not match the requested readiness query");
+                if (!ids.Add(bead.Id)) throw new JsonException($"{path}: duplicate ID '{bead.Id}'");
+            }
+            return ids.ToFrozenSet(StringComparer.Ordinal);
+        }
+        catch (JsonException exception)
+        {
             throw new ToolExecutionException($"{context}: incompatible or malformed bd JSON: {exception.Message}");
         }
     }
+
+    private static HashSet<string> PolicyLabels(IReadOnlyList<string> labels) => labels
+        .Where(label => label is "planned" or "product-decision-required" or "needs-human" || label.StartsWith("stage:", StringComparison.Ordinal))
+        .ToHashSet(StringComparer.Ordinal);
 
     internal static BeadsInventory Parse(string json)
     {
@@ -121,4 +175,5 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         }
         return new BeadsInventory(beads);
     }
+
 }

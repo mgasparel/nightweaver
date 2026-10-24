@@ -191,6 +191,8 @@ public sealed class NightweaverAppTests
             $"  tmp_dir: {JsonSerializer.Serialize(Path.Combine(host, "tmp", "demo"))}\n" +
             $"  logs_dir: {JsonSerializer.Serialize(Path.Combine(host, "logs", "demo"))}\n" +
             "\nStartup claim releases (hypothetical)\n  (none)\n\nWorktree removals (hypothetical)\n  (none)\n\nRetained worktrees\n  (none)\n\nOrphan tmp deletions (hypothetical)\n  (none)\n\nStartup diagnostics\n  (none)\n" +
+            "\nActive Plan Beads\n  count: 1\n  threshold: 5\n  backpressure: inactive\n  backpressure_reason: none\n" +
+            "\nPlanning selected\n  (none)\n\nPlanning waiting\n  (none)\n\nPlanning excluded diagnostics\n  (none)\n" +
             "\nConfiguration\n" +
             "  max_concurrent_planning: 2\n" +
             "  max_concurrent_delivery: 3\n" +
@@ -214,8 +216,8 @@ public sealed class NightweaverAppTests
         Assert.Equal(expected, secondOutput.ToString());
         Assert.Equal(string.Empty, firstError.ToString());
         Assert.Equal(string.Empty, secondError.ToString());
-        Assert.Equal(8, runner.Requests.Count);
-        Assert.Equal(2, runner.Requests.Count(request => request.FileName == "bd"));
+        Assert.Equal(12, runner.Requests.Count);
+        Assert.Equal(6, runner.Requests.Count(request => request.FileName == "bd"));
         Assert.Equal(2, runner.Requests.Count(request => request.Arguments.Contains("check-ref-format")));
         Assert.Equal(2, runner.Requests.Count(request => request.Arguments.Contains("rev-parse")));
         Assert.All(runner.Requests, request => Assert.Equal("0", request.Environment["GIT_OPTIONAL_LOCKS"]));

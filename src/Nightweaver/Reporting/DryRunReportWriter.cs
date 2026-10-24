@@ -64,6 +64,44 @@ internal static class DryRunReportWriter
             builder.Append('\n');
         }
 
+        builder.Append("\nActive Plan Beads\n");
+        AppendField(builder, "count", report.PlanningPoolPlan.ActivePlanBeadCount.ToString(CultureInfo.InvariantCulture));
+        AppendField(builder, "threshold", report.PlanningPoolPlan.MaxActivePlanBeads.ToString(CultureInfo.InvariantCulture));
+        AppendField(builder, "backpressure", report.PlanningPoolPlan.BackpressureActive ? "active" : "inactive");
+        AppendField(builder, "backpressure_reason", report.PlanningPoolPlan.BackpressureActive
+            ? $"active_plan_beads={report.PlanningPoolPlan.ActivePlanBeadCount.ToString(CultureInfo.InvariantCulture)} >= max_active_plan_beads={report.PlanningPoolPlan.MaxActivePlanBeads.ToString(CultureInfo.InvariantCulture)}"
+            : "none");
+
+        builder.Append("\nPlanning selected\n");
+        if (report.PlanningPoolPlan.Selected.Count == 0) builder.Append("  (none)\n");
+        foreach (var candidate in report.PlanningPoolPlan.Selected)
+            builder.Append("  rank=").Append(candidate.Rank.ToString(CultureInfo.InvariantCulture)).Append(' ')
+                .Append(JsonSerializer.Serialize(candidate.Bead.Id)).Append("; role=").Append(Role(candidate.Role))
+                .Append("; source=").Append(Source(candidate)).Append('\n');
+
+        builder.Append("\nPlanning waiting\n");
+        if (report.PlanningPoolPlan.Waiting.Count == 0) builder.Append("  (none)\n");
+        foreach (var waiting in report.PlanningPoolPlan.Waiting)
+        {
+            var candidate = waiting.Candidate;
+            builder.Append("  rank=").Append(candidate.Rank.ToString(CultureInfo.InvariantCulture)).Append(' ')
+                .Append(JsonSerializer.Serialize(candidate.Bead.Id)).Append("; role=").Append(Role(candidate.Role))
+                .Append("; reason=");
+            if (waiting.Reason == PlanningWaitReason.Backpressure)
+                builder.Append("backpressure (active_plan_beads=").Append(report.PlanningPoolPlan.ActivePlanBeadCount.ToString(CultureInfo.InvariantCulture))
+                    .Append(" >= max_active_plan_beads=").Append(report.PlanningPoolPlan.MaxActivePlanBeads.ToString(CultureInfo.InvariantCulture)).Append(')');
+            else
+                builder.Append("capacity (max_concurrent_planning=").Append(report.PlanningPoolPlan.MaxConcurrentPlanning.ToString(CultureInfo.InvariantCulture)).Append(')');
+            builder.Append("; source=").Append(Source(candidate)).Append('\n');
+        }
+
+        builder.Append("\nPlanning excluded diagnostics\n");
+        if (report.PlanningPoolPlan.Excluded.Count == 0) builder.Append("  (none)\n");
+        foreach (var exclusion in report.PlanningPoolPlan.Excluded)
+            builder.Append("  ").Append(JsonSerializer.Serialize(exclusion.BeadId)).Append(": ")
+                .Append(JsonNamingPolicy.SnakeCaseLower.ConvertName(exclusion.Code.ToString()))
+                .Append("; stages=").Append(JsonSerializer.Serialize(exclusion.StageLabels)).Append('\n');
+
         builder.Append('\n').Append("Configuration\n");
         AppendField(builder, "max_concurrent_planning", report.Configuration.Concurrency.MaxConcurrentPlanning.ToString(CultureInfo.InvariantCulture));
         AppendField(builder, "max_concurrent_delivery", report.Configuration.Concurrency.MaxConcurrentDelivery.ToString(CultureInfo.InvariantCulture));
@@ -86,6 +124,11 @@ internal static class DryRunReportWriter
         builder.Append("  ").Append(name).Append(": ").Append(value).Append('\n');
 
     private static string Checkout(Inspection.GitWorktreeSnapshot entry) => entry.Detached ? "detached HEAD" : "branch " + JsonSerializer.Serialize(entry.Branch);
+
+    private static string Role(PlanningRole role) => role == PlanningRole.PlanChallenger ? "plan_challenger" : "planner";
+
+    private static string Source(PlanningPoolCandidate candidate) => candidate.RecoveredAfterClaimRelease
+        ? "hypothetical_post_release" : "native_unassigned_ready";
 
     private static void AppendAgentSettings(StringBuilder builder, string name, AgentSettings settings)
     {

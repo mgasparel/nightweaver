@@ -21,7 +21,10 @@ public sealed class WorktreeIntegrationTests
         var runner = new RecordingProcessRunner((request, token) =>
         {
             Assert.Equal(request.Arguments[0] == "check-ref-format" ? Path.GetTempPath() : target.Path, request.WorkingDirectory);
-            if (request.FileName == "bd") Assert.Equal(inventoryArgs, request.Arguments);
+            if (request.FileName == "bd")
+                Assert.True(request.Arguments.SequenceEqual(inventoryArgs)
+                    || request.Arguments.SequenceEqual(BeadsCommand.CreateUnassignedReadiness(target.Path).Arguments)
+                    || request.Arguments.SequenceEqual(BeadsCommand.CreateRecoverableReadiness(target.Path, "nightweaver:demo").Arguments));
             else
             {
                 Assert.Equal("git", request.FileName);
@@ -45,7 +48,7 @@ public sealed class WorktreeIntegrationTests
         var first = await DryRun(["--project", "demo", "--dry-run"]);
         var second = await DryRun(["--config", Path.GetRelativePath(fixture.Caller, fixture.Config), "--dry-run"]);
         Assert.Equal(first, second);
-        Assert.Equal(8, runner.Requests.Count);
+        Assert.Equal(12, runner.Requests.Count);
         var runtime = RuntimeDirectoryReader.Read(new(fixture.Host), new("demo"));
         var registry = GitWorktreeReader.Parse(registryBefore);
         Assert.Contains(registry, entry => entry.Main && entry.Branch == "refs/heads/main");

@@ -36,7 +36,10 @@ public sealed class BeadsIntegrationTests
         var runner = new RecordingProcessRunner((request, token) =>
         {
             Assert.True(request.FileName == "git" || request.FileName == "bd");
-            if (request.FileName == "bd") Assert.Equal(inventoryArgs, request.Arguments);
+            if (request.FileName == "bd")
+                Assert.True(request.Arguments.SequenceEqual(inventoryArgs)
+                    || request.Arguments.SequenceEqual(BeadsCommand.CreateUnassignedReadiness(target.Path).Arguments)
+                    || request.Arguments.SequenceEqual(BeadsCommand.CreateRecoverableReadiness(target.Path, "nightweaver:demo").Arguments));
             var environment = new Dictionary<string, string?>(target.Environment)
             {
                 ["BEADS_DIR"] = Path.Combine(other.Path, ".beads"), ["BEADS_DB"] = Path.Combine(other.Path, ".beads", "beads.db"),
@@ -67,7 +70,7 @@ public sealed class BeadsIntegrationTests
         Assert.Contains($"\"{unassigned}\": unassigned_in_progress_claim", first, StringComparison.Ordinal);
         Assert.Contains($"\"{otherProject}\": foreign_in_progress_claim", first, StringComparison.Ordinal);
         Assert.DoesNotContain($"\"{decoy}\":", first, StringComparison.Ordinal);
-        Assert.Equal(8, runner.Requests.Count);
+        Assert.Equal(12, runner.Requests.Count);
         Assert.Equal(treeBefore, Snapshot.FileTree(target.Path));
         Assert.Equal(otherBefore, Snapshot.FileTree(other.Path));
         Assert.Equal(hostBefore, Snapshot.FileTree(host));

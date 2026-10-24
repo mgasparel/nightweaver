@@ -32,10 +32,14 @@ internal static class DryRunApplication
         var repository = await new TargetRepositoryValidator(processRunner)
             .ValidateAsync(config.TargetRepository, config.ConfigFilePath, cancellationToken);
 
-        var inventory = await new BeadsReader(processRunner).ReadSnapshotAsync(repository, cancellationToken);
+        var beadsReader = new BeadsReader(processRunner);
+        var inventory = await beadsReader.ReadSnapshotAsync(repository, cancellationToken);
+        var readiness = await beadsReader.ReadReadinessAsync(repository, inventory, config.RecoveryActor, cancellationToken);
         var registry = await new GitWorktreeReader(processRunner).ReadAsync(repository, cancellationToken);
         var runtime = RuntimeDirectoryReader.Read(hostPaths, config.Name);
         var startupPlan = StartupPlanner.Plan(config.RecoveryActor, inventory, registry, runtime.Worktrees, runtime.Tmp);
+        var planningPoolPlan = PlanningPoolPlanner.Plan(startupPlan, readiness,
+            config.Concurrency.MaxConcurrentPlanning, config.Concurrency.MaxActivePlanBeads);
 
         var header = new ProjectHeader(
             config.Name.Value,
@@ -50,7 +54,7 @@ internal static class DryRunApplication
         var report = new DryRunReport(
             header,
             new ConfigurationSection(config.Concurrency, config.Limits),
-            new AgentRolesSection(config.AgentDefaults, config.Roles), startupPlan);
+            new AgentRolesSection(config.AgentDefaults, config.Roles), startupPlan, planningPoolPlan);
         environment.Out.Write(DryRunReportWriter.Render(report));
     }
 }
