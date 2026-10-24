@@ -365,9 +365,7 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
 
     private static string GetDestination(HostPaths hostPaths, ProjectSlug project, ValidatedTargetRepository repository, string beadId)
     {
-        if (string.IsNullOrEmpty(beadId) || Path.IsPathRooted(beadId) || !RuntimePaths.SafeId(beadId)
-            || beadId.Any(character => character <= '\u001f' || "<>:\"/\\|?*".Contains(character))
-            || beadId.EndsWith(' ') || beadId.EndsWith('.') || IsWindowsDeviceName(beadId))
+        if (!IsSafeBeadId(beadId))
             throw Failure("validate Bead worktree ID", beadId, "ID is empty, rooted, traversal-like, platform-invalid, or aliases a Windows path name");
 
         var root = RuntimePaths.Normalize(hostPaths.WorktreesRoot(project));
@@ -381,6 +379,11 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
         return destination;
     }
 
+    internal static bool IsSafeBeadId(string beadId) => !string.IsNullOrEmpty(beadId)
+        && !Path.IsPathRooted(beadId) && RuntimePaths.SafeId(beadId)
+        && !beadId.Any(character => character <= '\u001f' || "<>:\"/\\|?*".Contains(character))
+        && !beadId.EndsWith(' ') && !beadId.EndsWith('.') && !IsWindowsDeviceName(beadId);
+
     private static bool IsWindowsDeviceName(string beadId)
     {
         var component = beadId.TrimEnd(' ', '.');
@@ -392,7 +395,7 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
                 && stem[3] is '¹' or '²' or '³';
     }
 
-    private static bool PathsOverlap(string left, string right) => IsSameOrAncestor(left, right) || IsSameOrAncestor(right, left);
+    internal static bool PathsOverlap(string left, string right) => IsSameOrAncestor(left, right) || IsSameOrAncestor(right, left);
 
     private static bool IsSameOrAncestor(string possibleAncestor, string path)
     {
@@ -416,7 +419,7 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
         }
     }
 
-    private static void ValidateNestedTree(string root)
+    internal static void ValidateNestedTree(string root)
     {
         try
         {

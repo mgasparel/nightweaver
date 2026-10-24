@@ -233,6 +233,7 @@ internal sealed class ProvisioningGitFixture : IDisposable
     }
 
     internal string TempRoot { get; }
+    internal string BareOrigin => bare;
     internal string Target { get; }
     internal string Host { get; }
     internal string WorktreesRoot => Path.Combine(Host, "worktrees", "demo");
@@ -255,9 +256,9 @@ internal sealed class ProvisioningGitFixture : IDisposable
         AdvancedSha = Git(seed, ["rev-parse", "HEAD"]).Output.Trim();
     }
 
-    internal string CreateAndPushRemoteBeadBranch()
+    internal string CreateAndPushRemoteBeadBranch(string? beadId = null)
     {
-        var branch = $"nightweaver/{BeadId}";
+        var branch = $"nightweaver/{beadId ?? BeadId}";
         Git(seed, ["switch", "-c", branch]);
         File.WriteAllText(Path.Combine(seed, "remote-bead.txt"), "remote bead work");
         Commit(seed, "remote bead work");

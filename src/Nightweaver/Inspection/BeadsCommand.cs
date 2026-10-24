@@ -20,7 +20,17 @@ internal static class BeadsCommand
     internal static ProcessRequest CreateUpDependencies(string workingDirectory, string beadId)
         => Create(workingDirectory, ["--readonly", "--sandbox", "dep", "list", beadId, "--direction", "up", "--json"]);
 
+    internal static ProcessRequest CreateWrite(string workingDirectory, IReadOnlyList<string> arguments)
+    {
+        var environment = CreateEnvironment(workingDirectory, readOnly: false);
+        return new ProcessRequest("bd", ["--sandbox", "--dolt-auto-commit", "on", .. arguments], workingDirectory,
+            environment, TimeSpan.FromSeconds(30));
+    }
+
     private static ProcessRequest Create(string workingDirectory, IReadOnlyList<string> arguments)
+        => new("bd", arguments, workingDirectory, CreateEnvironment(workingDirectory, readOnly: true), TimeSpan.FromSeconds(30));
+
+    private static Dictionary<string, string?> CreateEnvironment(string workingDirectory, bool readOnly)
     {
         var environment = new Dictionary<string, string?>(GitCommand.Create([], workingDirectory).Environment, StringComparer.OrdinalIgnoreCase);
         // bd 1.3.1: selectors in main.go/configfile; remove ambient database routing.
@@ -29,21 +39,21 @@ internal static class BeadsCommand
         {
             environment[name] = null;
         }
-        // Strict --readonly disables bootstrap/migration/maintenance. Defense in depth
-        // for the independently configurable automatic output and mutation settings.
+        // Keep tracker routing local and suppress automatic exports/pushes for both reads and writes.
         foreach (var name in new[] { "BD_IMPORT_AUTO", "BD_EXPORT_AUTO", "BD_BACKUP_ENABLED", "BD_DOLT_AUTO_PUSH", "BD_EVENTS_EXPORT" })
         {
             environment[name] = "false";
         }
-        // bd metrics can create files and launch a detached flusher even for reads.
+        // bd metrics can create files and launch a detached flusher.
         environment["BD_DISABLE_METRICS"] = "1";
-        environment["BD_DISABLE_EVENT_FLUSH"] = "1";
+        // Read-only inspections suppress journaling. Escalation writes retain normal journal behavior.
+        environment["BD_DISABLE_EVENT_FLUSH"] = readOnly ? "1" : null;
         environment["OTEL_SDK_DISABLED"] = "true";
         environment["BD_OTEL_STDOUT"] = "false";
-        environment["BD_DOLT_AUTO_COMMIT"] = "off";
+        environment["BD_DOLT_AUTO_COMMIT"] = readOnly ? "off" : "on";
         environment["BD_NO_HOOKS"] = "true";
         environment["BD_NO_DB"] = "false";
         environment["BD_DOLT_AUTO_START"] = "false";
-        return new ProcessRequest("bd", arguments, workingDirectory, environment, TimeSpan.FromSeconds(30));
+        return environment;
     }
 }

@@ -58,7 +58,7 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         }
     }
 
-    private static void EnsureMutationFreeBackend(ValidatedTargetRepository repository)
+    internal static void EnsureMutationFreeBackend(ValidatedTargetRepository repository)
     {
         // bd 1.3.1 creates persistent gate files before opening storage, even
         // under --readonly. Inspect only a prepared embedded backend.
