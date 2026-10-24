@@ -90,6 +90,26 @@ public sealed class AgentInvocationExecutorTests
     }
 
     [Fact]
+    public async Task BoundedStdoutCaptureDoesNotLimitCombinedLogDrain()
+    {
+        using var fixture = new ExecutionFixture();
+        const int size = 1_200_000;
+        var invocation = fixture.Invocation("flood", "payload", size.ToString(CultureInfo.InvariantCulture));
+
+        var captured = await AgentInvocationExecutor.ExecuteWithStandardOutputCaptureAsync(
+            fixture.Paths, fixture.Project, invocation, 64, TestContext.Current.CancellationToken);
+        var log = await File.ReadAllBytesAsync(captured.Execution.LogFilePath, TestContext.Current.CancellationToken);
+
+        Assert.Equal(AgentExecutionStatus.Exited, captured.Execution.Status);
+        Assert.Equal(0, captured.Execution.ExitCode);
+        Assert.True(captured.Overflowed);
+        Assert.Equal(64, captured.StandardOutput.Length);
+        Assert.All(captured.StandardOutput, value => Assert.Equal((byte)'O', value));
+        Assert.True(log.Count(value => value == (byte)'O') >= size);
+        Assert.True(log.Count(value => value == (byte)'E') >= size);
+    }
+
+    [Fact]
     public async Task EarlyStdinClosureFailsDeliveryAndKeepsAvailableOutput()
     {
         using var fixture = new ExecutionFixture();

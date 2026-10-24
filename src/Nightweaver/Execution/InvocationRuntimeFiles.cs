@@ -87,7 +87,83 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         }
     }
 
+    /// <summary>
+    /// Opens a settled lifecycle log for bounded, read-only comparison. Existing directory components are pinned
+    /// with the same no-reparse and no-delete-sharing rules used by invocation reservation.
+    /// </summary>
+    internal static PinnedLogReadStream OpenExistingSettledLogForRead(
+        HostPaths hostPaths,
+        ProjectSlug project,
+        string beadId,
+        string invocationId,
+        string logFilePath)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Settled invocation logs require Windows no-follow file handles.");
+        if (!SafeBeadId(beadId)) throw new InvalidDataException($"Bead ID '{beadId}' is not a safe Windows path segment.");
+        if (!SafeWindowsSegment(project.Value)) throw new InvalidDataException($"Project slug '{project.Value}' is not a safe Windows path segment.");
+        if (!IsValidInvocationId(invocationId)) throw new InvalidDataException($"Invocation ID '{invocationId}' is not valid.");
+
+        var expected = RuntimePaths.Normalize(Path.Combine(hostPaths.LogsRoot(project), beadId, invocationId + ".log"));
+        string fullPath;
+        try
+        {
+            if (!Path.IsPathFullyQualified(logFilePath))
+                throw new InvalidDataException("The failed invocation log path must be absolute.");
+            fullPath = Path.GetFullPath(logFilePath);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new InvalidDataException($"The failed invocation log path '{logFilePath}' is invalid.", exception);
+        }
+
+        // Require the exact path emitted by the preparer. This excludes traversal aliases, alternate streams,
+        // case aliases, sibling-prefix tricks, device paths and unexpected suffixes before touching the source.
+        if (!string.Equals(logFilePath, expected, StringComparison.Ordinal)
+            || !string.Equals(fullPath, expected, StringComparison.Ordinal))
+            throw new InvalidDataException($"Failed invocation log path '{logFilePath}' is not the canonical log for invocation '{invocationId}'.");
+
+        ValidatePathSegments(expected);
+        var guard = new InvocationRuntimeFiles(string.Empty, expected, null!);
+        try
+        {
+            guard.PinDirectoryChain(Path.GetDirectoryName(expected)!, createMissing: false, exclusiveLeaf: false);
+            var handle = CreateFileW(expected, GenericRead, FileShareRead, IntPtr.Zero, OpenExisting,
+                FileFlagOverlapped | FileFlagOpenReparsePoint, IntPtr.Zero);
+            if (handle.IsInvalid)
+            {
+                var error = Marshal.GetLastWin32Error();
+                handle.Dispose();
+                throw NativeError($"Could not open settled invocation log '{expected}' for read", error);
+            }
+
+            try
+            {
+                if (!GetFileInformationByHandle(handle, out var info))
+                    throw NativeError($"Could not inspect settled invocation log '{expected}'", Marshal.GetLastWin32Error());
+                if ((info.FileAttributes & AttributeReparsePoint) != 0)
+                    throw new InvalidDataException($"Refusing reparse point in failed invocation log path: '{expected}'.");
+                if ((info.FileAttributes & AttributeDirectory) != 0)
+                    throw new InvalidDataException($"Failed invocation log path '{expected}' is a directory.");
+
+                var stream = new FileStream(handle, FileAccess.Read, 4096, isAsync: true);
+                return new PinnedLogReadStream(stream, guard);
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+        catch
+        {
+            guard.Dispose();
+            throw;
+        }
+    }
+
     private const uint GenericWrite = 0x40000000;
+    private const uint GenericRead = 0x80000000;
 
     internal async Task FlushLogAsync(CancellationToken cancellationToken)
     {
@@ -141,7 +217,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         if (!value.AsSpan(0, 8).ToString().All(char.IsAsciiDigit)
             || !value.AsSpan(9, 13).ToString().All(char.IsAsciiDigit)) return false;
         var suffix = value[24..];
-        if (suffix is not ("planner" or "plan-challenger" or "implementer" or "reviewer" or "qa" or "merger")) return false;
+        if (suffix is not ("planner" or "plan-challenger" or "implementer" or "reviewer" or "qa" or "merger" or "classifier")) return false;
         return DateTime.TryParseExact(value[..23], "yyyyMMdd'T'HHmmssfffffff'Z'", System.Globalization.CultureInfo.InvariantCulture,
             System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out _);
     }
@@ -247,9 +323,9 @@ internal sealed class InvocationRuntimeFiles : IDisposable
             if (!GetFileInformationByHandle(handle, out var info))
                 throw NativeError($"Could not inspect pinned directory '{path}'", Marshal.GetLastWin32Error());
             if ((info.FileAttributes & AttributeReparsePoint) != 0)
-                throw new IOException($"Refusing reparse point in runtime path: '{path}'.");
+                throw new InvalidDataException($"Refusing reparse point in runtime path: '{path}'.");
             if ((info.FileAttributes & AttributeDirectory) == 0)
-                throw new IOException($"Expected a directory in runtime path, found a file: '{path}'.");
+                throw new InvalidDataException($"Expected a directory in runtime path, found a file: '{path}'.");
             pinnedDirectories.Add(path, handle);
         }
         catch
@@ -290,6 +366,17 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         {
             foreach (var handle in pinnedDirectories.Values) handle.Dispose();
             pinnedDirectories.Clear();
+        }
+    }
+
+    internal sealed class PinnedLogReadStream(FileStream stream, InvocationRuntimeFiles directoryPins) : IDisposable
+    {
+        internal FileStream Stream { get; } = stream;
+
+        public void Dispose()
+        {
+            try { Stream.Dispose(); }
+            finally { directoryPins.Dispose(); }
         }
     }
 

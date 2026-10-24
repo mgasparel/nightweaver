@@ -13,6 +13,12 @@ internal sealed record AgentExecutionResult(
     string InvocationId,
     string LogFilePath);
 
+/// <summary>Execution outcome plus a bounded stdout-only capture for protocols that consume machine output.</summary>
+internal sealed record AgentStandardOutputCaptureResult(
+    AgentExecutionResult Execution,
+    byte[] StandardOutput,
+    bool Overflowed);
+
 internal sealed class AgentInvocationExecutionException : NightweaverException
 {
     internal AgentInvocationExecutionException(

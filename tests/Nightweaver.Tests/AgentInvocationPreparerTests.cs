@@ -89,6 +89,50 @@ public sealed class AgentInvocationPreparerTests
     }
 
     [Fact]
+    public async Task PreparesClassifierWithItsOwnSettingsAndInvocationScopedRuntimePaths()
+    {
+        using var temp = new TempDirectory();
+        var host = CreateHost(temp.Path);
+        var project = CreateProject();
+        var classifierSettings = new AgentSettings(AgentCli.Codex, "classifier model with spaces", "high", 7);
+        var roles = AgentRoles.All.ToDictionary(role => role, role => role == AgentRole.Classifier
+            ? classifierSettings
+            : new AgentSettings(AgentCli.Claude, null, "low", 2));
+        project = project with { Roles = new RoleSettings(roles) };
+        var context = new AgentDispatchContext("ns-xci.2", "task", "stage:review", 1);
+        var worktree = CanonicalWorktree(host, project, context.BeadId);
+        var payload = "Classifier instructions\n{\"version\":1}";
+
+        var prepared = await new AgentInvocationPreparer().PrepareClassifierAsync(
+            host, project, context, worktree, payload, TestContext.Current.CancellationToken);
+
+        Assert.Equal("codex", prepared.Executable);
+        Assert.Equal(["exec", "--dangerously-bypass-approvals-and-sandbox", "--ephemeral", "--model", "classifier model with spaces",
+            "-c", "model_reasoning_effort=\"high\"", "-"], prepared.Arguments);
+        Assert.Equal(TimeSpan.FromMinutes(7), prepared.Timeout);
+        Assert.Matches("^\\d{8}T\\d{13}Z-classifier$", prepared.InvocationId);
+        Assert.Equal(payload, prepared.StandardInput);
+        Assert.Equal(worktree, prepared.WorkingDirectory);
+        Assert.Equal(Path.Combine(host.TmpRoot(project.Name), context.BeadId, prepared.InvocationId), prepared.TemporaryDirectory);
+        Assert.Equal(Path.Combine(host.LogsRoot(project.Name), context.BeadId, prepared.InvocationId + ".log"), prepared.LogFilePath);
+        Assert.Equal(4, prepared.EnvironmentOverrides.Count);
+        Assert.Equal(context.BeadId, prepared.EnvironmentOverrides["NIGHTWEAVER_BEAD_ID"]);
+        Assert.Equal(prepared.TemporaryDirectory, prepared.EnvironmentOverrides["TMP"]);
+        Assert.Equal(prepared.TemporaryDirectory, prepared.EnvironmentOverrides["TEMP"]);
+        Assert.Equal(prepared.TemporaryDirectory, prepared.EnvironmentOverrides["TMPDIR"]);
+        Assert.False(Directory.Exists(Path.Combine(host.Root, "tmp")));
+        Assert.False(Directory.Exists(Path.Combine(host.Root, "logs")));
+
+        roles[AgentRole.Classifier] = new AgentSettings(AgentCli.Claude, null, "low", 9);
+        project = project with { Roles = new RoleSettings(roles) };
+        prepared = await new AgentInvocationPreparer().PrepareClassifierAsync(
+            host, project, context, worktree, payload, TestContext.Current.CancellationToken);
+        Assert.Equal("claude", prepared.Executable);
+        Assert.Equal(["-p", "--dangerously-skip-permissions", "--no-session-persistence", "--effort", "low"], prepared.Arguments);
+        Assert.Equal(TimeSpan.FromMinutes(9), prepared.Timeout);
+    }
+
+    [Fact]
     public async Task ResolvesCanonicalPathsAndFourEnvironmentOverridesWithoutCreatingFiles()
     {
         using var temp = new TempDirectory();

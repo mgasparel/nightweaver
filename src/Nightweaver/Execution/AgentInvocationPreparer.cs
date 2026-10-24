@@ -56,8 +56,42 @@ internal sealed class AgentInvocationPreparer
             $"default_branch: {project.TargetRepository.DefaultBranch}",
             $"Remaining repair budget: {remainingRepairBudget.ToString(CultureInfo.InvariantCulture)}");
         var standardInput = dispatchHeader + "\n\n" + prompt;
+        return BuildInvocation(hostPaths, project, context, workingDirectory, project.Roles[role], standardInput, roleSuffix);
+    }
 
-        var settings = project.Roles[role];
+    /// <summary>Prepares the classifier's code-owned comparison protocol without loading a lifecycle prompt template.</summary>
+    internal Task<PreparedAgentInvocation> PrepareClassifierAsync(
+        HostPaths hostPaths,
+        ProjectConfig project,
+        AgentDispatchContext context,
+        string worktreePath,
+        string comparisonPayload,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(hostPaths);
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(worktreePath);
+        ArgumentNullException.ThrowIfNull(comparisonPayload);
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateContext(context, project);
+        var workingDirectory = ValidateWorktreePath(hostPaths, project, context.BeadId, worktreePath);
+        if (Encoding.UTF8.GetByteCount(comparisonPayload) > DuplicateFailureClassifierLimits.MaximumPayloadBytes)
+            throw new AgentInvocationPreparationException("The classifier comparison payload exceeds the configured serialized size limit.");
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(BuildInvocation(hostPaths, project, context, workingDirectory,
+            project.Roles[AgentRole.Classifier], comparisonPayload, "classifier"));
+    }
+
+    private PreparedAgentInvocation BuildInvocation(
+        HostPaths hostPaths,
+        ProjectConfig project,
+        AgentDispatchContext context,
+        string workingDirectory,
+        AgentSettings settings,
+        string standardInput,
+        string roleSuffix)
+    {
         var arguments = BuildArguments(settings);
         var invocationId = AllocateInvocationId(roleSuffix);
         var beadTmpRoot = RuntimePaths.Normalize(Path.Combine(hostPaths.TmpRoot(project.Name), context.BeadId));

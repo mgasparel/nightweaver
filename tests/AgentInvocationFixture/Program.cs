@@ -15,6 +15,8 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        var classifierAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION");
+        if (classifierAction is not null) return RunClassifierAction(classifierAction);
         var stageAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION");
         if (stageAction is not null) return RunStageAction(stageAction);
         if (args.Length == 0) return 64;
@@ -91,6 +93,75 @@ internal static class Program
                 while (true) Thread.Sleep(1000);
             default:
                 return 66;
+        }
+    }
+
+    private static int RunClassifierAction(string action)
+    {
+        using var input = Console.OpenStandardInput();
+        using var inputBytes = new MemoryStream();
+        input.CopyTo(inputBytes);
+        var exactInput = inputBytes.ToArray();
+        var capturedInputPath = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CAPTURE_STDIN");
+        if (!string.IsNullOrWhiteSpace(capturedInputPath)) File.WriteAllBytes(capturedInputPath, exactInput);
+
+        var reportPath = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_REPORT");
+        if (!string.IsNullOrWhiteSpace(reportPath))
+        {
+            File.WriteAllText(reportPath, JsonSerializer.Serialize(new
+            {
+                cwd = Environment.CurrentDirectory,
+                beadId = Environment.GetEnvironmentVariable("NIGHTWEAVER_BEAD_ID"),
+                tmp = Environment.GetEnvironmentVariable("TMP"),
+                temp = Environment.GetEnvironmentVariable("TEMP"),
+                tmpdir = Environment.GetEnvironmentVariable("TMPDIR"),
+                arguments = Environment.GetCommandLineArgs().Skip(1).ToArray()
+            }), new UTF8Encoding(false));
+        }
+
+        var output = Console.OpenStandardOutput();
+        var error = Console.OpenStandardError();
+        switch (action)
+        {
+            case "duplicate":
+                output.Write(Encoding.UTF8.GetBytes("{\"verdict\":\"duplicate\"}\n"));
+                return 0;
+            case "different":
+                output.Write(Encoding.UTF8.GetBytes(" {\"verdict\":\"different\"} \n"));
+                return 0;
+            case "stderr-verdict":
+                error.Write(Encoding.UTF8.GetBytes("{\"verdict\":\"duplicate\"}"));
+                output.Write(Encoding.UTF8.GetBytes("{\"verdict\":\"different\"}"));
+                return 0;
+            case "nonzero":
+                output.Write(Encoding.UTF8.GetBytes("{\"verdict\":\"duplicate\"}"));
+                return 17;
+            case "invalid":
+                output.Write(Encoding.UTF8.GetBytes("{\"verdict\":\"duplicate\",\"verdict\":\"different\"}"));
+                return 0;
+            case "oversized":
+                output.Write(Encoding.UTF8.GetBytes("{\"verdict\":\"duplicate\"}"));
+                output.Write(Enumerable.Repeat((byte)' ', 20 * 1024).ToArray());
+                return 0;
+            case "timeout-descendant":
+            {
+                var handshake = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_HANDSHAKE")
+                    ?? throw new InvalidOperationException("Classifier timeout handshake path is missing.");
+                File.WriteAllText(handshake + ".root", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                var classifierAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION");
+                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", null);
+                try { SpawnProcess("hold", handshake + ".child"); }
+                finally { Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", classifierAction); }
+                WaitForFile(handshake + ".child");
+                while (true) Thread.Sleep(1000);
+            }
+            case "flood":
+                output.Write(Enumerable.Repeat((byte)'O', 600_000).ToArray());
+                error.Write(Enumerable.Repeat((byte)'E', 600_000).ToArray());
+                output.Write(Encoding.UTF8.GetBytes("{\"verdict\":\"duplicate\"}"));
+                return 0;
+            default:
+                return 67;
         }
     }
 
@@ -212,7 +283,10 @@ internal static class Program
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
         var executable = Environment.ProcessPath ?? throw new InvalidOperationException("Fixture process path is unavailable.");
         var fixtureDll = Assembly.GetExecutingAssembly().Location;
-        var commandLineText = string.Join(' ', new[] { executable, fixtureDll, mode }.Concat(arguments).Select(QuoteArgument));
+        var launchArguments = string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase)
+            ? new[] { fixtureDll, mode }.Concat(arguments)
+            : new[] { mode }.Concat(arguments);
+        var commandLineText = string.Join(' ', new[] { executable }.Concat(launchArguments).Select(QuoteArgument));
         var commandLine = Marshal.StringToHGlobalUni(commandLineText);
         try
         {

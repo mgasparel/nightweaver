@@ -16,6 +16,28 @@ internal sealed class AgentInvocationExecutor
         PreparedAgentInvocation invocation,
         CancellationToken cancellationToken)
     {
+        var result = await ExecuteCoreAsync(hostPaths, project, invocation, null, cancellationToken).ConfigureAwait(false);
+        return result.Execution;
+    }
+
+    internal static Task<AgentStandardOutputCaptureResult> ExecuteWithStandardOutputCaptureAsync(
+        HostPaths hostPaths,
+        ProjectSlug project,
+        PreparedAgentInvocation invocation,
+        int maximumCapturedBytes,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCapturedBytes);
+        return ExecuteCoreAsync(hostPaths, project, invocation, maximumCapturedBytes, cancellationToken);
+    }
+
+    private static async Task<AgentStandardOutputCaptureResult> ExecuteCoreAsync(
+        HostPaths hostPaths,
+        ProjectSlug project,
+        PreparedAgentInvocation invocation,
+        int? maximumCapturedBytes,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(hostPaths);
         ArgumentNullException.ThrowIfNull(invocation);
         cancellationToken.ThrowIfCancellationRequested();
@@ -28,6 +50,7 @@ internal sealed class AgentInvocationExecutor
         Task? stdoutPump = null;
         Task? stderrPump = null;
         SemaphoreSlim? logGate = null;
+        var stdoutCapture = maximumCapturedBytes is null ? null : new BoundedStandardOutputCapture(maximumCapturedBytes.Value);
         Exception? primaryFailure = null;
         Exception? cleanupFailure = null;
         AgentExecutionStatus? status = null;
@@ -49,7 +72,7 @@ internal sealed class AgentInvocationExecutor
             child = WindowsProcessLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment);
             rootExit = child.WaitForRootExitAsync();
             logGate = new SemaphoreSlim(1, 1);
-            stdoutPump = PumpOutputAsync(child.StandardOutput, runtimeFiles.LogStream, logGate);
+            stdoutPump = PumpOutputAsync(child.StandardOutput, runtimeFiles.LogStream, logGate, stdoutCapture);
             stderrPump = PumpOutputAsync(child.StandardError, runtimeFiles.LogStream, logGate);
             stdinWrite = WriteInputAndCloseAsync(child.StandardInput, Encoding.UTF8.GetBytes(invocation.StandardInput));
 
@@ -138,7 +161,10 @@ internal sealed class AgentInvocationExecutor
         if (status is null)
             throw CreateDiagnostic(invocation, new InvalidOperationException("Execution finished without a process outcome."), "no process outcome was observed");
 
-        return new AgentExecutionResult(status.Value, exitCode, invocation.InvocationId, invocation.LogFilePath);
+        return new AgentStandardOutputCaptureResult(
+            new AgentExecutionResult(status.Value, exitCode, invocation.InvocationId, invocation.LogFilePath),
+            stdoutCapture?.Snapshot() ?? [],
+            stdoutCapture?.Overflowed ?? false);
     }
 
     internal static IReadOnlyDictionary<string, string> BuildInheritedEnvironment(IReadOnlyDictionary<string, string> overrides)
@@ -227,13 +253,18 @@ internal sealed class AgentInvocationExecutor
         }
     }
 
-    private static async Task PumpOutputAsync(Stream source, Stream log, SemaphoreSlim logGate)
+    private static async Task PumpOutputAsync(
+        Stream source,
+        Stream log,
+        SemaphoreSlim logGate,
+        BoundedStandardOutputCapture? capture = null)
     {
         var buffer = new byte[16 * 1024];
         while (true)
         {
             var count = await source.ReadAsync(buffer).ConfigureAwait(false);
             if (count == 0) return;
+            capture?.Append(buffer.AsSpan(0, count));
             await logGate.WaitAsync().ConfigureAwait(false);
             try { await log.WriteAsync(buffer.AsMemory(0, count)).ConfigureAwait(false); }
             finally { logGate.Release(); }
@@ -271,5 +302,26 @@ internal sealed class AgentInvocationExecutor
     {
         var remaining = CleanupBudget - cleanupClock.Elapsed;
         return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+    }
+
+    private sealed class BoundedStandardOutputCapture(int maximumBytes)
+    {
+        private readonly byte[] bytes = new byte[maximumBytes];
+        private int length;
+
+        internal bool Overflowed { get; private set; }
+
+        internal void Append(ReadOnlySpan<byte> chunk)
+        {
+            var copied = Math.Min(bytes.Length - length, chunk.Length);
+            if (copied > 0)
+            {
+                chunk[..copied].CopyTo(bytes.AsSpan(length));
+                length += copied;
+            }
+            if (copied != chunk.Length) Overflowed = true;
+        }
+
+        internal byte[] Snapshot() => bytes.AsSpan(0, length).ToArray();
     }
 }
