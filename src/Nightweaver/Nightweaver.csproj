@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>nightweaver</AssemblyName>
+    <RootNamespace>Nightweaver</RootNamespace>
+    <UseAppHost>true</UseAppHost>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Nightweaver.Tests" />
+  </ItemGroup>
+</Project>
