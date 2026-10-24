@@ -11,12 +11,6 @@ namespace Nightweaver.Execution;
 internal sealed class AgentInvocationPreparer
 {
     private static readonly object IdentifierLock = new();
-    private static readonly HashSet<string> WindowsDeviceNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$",
-        "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
-    };
     private static long lastIdentifierUtcTicks = DateTime.MinValue.Ticks;
 
     private readonly TimeProvider timeProvider;
@@ -159,21 +153,7 @@ internal sealed class AgentInvocationPreparer
             throw new AgentInvocationPreparationException($"{fieldName} must be a nonempty single-line value.");
     }
 
-    private static bool IsSafeBeadId(string beadId)
-    {
-        if (string.IsNullOrEmpty(beadId) || beadId.Length > 128 || beadId is "." or ".." || beadId.EndsWith('.')
-            || !char.IsAsciiLetterOrDigit(beadId[0])
-            || beadId.Any(character => !(char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.')))
-            return false;
-
-        var stem = beadId.Split('.', 2)[0];
-        if (WindowsDeviceNames.Contains(stem)) return false;
-        // Windows also reserves COM¹/²/³ and LPT¹/²/³, including on case-insensitive volumes.
-        return !(stem.Length == 4
-            && (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
-                || stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase))
-            && stem[3] is '¹' or '²' or '³');
-    }
+    private static bool IsSafeBeadId(string beadId) => BeadIdSafety.IsSafe(beadId);
 
     private static string ValidateWorktreePath(HostPaths hostPaths, ProjectConfig project, string beadId, string worktreePath)
     {

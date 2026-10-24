@@ -1,6 +1,6 @@
 # Nightweaver
 
-Nightweaver is a discovery-driven software factory for Beads (`bd`) issues. It is under active development. The runnable CLI currently supports read-only startup inspection and `--dry-run`; live scheduling, worktree cleanup, issue updates, and Agent dispatch are not implemented.
+Nightweaver is a discovery-driven software factory for Beads (`bd`) work. It is under active development. The CLI supports a read-only startup inspection and `--dry-run`, plus `dispatch` for one live lifecycle stage on one ready Bead. A scheduler that automatically advances Beads through their next stages is not implemented.
 
 ## Local prerequisites
 
@@ -8,8 +8,9 @@ Nightweaver is a discovery-driven software factory for Beads (`bd`) issues. It i
 - The .NET 10 runtime to run the framework-dependent published executable.
 - Git and `bd` on `PATH` for a dry run. The supported tracker is bd 1.3.1 using an initialized embedded Dolt database.
 - The Target Repository must be the root of a Git working tree and contain a prepared `.beads` tracker. Complete tracker setup before running Nightweaver. A fresh `bd init` may need a normal bd write outside the dry-run to create bd's persistent gate-lock files. Nightweaver does not initialize or migrate a tracker.
+- Live `dispatch` currently requires Windows for Win32 Job Object process containment, the configured Agent CLI installed and available on `PATH`, and the role prompt under `<nightweaver-root>\prompts\`. Worktree provisioning also needs the configured default branch on `origin`. A role's mandate can use `git`, `gh`, or the Target Repository's own build and test tools.
 
-The integration tests use real Git and bd against disposable repositories. They require those tools and fail with a prerequisite error if either is missing; the real-tool gate does not silently skip. A dry run does not need an Agent CLI, `gh`, a network connection, an `origin` remote, or credentials.
+The integration tests use real Git and bd against disposable repositories and use native fake Agent apphosts for live execution. They require those tools and fail with a prerequisite error if a required tool is missing; the real-tool gate does not silently skip. A dry run does not need an Agent CLI, `gh`, a network connection, an `origin` remote, or credentials.
 
 ## Build, test, and publish
 
@@ -62,6 +63,47 @@ Set-Location 'C:\Tools\Unrelated Caller Directory'
 
 Use the Unix apphost name `nightweaver` in place of `nightweaver.exe` on Unix systems.
 
+## Single-stage dispatch
+
+`dispatch` validates the Project and Target Repository, reads the complete Beads inventory and bd's native unassigned-ready set, acquires one guarded claim, then invokes the operational retry coordinator for exactly one lifecycle stage. It does not start a scheduler or automatically choose the next role. Run one Nightweaver process at a time for a Project.
+
+```text
+nightweaver dispatch <bead-id> [--role <role>] (--project <project-slug> | --config <path-to-project-json>)
+```
+
+Without `--role`, the role is inferred from the Bead's issue type and stage label:
+
+| Bead type | Stage | Inferred role |
+| --- | --- | --- |
+| `task` | absent or `stage:implement` | `implementer` |
+| `task` | `stage:review` | `reviewer` |
+| `task` | `stage:qa` | `qa` |
+| `task` | `stage:merge` | `merger` |
+| `feature` or `bug` | absent, `stage:plan`, or `stage:plan-approved` | `planner` |
+| `feature` or `bug` | `stage:plan-challenge` | `plan_challenger` |
+
+The six accepted lifecycle roles are `planner`, `plan_challenger`, `implementer`, `reviewer`, `qa`, and `merger`. `classifier` is reserved for automatic duplicate-failure comparison and cannot be dispatched directly. An explicit `--role` is checked against the same Authority Matrix; it cannot bypass a type, stage, terminal-state, or pause restriction. A valid task at `stage:review` can use `--role reviewer`, while `--role implementer` is refused.
+
+Only Beads that are open, unassigned, and present in bd's native ready set can be claimed. The guarded claim changes status to `in_progress` and assigns `nightweaver:<project-name>`. Dispatch rereads ownership, workflow state, and readiness before launch. On a verified success, it releases its claim and returns the Bead to `open` with no assignee; a verified Merger closure remains closed. Legal Planning outcomes such as `planned` or `product-decision-required` are kept. Operational failures retry up to `1 + limits.max_operational_retries` attempts, resetting the isolated worktree before a retry. Repeated failures are compared by the classifier; exhaustion or a duplicate failure escalates the Bead to `needs-human` and delegates cleanup to the retry coordinator.
+
+Exit codes are `0` for a verified stage and completed claim handoff, `1` for an ineligible Bead, operational failure, escalation, incomplete handoff, or cancellation, and `2` for command usage or Project configuration errors. Start/progress/success messages go to standard output. Operational failures, escalation, and cancellation details go to standard error. Successful dispatch retains the managed worktree, branch, and logs for a later explicit dispatch. Cancellation after execution starts stops further retries and follow-on work; inspect the coordinator's resulting claim and runtime state before retrying. This command performs no full lifecycle scheduling or general pause cleanup.
+
+Examples from an unrelated caller directory with spaces in the paths:
+
+```powershell
+$nightweaverRoot = 'C:\Tools\Nightweaver Host'
+Set-Location 'C:\Tools\Unrelated Caller Directory'
+
+# Infer the role from this Bead's type and stage.
+& (Join-Path $nightweaverRoot 'nightweaver.exe') dispatch ns-42 --project demo
+
+# Resolve the relative config path from the caller directory.
+& (Join-Path $nightweaverRoot 'nightweaver.exe') dispatch ns-42 --config '..\Nightweaver Host\projects\demo.json'
+
+# Explicit reviewer selection for a task currently labelled stage:review.
+& (Join-Path $nightweaverRoot 'nightweaver.exe') dispatch ns-42 --role reviewer --config '..\Nightweaver Host\projects\demo.json'
+```
+
 ## Built-in defaults and role inheritance
 
 Omitted settings receive these defaults:
@@ -98,11 +140,11 @@ For example, this sets a shared model and overrides the reviewer's effort while 
 }
 ```
 
-These role settings are reported as configuration. They do not launch Agents in the current CLI.
+These role settings are reported by `--dry-run` and used when `dispatch` launches a configured Agent for its selected lifecycle stage.
 
 ## Dry-run report and safety
 
-`--dry-run` validates the Project and Target Repository, reads the complete Beads inventory and readiness, inspects the Git worktree registry and Project runtime directories, then prints a deterministic hypothetical startup snapshot. It performs no cleanup or claim changes and launches no Agent processes.
+`--dry-run` validates the Project and Target Repository, reads the complete Beads inventory and readiness, inspects the Git worktree registry and Project runtime directories, then prints a deterministic hypothetical startup snapshot. It performs no cleanup or claim changes and launches no Agent processes. It still needs no Agent CLI, origin, network, or `gh`.
 
 - **Startup claim releases** list owned stranded `in_progress` Beads that a startup recovery would release. The tracker is unchanged.
 - **Worktree removals** and **orphan tmp deletions** describe hypothetical cleanup. Linked, locked, external, missing, or uncertain paths are preserved or reported conservatively.

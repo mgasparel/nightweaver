@@ -12,14 +12,18 @@ internal static class NightweaverApp
         IProcessRunner processRunner,
         CancellationToken cancellationToken)
     {
+        var dispatchCommand = args.Count > 0 && args[0] == "dispatch";
         try
         {
             var options = CommandLineParser.Parse(args);
             if (options.Help)
             {
-                environment.Out.Write(HelpText.Usage);
+                environment.Out.Write(options.Dispatch is null ? HelpText.Usage : HelpText.DispatchUsage);
                 return ExitCodes.Success;
             }
+
+            if (options.Dispatch is not null)
+                return await DispatchApplication.RunAsync(options, environment, processRunner, cancellationToken);
 
             await DryRunApplication.RunAsync(options, environment, processRunner, cancellationToken);
             return ExitCodes.Success;
@@ -27,7 +31,9 @@ internal static class NightweaverApp
         catch (UsageException exception)
         {
             environment.Err.WriteLine($"nightweaver: error: {exception.Message}");
-            environment.Err.WriteLine("Run 'nightweaver --help' for usage.");
+            environment.Err.WriteLine(dispatchCommand
+                ? "Run 'nightweaver dispatch --help' for usage."
+                : "Run 'nightweaver --help' for usage.");
             return ExitCodes.UsageOrConfiguration;
         }
         catch (ProjectConfigurationException exception)
@@ -47,23 +53,45 @@ internal static class NightweaverApp
         }
         catch (TargetRepositoryException exception)
         {
-            environment.Err.WriteLine($"nightweaver: error: {exception.Message}");
+            environment.Err.WriteLine(dispatchCommand
+                ? $"nightweaver: Failed: {exception.Message}"
+                : $"nightweaver: error: {exception.Message}");
             return ExitCodes.InspectionFailure;
         }
         catch (ToolExecutionException exception)
         {
-            environment.Err.WriteLine($"nightweaver: error: {exception.Message}");
+            if (cancellationToken.IsCancellationRequested)
+            {
+                environment.Err.WriteLine(dispatchCommand
+                    ? "nightweaver: Cancelled before dispatch completed."
+                    : "nightweaver: error: cancelled");
+                return ExitCodes.InspectionFailure;
+            }
+            environment.Err.WriteLine(dispatchCommand
+                ? $"nightweaver: Failed: {exception.Message}"
+                : $"nightweaver: error: {exception.Message}");
             WriteStandardErrorTail(environment.Err, exception.StandardError);
             return ExitCodes.InspectionFailure;
         }
         catch (OperationCanceledException)
         {
-            environment.Err.WriteLine("nightweaver: error: cancelled");
+            environment.Err.WriteLine(dispatchCommand
+                ? "nightweaver: Cancelled before dispatch completed."
+                : "nightweaver: error: cancelled");
+            return ExitCodes.InspectionFailure;
+        }
+        catch (NightweaverException exception)
+        {
+            environment.Err.WriteLine(dispatchCommand
+                ? $"nightweaver: Failed: {exception.Message}"
+                : $"nightweaver: error: {exception.Message}");
             return ExitCodes.InspectionFailure;
         }
         catch (Exception exception)
         {
-            environment.Err.WriteLine($"nightweaver: internal error: {exception.GetType().Name}: {exception.Message}");
+            environment.Err.WriteLine(dispatchCommand
+                ? $"nightweaver: Failed: {exception.GetType().Name}: {exception.Message}"
+                : $"nightweaver: internal error: {exception.GetType().Name}: {exception.Message}");
             return ExitCodes.InspectionFailure;
         }
     }

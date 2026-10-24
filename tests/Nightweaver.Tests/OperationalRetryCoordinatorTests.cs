@@ -113,6 +113,43 @@ public sealed class OperationalRetryCoordinatorTests
     }
 
     [Fact]
+    public async Task ProgressReportsActualAttemptsRetriesAndClassifierVerdictInOrder()
+    {
+        var fixture = new RetryFixture(2,
+            new Attempt(19, null),
+            new Attempt(23, null),
+            new Attempt(0, "stage:review"))
+        {
+            Verdict = DuplicateFailureVerdict.Different
+        };
+        var events = new List<OperationalRetryProgress>();
+
+        var outcome = await fixture.RunAsync(events.Add);
+
+        Assert.True(outcome.Succeeded);
+        Assert.Equal(
+            [
+                OperationalRetryProgressKind.AttemptStarted,
+                OperationalRetryProgressKind.RetryPreparing,
+                OperationalRetryProgressKind.AttemptStarted,
+                OperationalRetryProgressKind.ClassifierStarted,
+                OperationalRetryProgressKind.ClassifierCompleted,
+                OperationalRetryProgressKind.RetryPreparing,
+                OperationalRetryProgressKind.AttemptStarted
+            ],
+            events.Select(item => item.Kind));
+        Assert.Equal(3, events.Last(item => item.Kind == OperationalRetryProgressKind.AttemptStarted).Attempt);
+        var retry = events.First(item => item.Kind == OperationalRetryProgressKind.RetryPreparing);
+        Assert.Equal("invocation-1", retry.InvocationId);
+        Assert.Equal("C:\\logs\\1.log", retry.LogFilePath);
+        var classifier = events.Single(item => item.Kind == OperationalRetryProgressKind.ClassifierCompleted);
+        Assert.Equal(DuplicateFailureVerdict.Different,
+            classifier.ClassifierVerdict);
+        Assert.Equal("classifier-invocation", classifier.ClassifierInvocationId);
+        Assert.Equal("C:\\logs\\classifier.log", classifier.ClassifierLogFilePath);
+    }
+
+    [Fact]
     public async Task OneRetryBudgetDoesNotClassifyItsFinalFailure()
     {
         var fixture = new RetryFixture(1, new Attempt(19, null), new Attempt(23, null));
@@ -340,8 +377,9 @@ public sealed class OperationalRetryCoordinatorTests
         internal Action<string>? OnAttempt { get; set; }
         internal Action? OnReset { get; set; }
 
-        internal Task<OperationalRetryOutcome> RunAsync() => Coordinator.RunAsync(host, project, repository, Bead,
-            AgentRole.Implementer, Owner, TestContext.Current.CancellationToken);
+        internal Task<OperationalRetryOutcome> RunAsync(Action<OperationalRetryProgress>? progress = null) =>
+            Coordinator.RunAsync(host, project, repository, Bead, AgentRole.Implementer, Owner,
+                TestContext.Current.CancellationToken, progress);
 
         private string Inventory() => JsonSerializer.Serialize(new[]
         {

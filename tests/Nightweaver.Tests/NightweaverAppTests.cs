@@ -22,12 +22,29 @@ public sealed class NightweaverAppTests
         Assert.Equal(Nightweaver.Cli.HelpText.Usage, helpOutput.ToString());
         Assert.Equal(string.Empty, helpError.ToString());
 
+        var dispatchHelpOutput = new StringWriter();
+        var dispatchHelpError = new StringWriter();
+        var dispatchHelpCode = await NightweaverApp.RunAsync(["dispatch", "--help"],
+            CreateAppEnvironment(host, caller, dispatchHelpOutput, dispatchHelpError), runner, CancellationToken.None);
+        Assert.Equal(0, dispatchHelpCode);
+        Assert.Equal(Nightweaver.Cli.HelpText.DispatchUsage, dispatchHelpOutput.ToString());
+        Assert.Equal(string.Empty, dispatchHelpError.ToString());
+
         var badOutput = new StringWriter();
         var badError = new StringWriter();
         var badCode = await NightweaverApp.RunAsync(["--help", "--unknown"], CreateAppEnvironment(host, caller, badOutput, badError), runner, CancellationToken.None);
         Assert.Equal(2, badCode);
         Assert.Equal(string.Empty, badOutput.ToString());
         Assert.Contains("unknown option '--unknown'", badError.ToString(), StringComparison.Ordinal);
+        Assert.Empty(runner.Requests);
+
+        var unsafeIdOutput = new StringWriter();
+        var unsafeIdError = new StringWriter();
+        var unsafeIdCode = await NightweaverApp.RunAsync(["dispatch", "../outside", "--project", "demo"],
+            CreateAppEnvironment(host, caller, unsafeIdOutput, unsafeIdError), runner, CancellationToken.None);
+        Assert.Equal(2, unsafeIdCode);
+        Assert.Equal(string.Empty, unsafeIdOutput.ToString());
+        Assert.Contains("unsafe Bead ID", unsafeIdError.ToString(), StringComparison.Ordinal);
         Assert.Empty(runner.Requests);
     }
 
