@@ -141,10 +141,11 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
 
         foreach (var property in root.EnumerateObject())
         {
-            if (!seen.Add(property.Name))
+            var propertyName = ReadPropertyName(property);
+            if (!seen.Add(propertyName))
                 throw new JsonException("created issue contains a duplicate property");
 
-            switch (property.Name)
+            switch (propertyName)
             {
                 case "id":
                     id = ReadNonblankString(property.Value, "id");
@@ -168,7 +169,7 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
                     if (property.Value.ValueKind == JsonValueKind.Null)
                         assignee = null;
                     else if (property.Value.ValueKind == JsonValueKind.String)
-                        assignee = property.Value.GetString();
+                        assignee = ReadStringValue(property.Value);
                     else
                         throw new JsonException("created issue assignee must be a string or null");
                     break;
@@ -179,9 +180,10 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
                     var parsedLabels = new List<string>();
                     foreach (var label in property.Value.EnumerateArray())
                     {
-                        if (label.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(label.GetString()))
+                        var parsedLabel = label.ValueKind == JsonValueKind.String ? ReadStringValue(label) : null;
+                        if (string.IsNullOrWhiteSpace(parsedLabel))
                             throw new JsonException("created issue labels must contain nonblank strings");
-                        parsedLabels.Add(label.GetString()!);
+                        parsedLabels.Add(parsedLabel);
                     }
                     labels = parsedLabels;
                     break;
@@ -204,9 +206,34 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
 
     private static string ReadNonblankString(JsonElement value, string propertyName)
     {
-        if (value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(value.GetString()))
+        var decoded = value.ValueKind == JsonValueKind.String ? ReadStringValue(value) : null;
+        if (string.IsNullOrWhiteSpace(decoded))
             throw new JsonException($"created issue {propertyName} must be a nonblank string");
-        return value.GetString()!;
+        return decoded;
+    }
+
+    private static string ReadPropertyName(JsonProperty property)
+    {
+        try
+        {
+            return property.Name;
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new JsonException("created issue contains invalid Unicode", exception);
+        }
+    }
+
+    private static string? ReadStringValue(JsonElement value)
+    {
+        try
+        {
+            return value.GetString();
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new JsonException("created issue contains invalid Unicode", exception);
+        }
     }
 
     private async Task RunAsync(ValidatedTargetRepository repository, IReadOnlyList<string> arguments,

@@ -456,8 +456,12 @@ public sealed class WebBeadsIntegrationTests
         Assert.Equal(acceptance, issue.GetProperty("acceptance_criteria").GetString());
     }
 
-    [Fact]
-    public async Task MalformedCreateOutputReportsUncertainOutcomeWithoutRetryingOrDeleting()
+    [Theory]
+    [InlineData("high-value")]
+    [InlineData("low-value")]
+    [InlineData("high-property")]
+    [InlineData("low-property")]
+    public async Task InvalidUnicodeCreateOutputReportsUncertainOutcomeWithoutRetryingOrDeleting(string corruption)
     {
         using var target = new BeadsFixture();
         var actual = new SystemProcessRunner();
@@ -471,17 +475,30 @@ public sealed class WebBeadsIntegrationTests
                 Interlocked.Increment(ref createCalls);
                 using var created = JsonDocument.Parse(result.StandardOutput);
                 createdId = created.RootElement.GetProperty("id").GetString();
-                return result with { StandardOutput = "{ malformed" };
+                var titleJson = corruption switch
+                {
+                    "high-value" => "\"bad\\uD800-output\"",
+                    "low-value" => "\"bad\\uDC00-output\"",
+                    _ => JsonSerializer.Serialize("Invalid Unicode output probe")
+                };
+                var injectedProperty = corruption switch
+                {
+                    "high-property" => "\"bad\\uD800-property\":\"private tool output\",",
+                    "low-property" => "\"bad\\uDC00-property\":\"private tool output\",",
+                    _ => null
+                };
+                return result with { StandardOutput = CreateCreateOutput(createdId!, titleJson, injectedProperty) };
             }
             return result;
         });
         using var factory = CreateFactory(target, runner);
         using var client = factory.CreateClient();
+        const string submittedTitle = "Invalid Unicode output probe";
         var requestJson = JsonSerializer.Serialize(new
         {
             type = "feature",
             priority = 1,
-            title = "Uncertain output probe",
+            title = submittedTitle,
             description = "Create once before output parsing fails.",
             acceptanceCriteria = "The real issue remains discoverable."
         });
@@ -490,19 +507,70 @@ public sealed class WebBeadsIntegrationTests
             TestContext.Current.CancellationToken);
         var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
         Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
         using var problem = JsonDocument.Parse(body);
         Assert.Equal("Creation could not be confirmed", problem.RootElement.GetProperty("title").GetString());
         Assert.Contains("Check the backlog before resubmitting", problem.RootElement.GetProperty("detail").GetString());
-        Assert.DoesNotContain("Uncertain output probe", body, StringComparison.Ordinal);
+        Assert.DoesNotContain(submittedTitle, body, StringComparison.Ordinal);
+        Assert.DoesNotContain("private tool output", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("InvalidOperationException", body, StringComparison.Ordinal);
+        Assert.DoesNotContain(target.Path, body, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, Volatile.Read(ref createCalls));
         Assert.NotNull(createdId);
         var shown = target.Run("bd", ["show", createdId!]);
-        Assert.Contains("Uncertain output probe", shown, StringComparison.Ordinal);
+        Assert.Contains(submittedTitle, shown, StringComparison.Ordinal);
         Assert.Contains("The real issue remains discoverable.", shown, StringComparison.Ordinal);
 
         using var ready = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "ready", "--limit", "0", "--json"]));
-        Assert.Contains(ready.RootElement.EnumerateArray(), bead => bead.GetProperty("id").GetString() == createdId);
+        Assert.Equal(1, ready.RootElement.EnumerateArray()
+            .Count(bead => bead.GetProperty("id").GetString() == createdId));
+        using var nextRead = await client.GetAsync("/api/beads?view=ready", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, nextRead.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateOutputAcceptsValidEscapedSurrogatePair()
+    {
+        using var target = new BeadsFixture();
+        var actual = new SystemProcessRunner();
+        string? createdId = null;
+        var createCalls = 0;
+        var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
+        {
+            var result = await actual.RunAsync(AddFixtureEnvironment(target, request), cancellationToken);
+            if (request.FileName == "bd" && request.Arguments.Contains("create", StringComparer.Ordinal))
+            {
+                Interlocked.Increment(ref createCalls);
+                using var created = JsonDocument.Parse(result.StandardOutput);
+                createdId = created.RootElement.GetProperty("id").GetString();
+                const string escapedEmoji = "\\uD83D\\uDE00";
+                var titleJson = "\"Escaped output " + escapedEmoji + " pair\"";
+                return result with { StandardOutput = CreateCreateOutput(createdId!, titleJson) };
+            }
+            return result;
+        });
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        const string title = "Escaped output 😀 pair";
+        var requestJson = JsonSerializer.Serialize(new
+        {
+            type = "feature",
+            priority = 1,
+            title,
+            description = "Keep valid escaped Unicode in create output.",
+            acceptanceCriteria = "The paired escape decodes to the requested title."
+        });
+
+        using var response = await client.PostAsync("/api/beads",
+            new StringContent(requestJson, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        using var row = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(title, row.RootElement.GetProperty("title").GetString());
+        Assert.Equal(1, Volatile.Read(ref createCalls));
+        Assert.NotNull(createdId);
+        Assert.Contains(title, target.Run("bd", ["show", createdId!]), StringComparison.Ordinal);
+
         using var nextRead = await client.GetAsync("/api/beads?view=ready", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, nextRead.StatusCode);
     }
@@ -1105,6 +1173,10 @@ public sealed class WebBeadsIntegrationTests
             description = "A concurrent test Product Bead.",
             acceptanceCriteria = "Both deliberate submissions are created once."
         });
+
+    private static string CreateCreateOutput(string id, string titleJson, string? injectedPropertyJson = null)
+        => $"{{{injectedPropertyJson ?? string.Empty}\"id\":{JsonSerializer.Serialize(id)},\"title\":{titleJson},"
+            + "\"issue_type\":\"feature\",\"priority\":1,\"status\":\"open\",\"assignee\":null,\"labels\":[]}";
 
     private static void UpdateMaximum(ref int maximum, int observed)
     {
