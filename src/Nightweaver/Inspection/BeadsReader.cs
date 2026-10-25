@@ -160,8 +160,19 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         }
 
         using var metadata = JsonDocument.Parse(File.ReadAllText(Path.Combine(beadsDirectory, "metadata.json")));
-        if (File.Exists(Path.Combine(beadsDirectory, "redirect")) ||
-            (metadata.RootElement.TryGetProperty("dolt_mode", out var mode) && mode.GetString() != "embedded"))
+        var metadataRoot = metadata.RootElement;
+        if (metadataRoot.ValueKind != JsonValueKind.Object)
+            throw new JsonException("metadata root must be an object");
+
+        string? doltMode = null;
+        if (metadataRoot.TryGetProperty("dolt_mode", out var mode))
+        {
+            if (mode.ValueKind != JsonValueKind.String)
+                throw new JsonException("metadata.dolt_mode must be a string");
+            doltMode = mode.GetString();
+        }
+
+        if (File.Exists(Path.Combine(beadsDirectory, "redirect")) || doltMode is not null && doltMode != "embedded")
             throw new ToolExecutionException("this bd backend layout is unsupported for mutation-free inspection; a local embedded tracker is required");
         if (!Directory.Exists(Path.Combine(beadsDirectory, "embeddeddolt")) ||
             !File.Exists(Path.Combine(repository.Path, ".beads.gate.lock")) ||

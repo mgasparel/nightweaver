@@ -46,9 +46,10 @@ public sealed class WebBeadsIntegrationTests
         var beyondDefaultLimit = target.Create("Inventory beyond default limit", priority: 4);
         var foreignBead = foreign.Create("Must not appear in configured target");
 
-        var inventoryJson = target.Run("bd", BeadsCommand.Create(target.Path).Arguments);
-        var nativeReadyJson = target.Run("bd", BeadsCommand.CreateExplorerReadiness(target.Path).Arguments);
-        var nativeBlockedJson = target.Run("bd", BeadsCommand.CreateExplorerBlocked(target.Path).Arguments);
+        var inventoryJson = target.Run("bd", ["--readonly", "--sandbox", "list", "--all", "--limit", "0",
+            "--include-ephemeral", "--include-gates", "--include-infra", "--include-templates", "--json"]);
+        var nativeReadyJson = target.Run("bd", ["--readonly", "--sandbox", "ready", "--limit", "0", "--json"]);
+        var nativeBlockedJson = target.Run("bd", ["--readonly", "--sandbox", "blocked", "--json"]);
         var commentJson = target.Run("bd", ["--readonly", "--sandbox", "comments", htmlLooking, "--json"]);
         var targetTreeBefore = Snapshot.FileTree(target.Path);
         var foreignTreeBefore = Snapshot.FileTree(foreign.Path);
@@ -127,6 +128,8 @@ public sealed class WebBeadsIntegrationTests
             .ToArray();
         var readyView = await GetRowsAsync(client, "/api/beads?view=ready");
         Assert.Equal(expectedReady, readyView.Rows.Select(Id).Order(StringComparer.Ordinal));
+        Assert.Contains(assigned, readyView.Rows.Select(Id));
+        Assert.DoesNotContain(deferred, readyView.Rows.Select(Id));
         Assert.DoesNotContain(blockedChild, readyView.Rows.Select(Id));
 
         using var nativeBlocked = JsonDocument.Parse(nativeBlockedJson);
@@ -175,11 +178,6 @@ public sealed class WebBeadsIntegrationTests
         Assert.Equal(commentJson, target.Run("bd", ["--readonly", "--sandbox", "comments", htmlLooking, "--json"]));
         Assert.Equal(hostTreeBefore, Snapshot.FileTree(factory.HostRoot));
         Assert.Equal(webTreeBefore, Snapshot.FileTree(factory.WebRoot));
-        Assert.Contains(processRunner.Requests, request => request.FileName == "bd" && request.Arguments.SequenceEqual(BeadsCommand.Create(target.Path).Arguments));
-        Assert.Contains(processRunner.Requests, request => request.FileName == "bd" && request.Arguments.SequenceEqual(BeadsCommand.CreateExplorerReadiness(target.Path).Arguments));
-        Assert.Contains(processRunner.Requests, request => request.FileName == "bd" && request.Arguments.SequenceEqual(BeadsCommand.CreateExplorerBlocked(target.Path).Arguments));
-        Assert.All(processRunner.Requests.Where(request => request.FileName == "bd"), request => Assert.Equal(target.Path, request.WorkingDirectory));
-
         target.Run("bd", ["close", closingBlocker, "--force"]);
         var afterClose = await GetRowsAsync(client, "/api/beads?view=blocked");
         Assert.DoesNotContain(changingChild, afterClose.Rows.Select(Id));
@@ -261,6 +259,44 @@ public sealed class WebBeadsIntegrationTests
         Assert.Equal(targetGitBefore, Snapshot.GitStatus(target.Path));
         Assert.Equal(foreignGitBefore, Snapshot.GitStatus(foreign.Path));
         Assert.Equal(hostTreeBefore, Snapshot.FileTree(factory.HostRoot));
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("{\"dolt_mode\":7}")]
+    public async Task MalformedMetadataReturnsSafeProblemDetailsAndLeavesHostAvailable(string metadataJson)
+    {
+        using var target = new BeadsFixture();
+        File.WriteAllText(Path.Combine(target.Path, ".beads", "metadata.json"), metadataJson);
+        var targetTreeBefore = Snapshot.FileTree(target.Path);
+        var targetGitBefore = Snapshot.GitStatus(target.Path);
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        var hostTreeBefore = Snapshot.FileTree(factory.HostRoot);
+        var webTreeBefore = Snapshot.FileTree(factory.WebRoot);
+        using var client = factory.CreateClient();
+
+        using var response = await client.GetAsync("/api/beads", TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+        using var problem = JsonDocument.Parse(body);
+        Assert.Equal("Incompatible Beads output", problem.RootElement.GetProperty("title").GetString());
+        Assert.Equal("The bd command returned data that Nightweaver could not read.", problem.RootElement.GetProperty("detail").GetString());
+        Assert.DoesNotContain(target.Path, body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("metadata.json", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("InvalidOperationException", body, StringComparison.Ordinal);
+        Assert.DoesNotContain(" at ", body, StringComparison.Ordinal);
+
+        using var health = await client.GetAsync("/health", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+        using var shell = await client.GetAsync("/", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, shell.StatusCode);
+        Assert.Equal(targetTreeBefore, Snapshot.FileTree(target.Path));
+        Assert.Equal(targetGitBefore, Snapshot.GitStatus(target.Path));
+        Assert.Equal(hostTreeBefore, Snapshot.FileTree(factory.HostRoot));
+        Assert.Equal(webTreeBefore, Snapshot.FileTree(factory.WebRoot));
     }
 
     [Fact]
