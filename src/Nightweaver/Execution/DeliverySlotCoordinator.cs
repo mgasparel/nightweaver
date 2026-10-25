@@ -394,6 +394,19 @@ internal sealed class DeliverySlotCoordinator
             if (!readiness.RecoverableOwnedReady.Contains(beadId))
                 return Result(DeliverySlotDisposition.Failed, currentState, role, lastStage, false,
                     "Repair-budget escalation was refused because the owned Bead is no longer in the recoverable-ready set.");
+
+            // Readiness is a separate tracker query. Re-read the complete workflow afterwards so
+            // state changes during that query cannot be adopted as the escalation baseline.
+            var verifiedInventory = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
+            if (!verifiedInventory.ById.TryGetValue(beadId, out var verifiedBead))
+                return Result(DeliverySlotDisposition.Failed, currentState, role, lastStage, false,
+                    "Repair-budget escalation was refused because the Bead disappeared after the readiness check.");
+            currentState = BeadWorkflowState.Parse(verifiedBead);
+            if (verifiedBead.Status != "in_progress"
+                || !string.Equals(verifiedBead.Assignee, project.RecoveryActor, StringComparison.Ordinal)
+                || currentState != expectedState)
+                return Result(DeliverySlotDisposition.Failed, currentState, role, lastStage, false,
+                    "Repair-budget escalation was refused because the live workflow state or claim changed after the readiness check.");
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception exception)
@@ -409,7 +422,7 @@ internal sealed class DeliverySlotCoordinator
         var request = new NeedsHumanRequest(beadId, project.RecoveryActor, NeedsHumanCause.RepairBudgetExhausted,
             role, reason, latestFindings, string.IsNullOrWhiteSpace(stageResult?.InvocationId) ? null : stageResult.InvocationId,
             string.IsNullOrWhiteSpace(stageResult?.LogFilePath) ? null : [stageResult.LogFilePath],
-            WorktreePurpose.Delivery);
+            WorktreePurpose.Delivery, expectedState);
 
         try
         {

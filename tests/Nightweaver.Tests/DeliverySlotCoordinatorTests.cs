@@ -522,6 +522,110 @@ public sealed class DeliverySlotCoordinatorTests
         }
     }
 
+    [Theory]
+    [InlineData("admission", 3)]
+    [InlineData("reviewer-rejection", 4)]
+    [InlineData("qa-rejection", 3)]
+    public async Task BudgetEscalationRechecksWorkflowAfterRecoverableReadiness(string entry, int readinessResponse)
+    {
+        using var fixture = new SlotFixture(maxRepairCycles: 0);
+        var bead = entry == "qa-rejection" ? fixture.CreateTask("stage:qa") : fixture.CreateTask();
+        if (entry == "admission") fixture.SetRepairCycles(bead, 1);
+        var runtime = fixture.CreateRuntimeSentinels(bead);
+        var roles = new List<AgentRole>();
+        var readinessResponses = 0;
+        var runner = new MutatingProcessRunner(request => SlotFixture.IsRecoverableReadiness(request)
+            && ++readinessResponses == readinessResponse, () =>
+        {
+            fixture.SetRepairCycles(bead, fixture.ReadState(bead).RepairCycles + 1);
+            return Task.CompletedTask;
+        });
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            if (role == AgentRole.Implementer) fixture.Advance(bead, role);
+            else fixture.Reject(bead, role, "Verified Reviewer rejection finding.");
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, runner);
+
+        Assert.Equal(DeliverySlotDisposition.Failed, outcome.Disposition);
+        Assert.Contains("changed after the readiness check", outcome.Diagnostic!, StringComparison.Ordinal);
+        AgentRole[] expectedRoles = entry switch
+        {
+            "admission" => [],
+            "reviewer-rejection" => [AgentRole.Implementer, AgentRole.Reviewer],
+            _ => [AgentRole.Qa]
+        };
+        Assert.Equal(expectedRoles, roles);
+        Assert.Equal(2, fixture.ReadState(bead).RepairCycles);
+        Assert.False(fixture.ReadState(bead).NeedsHuman);
+        Assert.Equal("in_progress", fixture.ReadBead(bead).Status);
+        Assert.Equal(fixture.RecoveryActor, fixture.ReadBead(bead).Assignee);
+        Assert.Single(fixture.ClaimWrites(bead));
+        AssertRuntimeSentinelsRemain(runtime);
+        AssertNoEscalationCleanupWrites(runner.Requests);
+    }
+
+    [Theory]
+    [InlineData("admission", 5)]
+    [InlineData("reviewer-rejection", 8)]
+    [InlineData("qa-rejection", 6)]
+    public async Task RealBudgetEscalatorRejectsWorkflowDriftBeforeItsInitialRead(string entry, int inventoryRead)
+    {
+        using var fixture = new SlotFixture(maxRepairCycles: 0);
+        var bead = entry == "qa-rejection" ? fixture.CreateTask("stage:qa") : fixture.CreateTask();
+        if (entry == "admission") fixture.SetRepairCycles(bead, 1);
+        var runtime = fixture.CreateRuntimeSentinels(bead);
+        var roles = new List<AgentRole>();
+        var inventoryResponses = 0;
+        var runner = new MutatingProcessRunner(request => SlotFixture.IsInventoryRead(request)
+            && ++inventoryResponses == inventoryRead, () =>
+        {
+            fixture.SetRepairCycles(bead, fixture.ReadState(bead).RepairCycles + 1);
+            return Task.CompletedTask;
+        }, mutateBefore: true);
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            if (role == AgentRole.Implementer) fixture.Advance(bead, role);
+            else fixture.Reject(bead, role, "Verified Reviewer rejection finding.");
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, runner);
+
+        Assert.Equal(DeliverySlotDisposition.Failed, outcome.Disposition);
+        Assert.Contains("changed before needs-human escalation", outcome.Diagnostic!, StringComparison.Ordinal);
+        AgentRole[] expectedRoles = entry switch
+        {
+            "admission" => [],
+            "reviewer-rejection" => [AgentRole.Implementer, AgentRole.Reviewer],
+            _ => [AgentRole.Qa]
+        };
+        Assert.Equal(expectedRoles, roles);
+        Assert.Equal(2, fixture.ReadState(bead).RepairCycles);
+        Assert.False(fixture.ReadState(bead).NeedsHuman);
+        Assert.Equal("in_progress", fixture.ReadBead(bead).Status);
+        Assert.Equal(fixture.RecoveryActor, fixture.ReadBead(bead).Assignee);
+        Assert.Single(fixture.ClaimWrites(bead));
+        AssertRuntimeSentinelsRemain(runtime);
+        AssertNoEscalationCleanupWrites(runner.Requests);
+    }
+
+    private static void AssertRuntimeSentinelsRemain((string Worktree, string Temporary) runtime)
+    {
+        Assert.Equal("worktree sentinel", File.ReadAllText(Path.Combine(runtime.Worktree, "sentinel.txt")));
+        Assert.Equal("temporary sentinel", File.ReadAllText(Path.Combine(runtime.Temporary, "sentinel.txt")));
+    }
+
+    private static void AssertNoEscalationCleanupWrites(IReadOnlyList<ProcessRequest> requests)
+    {
+        Assert.DoesNotContain(requests, request => request.FileName == "bd"
+            && request.Arguments.Contains("needs-human", StringComparer.Ordinal));
+        Assert.DoesNotContain(requests, request => request.FileName == "git"
+            && request.Arguments.Any(argument => argument is "remove" or "prune" or "-D"));
+    }
+
     [Fact]
     public async Task BudgetDiagnosticRecordsWhenLatestCommentsCannotBeRead()
     {
@@ -794,6 +898,18 @@ public sealed class DeliverySlotCoordinatorTests
             return bead;
         }
 
+        internal (string Worktree, string Temporary) CreateRuntimeSentinels(string beadId)
+        {
+            var slug = ProjectSlug.Parse("demo");
+            var worktree = Path.Combine(Host.WorktreesRoot(slug), beadId);
+            var temporary = Path.Combine(Host.TmpRoot(slug), beadId);
+            Directory.CreateDirectory(worktree);
+            Directory.CreateDirectory(temporary);
+            File.WriteAllText(Path.Combine(worktree, "sentinel.txt"), "worktree sentinel");
+            File.WriteAllText(Path.Combine(temporary, "sentinel.txt"), "temporary sentinel");
+            return (worktree, temporary);
+        }
+
         internal BeadSnapshot ReadBead(string beadId) => BeadsReader.Parse(
             Target.Run("bd", BeadsCommand.Create(Target.Path).Arguments)).ById[beadId];
 
@@ -887,6 +1003,10 @@ public sealed class DeliverySlotCoordinatorTests
             && request.Arguments.Contains("--ready", StringComparer.Ordinal)
             && request.Arguments.Contains("--assignee", StringComparer.Ordinal)
             && request.Arguments.Contains("in_progress", StringComparer.Ordinal);
+
+        internal static bool IsInventoryRead(ProcessRequest request) => request.FileName == "bd"
+            && request.Arguments.Contains("--all", StringComparer.Ordinal)
+            && request.Arguments.Contains("--readonly", StringComparer.Ordinal);
 
         internal static bool IsCommentsRead(string bead, ProcessRequest request) => request.FileName == "bd"
             && request.Arguments.Contains("comments", StringComparer.Ordinal)
@@ -1109,7 +1229,8 @@ public sealed class DeliverySlotCoordinatorTests
 
     private sealed class MutatingProcessRunner(
         Func<ProcessRequest, bool> shouldMutate,
-        Func<Task> mutate) : IProcessRunner
+        Func<Task> mutate,
+        bool mutateBefore = false) : IProcessRunner
     {
         private readonly SystemProcessRunner inner = new();
         private int didMutate;
@@ -1119,9 +1240,10 @@ public sealed class DeliverySlotCoordinatorTests
         public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
             requests.Add(request);
+            var applyMutation = shouldMutate(request) && Interlocked.Exchange(ref didMutate, 1) == 0;
+            if (applyMutation && mutateBefore) await mutate();
             var result = await inner.RunAsync(request, cancellationToken);
-            if (shouldMutate(request) && Interlocked.Exchange(ref didMutate, 1) == 0)
-                await mutate();
+            if (applyMutation && !mutateBefore) await mutate();
             return result;
         }
     }
