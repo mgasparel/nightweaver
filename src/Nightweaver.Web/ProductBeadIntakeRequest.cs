@@ -126,8 +126,7 @@ internal static class ProductBeadIntakeRequest
             return null;
         }
 
-        if (raw.Any(character => char.IsControl(character)
-            && !(!singleLine && (character is '\r' or '\n' or '\t'))))
+        if (raw.Any(character => IsDisallowedCharacter(character, singleLine)))
         {
             AddError(errors, name, singleLine
                 ? "Title cannot contain line breaks or control characters."
@@ -160,6 +159,16 @@ internal static class ProductBeadIntakeRequest
             AddError(errors, field, "This field must contain valid Unicode.");
             return null;
         }
+    }
+
+    private static bool IsDisallowedCharacter(char character, bool singleLine)
+    {
+        if (singleLine)
+        {
+            return char.IsControl(character) || character is '\u2028' or '\u2029';
+        }
+
+        return char.IsControl(character) && character is not ('\r' or '\n' or '\t');
     }
 
     private static Dictionary<string, string[]> Freeze(Dictionary<string, List<string>> errors)

@@ -307,6 +307,8 @@ public sealed class WebBeadsIntegrationTests
             "{\"type\":\"feature\",\"priority\":2,\"title\":\" \",\"description\":\"Description\",\"acceptanceCriteria\":\"Criteria\"}",
             "{\"type\":\"feature\",\"priority\":2,\"title\":null,\"description\":\"Description\",\"acceptanceCriteria\":\"Criteria\"}",
             "{\"type\":\"feature\",\"priority\":2,\"title\":\"line\\nbreak\",\"description\":\"Description\",\"acceptanceCriteria\":\"Criteria\"}",
+            "{\"type\":\"feature\",\"priority\":2,\"title\":\"Single\\u2028LineProbe\",\"description\":\"Description\",\"acceptanceCriteria\":\"Criteria\"}",
+            "{\"type\":\"feature\",\"priority\":2,\"title\":\"Single\\u2029LineProbe\",\"description\":\"Description\",\"acceptanceCriteria\":\"Criteria\"}",
             "{\"type\":\"feature\",\"priority\":2,\"title\":\"bad\\u0000title\",\"description\":\"Description\",\"acceptanceCriteria\":\"Criteria\"}",
             "{\"type\":\"feature\",\"priority\":2,\"title\":\"Title\",\"description\":\"Description\",\"acceptanceCriteria\":\"Criteria\",\"repository\":\"elsewhere\"}",
             "{\"type\":\"feature\",\"priority\":2,\"title\":\"Title\",\"description\":\"Description\",\"acceptanceCriteria\":\"Criteria\",\"labels\":[]}",
@@ -452,6 +454,68 @@ public sealed class WebBeadsIntegrationTests
             ? Assert.Single(shown.RootElement.EnumerateArray())
             : shown.RootElement;
         Assert.Equal(title, issue.GetProperty("title").GetString());
+        Assert.Equal(description, issue.GetProperty("description").GetString());
+        Assert.Equal(acceptance, issue.GetProperty("acceptance_criteria").GetString());
+    }
+
+    [Theory]
+    [InlineData('\u2028')]
+    [InlineData('\u2029')]
+    public async Task IntakeRejectsUnicodeLineSeparatorsInTitle(char separator)
+    {
+        using var target = new BeadsFixture();
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        var json = JsonSerializer.Serialize(new
+        {
+            type = "feature",
+            priority = 2,
+            title = $"Single{separator}LineProbe",
+            description = "Description",
+            acceptanceCriteria = "Criteria"
+        });
+
+        using var response = await client.PostAsync("/api/beads",
+            new StringContent(json, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        var errors = problem.RootElement.GetProperty("errors");
+        var titleErrors = errors.GetProperty("title").EnumerateArray().Select(element => element.GetString()).ToArray();
+        Assert.Contains("Title cannot contain line breaks or control characters.", titleErrors);
+    }
+
+    [Theory]
+    [InlineData('\u2028')]
+    [InlineData('\u2029')]
+    public async Task IntakeAcceptsUnicodeLineSeparatorsInMultilineFields(char separator)
+    {
+        using var target = new BeadsFixture();
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        var description = $"Line 1{separator}Line 2";
+        var acceptance = $"Criteria 1{separator}Criteria 2";
+        var json = JsonSerializer.Serialize(new
+        {
+            type = "feature",
+            priority = 2,
+            title = "Valid Title",
+            description,
+            acceptanceCriteria = acceptance
+        });
+
+        using var response = await client.PostAsync("/api/beads",
+            new StringContent(json, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        using var row = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        var id = row.RootElement.GetProperty("id").GetString()!;
+
+        using var shown = JsonDocument.Parse(target.Run("bd", ["show", id, "--json"]));
+        var issue = shown.RootElement.ValueKind == JsonValueKind.Array
+            ? Assert.Single(shown.RootElement.EnumerateArray())
+            : shown.RootElement;
         Assert.Equal(description, issue.GetProperty("description").GetString());
         Assert.Equal(acceptance, issue.GetProperty("acceptance_criteria").GetString());
     }
