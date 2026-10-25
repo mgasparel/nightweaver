@@ -83,7 +83,24 @@ dotnet run --project src/Nightweaver.Web
 
 The default local address is `http://localhost:5000`; set `ASPNETCORE_URLS` or pass `--urls` to override it. `GET /health` returns HTTP 200 with `{"status":"ok"}` after configuration validation. It checks host liveness and does not invoke Git, bd, Agents, or the Orchestrator. A plain target directory suffices for this scaffold. Invalid or missing configuration prevents startup.
 
-The web application serves the static Nightweaver console at `/`, with `/index.html` available directly. Its responsive shell links the Catch-Up Digest, Human Attention Desk, Factory Execution Bays, Beads Explorer, and Full Bead Workspace. These sections are layout placeholders in this slice; tracker queries, intake, human-guidance actions, workspace history, and live factory telemetry are not connected yet. The page uses local HTML, CSS, and JavaScript assets from `wwwroot` beside the executable, so build and publish output can run independently of the source checkout. Static files remain restricted to that web root, unknown paths return 404, and there is no fallback route. `GET /health` continues to report host liveness after configuration validation.
+The web application serves the static Nightweaver console at `/`, with `/index.html` available directly. Its responsive shell links the Catch-Up Digest, Human Attention Desk, Factory Execution Bays, Beads Explorer, and Full Bead Workspace. The Beads Explorer reads the configured Target Repository; the other sections remain layout placeholders in this slice. The page uses local HTML, CSS, and JavaScript assets from `wwwroot` beside the executable, so build and publish output can run independently of the source checkout. Static files remain restricted to that web root, unknown paths return 404, and there is no fallback route. `GET /health` continues to report host liveness after configuration validation without invoking Git or bd.
+
+### Beads Explorer API
+
+`GET /api/beads` returns a JSON array of tracker items with exactly these fields: `id`, `title`, `type`, `priority` (integer P0–P4), `status` (the stored status), `labels` (always an array), and `assignee` (a string or `null`). The response is `Cache-Control: no-store`. Optional query parameters are:
+
+| Parameter | Meaning |
+| --- | --- |
+| `view=all` (default) | Complete inventory across statuses, types, labels, and assignees. |
+| `view=active` | Stored status is `in_progress`; this does not prove a factory slot is live. |
+| `view=ready` | IDs returned by native `bd ready --limit 0 --json`, intersected with inventory and limited to stored `open` status. |
+| `view=blocked` | Stored status is `blocked` or native `bd blocked --json` reports an active blocker; closed issues are excluded. |
+| `view=closed` | Stored status is `closed`. A closed Bead does not prove a Git merge. |
+| `q=<text>` | Trimmed, case-insensitive substring search in the ID or title; combines with the selected view. |
+
+View names are case-insensitive. A blank view means `all`; unsupported or repeated `view`/`q` parameters return HTTP 400. Successful empty queries return `[]`. Expected repository, tool, timeout, backend, and incompatible-output failures return HTTP 503 Problem Details without exposing host paths, raw stderr, or stack traces. The console clears rows while loading or after errors and lets the maintainer retry.
+
+Explorer requests require Git and bd 1.3.1 on `PATH`, a Git root configured as the Target Repository, and an already initialized, prepared embedded Dolt tracker with its gate files. Requests run read-only bd commands against that configured repository; the web host never initializes a tracker, creates gate files, or starts the Dolt backend. Tracker validation happens when `/api/beads` is requested, so `/health` and the static console can start when the tracker is unavailable. This slice only reads and filters the inventory; it does not create or mutate Beads, provide workspace history, or expose factory telemetry.
 
 ## Single-stage dispatch
 

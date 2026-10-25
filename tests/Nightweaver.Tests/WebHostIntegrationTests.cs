@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -27,6 +28,17 @@ public sealed class WebHostIntegrationTests
         Assert.Equal(2, config.Limits.MaxOperationalRetries);
         Assert.False(Directory.Exists(Path.Combine(factory.TargetRoot, ".beads")));
         Assert.Empty(Directory.EnumerateFileSystemEntries(factory.HostRoot));
+
+        using var unavailable = await client.GetAsync("/api/beads", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailable.StatusCode);
+        Assert.Equal("application/problem+json", unavailable.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("no-store", unavailable.Headers.CacheControl?.ToString());
+        using var stillHealthy = await client.GetAsync("/health", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, stillHealthy.StatusCode);
+        using var shell = await client.GetAsync("/", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, shell.StatusCode);
+        Assert.DoesNotContain(factory.TargetRoot,
+            await unavailable.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -126,6 +138,91 @@ public sealed class WebHostIntegrationTests
             Assert.Equal("{\"status\":\"ok\"}", await response.Content.ReadAsStringAsync(timeout.Token));
             using var unknown = await client.GetAsync("/unknown", timeout.Token);
             Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(host));
+        }
+        finally
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+            await stderr;
+        }
+    }
+
+    [Fact]
+    public async Task BuiltWebExecutableServesConfiguredBeadsExplorerOutsideTestHost()
+    {
+        using var target = new BeadsFixture("configured target");
+        var expectedId = target.Create("Executable smoke needle", status: "in_progress", priority: 0);
+        var config = JsonSerializer.Serialize(new { name = "web-smoke", target_repository = new { path = target.Path } });
+        using var directory = new TempDirectory();
+        var host = directory.CreateDirectory("host");
+        var caller = directory.CreateDirectory("unrelated caller");
+        var configPath = directory.WriteFile("settings/project.json", config);
+        var appDirectory = typeof(WebHostIntegrationTests).Assembly.GetCustomAttributes(
+            typeof(System.Reflection.AssemblyMetadataAttribute), false)
+            .Cast<System.Reflection.AssemblyMetadataAttribute>()
+            .Single(attribute => attribute.Key == "NightweaverWebAppDir").Value!;
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = Path.Combine(appDirectory, OperatingSystem.IsWindows() ? "Nightweaver.Web.exe" : "Nightweaver.Web"),
+            WorkingDirectory = caller,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.Environment["Nightweaver__ConfigPath"] = configPath;
+        startInfo.Environment["Nightweaver__Root"] = host;
+        startInfo.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:0";
+        startInfo.Environment["HOME"] = target.UserHome;
+        startInfo.Environment["USERPROFILE"] = target.UserHome;
+        startInfo.Environment["APPDATA"] = target.UserHome;
+        startInfo.Environment["XDG_CONFIG_HOME"] = target.UserHome;
+        startInfo.Environment["GIT_CONFIG_GLOBAL"] = Path.Combine(target.UserHome, "gitconfig");
+        startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+
+        using var process = new Process { StartInfo = startInfo };
+        Assert.True(process.Start());
+        var stderr = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(45));
+        try
+        {
+            string? address = null;
+            while (await process.StandardOutput.ReadLineAsync(timeout.Token) is { } line)
+            {
+                const string marker = "Now listening on: ";
+                var index = line.IndexOf(marker, StringComparison.Ordinal);
+                if (index >= 0)
+                {
+                    address = line[(index + marker.Length)..].Trim();
+                    break;
+                }
+            }
+            if (address is null)
+                Assert.Fail($"Built Web executable exited before listening: {await stderr.WaitAsync(timeout.Token)}");
+
+            using var client = new HttpClient { BaseAddress = new Uri(address!) };
+            using var health = await client.GetAsync("/health", timeout.Token);
+            Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+            using var beads = await client.GetAsync("/api/beads?view=ACTIVE&q=SMOKE%20NEEDLE", timeout.Token);
+            Assert.Equal(HttpStatusCode.OK, beads.StatusCode);
+            Assert.Equal("no-store", beads.Headers.CacheControl?.ToString());
+            using var document = JsonDocument.Parse(await beads.Content.ReadAsStringAsync(timeout.Token));
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal(expectedId, row.GetProperty("id").GetString());
+            using var page = await client.GetAsync("/", timeout.Token);
+            Assert.Equal(HttpStatusCode.OK, page.StatusCode);
+            var html = await page.Content.ReadAsStringAsync(timeout.Token);
+            Assert.Contains("id=\"beads-search\"", html, StringComparison.Ordinal);
+            Assert.Contains("aria-pressed=\"true\"", html, StringComparison.Ordinal);
+            using var script = await client.GetAsync("/js/app.js", timeout.Token);
+            Assert.Equal(HttpStatusCode.OK, script.StatusCode);
+            var javascript = await script.Content.ReadAsStringAsync(timeout.Token);
+            Assert.Contains("AbortController", javascript, StringComparison.Ordinal);
+            Assert.Contains("URLSearchParams", javascript, StringComparison.Ordinal);
+            Assert.Contains("textContent", javascript, StringComparison.Ordinal);
+            Assert.DoesNotContain("innerHTML", javascript, StringComparison.Ordinal);
             Assert.Empty(Directory.EnumerateFileSystemEntries(host));
         }
         finally

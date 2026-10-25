@@ -33,6 +33,84 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         return BeadsReadiness.Create(native, recoverable);
     }
 
+    internal Task<FrozenSet<string>> ReadExplorerReadinessAsync(ValidatedTargetRepository repository, CancellationToken cancellationToken)
+        => ReadMembershipAsync(repository, BeadsCommand.CreateExplorerReadiness(repository.Path),
+            "bd --readonly --sandbox ready --limit 0 --json", requireBlockerMetadata: false, cancellationToken);
+
+    internal Task<FrozenSet<string>> ReadExplorerBlockedAsync(ValidatedTargetRepository repository, CancellationToken cancellationToken)
+        => ReadMembershipAsync(repository, BeadsCommand.CreateExplorerBlocked(repository.Path),
+            "bd --readonly --sandbox blocked --json", requireBlockerMetadata: true, cancellationToken);
+
+    private async Task<FrozenSet<string>> ReadMembershipAsync(ValidatedTargetRepository repository, ProcessRequest request,
+        string commandDescription, bool requireBlockerMetadata, CancellationToken cancellationToken)
+    {
+        var context = $"{commandDescription} in Target Repository '{repository.Path}'";
+        var json = await RunQueryAsync(repository, request, context, cancellationToken);
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                throw new JsonException("$: expected an array");
+
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            var row = 0;
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                var path = $"$[{row++}]";
+                if (item.ValueKind != JsonValueKind.Object)
+                    throw new JsonException($"{path}: expected an object");
+
+                string? id = null;
+                int? blockedByCount = null;
+                var blockedBySeen = false;
+                var blockedByIds = new List<string>();
+                foreach (var property in item.EnumerateObject())
+                {
+                    switch (property.Name)
+                    {
+                        case "id":
+                            if (id is not null) throw new JsonException($"{path}.id: duplicate property");
+                            if (property.Value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(property.Value.GetString()))
+                                throw new JsonException($"{path}.id: expected a nonblank string");
+                            id = property.Value.GetString();
+                            break;
+                        case "blocked_by_count":
+                            if (blockedByCount is not null) throw new JsonException($"{path}.blocked_by_count: duplicate property");
+                            if (property.Value.ValueKind != JsonValueKind.Number || !property.Value.TryGetInt32(out var count) || count < 0)
+                                throw new JsonException($"{path}.blocked_by_count: expected a nonnegative integer");
+                            blockedByCount = count;
+                            break;
+                        case "blocked_by":
+                            if (blockedBySeen) throw new JsonException($"{path}.blocked_by: duplicate property");
+                            blockedBySeen = true;
+                            if (property.Value.ValueKind != JsonValueKind.Array)
+                                throw new JsonException($"{path}.blocked_by: expected a string array");
+                            foreach (var blocker in property.Value.EnumerateArray())
+                            {
+                                if (blocker.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(blocker.GetString()))
+                                    throw new JsonException($"{path}.blocked_by: expected a string array");
+                                blockedByIds.Add(blocker.GetString()!);
+                            }
+                            break;
+                    }
+                }
+
+                if (id is null) throw new JsonException($"{path}.id: required property is missing");
+                if (requireBlockerMetadata && (blockedByCount is null || !blockedBySeen))
+                    throw new JsonException($"{path}: blocked rows must include blocked_by_count and blocked_by metadata");
+                if (requireBlockerMetadata && blockedByCount > 0 && blockedByIds.Count == 0)
+                    throw new JsonException($"{path}.blocked_by: expected blocker IDs when blocked_by_count is positive");
+                if (!ids.Add(id)) throw new JsonException($"{path}.id: duplicate ID '{id}'");
+            }
+
+            return ids.ToFrozenSet(StringComparer.Ordinal);
+        }
+        catch (JsonException exception)
+        {
+            throw new ToolExecutionException($"{context}: incompatible or malformed bd JSON: {exception.Message}");
+        }
+    }
+
     private async Task<string> RunQueryAsync(ValidatedTargetRepository repository, ProcessRequest request, string context,
         CancellationToken cancellationToken)
     {
@@ -47,6 +125,10 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         catch (ToolExecutionException exception)
         {
             throw new ToolExecutionException($"{context}: {exception.Message}", exception.StandardError);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (OperationCanceledException)
         {
@@ -78,8 +160,19 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         }
 
         using var metadata = JsonDocument.Parse(File.ReadAllText(Path.Combine(beadsDirectory, "metadata.json")));
-        if (File.Exists(Path.Combine(beadsDirectory, "redirect")) ||
-            (metadata.RootElement.TryGetProperty("dolt_mode", out var mode) && mode.GetString() != "embedded"))
+        var metadataRoot = metadata.RootElement;
+        if (metadataRoot.ValueKind != JsonValueKind.Object)
+            throw new JsonException("metadata root must be an object");
+
+        string? doltMode = null;
+        if (metadataRoot.TryGetProperty("dolt_mode", out var mode))
+        {
+            if (mode.ValueKind != JsonValueKind.String)
+                throw new JsonException("metadata.dolt_mode must be a string");
+            doltMode = mode.GetString();
+        }
+
+        if (File.Exists(Path.Combine(beadsDirectory, "redirect")) || doltMode is not null && doltMode != "embedded")
             throw new ToolExecutionException("this bd backend layout is unsupported for mutation-free inspection; a local embedded tracker is required");
         if (!Directory.Exists(Path.Combine(beadsDirectory, "embeddeddolt")) ||
             !File.Exists(Path.Combine(repository.Path, ".beads.gate.lock")) ||
