@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
@@ -219,6 +220,36 @@ public sealed class WebHostIntegrationTests
             using var document = JsonDocument.Parse(await beads.Content.ReadAsStringAsync(timeout.Token));
             var row = Assert.Single(document.RootElement.EnumerateArray());
             Assert.Equal(expectedId, row.GetProperty("id").GetString());
+
+            const string productTitle = "Executable Product Bead smoke";
+            const string productDescription = "The shipped Web executable must create in its configured disposable tracker.";
+            const string acceptanceCriteria = "The created feature is open, unassigned, and visible to real bd.";
+            using var create = await client.PostAsync("/api/beads", new StringContent(JsonSerializer.Serialize(new
+            {
+                type = "feature",
+                priority = 1,
+                title = productTitle,
+                description = productDescription,
+                acceptanceCriteria
+            }), Encoding.UTF8, "application/json"), timeout.Token);
+            Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+            Assert.Equal("no-store", create.Headers.CacheControl?.ToString());
+            using var createdDocument = JsonDocument.Parse(await create.Content.ReadAsStringAsync(timeout.Token));
+            var createdId = createdDocument.RootElement.GetProperty("id").GetString()!;
+            using var independentShow = JsonDocument.Parse(target.Run("bd", ["show", createdId, "--json"]));
+            var shown = independentShow.RootElement.ValueKind == JsonValueKind.Array
+                ? Assert.Single(independentShow.RootElement.EnumerateArray())
+                : independentShow.RootElement;
+            Assert.Equal(createdId, shown.GetProperty("id").GetString());
+            Assert.Equal(productTitle, shown.GetProperty("title").GetString());
+            Assert.Equal(productDescription, shown.GetProperty("description").GetString());
+            Assert.Equal(acceptanceCriteria, shown.GetProperty("acceptance_criteria").GetString());
+            Assert.Equal("feature", shown.GetProperty("issue_type").GetString());
+            Assert.Equal(1, shown.GetProperty("priority").GetInt32());
+            Assert.Equal("open", shown.GetProperty("status").GetString());
+            using var ready = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "ready", "--limit", "0", "--json"]));
+            Assert.Contains(ready.RootElement.EnumerateArray(), bead => bead.GetProperty("id").GetString() == createdId);
+
             using var page = await client.GetAsync("/", timeout.Token);
             Assert.Equal(HttpStatusCode.OK, page.StatusCode);
             var html = await page.Content.ReadAsStringAsync(timeout.Token);

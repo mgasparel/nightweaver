@@ -259,8 +259,7 @@ if (intakeTrigger && intakeDialog instanceof HTMLDialogElement && intakeForm ins
     const fieldMessages = errors ? Object.values(errors).flat().filter(message => typeof message === "string").join(" ") : "";
     intakeError.textContent = `${title} ${fieldMessages || detail}`;
     intakeError.hidden = false;
-    if (firstInvalid) firstInvalid.focus();
-    else intakeError.focus();
+    return firstInvalid ?? intakeError;
   };
 
   const openDialog = () => {
@@ -284,6 +283,7 @@ if (intakeTrigger && intakeDialog instanceof HTMLDialogElement && intakeForm ins
     clearFieldErrors();
     setPending(true);
     let confirmed = false;
+    let focusAfterRestore = null;
     try {
       const payload = {
         type: intakeFields.type.value,
@@ -331,11 +331,14 @@ if (intakeTrigger && intakeDialog instanceof HTMLDialogElement && intakeForm ins
 
       let problem = null;
       try { problem = await response.json(); } catch { /* Use the safe generic failure below. */ }
-      showProblem(problem, response.status);
+      focusAfterRestore = showProblem(problem, response.status);
     } catch {
       focusErrorSummary("The connection ended before the result was confirmed. The request may have created a Product Bead. Check the backlog before manually resubmitting.");
     } finally {
-      if (!confirmed) setPending(false);
+      if (!confirmed) {
+        setPending(false);
+        focusAfterRestore?.focus();
+      }
     }
   });
 }

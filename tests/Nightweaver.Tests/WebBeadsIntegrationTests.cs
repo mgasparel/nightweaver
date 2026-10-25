@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Nightweaver.Inspection;
@@ -448,8 +449,8 @@ public sealed class WebBeadsIntegrationTests
         {
             if (request.FileName == "bd" && request.Arguments.Contains("create", StringComparer.Ordinal))
             {
-                Interlocked.Increment(ref createCalls);
-                return new ProcessResult(23, string.Empty, $"{secret} {target.Path} submitted prose");
+                if (Interlocked.Increment(ref createCalls) == 1)
+                    return new ProcessResult(23, string.Empty, $"{secret} {target.Path} submitted prose");
             }
             return await actual.RunAsync(AddFixtureEnvironment(target, request), cancellationToken);
         });
@@ -473,6 +474,7 @@ public sealed class WebBeadsIntegrationTests
         Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
         using var problem = JsonDocument.Parse(body);
         Assert.Equal("Creation could not be confirmed", problem.RootElement.GetProperty("title").GetString());
+        Assert.Contains("Check the backlog before resubmitting", problem.RootElement.GetProperty("detail").GetString());
         Assert.DoesNotContain(secret, body, StringComparison.Ordinal);
         Assert.DoesNotContain(target.Path, body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(submittedTitle, body, StringComparison.Ordinal);
@@ -486,6 +488,196 @@ public sealed class WebBeadsIntegrationTests
         Assert.Equal(HttpStatusCode.OK, shell.StatusCode);
         using var nextRead = await client.GetAsync("/api/beads", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, nextRead.StatusCode);
+        using var nextWrite = await client.PostAsync("/api/beads",
+            new StringContent(CreateIntakeJson("Write after nonzero create"), Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, nextWrite.StatusCode);
+        Assert.Equal(2, Volatile.Read(ref createCalls));
+    }
+
+    [Theory]
+    [InlineData("missing-executable")]
+    [InlineData("timeout")]
+    public async Task IntakeToolFailuresReportUncertainOutcomeAndReleaseTheTrackerGate(string failure)
+    {
+        using var target = new BeadsFixture();
+        const string secret = "intake-tool-failure-secret";
+        var targetTreeBefore = Snapshot.FileTree(target.Path);
+        var targetGitBefore = Snapshot.GitStatus(target.Path);
+        var actual = new SystemProcessRunner();
+        var createCalls = 0;
+        var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
+        {
+            if (request.FileName == "bd" && request.Arguments.Contains("create", StringComparer.Ordinal)
+                && Interlocked.Increment(ref createCalls) == 1)
+            {
+                if (failure == "missing-executable")
+                    throw new ToolExecutionException($"required executable 'bd' was not found at {target.Path}", $"{secret} {target.Path}");
+                throw new ToolExecutionException($"bd timed out after 0.01s at {target.Path}", $"{secret} {target.Path}");
+            }
+            return await actual.RunAsync(AddFixtureEnvironment(target, request), cancellationToken);
+        });
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        const string submittedTitle = "Unconfirmed create must not leak";
+
+        using var response = await client.PostAsync("/api/beads", new StringContent(JsonSerializer.Serialize(new
+        {
+            type = "feature", priority = 2, title = submittedTitle,
+            description = "Private intake description", acceptanceCriteria = "Private acceptance criteria"
+        }), Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+        using (var problem = JsonDocument.Parse(body))
+        {
+            Assert.Equal("Creation could not be confirmed", problem.RootElement.GetProperty("title").GetString());
+            Assert.Contains("Check the backlog before resubmitting", problem.RootElement.GetProperty("detail").GetString());
+        }
+        Assert.DoesNotContain(secret, body, StringComparison.Ordinal);
+        Assert.DoesNotContain(target.Path, body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(submittedTitle, body, StringComparison.Ordinal);
+        Assert.Equal(1, Volatile.Read(ref createCalls));
+        Assert.Equal(targetTreeBefore, Snapshot.FileTree(target.Path));
+        Assert.Equal(targetGitBefore, Snapshot.GitStatus(target.Path));
+
+        using var nextWrite = await client.PostAsync("/api/beads",
+            new StringContent(CreateIntakeJson($"Write after {failure}"), Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, nextWrite.StatusCode);
+        Assert.Equal(2, Volatile.Read(ref createCalls));
+    }
+
+    [Fact]
+    public async Task InconsistentSuccessfulCreateOutputReportsUncertainOutcomeWithoutDeletingTheIssue()
+    {
+        using var target = new BeadsFixture();
+        var actual = new SystemProcessRunner();
+        string? createdId = null;
+        var createCalls = 0;
+        var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
+        {
+            var result = await actual.RunAsync(AddFixtureEnvironment(target, request), cancellationToken);
+            if (request.FileName == "bd" && request.Arguments.Contains("create", StringComparer.Ordinal))
+            {
+                if (Interlocked.Increment(ref createCalls) == 1)
+                {
+                    using var created = JsonDocument.Parse(result.StandardOutput);
+                    createdId = created.RootElement.GetProperty("id").GetString();
+                    var inconsistentOutput = JsonNode.Parse(result.StandardOutput)!.AsObject();
+                    inconsistentOutput["title"] = "Unexpected title";
+                    return result with { StandardOutput = inconsistentOutput.ToJsonString() };
+                }
+            }
+            return result;
+        });
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        const string submittedTitle = "Inconsistent create output probe";
+
+        using var response = await client.PostAsync("/api/beads", new StringContent(JsonSerializer.Serialize(new
+        {
+            type = "bug", priority = 1, title = submittedTitle,
+            description = "The real issue should remain discoverable.",
+            acceptanceCriteria = "A response mismatch must not delete or retry the create."
+        }), Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        using (var problem = JsonDocument.Parse(body))
+        {
+            Assert.Equal("Creation could not be confirmed", problem.RootElement.GetProperty("title").GetString());
+            Assert.Contains("Check the backlog before resubmitting", problem.RootElement.GetProperty("detail").GetString());
+        }
+        Assert.DoesNotContain(submittedTitle, body, StringComparison.Ordinal);
+        Assert.Equal(1, Volatile.Read(ref createCalls));
+        Assert.NotNull(createdId);
+        var shown = target.Run("bd", ["show", createdId!, "--json"]);
+        Assert.Contains(submittedTitle, shown, StringComparison.Ordinal);
+        Assert.Contains("The real issue should remain discoverable.", shown, StringComparison.Ordinal);
+        using (var ready = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "ready", "--limit", "0", "--json"])))
+            Assert.Contains(ready.RootElement.EnumerateArray(), bead => bead.GetProperty("id").GetString() == createdId);
+
+        using var nextWrite = await client.PostAsync("/api/beads",
+            new StringContent(CreateIntakeJson("Write after inconsistent response"), Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, nextWrite.StatusCode);
+        Assert.Equal(2, Volatile.Read(ref createCalls));
+    }
+
+    [Fact]
+    public async Task UnpreparedTrackerRejectsPostWithoutMutationAndReleasesTheTrackerGate()
+    {
+        using var target = new BeadsFixture();
+        var gatePath = Path.Combine(target.Path, ".beads.gate.lock");
+        var gateContents = File.ReadAllBytes(gatePath);
+        File.Delete(gatePath);
+        var targetTreeBefore = Snapshot.FileTree(target.Path);
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+
+        using var rejected = await client.PostAsync("/api/beads",
+            new StringContent(CreateIntakeJson("Unprepared target must not create"), Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        var body = await rejected.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, rejected.StatusCode);
+        Assert.Equal("application/problem+json", rejected.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("no-store", rejected.Headers.CacheControl?.ToString());
+        using (var problem = JsonDocument.Parse(body))
+        {
+            Assert.Equal("Beads tracker unavailable", problem.RootElement.GetProperty("title").GetString());
+            Assert.DoesNotContain("Check the backlog before resubmitting", problem.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        }
+        Assert.DoesNotContain(target.Path, body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(runner.Requests, request => request.FileName == "bd");
+        Assert.Equal(targetTreeBefore, Snapshot.FileTree(target.Path));
+
+        File.WriteAllBytes(gatePath, gateContents);
+        using var nextWrite = await client.PostAsync("/api/beads",
+            new StringContent(CreateIntakeJson("Write after unprepared tracker"), Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, nextWrite.StatusCode);
+        Assert.Contains(runner.Requests, request => request.FileName == "bd" && request.Arguments.Contains("create", StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task UnsafeTrackerRoutingRejectsPostWithoutTouchingForeignTrackerAndReleasesTheGate()
+    {
+        using var target = new BeadsFixture("configured target");
+        using var foreign = new BeadsFixture("foreign tracker");
+        var envPath = Path.Combine(target.Path, ".beads", ".env");
+        File.WriteAllText(envPath, $"BEADS_DIR={Path.Combine(foreign.Path, ".beads")}\n");
+        var targetTreeBefore = Snapshot.FileTree(target.Path);
+        var foreignTreeBefore = Snapshot.FileTree(foreign.Path);
+        var foreignGitBefore = Snapshot.GitStatus(foreign.Path);
+        var runner = CreateFixtureRunner(target, foreign);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+
+        using var rejected = await client.PostAsync("/api/beads",
+            new StringContent(CreateIntakeJson("Unsafe routing must not create"), Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        var body = await rejected.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, rejected.StatusCode);
+        Assert.Equal("application/problem+json", rejected.Content.Headers.ContentType?.MediaType);
+        using (var problem = JsonDocument.Parse(body))
+            Assert.Equal("Beads tracker unavailable", problem.RootElement.GetProperty("title").GetString());
+        Assert.DoesNotContain(foreign.Path, body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(target.Path, body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(runner.Requests, request => request.FileName == "bd");
+        Assert.Equal(targetTreeBefore, Snapshot.FileTree(target.Path));
+        Assert.Equal(foreignTreeBefore, Snapshot.FileTree(foreign.Path));
+        Assert.Equal(foreignGitBefore, Snapshot.GitStatus(foreign.Path));
+
+        File.Delete(envPath);
+        using var nextWrite = await client.PostAsync("/api/beads",
+            new StringContent(CreateIntakeJson("Write after unsafe routing"), Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, nextWrite.StatusCode);
+        Assert.Equal(foreignTreeBefore, Snapshot.FileTree(foreign.Path));
+        Assert.Equal(foreignGitBefore, Snapshot.GitStatus(foreign.Path));
     }
 
     [Fact]
@@ -667,7 +859,9 @@ public sealed class WebBeadsIntegrationTests
     public async Task MalformedMetadataReturnsSafeProblemDetailsAndLeavesHostAvailable(string metadataJson)
     {
         using var target = new BeadsFixture();
-        File.WriteAllText(Path.Combine(target.Path, ".beads", "metadata.json"), metadataJson);
+        var metadataPath = Path.Combine(target.Path, ".beads", "metadata.json");
+        var validMetadata = File.ReadAllText(metadataPath);
+        File.WriteAllText(metadataPath, metadataJson);
         var targetTreeBefore = Snapshot.FileTree(target.Path);
         var targetGitBefore = Snapshot.GitStatus(target.Path);
         var runner = CreateFixtureRunner(target);
@@ -689,6 +883,22 @@ public sealed class WebBeadsIntegrationTests
         Assert.DoesNotContain("InvalidOperationException", body, StringComparison.Ordinal);
         Assert.DoesNotContain(" at ", body, StringComparison.Ordinal);
 
+        using var rejectedIntake = await client.PostAsync("/api/beads",
+            new StringContent(CreateIntakeJson("Malformed metadata must not create"), Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        var intakeBody = await rejectedIntake.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, rejectedIntake.StatusCode);
+        Assert.Equal("application/problem+json", rejectedIntake.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("no-store", rejectedIntake.Headers.CacheControl?.ToString());
+        using (var intakeProblem = JsonDocument.Parse(intakeBody))
+        {
+            Assert.Equal("Incompatible Beads output", intakeProblem.RootElement.GetProperty("title").GetString());
+            Assert.Equal("The bd command returned data that Nightweaver could not read.", intakeProblem.RootElement.GetProperty("detail").GetString());
+        }
+        Assert.DoesNotContain("Check the backlog before resubmitting", intakeBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(target.Path, intakeBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(runner.Requests, request => request.FileName == "bd");
+
         using var health = await client.GetAsync("/health", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, health.StatusCode);
         using var shell = await client.GetAsync("/", TestContext.Current.CancellationToken);
@@ -697,6 +907,12 @@ public sealed class WebBeadsIntegrationTests
         Assert.Equal(targetGitBefore, Snapshot.GitStatus(target.Path));
         Assert.Equal(hostTreeBefore, Snapshot.FileTree(factory.HostRoot));
         Assert.Equal(webTreeBefore, Snapshot.FileTree(factory.WebRoot));
+
+        File.WriteAllText(metadataPath, validMetadata);
+        using var nextWrite = await client.PostAsync("/api/beads",
+            new StringContent(CreateIntakeJson("Write after malformed metadata"), Encoding.UTF8, "application/json"),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, nextWrite.StatusCode);
     }
 
     [Fact]
