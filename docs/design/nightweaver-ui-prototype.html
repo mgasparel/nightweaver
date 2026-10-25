@@ -1,0 +1,1531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nightweaver UI — Unified Factory Console & Bead Workspace</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--muted-foreground); }
+    .pulse-dot {
+      animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    @keyframes pulse-ring {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.35; transform: scale(0.9); }
+    }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] min-h-screen pb-24 antialiased selection:bg-[var(--primary)] selection:text-[var(--primary-foreground)]">
+
+  <!-- ========================================================================= -->
+  <!-- TOP APP BAR                                                               -->
+  <!-- ========================================================================= -->
+  <header class="sticky top-0 z-40 bg-[var(--card)]/90 backdrop-blur border-b border-[var(--border)] px-6 py-3">
+    <div class="max-w-7xl mx-auto flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <button onclick="closeFullBeadWorkspace()" class="w-8 h-8 rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] flex items-center justify-center font-bold tracking-tight shadow-sm text-sm hover:opacity-90 transition-opacity" title="Return to Factory Console">
+          NW
+        </button>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="font-bold text-base tracking-tight text-[var(--foreground)]">Nightweaver</span>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-[var(--primary)]/10 text-[var(--primary)] border border-[var(--primary)]/20 font-medium">Orchestrator v0.4.2</span>
+          </div>
+          <div class="text-xs text-[var(--muted-foreground)] flex items-center gap-2">
+            <span>Project: <strong class="text-[var(--foreground)] font-mono">nightshift</strong></span>
+            <span>&bull;</span>
+            <span class="font-mono text-xs">Target: H:\code\nightshift (main)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Concurrency Telemetry & Quick Action -->
+      <div class="flex items-center gap-4">
+        <!-- Concurrency Slots Overview -->
+        <div class="hidden sm:flex items-center gap-3 text-xs bg-[var(--background)] px-3.5 py-1.5 rounded-xl border border-[var(--border)] font-mono">
+          <div title="Planning Pool (2 slots)">
+            <span class="text-[var(--muted-foreground)]">Plan:</span>
+            <span id="statPlanning" class="font-bold text-sky-400 ml-1">2/2</span>
+          </div>
+          <span class="text-[var(--border)]">|</span>
+          <div title="Delivery Pool (3 slots)">
+            <span class="text-[var(--muted-foreground)]">Delivery:</span>
+            <span id="statDelivery" class="font-bold text-indigo-400 ml-1">3/3</span>
+          </div>
+          <span class="text-[var(--border)]">|</span>
+          <div title="Singleton Merger Slot (1 slot)">
+            <span class="text-[var(--muted-foreground)]">Merger:</span>
+            <span id="statMerger" class="font-bold text-amber-400 ml-1">1/1</span>
+          </div>
+          <span class="text-[var(--border)]">|</span>
+          <div title="Active Plan Backpressure (cap 5)">
+            <span class="text-[var(--muted-foreground)]">BP:</span>
+            <span id="statBP" class="font-bold text-emerald-400 ml-1">4/5</span>
+          </div>
+        </div>
+
+        <!-- Submit Feature Request Button -->
+        <button onclick="openNewBeadModal()" class="px-3.5 py-1.5 rounded-xl bg-[var(--primary)] hover:opacity-90 text-[var(--primary-foreground)] text-xs font-semibold transition-all shadow-sm flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          New Feature / Bug
+        </button>
+      </div>
+    </div>
+  </header>
+
+
+  <!-- ========================================================================= -->
+  <!-- VIEW 1: FACTORY CONSOLE & TRIAGE DECK                                     -->
+  <!-- ========================================================================= -->
+  <main id="layoutDeck" class="max-w-7xl mx-auto px-6 py-6 space-y-6">
+
+    <!-- 1. "SINCE YOUR LAST VISIT" CATCH-UP BAR (Handles days or weeks of absence) -->
+    <section class="bg-gradient-to-r from-[var(--card)] to-[var(--background)] border border-[var(--border)] rounded-2xl p-5 shadow-sm relative overflow-hidden">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div class="space-y-1">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 pulse-dot"></span>
+            <span class="text-xs font-bold uppercase tracking-wider text-[var(--primary)] font-mono">Catch-Up Digest</span>
+            <span class="text-xs px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-[var(--muted-foreground)] font-mono">
+              Last seen: <span id="lastSeenText" class="text-[var(--foreground)] font-semibold">12 days ago (Oct 12)</span>
+            </span>
+          </div>
+          <h2 class="text-lg font-bold text-[var(--foreground)]">Welcome back! Here is what Nightweaver accomplished while you were away.</h2>
+          <p class="text-xs text-[var(--muted-foreground)]">
+            <span class="text-emerald-400 font-semibold font-mono">18 Plan Beads</span> delivered &bull; 
+            <span class="text-emerald-400 font-semibold font-mono">14 PRs</span> merged to <code class="font-mono text-slate-300">main</code> &bull; 
+            <span class="text-emerald-400 font-semibold font-mono">4 Product Features</span> auto-completed.
+            <span class="text-amber-400 font-semibold ml-1">2 items are paused waiting for your guidance.</span>
+          </p>
+        </div>
+
+        <!-- Digest Controls & Time Filter -->
+        <div class="flex items-center gap-2 shrink-0">
+          <select id="timeFilterSelect" onchange="changeTimeFilter(this.value)" class="bg-[var(--background)] border border-[var(--border)] text-xs text-[var(--foreground)] rounded-xl px-3 py-1.5 font-medium outline-none cursor-pointer">
+            <option value="12d">Since Last Visit (12d ago)</option>
+            <option value="48h">Last 48 Hours</option>
+            <option value="7d">Last 7 Days</option>
+            <option value="all">All Time</option>
+          </select>
+
+          <button onclick="markAsCaughtUp()" id="caughtUpBtn" class="px-3 py-1.5 rounded-xl border border-[var(--border)] hover:bg-[var(--card)] text-xs font-medium text-[var(--foreground)] transition-colors flex items-center gap-1.5" title="Reset your last-visited bookmark to now">
+            <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            Mark Caught Up
+          </button>
+        </div>
+      </div>
+
+      <!-- Feature Rollup Chips (Collapses 18 raw beads into 4 meaningful feature cards) -->
+      <div id="rollupSection" class="mt-4 pt-4 border-t border-[var(--border)] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div onclick="openFullBeadWorkspace('ns-xci')" class="bg-[var(--background)]/60 hover:bg-[var(--background)] rounded-xl p-3 border border-[var(--border)] text-xs cursor-pointer transition-all">
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-emerald-400 font-bold">ns-xci</span>
+            <span class="text-xs px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 font-medium">4/4 Slices Merged</span>
+          </div>
+          <div class="font-semibold text-[var(--foreground)] mt-1 truncate" title="Worktree Isolation & Job Containment">Worktree Isolation Spine</div>
+          <div class="text-[var(--muted-foreground)] text-xs mt-1">PR #41 #44 squashed into main &rarr;</div>
+        </div>
+
+        <div onclick="openFullBeadWorkspace('ns-104')" class="bg-[var(--background)]/60 hover:bg-[var(--background)] rounded-xl p-3 border border-[var(--border)] text-xs cursor-pointer transition-all">
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-emerald-400 font-bold">ns-104</span>
+            <span class="text-xs px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 font-medium">3/3 Slices Merged</span>
+          </div>
+          <div class="font-semibold text-[var(--foreground)] mt-1 truncate" title="Custom Agent CLI Timeout Support">Custom CLI Timeout Support</div>
+          <div class="text-[var(--muted-foreground)] text-xs mt-1">PR #38 #39 squashed into main &rarr;</div>
+        </div>
+
+        <div onclick="openFullBeadWorkspace('ns-80m')" class="bg-[var(--background)]/60 hover:bg-[var(--background)] rounded-xl p-3 border border-[var(--border)] text-xs cursor-pointer transition-all">
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-emerald-400 font-bold">ns-80m</span>
+            <span class="text-xs px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 font-medium">2/2 Slices Merged</span>
+          </div>
+          <div class="font-semibold text-[var(--foreground)] mt-1 truncate" title="Singleton Merger Slot Spine">Singleton Merger Slot</div>
+          <div class="text-[var(--muted-foreground)] text-xs mt-1">PR #40 squashed into main &rarr;</div>
+        </div>
+
+        <div onclick="openFullBeadWorkspace('ns-3la')" class="bg-[var(--background)]/60 hover:bg-[var(--background)] rounded-xl p-3 border border-[var(--border)] text-xs cursor-pointer transition-all">
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-emerald-400 font-bold">ns-3la</span>
+            <span class="text-xs px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 font-medium">3/3 Slices Merged</span>
+          </div>
+          <div class="font-semibold text-[var(--foreground)] mt-1 truncate" title="Published CLI Trap Suite">Published CLI Test Suite</div>
+          <div class="text-[var(--muted-foreground)] text-xs mt-1">PR #35 #36 squashed into main &rarr;</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. HUMAN ATTENTION DESK (Step In Where You Are Needed) -->
+    <section class="bg-[var(--card)] border-2 border-amber-500/40 rounded-2xl p-5 shadow-sm space-y-4">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[var(--border)] pb-3">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-amber-500/15 text-amber-400 flex items-center justify-center font-bold">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-[var(--foreground)] flex items-center gap-2">
+              Human Attention Required 
+              <span id="attentionCountBadge" class="text-xs px-2 py-0.2 rounded-full bg-amber-500/20 text-amber-300 font-mono">2 items</span>
+            </h3>
+            <p class="text-xs text-[var(--muted-foreground)]">Autonomous agents have halted on these beads pending your review or guidance.</p>
+          </div>
+        </div>
+        <div class="text-xs text-[var(--muted-foreground)] font-mono">
+          Auto-resumes upon submission
+        </div>
+      </div>
+
+      <!-- Attention Cards -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+        <!-- Card 1: product-decision-required -->
+        <div id="decisionCard1" class="bg-[var(--background)] border border-amber-500/40 rounded-xl p-4 space-y-3">
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded">ns-99b</span>
+                <span class="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-semibold">product-decision-required</span>
+              </div>
+              <h4 class="text-sm font-semibold text-[var(--foreground)] mt-1.5">CLI Authentication: Session vs Stateless JWT</h4>
+            </div>
+            <span class="text-xs font-mono text-[var(--muted-foreground)] shrink-0">Paused 4d ago</span>
+          </div>
+
+          <!-- Planner Question -->
+          <div class="bg-[var(--card)] rounded-lg p-3 border border-[var(--border)] text-xs space-y-2">
+            <div class="flex items-center justify-between text-[var(--muted-foreground)] font-mono text-[11px]">
+              <span>From: Planner Agent (claude-3-7-sonnet)</span>
+              <span>stage:plan</span>
+            </div>
+            <p class="text-[var(--foreground)] leading-relaxed">
+              "Should the daemon use a refreshed Bearer JWT stored in host DPAPI credentials, or rely on ephemeral session cookies via local proxy? Choosing JWT simplifies headless worker restarts."
+            </p>
+          </div>
+
+          <!-- Quick Actions & Full Workspace Link -->
+          <div class="space-y-2">
+            <input id="decisionInput1" type="text" placeholder="Type quick one-liner, or open full workspace below..." class="w-full bg-[var(--card)] border border-[var(--border)] focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] rounded-lg px-3 py-2 text-xs text-[var(--foreground)] placeholder-[var(--placeholder)] outline-none" />
+            
+            <div class="flex items-center justify-between pt-1">
+              <button onclick="openFullBeadWorkspace('ns-99b')" class="text-xs text-[var(--primary)] hover:underline font-mono font-semibold flex items-center gap-1.5 py-1">
+                <span>Open Full Bead Workspace</span>
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+              </button>
+
+              <button onclick="resolveProductDecision('decisionCard1', 'ns-99b')" class="px-3 py-1.5 rounded-lg bg-[var(--primary)] hover:opacity-90 text-[var(--primary-foreground)] text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                Post &amp; Resume
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 2: needs-human (Exhausted repair cycles) -->
+        <div id="decisionCard2" class="bg-[var(--background)] border border-rose-500/40 rounded-xl p-4 space-y-3">
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-mono font-bold text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded">ns-du2.1</span>
+                <span class="text-xs px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-semibold">needs-human</span>
+              </div>
+              <h4 class="text-sm font-semibold text-[var(--foreground)] mt-1.5">Win32 Job Timeout in PublishedCliTrap</h4>
+            </div>
+            <span class="text-xs font-mono text-rose-400 shrink-0">Repair 3/3 exhausted</span>
+          </div>
+
+          <div class="bg-[var(--card)] rounded-lg p-3 border border-[var(--border)] text-xs space-y-1.5">
+            <div class="text-[var(--muted-foreground)] font-mono text-[11px]">QA Agent verification failed after 3 repair attempts</div>
+            <p class="text-[var(--foreground)] leading-relaxed">
+              Async cancellation deadlock in <code class="font-mono text-slate-300">PublishedCliIntegrationTests.cs</code>. Remote branch <code class="font-mono text-rose-300">origin/nightweaver/ns-du2.1</code> preserved for human inspection.
+            </p>
+          </div>
+
+          <!-- Action Options & Full Workspace Link -->
+          <div class="flex items-center justify-between gap-2 pt-1">
+            <button onclick="openFullBeadWorkspace('ns-du2.1')" class="text-xs text-[var(--primary)] hover:underline font-mono font-semibold flex items-center gap-1.5 py-1">
+              <span>Open Full Bead Workspace</span>
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            </button>
+            <div class="flex items-center gap-2">
+              <button onclick="resolveNeedsHuman('decisionCard2', 'retry')" class="py-1.5 px-2.5 rounded-lg bg-[var(--card)] border border-[var(--border)] hover:border-[var(--primary)] text-xs text-[var(--foreground)] font-medium transition-colors">
+                Retry
+              </button>
+              <button onclick="resolveNeedsHuman('decisionCard2', 'takeover')" class="py-1.5 px-2.5 rounded-lg bg-[var(--card)] border border-[var(--border)] hover:border-[var(--primary)] text-xs text-[var(--foreground)] font-medium transition-colors">
+                Checkout Cmd
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 3. LIVE FACTORY STATUS (The 3 Concurrency Bays from Variant A) -->
+    <section class="space-y-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+          <h3 class="text-sm font-bold uppercase tracking-wide text-[var(--foreground)]">Factory Floor — Active Execution Bays</h3>
+        </div>
+        <div class="text-xs font-mono text-[var(--muted-foreground)]">
+          Click any active slot for live terminal telemetry
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+
+        <!-- Bay 1: Planning Pool (2 Slots) -->
+        <div class="lg:col-span-4 bg-[var(--card)] border border-[var(--border)] rounded-2xl p-4 space-y-3 shadow-sm">
+          <div class="flex items-center justify-between border-b border-[var(--border)] pb-2.5">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-sky-400"></span>
+              <span class="text-xs font-bold uppercase text-[var(--foreground)]">Planning Pool</span>
+            </div>
+            <span class="text-xs font-mono text-sky-400 font-semibold bg-sky-500/10 px-2 py-0.5 rounded">2/2 Slots</span>
+          </div>
+
+          <!-- Slot P-1 -->
+          <div onclick="openSlotTelemetry('ns-47f', 'Product Bead', 'stage:plan', 'Planner Agent (claude)', 'Drafting candidate Plan Bead decomposition...')" class="bg-[var(--background)] border border-[var(--border)] hover:border-sky-500/50 rounded-xl p-3 cursor-pointer transition-all hover:translate-y-[-1px] space-y-2">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-mono font-bold text-sky-400">ns-47f</span>
+              <span class="px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-400 text-xs flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-sky-400 pulse-dot"></span> stage:plan
+              </span>
+            </div>
+            <div class="text-xs font-semibold text-[var(--foreground)] line-clamp-1">Reactive Event Stream Journal</div>
+            <div class="flex items-center justify-between text-[11px] font-mono text-[var(--muted-foreground)] pt-1 border-t border-[var(--border)]">
+              <span>claude-3-7-sonnet</span>
+              <span>12m 40s</span>
+            </div>
+          </div>
+
+          <!-- Slot P-2 -->
+          <div onclick="openSlotTelemetry('ns-w91', 'Product Bead', 'stage:plan-challenge', 'Plan Challenger (claude)', 'Critiquing decomposition independence & blocks edges...')" class="bg-[var(--background)] border border-[var(--border)] hover:border-purple-500/50 rounded-xl p-3 cursor-pointer transition-all hover:translate-y-[-1px] space-y-2">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-mono font-bold text-purple-400">ns-w91</span>
+              <span class="px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-400 text-xs flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-purple-400 pulse-dot"></span> stage:plan-challenge
+              </span>
+            </div>
+            <div class="text-xs font-semibold text-[var(--foreground)] line-clamp-1">Orphan Temp Directory Sweep</div>
+            <div class="flex items-center justify-between text-[11px] font-mono text-[var(--muted-foreground)] pt-1 border-t border-[var(--border)]">
+              <span>plan-challenger</span>
+              <span>4m 12s</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bay 2: Delivery Floor (3 Slots) -->
+        <div class="lg:col-span-5 bg-[var(--card)] border border-[var(--border)] rounded-2xl p-4 space-y-3 shadow-sm">
+          <div class="flex items-center justify-between border-b border-[var(--border)] pb-2.5">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-indigo-400"></span>
+              <span class="text-xs font-bold uppercase text-[var(--foreground)]">Delivery Floor</span>
+            </div>
+            <span class="text-xs font-mono text-indigo-400 font-semibold bg-indigo-500/10 px-2 py-0.5 rounded">3/3 Bays Active</span>
+          </div>
+
+          <!-- Slot D-1 -->
+          <div onclick="openSlotTelemetry('ns-xci.1', 'Plan Bead', 'stage:implement', 'Implementer Agent (claude)', 'Writing WorktreeProvisioner tests and path isolation...')" class="bg-[var(--background)] border border-[var(--border)] hover:border-indigo-500/50 rounded-xl p-3 cursor-pointer transition-all hover:translate-y-[-1px] space-y-2">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-mono font-bold text-indigo-400">ns-xci.1</span>
+              <span class="px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-400 text-xs flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-blue-400 pulse-dot"></span> stage:implement
+              </span>
+            </div>
+            <div class="text-xs font-semibold text-[var(--foreground)] line-clamp-1">Isolated Worktree Provisioning</div>
+            <div class="flex items-center justify-between text-[11px] font-mono text-[var(--muted-foreground)] pt-1 border-t border-[var(--border)]">
+              <span class="truncate max-w-[180px]">worktrees/ns-xci.1</span>
+              <span>Repair: 0/3</span>
+            </div>
+          </div>
+
+          <!-- Slot D-2 -->
+          <div onclick="openSlotTelemetry('ns-xci.2', 'Plan Bead', 'stage:review', 'Reviewer Agent (codex)', 'Static architectural & spec review against codebase...')" class="bg-[var(--background)] border border-[var(--border)] hover:border-yellow-500/50 rounded-xl p-3 cursor-pointer transition-all hover:translate-y-[-1px] space-y-2">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-mono font-bold text-indigo-400">ns-xci.2</span>
+              <span class="px-1.5 py-0.2 rounded bg-yellow-500/20 text-yellow-400 text-xs flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-yellow-400 pulse-dot"></span> stage:review
+              </span>
+            </div>
+            <div class="text-xs font-semibold text-[var(--foreground)] line-clamp-1">Role Prompt Packaging Specification</div>
+            <div class="flex items-center justify-between text-[11px] font-mono text-[var(--muted-foreground)] pt-1 border-t border-[var(--border)]">
+              <span>PR #44 opened</span>
+              <span>Repair: 1/3</span>
+            </div>
+          </div>
+
+          <!-- Slot D-3 -->
+          <div onclick="openSlotTelemetry('ns-3la.1', 'Plan Bead', 'stage:qa', 'QA Agent (claude)', 'Booting software and exercising integration test matrix...')" class="bg-[var(--background)] border border-[var(--border)] hover:border-emerald-500/50 rounded-xl p-3 cursor-pointer transition-all hover:translate-y-[-1px] space-y-2">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-mono font-bold text-indigo-400">ns-3la.1</span>
+              <span class="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 text-xs flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span> stage:qa
+              </span>
+            </div>
+            <div class="text-xs font-semibold text-[var(--foreground)] line-clamp-1">Published CLI Integration Tests</div>
+            <div class="flex items-center justify-between text-[11px] font-mono text-[var(--muted-foreground)] pt-1 border-t border-[var(--border)]">
+              <span class="text-emerald-400 font-semibold">24/24 tests pass</span>
+              <span>8m 52s</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bay 3: Singleton Merger Air-Lock (1 Slot) -->
+        <div class="lg:col-span-3 bg-gradient-to-b from-[var(--card)] to-[var(--background)] border-2 border-amber-500/40 rounded-2xl p-4 space-y-3 shadow-md">
+          <div class="flex items-center justify-between border-b border-[var(--border)] pb-2.5">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+              <span class="text-xs font-bold uppercase text-[var(--foreground)]">Merger Air-Lock</span>
+            </div>
+            <span class="text-xs font-mono text-amber-400 font-bold">1 SERIAL SLOT</span>
+          </div>
+
+          <!-- Singleton Card -->
+          <div onclick="openSlotTelemetry('ns-80m.1', 'Plan Bead', 'stage:merge', 'Singleton Merger (claude)', 'Rebase on origin/main & monitoring remote CI...')" class="bg-[var(--card)] border border-[var(--border)] hover:border-amber-500 rounded-xl p-3 cursor-pointer transition-all space-y-2">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-mono font-bold text-amber-400">ns-80m.1</span>
+              <span class="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 text-xs flex items-center gap-1 font-mono">
+                <span class="w-1.5 h-1.5 rounded-full bg-amber-400 pulse-dot"></span> stage:merge
+              </span>
+            </div>
+            <div class="text-xs font-semibold text-[var(--foreground)] line-clamp-1">Merger Slot Implementation</div>
+            
+            <div class="bg-[var(--background)] rounded-lg p-2 border border-[var(--border)] text-[11px] font-mono space-y-1">
+              <div class="flex justify-between text-emerald-400">
+                <span>Rebase:</span>
+                <span>Clean</span>
+              </div>
+              <div class="flex justify-between text-amber-400">
+                <span>CI Checks:</span>
+                <span>gh pr checks (3/4)</span>
+              </div>
+            </div>
+
+            <div class="flex items-center justify-between text-[11px] font-mono text-[var(--muted-foreground)] pt-1 border-t border-[var(--border)]">
+              <span>PR #40</span>
+              <span>11m 30s</span>
+            </div>
+          </div>
+
+          <div class="text-center text-[11px] font-mono text-[var(--muted-foreground)]">
+            Merge queue: <span class="text-[var(--foreground)] font-semibold">1 waiting</span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 4. HUMAN-FRIENDLY BEAD EXPLORER (The User's Single Window into Beads) -->
+    <section class="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-5 shadow-sm space-y-4">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div>
+          <h3 class="text-sm font-bold text-[var(--foreground)]">Beads Inventory &amp; Lifecycle Explorer</h3>
+          <p class="text-xs text-[var(--muted-foreground)]">Browse, inspect, and track all Beads managed by Nightweaver in <span class="font-mono text-slate-300">.beads</span>.</p>
+        </div>
+
+        <!-- Filter Tabs -->
+        <div class="flex items-center gap-1 bg-[var(--background)] p-1 rounded-xl border border-[var(--border)] text-xs font-medium overflow-x-auto">
+          <button onclick="filterBeadsTable('all')" id="tab-all" class="bead-tab px-3 py-1 rounded-lg bg-[var(--card)] text-[var(--foreground)] font-semibold shadow-sm">All (12)</button>
+          <button onclick="filterBeadsTable('active')" id="tab-active" class="bead-tab px-3 py-1 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)]">Active in Factory (6)</button>
+          <button onclick="filterBeadsTable('ready')" id="tab-ready" class="bead-tab px-3 py-1 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)]">Ready Backlog (2)</button>
+          <button onclick="filterBeadsTable('blocked')" id="tab-blocked" class="bead-tab px-3 py-1 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)]">Blocked (2)</button>
+          <button onclick="filterBeadsTable('closed')" id="tab-closed" class="bead-tab px-3 py-1 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)]">Closed (2)</button>
+        </div>
+      </div>
+
+      <!-- Beads Table -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead>
+            <tr class="border-b border-[var(--border)] text-[var(--muted-foreground)] font-mono text-[11px]">
+              <th class="py-2.5 px-3">ID</th>
+              <th class="py-2.5 px-3">TYPE</th>
+              <th class="py-2.5 px-3">TITLE</th>
+              <th class="py-2.5 px-3">STAGE / STATUS</th>
+              <th class="py-2.5 px-3">ACTIVE ROLE</th>
+              <th class="py-2.5 px-3">REPAIR</th>
+              <th class="py-2.5 px-3 text-right">ACTION</th>
+            </tr>
+          </thead>
+          <tbody id="beadsTableBody" class="divide-y divide-[var(--border)]">
+            <!-- Row 1 -->
+            <tr onclick="openFullBeadWorkspace('ns-47f')" class="bead-row hover:bg-[var(--background)]/50 transition-colors cursor-pointer" data-status="active">
+              <td class="py-3 px-3 font-mono font-bold text-sky-400">ns-47f</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono text-slate-300">feature</span></td>
+              <td class="py-3 px-3 font-medium text-[var(--foreground)]">Reactive Event Stream &amp; Startup Crash Sweep</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-sky-500/20 text-sky-400 font-mono font-medium">stage:plan</span></td>
+              <td class="py-3 px-3 font-mono text-[var(--muted-foreground)]">Planner Agent</td>
+              <td class="py-3 px-3 font-mono text-slate-400">0/3</td>
+              <td class="py-3 px-3 text-right">
+                <span class="text-[var(--primary)] font-mono hover:underline">Open Workspace &rarr;</span>
+              </td>
+            </tr>
+
+            <!-- Row 2 -->
+            <tr onclick="openFullBeadWorkspace('ns-xci.1')" class="bead-row hover:bg-[var(--background)]/50 transition-colors cursor-pointer" data-status="active">
+              <td class="py-3 px-3 font-mono font-bold text-indigo-400">ns-xci.1</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono text-slate-300">task</span></td>
+              <td class="py-3 px-3 font-medium text-[var(--foreground)]">Isolated Worktree Provisioning, Reuse &amp; Clean Reset</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-mono font-medium">stage:implement</span></td>
+              <td class="py-3 px-3 font-mono text-[var(--muted-foreground)]">Implementer</td>
+              <td class="py-3 px-3 font-mono text-slate-400">0/3</td>
+              <td class="py-3 px-3 text-right">
+                <span class="text-[var(--primary)] font-mono hover:underline">Open Workspace &rarr;</span>
+              </td>
+            </tr>
+
+            <!-- Row 3 -->
+            <tr onclick="openFullBeadWorkspace('ns-xci.2')" class="bead-row hover:bg-[var(--background)]/50 transition-colors cursor-pointer" data-status="active">
+              <td class="py-3 px-3 font-mono font-bold text-indigo-400">ns-xci.2</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono text-slate-300">task</span></td>
+              <td class="py-3 px-3 font-medium text-[var(--foreground)]">Role Prompt Packaging &amp; Launch Specification</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400 font-mono font-medium">stage:review</span></td>
+              <td class="py-3 px-3 font-mono text-[var(--muted-foreground)]">Reviewer</td>
+              <td class="py-3 px-3 font-mono text-amber-400">1/3</td>
+              <td class="py-3 px-3 text-right">
+                <span class="text-[var(--primary)] font-mono hover:underline">Open Workspace &rarr;</span>
+              </td>
+            </tr>
+
+            <!-- Row 4 -->
+            <tr onclick="openFullBeadWorkspace('ns-80m.1')" class="bead-row hover:bg-[var(--background)]/50 transition-colors cursor-pointer" data-status="active">
+              <td class="py-3 px-3 font-mono font-bold text-amber-400">ns-80m.1</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono text-slate-300">task</span></td>
+              <td class="py-3 px-3 font-medium text-[var(--foreground)]">Singleton Merger Slot Implementation</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono font-medium">stage:merge</span></td>
+              <td class="py-3 px-3 font-mono text-[var(--muted-foreground)]">Merger</td>
+              <td class="py-3 px-3 font-mono text-slate-400">0/3</td>
+              <td class="py-3 px-3 text-right">
+                <span class="text-[var(--primary)] font-mono hover:underline">Open Workspace &rarr;</span>
+              </td>
+            </tr>
+
+            <!-- Row 5: Ready -->
+            <tr onclick="openFullBeadWorkspace('ns-2qe')" class="bead-row hover:bg-[var(--background)]/50 transition-colors cursor-pointer" data-status="ready">
+              <td class="py-3 px-3 font-mono font-bold text-slate-300">ns-2qe</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono text-slate-300">feature</span></td>
+              <td class="py-3 px-3 font-medium text-[var(--foreground)]">End-to-End Delivery Pool &amp; Delivery Role Prompts</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono">open (ready)</span></td>
+              <td class="py-3 px-3 font-mono text-slate-500">Unassigned</td>
+              <td class="py-3 px-3 font-mono text-slate-400">0/3</td>
+              <td class="py-3 px-3 text-right">
+                <span class="text-[var(--primary)] font-mono hover:underline">Open Workspace &rarr;</span>
+              </td>
+            </tr>
+
+            <!-- Row 6: Blocked -->
+            <tr onclick="openFullBeadWorkspace('ns-xci.4')" class="bead-row hover:bg-[var(--background)]/50 transition-colors cursor-pointer" data-status="blocked">
+              <td class="py-3 px-3 font-mono font-bold text-slate-400">ns-xci.4</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono text-slate-300">task</span></td>
+              <td class="py-3 px-3 font-medium text-[var(--muted-foreground)]">Post-Exit Invariant Verification &amp; Authority Matrix</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 font-mono">blocked</span></td>
+              <td class="py-3 px-3 font-mono text-slate-500">Blocked by ns-xci.1</td>
+              <td class="py-3 px-3 font-mono text-slate-400">0/3</td>
+              <td class="py-3 px-3 text-right">
+                <span class="text-[var(--primary)] font-mono hover:underline">Open Workspace &rarr;</span>
+              </td>
+            </tr>
+
+            <!-- Row 7: Closed -->
+            <tr onclick="openFullBeadWorkspace('ns-xci.3')" class="bead-row hover:bg-[var(--background)]/50 transition-colors cursor-pointer" data-status="closed">
+              <td class="py-3 px-3 font-mono font-bold text-emerald-400">ns-xci.3</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono text-slate-300">task</span></td>
+              <td class="py-3 px-3 font-medium text-[var(--muted-foreground)]">Win32 Job Object Containment &amp; Timeout</td>
+              <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono">closed (merged)</span></td>
+              <td class="py-3 px-3 font-mono text-emerald-400">Merged to main</td>
+              <td class="py-3 px-3 font-mono text-slate-400">0/3</td>
+              <td class="py-3 px-3 text-right">
+                <span class="text-[var(--primary)] font-mono hover:underline">Open Workspace &rarr;</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+
+  <!-- ========================================================================= -->
+  <!-- VIEW 2: DEDICATED FULL BEAD WORKSPACE (Deep Reading & Interaction Surface)  -->
+  <!-- ========================================================================= -->
+  <main id="viewBeadWorkspace" class="hidden max-w-7xl mx-auto px-6 py-6 space-y-6">
+    
+    <!-- Top Breadcrumb & Return Action -->
+    <div class="flex items-center justify-between border-b border-[var(--border)] pb-4">
+      <div class="flex items-center gap-3 text-sm">
+        <button onclick="closeFullBeadWorkspace()" class="px-3 py-1.5 rounded-xl border border-[var(--border)] hover:bg-[var(--card)] font-medium text-[var(--foreground)] transition-colors flex items-center gap-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+          Back to Factory Console
+        </button>
+        <span class="text-[var(--muted-foreground)]">/</span>
+        <span class="text-[var(--muted-foreground)] font-mono">nightshift</span>
+        <span class="text-[var(--muted-foreground)]">/</span>
+        <span id="wsBreadcrumbId" class="font-mono font-bold text-[var(--primary)]">ns-99b</span>
+      </div>
+
+      <!-- Quick Actions for Current Bead -->
+      <div class="flex items-center gap-2">
+        <button onclick="alert('Copied command: bd show ' + currentBeadId)" class="px-3 py-1.5 rounded-xl border border-[var(--border)] hover:bg-[var(--card)] text-xs font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+          bd show
+        </button>
+        <button onclick="alert('Opening worktree terminal in H:\\code\\nightshift\\worktrees\\nightshift\\' + currentBeadId)" class="px-3 py-1.5 rounded-xl border border-[var(--border)] hover:bg-[var(--card)] text-xs font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          Worktree
+        </button>
+      </div>
+    </div>
+
+    <!-- Header Section (Generous Typography & Badges) -->
+    <div class="space-y-3">
+      <div class="flex flex-wrap items-center gap-2">
+        <span id="wsBeadId" class="text-xs font-mono font-bold text-[var(--primary)] bg-[var(--primary)]/10 px-2.5 py-0.5 rounded-md">ns-99b</span>
+        <span id="wsBeadType" class="text-xs font-mono px-2.5 py-0.5 rounded-md bg-[var(--card)] border border-[var(--border)] text-slate-300">feature</span>
+        <span id="wsBeadPriority" class="text-xs font-mono font-bold px-2.5 py-0.5 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20">P1</span>
+        <span id="wsBeadStage" class="text-xs font-semibold px-2.5 py-0.5 rounded-md bg-sky-500/20 text-sky-400">stage:plan</span>
+        <span id="wsBeadLabel" class="text-xs font-semibold px-2.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300">product-decision-required</span>
+      </div>
+
+      <h1 id="wsTitle" class="text-2xl md:text-3xl font-bold tracking-tight text-[var(--foreground)] leading-tight">
+        CLI Authentication: Session Token vs Stateless JWT Architecture
+      </h1>
+    </div>
+
+    <!-- Two-Column Workspace Layout (Left: Spec & Collapsible History / Right: Runtime Telemetry & Meta) -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+
+      <!-- LEFT / MAIN READING SURFACE (8 cols) -->
+      <div class="lg:col-span-8 space-y-8">
+
+        <!-- 1. The Core Specification Box (Large, highly readable typography) -->
+        <section class="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-6 md:p-8 shadow-sm space-y-6">
+          <div class="flex items-center justify-between border-b border-[var(--border)] pb-3">
+            <h2 class="text-base font-bold uppercase tracking-wider text-[var(--muted-foreground)] flex items-center gap-2">
+              <svg class="w-4 h-4 text-[var(--primary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+              Specification &amp; Problem Statement
+            </h2>
+            <span class="text-xs font-mono text-[var(--muted-foreground)]">Author: <span id="wsAuthor">mgasp</span> &bull; 4 days ago</span>
+          </div>
+
+          <!-- Rich Specification Body -->
+          <div id="wsSpecBody" class="text-base text-[var(--foreground)] leading-relaxed space-y-5">
+            <!-- Populated dynamically with rich readable markup -->
+          </div>
+        </section>
+
+        <!-- 2. Agent Conversation Stream & History (With Compression / Collapsing) -->
+        <section class="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-6 md:p-8 shadow-sm space-y-6">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[var(--border)] pb-4">
+            <div>
+              <h2 class="text-base font-bold uppercase tracking-wider text-[var(--foreground)] flex items-center gap-2">
+                <svg class="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
+                Inter-Agent History &amp; Decision Stream
+              </h2>
+              <p class="text-xs text-[var(--muted-foreground)] mt-0.5">Full trail of Planner drafts, Challenger critiques, review findings, and human feedback.</p>
+            </div>
+
+            <!-- History Compression & Filter Controls -->
+            <div class="flex items-center gap-2 shrink-0">
+              <button id="wsToggleCompressBtn" onclick="toggleHistoryCompression()" class="px-3 py-1.5 rounded-xl border border-[var(--border)] hover:bg-[var(--background)] text-xs font-medium text-[var(--foreground)] transition-colors flex items-center gap-1.5">
+                <svg id="wsToggleIcon" class="w-3.5 h-3.5 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                <span id="wsToggleText">Expand Older Iterations (3)</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Dynamic Comments Stream -->
+          <div id="wsCommentsList" class="space-y-4">
+            <!-- Dynamically populated -->
+          </div>
+
+          <!-- Human Feedback & Unblocking Studio (Pinned at bottom of stream) -->
+          <div id="wsGuidanceBox" class="mt-8 pt-6 border-t-2 border-amber-500/30 space-y-4">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-amber-400 pulse-dot"></span>
+                <h3 class="text-sm font-bold uppercase tracking-wider text-[var(--foreground)]">Your Decision &amp; Guidance to the Agent</h3>
+              </div>
+              <span class="text-xs font-mono text-[var(--muted-foreground)]">Will post via <code class="font-mono text-xs">bd comments add</code></span>
+            </div>
+
+            <p class="text-xs text-[var(--muted-foreground)]">
+              This response will be piped directly into the next invocation of the active agent inside its isolated worktree. Submitting clears the pause label and releases the claim back to the factory queue.
+            </p>
+
+            <textarea id="wsGuidanceInput" rows="4" class="w-full bg-[var(--background)] border border-[var(--border)] focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] rounded-xl p-4 text-sm text-[var(--foreground)] placeholder-[var(--placeholder)] outline-none resize-none leading-relaxed" placeholder="Type your architectural decision, instructions, or clarifications here..."></textarea>
+
+            <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <div class="flex items-center gap-2">
+                <button onclick="insertTemplate('Option 1. Use DPAPI Bearer JWT with 12h rotation. Proceed with planning.')" class="px-2.5 py-1 rounded-lg bg-[var(--background)] border border-[var(--border)] text-xs hover:border-[var(--primary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors">
+                  + Insert: Option 1 (JWT)
+                </button>
+                <button onclick="insertTemplate('Option 2. Implement ephemeral session tokens via local loopback proxy.')" class="px-2.5 py-1 rounded-lg bg-[var(--background)] border border-[var(--border)] text-xs hover:border-[var(--primary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors">
+                  + Insert: Option 2 (Session)
+                </button>
+              </div>
+
+              <div class="flex items-center gap-3">
+                <button onclick="alert('Note saved to bd comments without unblocking the agent.')" class="px-3.5 py-2 rounded-xl border border-[var(--border)] hover:bg-[var(--background)] text-xs font-medium text-[var(--foreground)] transition-colors">
+                  Save Note Only
+                </button>
+                <button onclick="submitWorkspaceDecision()" class="px-5 py-2 rounded-xl bg-[var(--primary)] hover:opacity-90 text-[var(--primary-foreground)] text-xs font-bold transition-all shadow-sm flex items-center gap-2">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                  Post Guidance &amp; Resume Agent
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- RIGHT / METADATA & FACTORY RUNTIME SIDEBAR (4 cols) -->
+      <div class="lg:col-span-4 space-y-6">
+
+        <!-- 1. Bead Tracker Details Card -->
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-5 shadow-sm space-y-4">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-[var(--muted-foreground)]">Beads Tracker Invariants</h3>
+          
+          <div class="space-y-3 text-xs font-mono">
+            <div class="flex justify-between py-1.5 border-b border-[var(--border)]">
+              <span class="text-[var(--muted-foreground)]">Bead ID:</span>
+              <span id="wsMetaId" class="text-[var(--foreground)] font-bold">ns-99b</span>
+            </div>
+            <div class="flex justify-between py-1.5 border-b border-[var(--border)]">
+              <span class="text-[var(--muted-foreground)]">Status:</span>
+              <span id="wsMetaStatus" class="text-amber-400 font-bold">open (paused)</span>
+            </div>
+            <div class="flex justify-between py-1.5 border-b border-[var(--border)]">
+              <span class="text-[var(--muted-foreground)]">Stage Label:</span>
+              <span id="wsMetaStage" class="text-sky-400 font-semibold">stage:plan</span>
+            </div>
+            <div class="flex justify-between py-1.5 border-b border-[var(--border)]">
+              <span class="text-[var(--muted-foreground)]">Repair Budget:</span>
+              <span id="wsMetaRepair" class="text-[var(--foreground)] font-bold">0 / 3 cycles</span>
+            </div>
+            <div class="flex justify-between py-1.5">
+              <span class="text-[var(--muted-foreground)]">Embedded Dolt:</span>
+              <span class="text-emerald-400 font-semibold">Journal Tail Active</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Execution Environment & Worktree Isolation Card -->
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-5 shadow-sm space-y-4">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-[var(--muted-foreground)]">Execution Environment</h3>
+          
+          <div class="space-y-3 text-xs font-mono">
+            <div>
+              <div class="text-[var(--muted-foreground)] text-[11px]">Isolated Worktree:</div>
+              <div id="wsMetaWorktree" class="text-[var(--foreground)] bg-[var(--background)] p-2 rounded-lg border border-[var(--border)] truncate mt-1">
+                worktrees/nightshift/ns-99b
+              </div>
+            </div>
+
+            <div>
+              <div class="text-[var(--muted-foreground)] text-[11px]">Git Branch:</div>
+              <div id="wsMetaBranch" class="text-[var(--foreground)] bg-[var(--background)] p-2 rounded-lg border border-[var(--border)] truncate mt-1">
+                nightweaver/ns-99b (detached HEAD)
+              </div>
+            </div>
+
+            <div class="flex justify-between py-1.5 border-b border-[var(--border)]">
+              <span class="text-[var(--muted-foreground)]">Target Branch:</span>
+              <span class="text-[var(--foreground)] font-bold">main</span>
+            </div>
+
+            <div class="flex justify-between py-1.5 border-b border-[var(--border)]">
+              <span class="text-[var(--muted-foreground)]">Git Status:</span>
+              <span class="text-emerald-400 font-semibold">clean (verified)</span>
+            </div>
+
+            <div class="flex justify-between py-1.5">
+              <span class="text-[var(--muted-foreground)]">Win32 Containment:</span>
+              <span class="text-slate-300">Job Object PID 14208</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Configured Agent Roster Card -->
+        <div class="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-5 shadow-sm space-y-4">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-[var(--muted-foreground)]">Assigned Agent Profile</h3>
+          
+          <div class="space-y-3 text-xs font-mono">
+            <div class="flex justify-between py-1.5 border-b border-[var(--border)]">
+              <span class="text-[var(--muted-foreground)]">Active Role:</span>
+              <span id="wsMetaRole" class="text-sky-400 font-bold">Planner Agent</span>
+            </div>
+            <div class="flex justify-between py-1.5 border-b border-[var(--border)]">
+              <span class="text-[var(--muted-foreground)]">Agent CLI:</span>
+              <span class="text-[var(--foreground)] font-semibold">claude</span>
+            </div>
+            <div class="flex justify-between py-1.5 border-b border-[var(--border)]">
+              <span class="text-[var(--muted-foreground)]">Model:</span>
+              <span class="text-[var(--foreground)]">claude-3-7-sonnet</span>
+            </div>
+            <div class="flex justify-between py-1.5 border-b border-[var(--border)]">
+              <span class="text-[var(--muted-foreground)]">Effort:</span>
+              <span class="text-[var(--foreground)] font-bold">high</span>
+            </div>
+            <div class="flex justify-between py-1.5">
+              <span class="text-[var(--muted-foreground)]">Timeout:</span>
+              <span class="text-[var(--foreground)]">30 minutes</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+
+  <!-- ========================================================================= -->
+  <!-- MODAL: SUBMIT NEW FEATURE REQUEST / PRODUCT BEAD                          -->
+  <!-- ========================================================================= -->
+  <div id="newBeadModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-[var(--border)] pb-3">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-[var(--primary)]/15 text-[var(--primary)] flex items-center justify-center font-bold">
+            +
+          </div>
+          <div>
+            <h3 class="text-base font-bold text-[var(--foreground)]">Submit Product Bead to Nightweaver</h3>
+            <p class="text-xs text-[var(--muted-foreground)]">Creates a new issue in the target repository's <code class="font-mono text-xs">.beads</code> tracker.</p>
+          </div>
+        </div>
+        <button onclick="closeNewBeadModal()" class="text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <div class="space-y-4 text-xs">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block font-semibold text-[var(--foreground)] mb-1">Bead Type</label>
+            <select id="newBeadType" class="w-full bg-[var(--background)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs text-[var(--foreground)] outline-none">
+              <option value="feature">Feature Request (--type feature)</option>
+              <option value="bug">Bug Report (--type bug)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block font-semibold text-[var(--foreground)] mb-1">Priority</label>
+            <select id="newBeadPriority" class="w-full bg-[var(--background)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs text-[var(--foreground)] outline-none">
+              <option value="P2">P2 (Normal)</option>
+              <option value="P1">P1 (High)</option>
+              <option value="P0">P0 (Critical)</option>
+              <option value="P3">P3 (Low)</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-semibold text-[var(--foreground)] mb-1">Title / Summary</label>
+          <input id="newBeadTitle" type="text" placeholder="e.g. Add webhook receiver for GitHub push events" class="w-full bg-[var(--background)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs text-[var(--foreground)] placeholder-[var(--placeholder)] outline-none focus:border-[var(--primary)]" />
+        </div>
+
+        <div>
+          <label class="block font-semibold text-[var(--foreground)] mb-1">Requirements &amp; Acceptance Criteria</label>
+          <textarea id="newBeadDescription" rows="5" placeholder="Describe the desired user behavior, constraints, and testable acceptance criteria..." class="w-full bg-[var(--background)] border border-[var(--border)] rounded-xl p-3 text-xs text-[var(--foreground)] placeholder-[var(--placeholder)] outline-none focus:border-[var(--primary)] resize-none"></textarea>
+        </div>
+
+        <div class="p-3 bg-[var(--background)] rounded-xl border border-[var(--border)] text-[11px] text-[var(--muted-foreground)] space-y-1">
+          <div class="font-bold text-[var(--foreground)]">What happens next?</div>
+          <div>Nightweaver's <strong>Planning Pool</strong> will discover this bead, check it out in a detached worktree, draft a technical decomposition, and either seek your clarification if ambiguous or materialize independent Plan Beads ready for Delivery.</div>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-between pt-2 border-t border-[var(--border)]">
+        <button onclick="closeNewBeadModal()" class="px-4 py-2 rounded-xl border border-[var(--border)] hover:bg-[var(--background)] text-xs font-medium text-[var(--foreground)]">
+          Cancel
+        </button>
+        <button onclick="submitNewProductBead()" class="px-4 py-2 rounded-xl bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-semibold hover:opacity-90 shadow-sm flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          Create &amp; Dispatch to Planning Pool
+        </button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ========================================================================= -->
+  <!-- DRAWER: LIVE AGENT TELEMETRY & TERMINAL                                   -->
+  <!-- ========================================================================= -->
+  <div id="telemetryDrawer" class="fixed inset-y-0 right-0 w-full md:w-[540px] bg-[var(--card)] border-l border-[var(--border)] shadow-2xl z-50 transform translate-x-full transition-transform duration-300 flex flex-col justify-between">
+    <div class="p-6 overflow-y-auto space-y-5">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="flex items-center gap-2">
+            <span id="telBeadId" class="text-xs font-mono font-bold text-[var(--primary)] bg-[var(--primary)]/10 px-2.5 py-0.5 rounded">ns-xci.1</span>
+            <span id="telStage" class="text-xs font-semibold px-2 py-0.5 rounded bg-blue-500/20 text-blue-400">stage:implement</span>
+          </div>
+          <h3 id="telRole" class="text-base font-bold text-[var(--foreground)] mt-2">Implementer Agent (claude)</h3>
+          <p id="telSummary" class="text-xs text-[var(--muted-foreground)] mt-1">Writing WorktreeProvisioner tests and path isolation...</p>
+        </div>
+        <button onclick="closeSlotTelemetry()" class="p-1 rounded-lg hover:bg-[var(--background)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <div class="bg-[var(--background)] border border-[var(--border)] rounded-xl p-3.5 space-y-2 text-xs font-mono">
+        <div class="flex justify-between">
+          <span class="text-[var(--muted-foreground)]">Worktree:</span>
+          <span class="text-[var(--foreground)] truncate max-w-[280px]">worktrees/nightshift/ns-xci.1</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-[var(--muted-foreground)]">Git status:</span>
+          <span class="text-emerald-400">clean (pre-dispatch verified)</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-[var(--muted-foreground)]">Win32 Job Object:</span>
+          <span class="text-slate-300">Active (PID 14208 &bull; Timeout 30m)</span>
+        </div>
+      </div>
+
+      <div class="space-y-2">
+        <div class="flex items-center justify-between text-xs font-mono">
+          <span class="text-[var(--muted-foreground)] font-bold flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 pulse-dot"></span> LIVE AGENT STDOUT
+          </span>
+          <span class="text-slate-500">logs/nightshift/live.log</span>
+        </div>
+        <div class="bg-black/90 rounded-xl p-4 font-mono text-xs text-emerald-400 space-y-1.5 h-64 overflow-y-auto border border-emerald-500/20 shadow-inner">
+          <div class="text-slate-500"># Launching Agent CLI with role in isolated worktree...</div>
+          <div class="text-slate-400">> Reading beads issue specification via bd show</div>
+          <div class="text-slate-300">> Running dotnet build Nightweaver.slnx...</div>
+          <div class="text-emerald-300">  Build succeeded. 0 Warning(s) 0 Error(s)</div>
+          <div class="text-slate-400">> Running test suite for modified touched modules...</div>
+          <div class="text-emerald-300">  Passed! - Failed: 0, Passed: 6, Total: 6</div>
+          <div class="text-cyan-300">> git push -u origin nightweaver/branch</div>
+          <div class="text-yellow-400 animate-pulse">> Monitoring remote CI status...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="p-4 border-t border-[var(--border)] bg-[var(--card)] flex items-center justify-between">
+      <button id="telOpenWorkspaceBtn" onclick="" class="text-xs text-[var(--primary)] hover:underline font-mono font-semibold flex items-center gap-1">
+        Open Full Bead Workspace &nearr;
+      </button>
+      <button onclick="closeSlotTelemetry()" class="px-4 py-2 rounded-xl border border-[var(--border)] hover:bg-[var(--background)] text-xs font-medium text-[var(--foreground)]">
+        Close
+      </button>
+    </div>
+  </div>
+
+
+  <!-- ========================================================================= -->
+  <!-- JAVASCRIPT: Full Interactivity, Workspace Data & Compression Model        -->
+  <!-- ========================================================================= -->
+  <script>
+    // Rich Mock Database for Full Bead Workspace
+    const BEADS_DB = {
+      'ns-99b': {
+        id: 'ns-99b',
+        title: 'CLI Authentication: Session Token vs Stateless JWT Architecture',
+        type: 'feature',
+        priority: 'P1',
+        status: 'open (paused)',
+        stage: 'stage:plan',
+        label: 'product-decision-required',
+        author: 'mgasp',
+        repairCycles: '0 / 3 cycles',
+        worktree: 'worktrees/nightshift/ns-99b',
+        branch: 'nightweaver/ns-99b (detached HEAD)',
+        role: 'Planner Agent (claude-3-7-sonnet)',
+        spec: `
+          <div class="space-y-4">
+            <div>
+              <h3 class="text-base font-bold text-[var(--foreground)] mb-1.5">1. Summary & Background</h3>
+              <p class="leading-relaxed">Nightweaver currently runs as a headless command-line tool with direct local tracker and worktree access. When operating in daemon mode or when invoked by multiple concurrent CLI callers, the Orchestrator must authenticate requests without leaking credential material or exposing raw Dolt database locks to untrusted callers.</p>
+            </div>
+
+            <div>
+              <h3 class="text-base font-bold text-[var(--foreground)] mb-1.5">2. Desired Behavior</h3>
+              <p class="leading-relaxed">When the user runs <code class="font-mono text-xs px-1.5 py-0.5 rounded bg-[var(--background)] border border-[var(--border)]">nightweaver submit</code> or accesses the HTTP dashboard, the CLI must establish a verified identity session against the host Orchestrator. The credential exchange must survive host daemon restarts without prompting for interactive re-authentication during headless CI runs.</p>
+            </div>
+
+            <div>
+              <h3 class="text-base font-bold text-[var(--foreground)] mb-1.5">3. Key Interfaces & Security Touchpoints</h3>
+              <ul class="list-disc pl-5 space-y-1.5">
+                <li><code class="font-mono text-xs text-sky-400">src/Nightweaver/Security/HostSecurityProvider.cs</code>: Token generation and secret hashing.</li>
+                <li><code class="font-mono text-xs text-sky-400">src/Nightweaver/Execution/Win32JobObjectContainer.cs</code>: Environment token injection.</li>
+                <li><code class="font-mono text-xs text-sky-400">projects/&lt;project-slug&gt;.json</code>: Optional authentication policy configuration block.</li>
+              </ul>
+            </div>
+
+            <div>
+              <h3 class="text-base font-bold text-[var(--foreground)] mb-1.5">4. Acceptance Criteria</h3>
+              <ul class="list-disc pl-5 space-y-1.5">
+                <li>Unauthenticated requests to the Orchestrator API return HTTP 401 Unauthorized with standard challenge headers.</li>
+                <li>On Windows hosts, stored secrets are protected using DPAPI; on Unix, credentials use file-permissions 0600 under the host root.</li>
+                <li>Token validation takes &lt; 2ms and introduces zero measurable latency to Agent CLI dispatch loops.</li>
+              </ul>
+            </div>
+          </div>
+        `,
+        comments: [
+          {
+            id: 'c1',
+            author: 'Planner Agent (claude-3-7-sonnet)',
+            role: 'planner',
+            stage: 'stage:plan',
+            time: '4 days ago',
+            collapsed: true,
+            body: `Completed initial repository survey. Inspected <code class="font-mono text-xs text-sky-400">src/Nightweaver/CommandLineAndPath.cs</code>. The daemon process currently runs without mutual TLS or Bearer token validation on localhost. I have drafted an initial decomposition splitting token storage from the HTTP middleware.`
+          },
+          {
+            id: 'c2',
+            author: 'Plan Challenger Agent (claude-3-7-sonnet)',
+            role: 'plan_challenger',
+            stage: 'stage:plan-challenge',
+            time: '4 days ago',
+            collapsed: true,
+            body: `<strong>Adversarial Plan Critique findings:</strong><br>The proposed decomposition slice 1 assumes Windows DPAPI is always available. However, in containerized Docker or Linux runners, DPAPI throws <code class="font-mono text-xs">PlatformNotSupportedException</code>. Please revise the specification to include an OS-agnostic credential abstraction seam before creating Plan Beads in bd.`
+          },
+          {
+            id: 'c3',
+            author: 'Planner Agent (claude-3-7-sonnet)',
+            role: 'planner',
+            stage: 'stage:plan',
+            time: '3 days ago',
+            collapsed: true,
+            body: `Revised architecture to include <code class="font-mono text-xs">ICredentialStore</code> with DPAPI implementation on Windows and file-based permission masking on Linux. Re-running challenge verification.`
+          },
+          {
+            id: 'c4',
+            author: 'Planner Agent (claude-3-7-sonnet)',
+            role: 'planner',
+            stage: 'stage:plan',
+            time: '18 hours ago (Active Pause)',
+            collapsed: false,
+            highlight: true,
+            body: `
+              <div class="space-y-3">
+                <div class="font-bold text-amber-400 flex items-center gap-1.5">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                  Product Requirement Decision Required:
+                </div>
+                <p class="leading-relaxed">While finalizing the concrete Plan Bead decomposition, I encountered an architectural trade-off that requires human product guidance:</p>
+                
+                <div class="bg-[var(--card)] p-4 rounded-xl border border-[var(--border)] font-mono text-xs space-y-2">
+                  <div class="text-amber-300 font-bold">Options:</div>
+                  <div><strong>1. Bearer JWT (Stateless):</strong> The Orchestrator issues a signed JWT stored locally in credentials. Simplifies background workers and survives daemon restarts without state synchronization.</div>
+                  <div><strong>2. Ephemeral Session Token (Stateful):</strong> The CLI performs a local handshake on each startup. Aligns with standard browser cookies but requires daemon socket persistence.</div>
+                </div>
+
+                <p class="text-xs text-[var(--muted-foreground)]">Please post your preferred approach below. I will proceed with Plan Bead materialization immediately upon response.</p>
+              </div>
+            `
+          }
+        ]
+      },
+
+      'ns-du2.1': {
+        id: 'ns-du2.1',
+        title: 'Win32 Job Timeout in PublishedCliTrap',
+        type: 'task',
+        priority: 'P2',
+        status: 'open (paused)',
+        stage: 'stage:qa',
+        label: 'needs-human',
+        author: 'Planner Agent',
+        repairCycles: '3 / 3 (Exhausted)',
+        worktree: 'worktrees/nightshift/ns-du2.1',
+        branch: 'nightweaver/ns-du2.1',
+        role: 'QA Agent (claude-3-7-sonnet)',
+        spec: `
+          <div class="space-y-4">
+            <div>
+              <h3 class="text-base font-bold text-[var(--foreground)] mb-1.5">1. Summary & Acceptance Criteria</h3>
+              <p class="leading-relaxed">Implement comprehensive process timeout verification in the integration test suite. Ensure that when an Agent CLI process exceeds its configured timeout, the Win32 Job Object forcefully terminates the entire process tree without leaving orphaned child processes.</p>
+            </div>
+            <div>
+              <h3 class="text-base font-bold text-[var(--foreground)] mb-1.5">2. Problem Invariant</h3>
+              <p class="leading-relaxed">During test execution, <code class="font-mono text-xs text-rose-400">AgentCliTrap.exe</code> hangs when receiving asynchronous cancellation tokens on Windows 11.</p>
+            </div>
+          </div>
+        `,
+        comments: [
+          {
+            id: 'c1',
+            author: 'Implementer Agent (claude-3-7-sonnet)',
+            role: 'implementer',
+            stage: 'stage:implement',
+            time: '2 days ago',
+            collapsed: true,
+            body: `Implemented Win32 Job Object timeout trap in <code class="font-mono text-xs">tests/AgentCliTrap/Program.cs</code>. Pushed branch <code class="font-mono text-xs">nightweaver/ns-du2.1</code> and opened PR #43.`
+          },
+          {
+            id: 'c2',
+            author: 'Reviewer Agent (codex)',
+            role: 'reviewer',
+            stage: 'stage:review',
+            time: '2 days ago',
+            collapsed: true,
+            body: `Static code review passed. Clean architecture and correct P/Invoke definitions for <code class="font-mono text-xs">TerminateJobObject</code>. Transitioning to stage:qa.`
+          },
+          {
+            id: 'c3',
+            author: 'QA Agent (claude-3-7-sonnet)',
+            role: 'qa',
+            stage: 'stage:qa',
+            time: '1 day ago',
+            collapsed: true,
+            body: `<strong>QA Verification Failed (Cycle 1/3):</strong> Test <code class="font-mono text-xs">PublishedCliIntegrationTests.Timeout_TerminatesProcessTree</code> timed out after 60s. Returning to stage:implement.`
+          },
+          {
+            id: 'c4',
+            author: 'Implementer Agent (claude-3-7-sonnet)',
+            role: 'implementer',
+            stage: 'stage:implement',
+            time: '18 hours ago',
+            collapsed: true,
+            body: `Attempted fix by adding explicit task cancellation token link. Pushed update to branch.`
+          },
+          {
+            id: 'c5',
+            author: 'QA Agent (claude-3-7-sonnet)',
+            role: 'qa',
+            stage: 'stage:qa',
+            time: '1 hour ago (Active Halt)',
+            collapsed: false,
+            highlight: true,
+            body: `
+              <div class="space-y-2">
+                <div class="font-bold text-rose-400">Exhausted Max Repair Cycles (3 of 3):</div>
+                <p class="leading-relaxed">The test still deadlocks on CI runners due to standard handle redirection buffering in the child console process. Remote branch <code class="font-mono text-xs text-slate-300">origin/nightweaver/ns-du2.1</code> and PR #43 are preserved intact. Halting for human intervention.</p>
+                <div class="text-xs font-mono text-[var(--muted-foreground)]">Diagnostic log: &lt;nightweaver-root&gt;/logs/nightshift/ns-du2.1/20261024-qa.log</div>
+              </div>
+            `
+          }
+        ]
+      },
+
+      'ns-47f': {
+        id: 'ns-47f',
+        title: 'Reactive Event Stream & Startup Crash Sweep',
+        type: 'feature',
+        priority: 'P2',
+        status: 'in_progress',
+        stage: 'stage:plan',
+        label: 'active',
+        author: 'mgasp',
+        repairCycles: '0 / 3 cycles',
+        worktree: 'worktrees/nightshift/ns-47f',
+        branch: 'nightweaver/ns-47f (detached HEAD)',
+        role: 'Planner Agent (claude-3-7-sonnet)',
+        spec: `
+          <div class="space-y-4">
+            <h3 class="text-base font-bold text-[var(--foreground)] mb-1.5">Reactive Event Stream Specification</h3>
+            <p class="leading-relaxed">Implement durable journal tailing via <code class="font-mono text-xs">bd events tail --follow</code> to replace polling loops. The Orchestrator must detect tracker mutations instantaneously, run startup sweep to release stranded claims, and recover cleanly after sudden power loss.</p>
+          </div>
+        `,
+        comments: [
+          {
+            id: 'c1',
+            author: 'Planner Agent (claude-3-7-sonnet)',
+            role: 'planner',
+            stage: 'stage:plan',
+            time: '12 min ago',
+            collapsed: false,
+            body: `Inspecting <code class="font-mono text-xs">tests/Nightweaver.Tests/BeadsIntegrationTests.cs</code>. Drafting candidate Plan Beads for: 1. Event stream tail runner, 2. Startup stranded claim release sweep, 3. Re-baseline on journal truncation.`
+          }
+        ]
+      },
+
+      'ns-xci.1': {
+        id: 'ns-xci.1',
+        title: 'Isolated Worktree Provisioning, Reuse & Clean Reset',
+        type: 'task',
+        priority: 'P2',
+        status: 'in_progress',
+        stage: 'stage:implement',
+        label: 'active',
+        author: 'Planner Agent',
+        repairCycles: '0 / 3 cycles',
+        worktree: 'worktrees/nightshift/ns-xci.1',
+        branch: 'nightweaver/ns-xci.1',
+        role: 'Implementer Agent (claude-3-7-sonnet)',
+        spec: `
+          <div class="space-y-4">
+            <h3 class="text-base font-bold text-[var(--foreground)] mb-1.5">Worktree Provisioner Specification</h3>
+            <p class="leading-relaxed">Provide isolated git worktrees under <code class="font-mono text-xs">&lt;nightweaver-root&gt;/worktrees/&lt;project&gt;/&lt;bead-id&gt;</code>. Provisioning must verify clean index before dispatch, support fast reuse across delivery stages, and guarantee hard reset on retry.</p>
+          </div>
+        `,
+        comments: [
+          {
+            id: 'c1',
+            author: 'Implementer Agent (claude-3-7-sonnet)',
+            role: 'implementer',
+            stage: 'stage:implement',
+            time: '18 min ago',
+            collapsed: false,
+            body: `Created WorktreeProvisionerTests.cs with 6 test cases covering clean reset, path traversal rejection, and detached HEAD allocation. Running local test suite.`
+          }
+        ]
+      }
+    };
+
+    let currentBeadId = 'ns-99b';
+    let isHistoryCompressed = true;
+
+    // Open Full Bead Workspace
+    function openFullBeadWorkspace(beadId) {
+      currentBeadId = beadId;
+      const bead = BEADS_DB[beadId] || {
+        id: beadId,
+        title: 'Bead ' + beadId,
+        type: 'task',
+        priority: 'P2',
+        status: 'open',
+        stage: 'stage:implement',
+        label: 'active',
+        author: 'system',
+        repairCycles: '0 / 3',
+        worktree: 'worktrees/nightshift/' + beadId,
+        branch: 'nightweaver/' + beadId,
+        role: 'Implementer Agent',
+        spec: '<p class="leading-relaxed">Specification loaded from tracker for bead ' + beadId + '...</p>',
+        comments: [
+          {
+            id: 'c1',
+            author: 'Orchestrator',
+            role: 'orchestrator',
+            stage: 'discovery',
+            time: 'Just now',
+            collapsed: false,
+            body: 'Bead claimed by factory queue.'
+          }
+        ]
+      };
+
+      // Populate header & meta
+      document.getElementById('wsBreadcrumbId').textContent = bead.id;
+      document.getElementById('wsBeadId').textContent = bead.id;
+      document.getElementById('wsTitle').textContent = bead.title;
+      document.getElementById('wsBeadType').textContent = bead.type;
+      document.getElementById('wsBeadPriority').textContent = bead.priority;
+      document.getElementById('wsBeadStage').textContent = bead.stage;
+      document.getElementById('wsBeadLabel').textContent = bead.label;
+      document.getElementById('wsAuthor').textContent = bead.author;
+
+      // Populate sidebar
+      document.getElementById('wsMetaId').textContent = bead.id;
+      document.getElementById('wsMetaStatus').textContent = bead.status;
+      document.getElementById('wsMetaStage').textContent = bead.stage;
+      document.getElementById('wsMetaRepair').textContent = bead.repairCycles;
+      document.getElementById('wsMetaWorktree').textContent = bead.worktree;
+      document.getElementById('wsMetaBranch').textContent = bead.branch;
+      document.getElementById('wsMetaRole').textContent = bead.role;
+
+      // Populate spec
+      document.getElementById('wsSpecBody').innerHTML = bead.spec;
+
+      // Populate comments
+      renderCommentsStream(bead.comments);
+
+      // Show/hide guidance box depending on label
+      const guidanceBox = document.getElementById('wsGuidanceBox');
+      if (bead.label === 'product-decision-required' || bead.label === 'needs-human') {
+        guidanceBox.style.display = 'block';
+      } else {
+        guidanceBox.style.display = 'none';
+      }
+
+      // Hide dashboard, show workspace
+      document.getElementById('layoutDeck').classList.add('hidden');
+      document.getElementById('viewBeadWorkspace').classList.remove('hidden');
+
+      // Scroll to top
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function closeFullBeadWorkspace() {
+      document.getElementById('viewBeadWorkspace').classList.add('hidden');
+      document.getElementById('layoutDeck').classList.remove('hidden');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    // Render comments with collapsible older history
+    function renderCommentsStream(comments) {
+      const container = document.getElementById('wsCommentsList');
+      container.innerHTML = '';
+
+      const olderComments = comments.filter(c => c.collapsed);
+      const activeComments = comments.filter(c => !c.collapsed);
+
+      // Collapsible banner for older comments if present
+      if (olderComments.length > 0) {
+        const collapsedWrapper = document.createElement('div');
+        collapsedWrapper.id = 'wsCollapsedWrapper';
+        collapsedWrapper.className = isHistoryCompressed ? 'hidden space-y-4' : 'space-y-4';
+
+        olderComments.forEach(c => {
+          collapsedWrapper.appendChild(createCommentCard(c));
+        });
+
+        const toggleBanner = document.createElement('div');
+        toggleBanner.className = 'bg-[var(--background)] hover:bg-[var(--card)] border border-dashed border-[var(--border)] rounded-xl p-3.5 text-xs text-center cursor-pointer transition-colors text-[var(--muted-foreground)] hover:text-[var(--foreground)] flex items-center justify-center gap-2 font-mono';
+        toggleBanner.onclick = toggleHistoryCompression;
+        toggleBanner.innerHTML = `
+          <svg class="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          <span><strong>${olderComments.length} older iterations collapsed</strong> (Planning drafts &amp; reviews) &bull; Click to ${isHistoryCompressed ? 'expand' : 'collapse'}</span>
+        `;
+
+        container.appendChild(toggleBanner);
+        container.appendChild(collapsedWrapper);
+      }
+
+      // Active / Recent comments
+      activeComments.forEach(c => {
+        container.appendChild(createCommentCard(c));
+      });
+    }
+
+    function createCommentCard(c) {
+      const card = document.createElement('div');
+      const isHighlight = c.highlight;
+      card.className = isHighlight 
+        ? 'bg-amber-500/10 border-2 border-amber-500/40 rounded-xl p-5 space-y-3 shadow-sm'
+        : 'bg-[var(--background)] border border-[var(--border)] rounded-xl p-5 space-y-3';
+
+      card.innerHTML = `
+        <div class="flex items-center justify-between border-b border-[var(--border)] pb-2.5 text-xs">
+          <div class="flex items-center gap-2.5">
+            <span class="w-6 h-6 rounded-full bg-sky-500/20 text-sky-400 flex items-center justify-center font-bold text-xs">
+              ${c.role === 'planner' ? 'P' : c.role === 'plan_challenger' ? 'C' : c.role === 'implementer' ? 'I' : 'Q'}
+            </span>
+            <span class="font-bold text-[var(--foreground)] text-sm">${c.author}</span>
+            <span class="px-2 py-0.5 rounded bg-[var(--card)] border border-[var(--border)] font-mono text-[11px] text-[var(--muted-foreground)]">${c.stage}</span>
+          </div>
+          <span class="font-mono text-xs text-[var(--muted-foreground)]">${c.time}</span>
+        </div>
+        <div class="text-sm sm:text-base text-[var(--foreground)] leading-relaxed space-y-2">
+          ${c.body}
+        </div>
+      `;
+      return card;
+    }
+
+    function toggleHistoryCompression() {
+      isHistoryCompressed = !isHistoryCompressed;
+      const bead = BEADS_DB[currentBeadId];
+      if (bead) {
+        renderCommentsStream(bead.comments);
+        document.getElementById('wsToggleText').textContent = isHistoryCompressed 
+          ? `Expand Older Iterations (${bead.comments.filter(c => c.collapsed).length})`
+          : 'Collapse Older Iterations';
+      }
+    }
+
+    function insertTemplate(text) {
+      const input = document.getElementById('wsGuidanceInput');
+      input.value = text;
+      input.focus();
+    }
+
+    function submitWorkspaceDecision() {
+      const input = document.getElementById('wsGuidanceInput');
+      const text = input.value.trim();
+      if (!text) {
+        alert('Please enter your decision or instructions.');
+        return;
+      }
+
+      alert(`Decision Recorded for ${currentBeadId}!\n\nExecuting Orchestrator Actions:\n1. bd comments add ${currentBeadId} "${text}"\n2. bd update ${currentBeadId} --remove-label product-decision-required\n\nThe Planner Agent has been re-dispatched into Planning Pool Slot 1.`);
+
+      input.value = '';
+      
+      // Update bead state in memory
+      if (BEADS_DB[currentBeadId]) {
+        BEADS_DB[currentBeadId].label = 'active';
+        BEADS_DB[currentBeadId].status = 'in_progress';
+        BEADS_DB[currentBeadId].comments.push({
+          id: 'c' + Date.now(),
+          author: 'mgasp (Human Operator)',
+          role: 'human',
+          stage: 'stage:plan',
+          time: 'Just now',
+          collapsed: false,
+          body: `<p class="leading-relaxed font-semibold text-emerald-400">Human Guidance Provided:</p><p class="leading-relaxed">${text}</p>`
+        });
+      }
+
+      // Re-render
+      openFullBeadWorkspace(currentBeadId);
+      updateAttentionCount();
+    }
+
+    // Time filter & Catch-up logic
+    function changeTimeFilter(val) {
+      const textMap = {
+        '12d': '12 days ago (Oct 12)',
+        '48h': '48 hours ago',
+        '7d': '7 days ago',
+        'all': 'Beginning of Project'
+      };
+      document.getElementById('lastSeenText').textContent = textMap[val] || val;
+    }
+
+    function markAsCaughtUp() {
+      document.getElementById('lastSeenText').textContent = 'Just now (Oct 24)';
+      const btn = document.getElementById('caughtUpBtn');
+      btn.innerHTML = '<svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg> Caught Up!';
+      btn.classList.add('bg-emerald-500/10', 'border-emerald-500/30');
+      alert('All past completed beads marked as read. Next time you visit, the digest will calculate delta starting from today.');
+    }
+
+    // Resolve Product Decision from card
+    function resolveProductDecision(cardId, beadId) {
+      const input = document.getElementById('decisionInput1');
+      const val = input.value.trim() || "Use DPAPI Bearer JWT with 12h rotation. Proceed with planning.";
+      alert('Decision submitted for ' + beadId + ':\n"' + val + '"\n\nNightweaver Orchestrator:\n1. Added comment to bd comments\n2. Removed product-decision-required label\n3. Resumed Planner Agent in Planning Pool slot.');
+      
+      const card = document.getElementById(cardId);
+      if (card) {
+        card.style.display = 'none';
+        updateAttentionCount();
+      }
+    }
+
+    // Resolve Needs Human from card
+    function resolveNeedsHuman(cardId, action) {
+      if (action === 'retry') {
+        alert('Resetting repair_cycles metadata in bd. Worktree reset to clean HEAD. Rescheduling QA Agent.');
+      } else if (action === 'takeover') {
+        alert('Copied to clipboard:\ngit checkout nightweaver/ns-du2.1\n\nBranch and PR #43 are preserved for manual fixes.');
+      } else if (action === 'abort') {
+        alert('Closing bead ns-du2.1 as deferred/closed. Worktree cleaned up.');
+      }
+      const card = document.getElementById(cardId);
+      if (card) {
+        card.style.display = 'none';
+        updateAttentionCount();
+      }
+    }
+
+    function updateAttentionCount() {
+      const remaining = [document.getElementById('decisionCard1'), document.getElementById('decisionCard2')]
+        .filter(c => c && c.style.display !== 'none').length;
+      document.getElementById('attentionCountBadge').textContent = remaining + ' items';
+      if (remaining === 0) {
+        document.getElementById('attentionCountBadge').className = 'text-xs px-2 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 font-mono';
+        document.getElementById('attentionCountBadge').textContent = 'All Clear';
+      }
+    }
+
+    // Modal: Submit New Feature / Bug
+    function openNewBeadModal() {
+      document.getElementById('newBeadModal').classList.remove('hidden');
+    }
+    function closeNewBeadModal() {
+      document.getElementById('newBeadModal').classList.add('hidden');
+    }
+
+    function submitNewProductBead() {
+      const title = document.getElementById('newBeadTitle').value.trim();
+      const type = document.getElementById('newBeadType').value;
+      const priority = document.getElementById('newBeadPriority').value;
+      const desc = document.getElementById('newBeadDescription').value.trim();
+
+      if (!title) {
+        alert('Please enter a title for the bead.');
+        return;
+      }
+
+      const newId = 'ns-' + Math.random().toString(36).substring(2, 5);
+
+      alert(`Product Bead created successfully in bd!\n\nID: ${newId}\nType: ${type}\nPriority: ${priority}\nTitle: "${title}"\n\nNightweaver Orchestrator has picked up the event via bd events tail and added it to the Ready Backlog.`);
+
+      // Add to mock DB
+      BEADS_DB[newId] = {
+        id: newId,
+        title: title,
+        type: type,
+        priority: priority,
+        status: 'open',
+        stage: 'stage:plan',
+        label: 'ready',
+        author: 'mgasp',
+        repairCycles: '0 / 3 cycles',
+        worktree: 'worktrees/nightshift/' + newId,
+        branch: 'nightweaver/' + newId,
+        role: 'Planning Pool (Pending Discovery)',
+        spec: `<p class="leading-relaxed">${desc || 'No specification details provided.'}</p>`,
+        comments: [
+          {
+            id: 'c1',
+            author: 'mgasp (Author)',
+            role: 'human',
+            stage: 'creation',
+            time: 'Just now',
+            collapsed: false,
+            body: `<p class="leading-relaxed">Created bead via Nightweaver UI Console.</p>`
+          }
+        ]
+      };
+
+      // Prepend to table
+      const tbody = document.getElementById('beadsTableBody');
+      const newRow = document.createElement('tr');
+      newRow.className = 'bead-row hover:bg-[var(--background)]/50 transition-colors bg-sky-500/5 cursor-pointer';
+      newRow.setAttribute('data-status', 'ready');
+      newRow.onclick = () => openFullBeadWorkspace(newId);
+      newRow.innerHTML = `
+        <td class="py-3 px-3 font-mono font-bold text-sky-400">${newId}</td>
+        <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono text-slate-300">${type}</span></td>
+        <td class="py-3 px-3 font-medium text-[var(--foreground)]">${title}</td>
+        <td class="py-3 px-3"><span class="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono">open (ready)</span></td>
+        <td class="py-3 px-3 font-mono text-slate-500">Unassigned</td>
+        <td class="py-3 px-3 font-mono text-slate-400">0/3</td>
+        <td class="py-3 px-3 text-right">
+          <span class="text-[var(--primary)] font-mono hover:underline">Open Workspace &rarr;</span>
+        </td>
+      `;
+      tbody.insertBefore(newRow, tbody.firstChild);
+
+      closeNewBeadModal();
+      document.getElementById('newBeadTitle').value = '';
+      document.getElementById('newBeadDescription').value = '';
+    }
+
+    // Telemetry Drawer
+    function openSlotTelemetry(beadId, type, stage, role, summary) {
+      document.getElementById('telBeadId').textContent = beadId;
+      document.getElementById('telStage').textContent = stage;
+      document.getElementById('telRole').textContent = role;
+      document.getElementById('telSummary').textContent = summary;
+      document.getElementById('telOpenWorkspaceBtn').onclick = () => {
+        closeSlotTelemetry();
+        openFullBeadWorkspace(beadId);
+      };
+      document.getElementById('telemetryDrawer').classList.remove('translate-x-full');
+    }
+    function closeSlotTelemetry() {
+      document.getElementById('telemetryDrawer').classList.add('translate-x-full');
+    }
+
+    // Filter Table
+    function filterBeadsTable(filter) {
+      document.querySelectorAll('.bead-tab').forEach(b => {
+        b.className = 'bead-tab px-3 py-1 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)]';
+      });
+      document.getElementById('tab-' + filter).className = 'bead-tab px-3 py-1 rounded-lg bg-[var(--card)] text-[var(--foreground)] font-semibold shadow-sm';
+
+      document.querySelectorAll('.bead-row').forEach(row => {
+        const status = row.getAttribute('data-status');
+        if (filter === 'all' || status === filter) {
+          row.style.display = '';
+        } else {
+          row.style.display = 'none';
+        }
+      });
+    }
+  </script>
+</body>
+</html>
