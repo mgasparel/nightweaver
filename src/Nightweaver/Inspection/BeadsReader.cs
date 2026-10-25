@@ -290,6 +290,65 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         }
     }
 
+    internal async Task<IReadOnlyList<BeadCommentSnapshot>> ReadCommentsAsync(
+        ValidatedTargetRepository repository,
+        string beadId,
+        CancellationToken cancellationToken)
+    {
+        var context = $"bd --readonly --sandbox comments '{beadId}' --json in Target Repository '{repository.Path}'";
+        var json = await RunQueryAsync(repository, BeadsCommand.CreateComments(repository.Path, beadId), context, cancellationToken);
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return ParseComments(document.RootElement, beadId);
+        }
+        catch (JsonException exception)
+        {
+            throw new ToolExecutionException($"{context}: incompatible or malformed bd JSON: {exception.Message}");
+        }
+    }
+
+    internal static IReadOnlyList<BeadCommentSnapshot> ParseComments(JsonElement root, string beadId)
+    {
+        if (root.ValueKind != JsonValueKind.Array) throw new JsonException("$: expected an array");
+        var comments = new List<(int Index, BeadCommentSnapshot Comment)>();
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var row = 0;
+        foreach (var item in root.EnumerateArray())
+        {
+            var path = $"$[{row}]";
+            if (item.ValueKind != JsonValueKind.Object) throw new JsonException($"{path}: expected an object");
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in item.EnumerateObject())
+            {
+                if ((property.Name is "id" or "issue_id" or "text" or "created_at") && !seen.Add(property.Name))
+                    throw new JsonException($"{path}.{property.Name}: duplicate property");
+            }
+
+            string RequiredString(string name)
+            {
+                if (!item.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String
+                    || string.IsNullOrWhiteSpace(value.GetString()))
+                    throw new JsonException($"{path}.{name}: expected a nonblank string");
+                return value.GetString()!;
+            }
+
+            var id = RequiredString("id");
+            if (!ids.Add(id)) throw new JsonException($"{path}.id: duplicate comment ID '{id}'");
+            if (!string.Equals(RequiredString("issue_id"), beadId, StringComparison.Ordinal))
+                throw new JsonException($"{path}.issue_id: comment does not belong to Bead '{beadId}'");
+            var text = RequiredString("text");
+            var createdAtText = RequiredString("created_at");
+            if (!DateTimeOffset.TryParse(createdAtText, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var createdAt))
+                throw new JsonException($"{path}.created_at: expected an ISO timestamp");
+            comments.Add((row++, new BeadCommentSnapshot(id, text, createdAt)));
+        }
+
+        return comments.OrderBy(entry => entry.Comment.CreatedAt).ThenBy(entry => entry.Index)
+            .Select(entry => entry.Comment).ToArray();
+    }
+
     internal static IReadOnlyList<Execution.BeadDependency> ParseUpDependencies(JsonElement root, string beadId)
     {
         if (root.ValueKind != JsonValueKind.Array) throw new JsonException("$: expected an array");

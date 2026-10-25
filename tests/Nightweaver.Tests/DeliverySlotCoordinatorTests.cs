@@ -293,28 +293,296 @@ public sealed class DeliverySlotCoordinatorTests
     }
 
     [Fact]
-    public async Task ReviewerRepairStopsWithoutFollowOnRoleOrClaimRelease()
+    public async Task ReviewerRejectionImmediatelyRunsImplementerReviewerAndQaUnderTheSameClaim()
     {
         using var fixture = new SlotFixture();
-        var bead = fixture.CreateTask("stage:review");
+        var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
 
         var outcome = await fixture.RunAsync(bead, (role, _) =>
         {
             roles.Add(role);
-            fixture.Target.Run("bd", ["update", bead, "--remove-label", "stage:review", "--add-label", "stage:implement",
-                "--set-metadata", "repair_cycles=1"]);
+            if (role == AgentRole.Reviewer && roles.Count == 2) fixture.Reject(bead, role, "Review finding: repair the serializer.");
+            else fixture.Advance(bead, role);
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        });
+
+        Assert.True(outcome.MergeReady, outcome.Diagnostic);
+        Assert.Equal([AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa], roles);
+        Assert.Equal(1, outcome.FinalState!.RepairCycles);
+        Assert.Equal(2, fixture.ClaimWrites(bead).Length);
+        Assert.Equal("open", fixture.ReadBead(bead).Status);
+        Assert.Null(fixture.ReadBead(bead).Assignee);
+    }
+
+    [Fact]
+    public async Task QaRejectionRerunsImplementationAndReviewBeforeQa()
+    {
+        using var fixture = new SlotFixture();
+        var bead = fixture.CreateTask();
+        var roles = new List<AgentRole>();
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            if (role == AgentRole.Qa && roles.Count == 3) fixture.Reject(bead, role, "QA reproduction: observed 500; expected 200.");
+            else fixture.Advance(bead, role);
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        });
+
+        Assert.True(outcome.MergeReady, outcome.Diagnostic);
+        Assert.Equal([AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa,
+            AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa], roles);
+        Assert.Equal(1, outcome.FinalState!.RepairCycles);
+        Assert.Equal(2, fixture.ClaimWrites(bead).Length);
+    }
+
+    [Fact]
+    public async Task MixedReviewAndQaRejectionsShareThePersistedCounterWithoutResettingIt()
+    {
+        using var fixture = new SlotFixture();
+        var bead = fixture.CreateTask();
+        var roles = new List<AgentRole>();
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            if (role == AgentRole.Reviewer && roles.Count == 2) fixture.Reject(bead, role, "Reviewer finding cycle one.");
+            else if (role == AgentRole.Qa && roles.Count == 5) fixture.Reject(bead, role, "QA failure cycle two.");
+            else fixture.Advance(bead, role);
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        });
+
+        Assert.True(outcome.MergeReady, outcome.Diagnostic);
+        Assert.Equal([AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Implementer, AgentRole.Reviewer,
+            AgentRole.Qa, AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa], roles);
+        Assert.Equal(2, outcome.FinalState!.RepairCycles);
+        Assert.Equal([0, 0, 1, 1, 1, 2, 2, 2], fixture.ExpectedStates.Select(state => state.RepairCycles));
+    }
+
+    [Fact]
+    public async Task RepairAtExactLimitRunsAndZeroLimitEscalatesFirstRejection()
+    {
+        using (var atLimitFixture = new SlotFixture(maxRepairCycles: 2))
+        {
+            var bead = atLimitFixture.CreateTask("stage:review");
+            atLimitFixture.SetRepairCycles(bead, 1);
+            var roles = new List<AgentRole>();
+            var outcome = await atLimitFixture.RunAsync(bead, (role, _) =>
+            {
+                roles.Add(role);
+                if (role == AgentRole.Reviewer && roles.Count == 1) atLimitFixture.Reject(bead, role, "One remaining repair allowed.");
+                else atLimitFixture.Advance(bead, role);
+                return Task.FromResult(Success(role, bead, atLimitFixture.ReadState(bead)));
+            });
+
+            Assert.True(outcome.MergeReady, outcome.Diagnostic);
+            Assert.Equal([AgentRole.Reviewer, AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa], roles);
+            Assert.Equal(2, outcome.FinalState!.RepairCycles);
+        }
+
+        using (var zeroFixture = new SlotFixture(maxRepairCycles: 0))
+        {
+            var bead = zeroFixture.CreateTask();
+            var roles = new List<AgentRole>();
+            NeedsHumanRequest? request = null;
+            var outcome = await zeroFixture.RunAsync(bead, (role, _) =>
+            {
+                roles.Add(role);
+                if (role == AgentRole.Reviewer) zeroFixture.Reject(bead, role, "Actionable zero-budget finding.");
+                else zeroFixture.Advance(bead, role);
+                return Task.FromResult(Success(role, bead, zeroFixture.ReadState(bead)));
+            }, escalate: async escalationRequest =>
+            {
+                request = escalationRequest;
+                await zeroFixture.SimulateEscalationAsync(bead);
+                return new NeedsHumanEscalationResult(true, true, true, true, []);
+            });
+
+            Assert.Equal(DeliverySlotDisposition.Escalated, outcome.Disposition);
+            Assert.Equal([AgentRole.Implementer, AgentRole.Reviewer], roles);
+            Assert.Equal(NeedsHumanCause.RepairBudgetExhausted, request!.Cause);
+            Assert.Equal(AgentRole.Reviewer, request.Role);
+            Assert.Contains("raised repair_cycles to 1", request.Reason, StringComparison.Ordinal);
+            Assert.Contains("stage:review", request.Reason, StringComparison.Ordinal);
+            Assert.Contains("Actionable zero-budget finding.", Assert.Single(request.LatestFindings), StringComparison.Ordinal);
+            Assert.Equal("stage:implement", zeroFixture.ReadState(bead).Stage);
+            Assert.Equal(1, zeroFixture.ReadState(bead).RepairCycles);
+            Assert.True(zeroFixture.ReadState(bead).NeedsHuman);
+            Assert.Equal("open", zeroFixture.ReadBead(bead).Status);
+            Assert.Null(zeroFixture.ReadBead(bead).Assignee);
+        }
+    }
+
+    [Fact]
+    public async Task PersistedOverLimitEntryEscalatesBeforeAnyRoleAndUsesCurrentStageRole()
+    {
+        using var fixture = new SlotFixture(maxRepairCycles: 1);
+        var bead = fixture.CreateTask("stage:qa");
+        fixture.SetRepairCycles(bead, 2);
+        var roles = new List<AgentRole>();
+        NeedsHumanRequest? request = null;
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            throw new InvalidOperationException("Over-limit entry must escalate before provisioning or launch.");
+        }, escalate: async escalationRequest =>
+        {
+            request = escalationRequest;
+            await fixture.SimulateEscalationAsync(bead);
+            return new NeedsHumanEscalationResult(true, true, true, true, []);
+        });
+
+        Assert.Equal(DeliverySlotDisposition.Escalated, outcome.Disposition);
+        Assert.Empty(roles);
+        Assert.Equal(AgentRole.Qa, request!.Role);
+        Assert.Contains("Persisted repair_cycles=2", request.Reason, StringComparison.Ordinal);
+        Assert.Null(request.InvocationId);
+        Assert.Null(request.LogFilePaths);
+        Assert.Equal("stage:qa", outcome.FinalState!.Stage);
+        Assert.Equal(2, outcome.FinalState.RepairCycles);
+        Assert.Single(fixture.ClaimWrites(bead));
+    }
+
+    [Fact]
+    public async Task IncompleteBudgetEscalationIsReturnedOnceWithoutAnotherRoleOrRelease()
+    {
+        using var fixture = new SlotFixture(maxRepairCycles: 0);
+        var bead = fixture.CreateTask();
+        var roles = new List<AgentRole>();
+        var calls = 0;
+        var partial = new NeedsHumanEscalationResult(true, true, false, false, ["local worktree cleanup refused"]);
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            if (role == AgentRole.Implementer) fixture.Advance(bead, role);
+            else fixture.Reject(bead, role, "Budget rejection finding.");
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, escalate: _ =>
+        {
+            calls++;
+            return Task.FromResult(partial);
+        });
+
+        Assert.Equal(DeliverySlotDisposition.Failed, outcome.Disposition);
+        Assert.Equal(1, calls);
+        Assert.Equal([AgentRole.Implementer, AgentRole.Reviewer], roles);
+        Assert.Equal(partial, outcome.EscalationProgress);
+        Assert.False(outcome.ClaimHandoffCompleted);
+        Assert.False(outcome.ClaimReleased);
+        Assert.Equal("in_progress", fixture.ReadBead(bead).Status);
+        Assert.Equal(fixture.RecoveryActor, fixture.ReadBead(bead).Assignee);
+        Assert.False(fixture.ReadState(bead).NeedsHuman);
+        Assert.Equal(1, fixture.ReadState(bead).RepairCycles);
+    }
+
+    [Theory]
+    [InlineData("owner")]
+    [InlineData("workflow")]
+    public async Task BudgetEscalationPreflightRefusesOwnerOrWorkflowRaces(string race)
+    {
+        using var fixture = new SlotFixture(maxRepairCycles: 0);
+        var bead = fixture.CreateTask();
+        var roles = new List<AgentRole>();
+        var escalationCalls = 0;
+        var runner = new MutatingProcessRunner(request => SlotFixture.IsCommentsRead(bead, request), async () =>
+        {
+            if (race == "owner") await fixture.SimulateCompetingClaimAsync(bead);
+            else fixture.SetRepairCycles(bead, 2);
+        });
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            if (role == AgentRole.Implementer) fixture.Advance(bead, role);
+            else fixture.Reject(bead, role, "Budget rejection finding.");
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, runner, _ =>
+        {
+            escalationCalls++;
+            return Task.FromResult(new NeedsHumanEscalationResult(true, true, true, true, []));
+        });
+
+        Assert.Equal(DeliverySlotDisposition.Failed, outcome.Disposition);
+        Assert.Contains(race == "owner" ? "claim changed" : "workflow", outcome.Diagnostic!, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, escalationCalls);
+        Assert.Equal([AgentRole.Implementer, AgentRole.Reviewer], roles);
+        Assert.Single(SlotFixture.ClaimWrites(runner.Requests, bead));
+        if (race == "owner")
+        {
+            Assert.Equal("other:worker", fixture.ReadBead(bead).Assignee);
+            Assert.Equal("in_progress", fixture.ReadBead(bead).Status);
+        }
+        else
+        {
+            Assert.Equal(fixture.RecoveryActor, fixture.ReadBead(bead).Assignee);
+            Assert.Equal(2, fixture.ReadState(bead).RepairCycles);
+        }
+    }
+
+    [Fact]
+    public async Task BudgetDiagnosticRecordsWhenLatestCommentsCannotBeRead()
+    {
+        using var fixture = new SlotFixture(maxRepairCycles: 0);
+        var bead = fixture.CreateTask();
+        NeedsHumanRequest? request = null;
+        var runner = new FailingCommentsProcessRunner(bead);
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            if (role == AgentRole.Implementer) fixture.Advance(bead, role);
+            else fixture.Reject(bead, role, "Comment read will fail in the Orchestrator.");
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, runner, async escalationRequest =>
+        {
+            request = escalationRequest;
+            await fixture.SimulateEscalationAsync(bead);
+            return new NeedsHumanEscalationResult(true, true, true, true, []);
+        });
+
+        Assert.Equal(DeliverySlotDisposition.Escalated, outcome.Disposition);
+        Assert.Contains("comments could not be read", Assert.Single(request!.LatestFindings), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("repair_cycles=1", Assert.Single(request.LatestFindings), StringComparison.Ordinal);
+        Assert.Contains("fixture-Reviewer", Assert.Single(request.LatestFindings), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task IntMaxBoundaryAllowsRepairToReachLimitWithoutOverflow()
+    {
+        using var fixture = new SlotFixture(maxRepairCycles: int.MaxValue);
+        var bead = fixture.CreateTask("stage:review");
+        fixture.SetRepairCycles(bead, int.MaxValue - 1);
+        var roles = new List<AgentRole>();
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            if (role == AgentRole.Reviewer) fixture.Reject(bead, role, "Boundary finding.");
             return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
         });
 
         Assert.Equal(DeliverySlotDisposition.StoppedAtUnsupportedOutcome, outcome.Disposition);
-        Assert.Single(roles);
-        Assert.False(outcome.ClaimHandoffCompleted);
-        Assert.Single(fixture.ClaimWrites(bead));
-        Assert.Equal("in_progress", fixture.ReadBead(bead).Status);
-        Assert.Equal("nightweaver:demo", fixture.ReadBead(bead).Assignee);
-        Assert.Equal("stage:implement", outcome.FinalState!.Stage);
-        Assert.Equal(1, outcome.FinalState.RepairCycles);
+        Assert.Equal([AgentRole.Reviewer, AgentRole.Implementer], roles);
+        Assert.Equal(int.MaxValue, fixture.ExpectedStates[^1].RepairCycles);
+        Assert.Equal(int.MaxValue, fixture.ReadState(bead).RepairCycles);
+    }
+
+    [Fact]
+    public void CommentsParserOrdersFindingsAndRejectsForeignRows()
+    {
+        using var document = System.Text.Json.JsonDocument.Parse("""
+            [
+              {"id":"new","issue_id":"ns-test","text":"latest finding","created_at":"2026-10-25T12:00:00Z"},
+              {"id":"old","issue_id":"ns-test","text":"earlier finding","created_at":"2026-10-25T11:00:00Z"}
+            ]
+            """);
+
+        var comments = BeadsReader.ParseComments(document.RootElement, "ns-test");
+
+        Assert.Equal(["old", "new"], comments.Select(comment => comment.Id));
+        Assert.Equal("latest finding", comments[^1].Text);
+        Assert.Throws<System.Text.Json.JsonException>(() => BeadsReader.ParseComments(document.RootElement, "other"));
     }
 
     [Fact]
@@ -411,6 +679,7 @@ public sealed class DeliverySlotCoordinatorTests
         Assert.Equal("open", fixture.ReadBead(bead).Status);
         Assert.Null(fixture.ReadBead(bead).Assignee);
         Assert.True(fixture.ReadState(bead).NeedsHuman);
+        Assert.Equal(0, fixture.ReadState(bead).RepairCycles);
     }
 
     [Fact]
@@ -493,14 +762,14 @@ public sealed class DeliverySlotCoordinatorTests
         private readonly TempDirectory hostTemp = new();
         private readonly ProjectConfig project;
 
-        internal SlotFixture()
+        internal SlotFixture(int maxRepairCycles = 3)
         {
             Target = new BeadsFixture();
             Host = new HostPaths(hostTemp.Path);
             var settings = new AgentSettings(AgentCli.Codex, null, "low", 1);
             var roles = AgentRoles.All.ToDictionary(role => role, _ => settings);
             project = new(ProjectSlug.Parse("demo"), Path.Combine(Host.Root, "demo.json"),
-                new(Target.Path, "main"), new(1, 1, 1), new(3, 2), settings, new RoleSettings(roles));
+                new(Target.Path, "main"), new(1, 1, 1), new(maxRepairCycles, 2), settings, new RoleSettings(roles));
         }
 
         internal BeadsFixture Target { get; }
@@ -547,6 +816,19 @@ public sealed class DeliverySlotCoordinatorTests
             Target.Run("bd", args);
         }
 
+        internal void Reject(string beadId, AgentRole role, string finding)
+        {
+            var before = ReadState(beadId);
+            var expectedStage = role == AgentRole.Reviewer ? "stage:review" : "stage:qa";
+            if (before.Stage != expectedStage) throw new InvalidOperationException($"Cannot reject {before.Stage} as {role}.");
+            Target.Run("bd", ["comments", "add", beadId, finding]);
+            Target.Run("bd", ["update", beadId, "--remove-label", expectedStage, "--add-label", "stage:implement",
+                "--set-metadata", $"repair_cycles={checked(before.RepairCycles + 1)}"]);
+        }
+
+        internal void SetRepairCycles(string beadId, int count) =>
+            Target.Run("bd", ["update", beadId, "--set-metadata", $"repair_cycles={count}"]);
+
         internal async Task SimulateEscalationAsync(string beadId)
         {
             var escalationWriter = new BeadsWriter(new SystemProcessRunner());
@@ -576,7 +858,8 @@ public sealed class DeliverySlotCoordinatorTests
 
         internal async Task<DeliverySlotOutcome> RunAsync(string beadId,
             Func<AgentRole, CancellationToken, Task<OperationalRetryOutcome>> roleRunner,
-            IProcessRunner? processRunner = null)
+            IProcessRunner? processRunner = null,
+            Func<NeedsHumanRequest, Task<NeedsHumanEscalationResult>>? escalate = null)
         {
             var runner = processRunner ?? new RecordingProcessRunner((request, token) =>
                 new SystemProcessRunner().RunAsync(request, token));
@@ -592,7 +875,8 @@ public sealed class DeliverySlotCoordinatorTests
                 ExpectedStates.Add(expectedState);
                 return roleRunner(role, token);
             });
-            return await new DeliverySlotCoordinator(runner, stageRunner)
+            DeliveryRepairBudgetEscalator? escalator = escalate is null ? null : (_, _, _, request, _) => escalate(request);
+            return await new DeliverySlotCoordinator(runner, stageRunner, escalator)
                 .RunAsync(Host, project, Repository, beadId,
                     CancellationTokenOverride ?? TestContext.Current.CancellationToken);
         }
@@ -603,6 +887,11 @@ public sealed class DeliverySlotCoordinatorTests
             && request.Arguments.Contains("--ready", StringComparer.Ordinal)
             && request.Arguments.Contains("--assignee", StringComparer.Ordinal)
             && request.Arguments.Contains("in_progress", StringComparer.Ordinal);
+
+        internal static bool IsCommentsRead(string bead, ProcessRequest request) => request.FileName == "bd"
+            && request.Arguments.Contains("comments", StringComparer.Ordinal)
+            && request.Arguments.Contains(bead, StringComparer.Ordinal)
+            && request.Arguments.Contains("--readonly", StringComparer.Ordinal);
 
         internal List<BeadWorkflowState> ExpectedStates { get; } = [];
 
@@ -835,5 +1124,15 @@ public sealed class DeliverySlotCoordinatorTests
                 await mutate();
             return result;
         }
+    }
+
+    private sealed class FailingCommentsProcessRunner(string beadId) : IProcessRunner
+    {
+        private readonly SystemProcessRunner inner = new();
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken) =>
+            SlotFixture.IsCommentsRead(beadId, request)
+                ? Task.FromResult(new ProcessResult(2, string.Empty, "fixture comments read failure"))
+                : inner.RunAsync(request, cancellationToken);
     }
 }

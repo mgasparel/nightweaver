@@ -191,12 +191,42 @@ internal static class Program
                 Run("git", ["commit", "-m", "slot fixture implementation"]);
                 Run("bd", ["update", beadId, "--add-label", "stage:review"]);
                 break;
+            case "slot-implement-push":
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-slot.txt"), "slot implementation\n");
+                Directory.CreateDirectory(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored"));
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored", "slot-sentinel.bin"), "keep across roles\n");
+                Run("git", ["add", "delivery-slot.txt"]);
+                Run("git", ["commit", "-m", "slot fixture implementation"]);
+                Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
+                UpdateLabels(beadId, "stage:implement", "stage:review");
+                break;
+            case "slot-implement-repair":
+                File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "delivery-repair.txt"), "repair committed\n");
+                Run("git", ["add", "delivery-repair.txt"]);
+                Run("git", ["commit", "-m", "slot fixture repair"]);
+                Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
+                UpdateLabels(beadId, "stage:implement", "stage:review");
+                break;
             case "slot-review":
                 UpdateLabels(beadId, "stage:review", "stage:qa");
                 break;
+            case var reviewRejection when action.StartsWith("slot-review-reject-", StringComparison.Ordinal):
+            {
+                var cycle = int.Parse(reviewRejection["slot-review-reject-".Length..], System.Globalization.CultureInfo.InvariantCulture);
+                RejectToImplement(beadId, "stage:review", cycle,
+                    $"Reviewer finding cycle {cycle}: the serialized response is malformed; correct it and add a reproducible regression check.");
+                break;
+            }
             case "slot-qa":
                 UpdateLabels(beadId, "stage:qa", "stage:merge");
                 break;
+            case var qaRejection when action.StartsWith("slot-qa-reject-", StringComparison.Ordinal):
+            {
+                var cycle = int.Parse(qaRejection["slot-qa-reject-".Length..], System.Globalization.CultureInfo.InvariantCulture);
+                RejectToImplement(beadId, "stage:qa", cycle,
+                    $"QA reproduction cycle {cycle}: POST /fixture returned 500; expected 200. Reproduce with the fixture command and fix the handler.");
+                break;
+            }
             case "plan-challenge":
                 UpdateLabels(beadId, "stage:plan", "stage:plan-challenge");
                 break;
@@ -284,6 +314,13 @@ internal static class Program
 
     private static void UpdateLabels(string beadId, string oldLabel, string newLabel) =>
         Run("bd", ["update", beadId, "--remove-label", oldLabel, "--add-label", newLabel]);
+
+    private static void RejectToImplement(string beadId, string stage, int repairCycles, string finding)
+    {
+        Run("bd", ["comments", "add", beadId, finding]);
+        Run("bd", ["update", beadId, "--remove-label", stage, "--add-label", "stage:implement",
+            "--set-metadata", $"repair_cycles={repairCycles}"]);
+    }
 
     private static string Run(string fileName, IReadOnlyList<string> arguments)
     {

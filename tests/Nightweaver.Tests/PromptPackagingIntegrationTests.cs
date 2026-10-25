@@ -30,11 +30,17 @@ public sealed class PromptPackagingIntegrationTests
         Assert.Contains("gh pr create --base <default_branch> --head nightweaver/<bead-id>", implementer, StringComparison.Ordinal);
         Assert.Contains("Keep status `in_progress`", implementer, StringComparison.Ordinal);
         Assert.Contains("stage:review", implementer, StringComparison.Ordinal);
+        Assert.Contains("Re-read Bead comments on every dispatch", implementer, StringComparison.Ordinal);
+        Assert.Contains("map each Reviewer, QA, and Merger finding", implementer, StringComparison.Ordinal);
+        Assert.Contains("do not reset or increment it", implementer, StringComparison.Ordinal);
 
         Assert.Contains("full committed branch diff against `origin/<default_branch>`", reviewer, StringComparison.Ordinal);
         Assert.Contains("do not build, run tests", reviewer, StringComparison.Ordinal);
         Assert.Contains("stage:qa", reviewer, StringComparison.Ordinal);
         Assert.Contains("Keep status `in_progress`", reviewer, StringComparison.Ordinal);
+        Assert.Contains("increment it exactly once", reviewer, StringComparison.Ordinal);
+        Assert.Contains("Do this even when the new count exceeds `max_repair_cycles`", reviewer, StringComparison.Ordinal);
+        Assert.Contains("Do not add `needs-human` for budget exhaustion", reviewer, StringComparison.Ordinal);
 
         Assert.Contains("build and boot the software", qa, StringComparison.Ordinal);
         Assert.Contains("exact commands plus observed behavior", qa, StringComparison.Ordinal);
@@ -42,6 +48,9 @@ public sealed class PromptPackagingIntegrationTests
         Assert.Contains("git status --porcelain` is empty", qa, StringComparison.Ordinal);
         Assert.Contains("stage:merge", qa, StringComparison.Ordinal);
         Assert.Contains("Keep status `in_progress`", qa, StringComparison.Ordinal);
+        Assert.Contains("increment it exactly once", qa, StringComparison.Ordinal);
+        Assert.Contains("Do this even when the new count exceeds `max_repair_cycles`", qa, StringComparison.Ordinal);
+        Assert.Contains("Do not add `needs-human` for budget exhaustion", qa, StringComparison.Ordinal);
     }
 
     [Fact]
