@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 
 namespace Nightweaver.Tests;
@@ -9,10 +11,14 @@ internal sealed class NightweaverWebApplicationFactory : WebApplicationFactory<W
 {
     private readonly TempDirectory directory = new();
     private readonly Action<IConfigurationBuilder>? configure;
+    private readonly Action<IServiceCollection>? configureServices;
 
-    internal NightweaverWebApplicationFactory(Action<IConfigurationBuilder>? configure = null)
+    internal NightweaverWebApplicationFactory(
+        Action<IConfigurationBuilder>? configure = null,
+        Action<IServiceCollection>? configureServices = null)
     {
         this.configure = configure;
+        this.configureServices = configureServices;
         HostRoot = directory.CreateDirectory("host");
         TargetRoot = directory.CreateDirectory("target");
         WebRoot = directory.CreateDirectory("wwwroot");
@@ -68,6 +74,7 @@ internal sealed class NightweaverWebApplicationFactory : WebApplicationFactory<W
             });
             configure?.Invoke(configuration);
         });
+        builder.ConfigureTestServices(services => configureServices?.Invoke(services));
     }
 
     protected override void Dispose(bool disposing)

@@ -263,9 +263,9 @@ internal sealed class BeadsFixture : IDisposable
         return result.StandardOutput;
     }
 
-    internal string Create(string title, string? actor = null, string status = "open", string type = "task")
+    internal string Create(string title, string? actor = null, string status = "open", string type = "task", int priority = 2)
     {
-        var args = new List<string> { "create", "--title", title, "--type", type, "--json" };
+        var args = new List<string> { "create", "--title", title, "--type", type, "--priority", priority.ToString(System.Globalization.CultureInfo.InvariantCulture), "--json" };
         if (actor is not null) { args.Add("--assignee"); args.Add(actor); }
         using var document = System.Text.Json.JsonDocument.Parse(Run("bd", args));
         var id = document.RootElement.GetProperty("id").GetString()!;
