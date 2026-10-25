@@ -227,6 +227,28 @@ internal static class Snapshot
     }
 }
 
+// A real Git worktree with only the filesystem markers needed to pass the
+// mutation-free backend guard; BeadsApplicationTests provide bd responses via
+// their recording process runner and do not require a real Dolt database.
+internal sealed class BeadsApplicationFixture : IDisposable
+{
+    private readonly GitFixture git = new();
+
+    internal BeadsApplicationFixture()
+    {
+        Path = git.Path;
+        var beadsDirectory = System.IO.Path.Combine(Path, ".beads");
+        File.WriteAllText(System.IO.Path.Combine(beadsDirectory, "metadata.json"), "{\"backend\":\"dolt\",\"dolt_mode\":\"embedded\"}");
+        Directory.CreateDirectory(System.IO.Path.Combine(beadsDirectory, "embeddeddolt"));
+        File.WriteAllText(System.IO.Path.Combine(Path, ".beads.gate.lock"), "");
+        File.WriteAllText(System.IO.Path.Combine(beadsDirectory, "embeddeddolt.gate.lock"), "");
+    }
+
+    internal string Path { get; }
+
+    public void Dispose() => git.Dispose();
+}
+
 // A real, isolated embedded Dolt tracker. Setup writes are outside measured runs.
 internal sealed class BeadsFixture : IDisposable
 {

@@ -53,13 +53,21 @@ public sealed class PromptPackagingIntegrationTests
         var buildOutput = Path.Combine(temp.Path, "dedicated build output");
         var publishOutput = Path.Combine(temp.Path, "dedicated publish output");
 
-        var build = await ProcessTool.RunAsync("dotnet", ["build", projectPath, "--configuration", "Release", "--output", buildOutput, "-p:UseAppHost=true"],
-            repositoryRoot, null, TimeSpan.FromMinutes(3));
-        Assert.True(build.ExitCode == 0, $"dotnet build failed (exit {build.ExitCode})\n{build.StandardOutputText}\n{build.StandardErrorText}");
+        await TestProjectBuildGate.NightweaverProject.WaitAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            var build = await ProcessTool.RunAsync("dotnet", ["build", projectPath, "--configuration", "Release", "--output", buildOutput, "-p:UseAppHost=true"],
+                repositoryRoot, null, TimeSpan.FromMinutes(3));
+            Assert.True(build.ExitCode == 0, $"dotnet build failed (exit {build.ExitCode})\n{build.StandardOutputText}\n{build.StandardErrorText}");
 
-        var publish = await ProcessTool.RunAsync("dotnet", ["publish", projectPath, "--configuration", "Release", "--self-contained", "false", "-p:UseAppHost=true", "--output", publishOutput],
-            repositoryRoot, null, TimeSpan.FromMinutes(3));
-        Assert.True(publish.ExitCode == 0, $"dotnet publish failed (exit {publish.ExitCode})\n{publish.StandardOutputText}\n{publish.StandardErrorText}");
+            var publish = await ProcessTool.RunAsync("dotnet", ["publish", projectPath, "--configuration", "Release", "--self-contained", "false", "-p:UseAppHost=true", "--output", publishOutput],
+                repositoryRoot, null, TimeSpan.FromMinutes(3));
+            Assert.True(publish.ExitCode == 0, $"dotnet publish failed (exit {publish.ExitCode})\n{publish.StandardOutputText}\n{publish.StandardErrorText}");
+        }
+        finally
+        {
+            TestProjectBuildGate.NightweaverProject.Release();
+        }
 
         foreach (var output in new[] { buildOutput, publishOutput })
         {

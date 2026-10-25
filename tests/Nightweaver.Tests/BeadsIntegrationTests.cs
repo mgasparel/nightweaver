@@ -23,12 +23,35 @@ public sealed class BeadsIntegrationTests
         target.Run("bd", ["comments", "add", owned, "Retain this comment"]);
         target.Create("Closed control", "nightweaver:demo", "closed");
         target.Create("Hidden gate", "nightweaver:demo", "in_progress", "gate");
-        for (var index = 0; index < 51; index++) target.Create($"Control {index}");
+        var controlTitles = Enumerable.Range(0, 51).Select(index => $"Control {index}").ToArray();
+        var controlsFile = temp.WriteFile("inventory-controls.jsonl", string.Join('\n', controlTitles.Select(title => JsonSerializer.Serialize(new
+        {
+            title,
+            issue_type = "task",
+            status = "open",
+            priority = 2,
+            created_at = "2025-01-01T00:00:00Z",
+            labels = Array.Empty<string>()
+        }))));
+        using (JsonDocument.Parse(target.Run("bd", ["import", controlsFile, "--json"]))) { }
         var late = target.Create("Owned beyond default limit", "nightweaver:demo", "in_progress");
         var decoy = other.Create("Must not inspect this", "nightweaver:demo", "in_progress");
 
         var inventoryArgs = BeadsCommand.Create(target.Path).Arguments;
         var logicalBefore = target.Run("bd", inventoryArgs);
+        var importedControls = BeadsReader.Parse(logicalBefore).ById.Values
+            .Where(bead => bead.Payload.GetProperty("title").GetString()!.StartsWith("Control ", StringComparison.Ordinal))
+            .ToArray();
+        var importedControlTitles = importedControls
+            .Select(bead => bead.Payload.GetProperty("title").GetString()!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(controlTitles.Order(StringComparer.Ordinal), importedControlTitles);
+        Assert.All(importedControls, bead =>
+        {
+            Assert.Equal("open", bead.Status);
+            Assert.Equal("task", bead.IssueType);
+        });
         var commentsBefore = target.Run("bd", ["--readonly", "--sandbox", "comments", owned, "--json"]);
         var treeBefore = Snapshot.FileTree(target.Path);
         var otherBefore = Snapshot.FileTree(other.Path);

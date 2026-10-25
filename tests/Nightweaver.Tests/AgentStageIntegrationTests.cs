@@ -9,7 +9,7 @@ using Nightweaver.Inspection;
 
 namespace Nightweaver.Tests;
 
-[CollectionDefinition("Agent stage native integration", DisableParallelization = true)]
+[CollectionDefinition("Agent stage native integration")]
 public sealed class AgentStageNativeIntegration { }
 
 [Collection("Agent stage native integration")]
@@ -377,6 +377,7 @@ public sealed class AgentStageIntegrationTests
             CopyFixtureCli("AgentInvocationFixture.dll");
             CopyFixtureCli("AgentInvocationFixture.deps.json");
             CopyFixtureCli("AgentInvocationFixture.runtimeconfig.json");
+            InheritedPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
 
             UserHome = temp.CreateDirectory("isolated bd user");
             BeadsEnvironment = new Dictionary<string, string?>(BeadsCommand.Create(TargetPath).Environment, StringComparer.OrdinalIgnoreCase)
@@ -401,6 +402,7 @@ public sealed class AgentStageIntegrationTests
         internal string RootPath => temp.Path;
         internal HostPaths Host { get; }
         private string FakeCliRoot { get; }
+        private string InheritedPath { get; }
         private string UserHome { get; }
         private IReadOnlyDictionary<string, string?> BeadsEnvironment { get; }
         internal IReadOnlyList<ProcessRequest> LastRetryRequests { get; private set; } = [];
@@ -477,28 +479,17 @@ public sealed class AgentStageIntegrationTests
                 var actual = new PreparedAgentInvocation(invocation.Executable, invocation.Arguments, invocation.WorkingDirectory,
                     invocation.StandardInput, invocation.EnvironmentOverrides, timeout, invocation.InvocationId,
                     invocation.TemporaryDirectory, invocation.LogFilePath);
-                return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, actual, token);
+                return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, actual,
+                    CreateProcessLauncher(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["NIGHTWEAVER_FIXTURE_ACTION"] = action,
+                        ["NIGHTWEAVER_FIXTURE_PID_FILE"] = pidFile
+                    }), token);
             }
 
             var coordinator = new AgentStageCoordinator(runner, prepare: Prepare, execute: Execute);
-            var oldAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION");
-            var oldPidFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE");
-            var oldPath = Environment.GetEnvironmentVariable("PATH");
-            AgentStageResult result;
-            try
-            {
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION", action);
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE", pidFile);
-                Environment.SetEnvironmentVariable("PATH", FakeCliRoot + System.IO.Path.PathSeparator + (oldPath ?? ""));
-                result = await coordinator.RunAsync(Host, project, new(TargetPath, "main"), beadId, role,
-                    TestContext.Current.CancellationToken);
-            }
-            finally
-            {
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION", oldAction);
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE", oldPidFile);
-                Environment.SetEnvironmentVariable("PATH", oldPath);
-            }
+            var result = await coordinator.RunAsync(Host, project, new(TargetPath, "main"), beadId, role,
+                TestContext.Current.CancellationToken);
             AssertFixtureExited(pidFile);
             return result;
         }
@@ -523,6 +514,8 @@ public sealed class AgentStageIntegrationTests
             var runner = new RecordingProcessRunner((request, token) => systemRunner.RunAsync(request, token));
             var preparer = new AgentInvocationPreparer();
             var pidFiles = new List<string>();
+            string? latestAction = null;
+            string? latestPidFile = null;
             var actionIndex = 0;
             async Task<PreparedAgentInvocation> Prepare(HostPaths hostPaths, ProjectConfig projectConfig, AgentRole invocationRole,
                 AgentDispatchContext context, string worktreePath, CancellationToken token)
@@ -542,9 +535,8 @@ public sealed class AgentStageIntegrationTests
                 var pidFile = System.IO.Path.Combine(temp.Path, "retry-pids", index.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".txt");
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(pidFile)!);
                 pidFiles.Add(pidFile);
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION", actions[index]);
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE", pidFile);
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", null);
+                latestAction = actions[index];
+                latestPidFile = pidFile;
                 if (index == 1 && verifyResetSentinels)
                 {
                     Assert.Equal("fixture base\n", File.ReadAllText(System.IO.Path.Combine(invocation.WorkingDirectory, "README.md"))
@@ -552,54 +544,42 @@ public sealed class AgentStageIntegrationTests
                     Assert.False(File.Exists(System.IO.Path.Combine(invocation.WorkingDirectory, "retry-untracked.txt")));
                     Assert.True(File.Exists(System.IO.Path.Combine(invocation.WorkingDirectory, ".nightweaver-ignored", "keep.bin")));
                 }
-                return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation, token);
+                return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
+                    CreateProcessLauncher(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["BD_ACTOR"] = actor,
+                        ["NIGHTWEAVER_FIXTURE_ACTION"] = latestAction,
+                        ["NIGHTWEAVER_FIXTURE_PID_FILE"] = latestPidFile,
+                        ["NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION"] = null
+                    }), token);
             }
 
-            var oldActor = Environment.GetEnvironmentVariable("BD_ACTOR");
-            var oldAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION");
-            var oldPidFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE");
-            var oldClassifierAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION");
-            var oldPath = Environment.GetEnvironmentVariable("PATH");
-            try
+            var stageCoordinator = new AgentStageCoordinator(runner, prepare: Prepare, execute: Execute);
+            DuplicateFailureClassifier? classifier = null;
+            if (classifierAction is not null)
             {
-                Environment.SetEnvironmentVariable("BD_ACTOR", actor);
-                Environment.SetEnvironmentVariable("PATH", FakeCliRoot + System.IO.Path.PathSeparator + (oldPath ?? ""));
-                var stageCoordinator = new AgentStageCoordinator(runner, prepare: Prepare, execute: Execute);
-                DuplicateFailureClassifier? classifier = null;
-                if (classifierAction is not null)
+                classifier = new DuplicateFailureClassifier(execute: (hostPaths, projectSlug, invocation, limit, token) =>
                 {
-                    classifier = new DuplicateFailureClassifier(execute: async (hostPaths, projectSlug, invocation, limit, token) =>
-                    {
-                        var priorAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION");
-                        Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", classifierAction);
-                        try
+                    return AgentInvocationExecutor.ExecuteWithStandardOutputCaptureAsync(hostPaths, projectSlug,
+                        invocation, limit, CreateProcessLauncher(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
                         {
-                            return await AgentInvocationExecutor.ExecuteWithStandardOutputCaptureAsync(
-                                hostPaths, projectSlug, invocation, limit, token);
-                        }
-                        finally
-                        {
-                            Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", priorAction);
-                        }
-                    });
-                }
-                var retryCoordinator = new OperationalRetryCoordinator(runner, stages: stageCoordinator, classifier: classifier);
-                var outcome = await retryCoordinator.RunAsync(Host, project, new(TargetPath, "main"), beadId, role, actor,
-                    TestContext.Current.CancellationToken);
-                LastRetryRequests = runner.Requests.ToArray();
-                Assert.True(pidFiles.Count <= actions.Count);
-                LastRetryLifecycleCount = pidFiles.Count;
-                foreach (var pidFile in pidFiles) AssertFixtureExited(pidFile);
-                return outcome;
+                            ["BD_ACTOR"] = actor,
+                            ["NIGHTWEAVER_FIXTURE_ACTION"] = latestAction
+                                ?? throw new InvalidOperationException("Classifier launched before a stage action."),
+                            ["NIGHTWEAVER_FIXTURE_PID_FILE"] = latestPidFile
+                                ?? throw new InvalidOperationException("Classifier launched before a stage PID file."),
+                            ["NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION"] = classifierAction
+                        }), token);
+                });
             }
-            finally
-            {
-                Environment.SetEnvironmentVariable("BD_ACTOR", oldActor);
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION", oldAction);
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE", oldPidFile);
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", oldClassifierAction);
-                Environment.SetEnvironmentVariable("PATH", oldPath);
-            }
+            var retryCoordinator = new OperationalRetryCoordinator(runner, stages: stageCoordinator, classifier: classifier);
+            var outcome = await retryCoordinator.RunAsync(Host, project, new(TargetPath, "main"), beadId, role, actor,
+                TestContext.Current.CancellationToken);
+            LastRetryRequests = runner.Requests.ToArray();
+            Assert.True(pidFiles.Count <= actions.Count);
+            LastRetryLifecycleCount = pidFiles.Count;
+            foreach (var pidFile in pidFiles) AssertFixtureExited(pidFile);
+            return outcome;
         }
 
         internal async Task<DeliverySlotOutcome> RunDeliverySlotAsync(
@@ -640,39 +620,60 @@ public sealed class AgentStageIntegrationTests
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(pidFile)!);
                 pidFiles.Add(pidFile);
                 AppendSlotObservation(observationPath, beadId, role, invocation.WorkingDirectory, action);
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION", action);
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE", pidFile);
-                return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation, token);
+                return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
+                    CreateProcessLauncher(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["BD_ACTOR"] = actor,
+                        ["NIGHTWEAVER_FIXTURE_ACTION"] = action,
+                        ["NIGHTWEAVER_FIXTURE_PID_FILE"] = pidFile
+                    }), token);
             }
 
-            var oldActor = Environment.GetEnvironmentVariable("BD_ACTOR");
-            var oldAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION");
-            var oldPidFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE");
-            var oldPath = Environment.GetEnvironmentVariable("PATH");
-            try
+            var stages = new AgentStageCoordinator(runner, prepare: Prepare, execute: Execute);
+            var retries = new OperationalRetryCoordinator(runner, stages: stages);
+            var slotRunner = new DeliveryRoleRunner((paths, config, repository, requestedBead, role, expectedAssignee,
+                expectedState, token, progress) =>
+                retries.RunAsync(paths, config, repository, requestedBead, role, expectedAssignee, token, progress,
+                    expectedState));
+            var slot = new DeliverySlotCoordinator(runner, slotRunner);
+            var outcome = await slot.RunAsync(Host, project, new(TargetPath, "main"), beadId,
+                TestContext.Current.CancellationToken);
+            LastSlotRequests = runner.Requests.ToArray();
+            LastSlotRoles = roles.ToArray();
+            foreach (var pidFile in pidFiles) AssertFixtureExited(pidFile);
+            return outcome;
+        }
+
+        private FixtureEnvironmentOverlayProcessLauncher CreateProcessLauncher(
+            IReadOnlyDictionary<string, string?> environmentOverrides)
+        {
+            var overrides = new Dictionary<string, string?>(environmentOverrides, StringComparer.OrdinalIgnoreCase)
             {
-                Environment.SetEnvironmentVariable("BD_ACTOR", actor);
-                Environment.SetEnvironmentVariable("PATH", FakeCliRoot + System.IO.Path.PathSeparator + (oldPath ?? ""));
-                var stages = new AgentStageCoordinator(runner, prepare: Prepare, execute: Execute);
-                var retries = new OperationalRetryCoordinator(runner, stages: stages);
-                var slotRunner = new DeliveryRoleRunner((paths, config, repository, requestedBead, role, expectedAssignee,
-                    expectedState, token, progress) =>
-                    retries.RunAsync(paths, config, repository, requestedBead, role, expectedAssignee, token, progress,
-                        expectedState));
-                var slot = new DeliverySlotCoordinator(runner, slotRunner);
-                var outcome = await slot.RunAsync(Host, project, new(TargetPath, "main"), beadId,
-                    TestContext.Current.CancellationToken);
-                LastSlotRequests = runner.Requests.ToArray();
-                LastSlotRoles = roles.ToArray();
-                foreach (var pidFile in pidFiles) AssertFixtureExited(pidFile);
-                return outcome;
-            }
-            finally
+                ["PATH"] = FakeCliRoot + System.IO.Path.PathSeparator + InheritedPath
+            };
+            return new FixtureEnvironmentOverlayProcessLauncher(overrides);
+        }
+
+        private sealed class FixtureEnvironmentOverlayProcessLauncher(
+            IReadOnlyDictionary<string, string?> overrides) : IAgentProcessLauncher
+        {
+            public string ResolveExecutable(string name, IReadOnlyDictionary<string, string> environment) =>
+                WindowsProcessLauncher.ResolveExecutable(name, MergeEnvironment(environment));
+
+            public WindowsProcessLauncher.WindowsAgentProcess Launch(string executable, IReadOnlyList<string> arguments,
+                string workingDirectory, IReadOnlyDictionary<string, string> environment) =>
+                WindowsProcessLauncher.Launch(executable, arguments, workingDirectory, MergeEnvironment(environment));
+
+            private Dictionary<string, string> MergeEnvironment(IReadOnlyDictionary<string, string> environment)
             {
-                Environment.SetEnvironmentVariable("BD_ACTOR", oldActor);
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION", oldAction);
-                Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE", oldPidFile);
-                Environment.SetEnvironmentVariable("PATH", oldPath);
+                var merged = new Dictionary<string, string>(environment, StringComparer.OrdinalIgnoreCase);
+                foreach (var (name, value) in overrides)
+                {
+                    var existing = merged.Keys.FirstOrDefault(key => string.Equals(key, name, StringComparison.OrdinalIgnoreCase));
+                    if (existing is not null) merged.Remove(existing);
+                    if (value is not null) merged[name] = value;
+                }
+                return merged;
             }
         }
 
