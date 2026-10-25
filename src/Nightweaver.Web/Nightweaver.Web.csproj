@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <AssemblyName>Nightweaver.Web</AssemblyName>
+    <RootNamespace>Nightweaver.Web</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Nightweaver/Nightweaver.csproj" />
+    <Content Update="wwwroot/.gitkeep" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

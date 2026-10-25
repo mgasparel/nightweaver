@@ -63,6 +63,28 @@ Set-Location 'C:\Tools\Unrelated Caller Directory'
 
 Use the Unix apphost name `nightweaver` in place of `nightweaver.exe` on Unix systems.
 
+## Web host scaffold
+
+The standalone ASP.NET Core host requires the .NET 10 ASP.NET Core runtime. Run it with an existing Project JSON file:
+
+```powershell
+dotnet run --project src/Nightweaver.Web -- --Nightweaver:ConfigPath 'C:\Tools\Nightweaver Host\projects\demo.json' --Nightweaver:Root 'C:\Tools\Nightweaver Host'
+```
+
+Or supply bootstrap settings through environment variables:
+
+```powershell
+$env:Nightweaver__ConfigPath = 'C:\Tools\Nightweaver Host\projects\demo.json'
+$env:Nightweaver__Root = 'C:\Tools\Nightweaver Host'
+dotnet run --project src/Nightweaver.Web
+```
+
+`Nightweaver:ConfigPath` is required. `Nightweaver:Root` defaults to the web executable's directory. Relative bootstrap paths resolve from the process working directory; relative `target_repository.path` values resolve from the Project JSON directory. The existing Project schema supplies concurrency, limits, Agent defaults, and role settings. Command-line settings override environment variables, which override appsettings.
+
+The default local address is `http://localhost:5000`; set `ASPNETCORE_URLS` or pass `--urls` to override it. `GET /health` returns HTTP 200 with `{"status":"ok"}` after configuration validation. It checks host liveness and does not invoke Git, bd, Agents, or the Orchestrator. A plain target directory suffices for this scaffold. Invalid or missing configuration prevents startup.
+
+Static files are served only from the web application's own `wwwroot`, beside its executable. There is no index page or fallback route. The dashboard UI and a dashboard/serve CLI command are later work.
+
 ## Single-stage dispatch
 
 `dispatch` validates the Project and Target Repository, reads the complete Beads inventory and bd's native unassigned-ready set, acquires one guarded claim, then invokes the operational retry coordinator for exactly one lifecycle stage. It does not start a scheduler or automatically choose the next role. Run one Nightweaver process at a time for a Project.
