@@ -163,6 +163,42 @@ public sealed class OperationalRetryCoordinatorTests
         Assert.Equal(NeedsHumanCause.OperationalRetriesExhausted, outcome.EscalationCause);
     }
 
+    [Theory]
+    [InlineData("returned")]
+    [InlineData("needs-human-exception")]
+    [InlineData("cancellation")]
+    public async Task IncompleteEscalationRetainsProgressAndLatestFailedStage(string failureKind)
+    {
+        var fixture = new RetryFixture(0, new Attempt(19, null));
+        var progress = new NeedsHumanEscalationResult(true, true, false, true, ["worktree cleanup failed"]);
+        fixture.EscalationBehavior = (_, _) => failureKind switch
+        {
+            "returned" => Task.FromResult(progress),
+            "needs-human-exception" => Task.FromException<NeedsHumanEscalationResult>(
+                new NeedsHumanEscalationException("cleanup failed", progress, new InvalidOperationException("cleanup failed"))),
+            "cancellation" => Task.FromException<NeedsHumanEscalationResult>(CancellationWith(progress)),
+            _ => throw new InvalidOperationException($"Unknown fixture failure kind '{failureKind}'.")
+        };
+
+        var exception = await Assert.ThrowsAsync<OperationalRetryEscalationIncompleteException>(() => fixture.RunAsync());
+
+        Assert.Same(progress, exception.Progress);
+        Assert.Equal(NeedsHumanCause.OperationalRetriesExhausted, exception.Outcome.EscalationCause);
+        Assert.Equal(1, exception.Outcome.AttemptCount);
+        Assert.Equal(AgentRole.Implementer, exception.Outcome.StageResult.Role);
+        Assert.Equal("invocation-1", exception.Outcome.StageResult.InvocationId);
+        Assert.Equal("C:\\logs\\1.log", exception.Outcome.StageResult.LogFilePath);
+        Assert.False(exception.Progress.CleanupCompleted);
+        Assert.True(exception.Progress.ClaimReleased);
+    }
+
+    private static OperationCanceledException CancellationWith(NeedsHumanEscalationResult progress)
+    {
+        var exception = new OperationCanceledException("escalation cancelled");
+        exception.Data[nameof(NeedsHumanEscalationResult)] = progress;
+        return exception;
+    }
+
     [Fact]
     public async Task RetryRefusalForAdvancedStageUsesEnvironmentBlockWithoutClassifierOrReset()
     {
@@ -352,10 +388,11 @@ public sealed class OperationalRetryCoordinatorTests
                         "classifier-invocation", "C:\\logs\\classifier.log", previous.InvocationId, previous.LogFilePath,
                         latest.InvocationId, latest.LogFilePath));
                 },
-                escalate: (_, _, _, request, _) =>
+                escalate: (_, _, _, request, token) =>
                 {
                     EscalateCount++;
                     LastEscalation = request;
+                    if (EscalationBehavior is { } behavior) return behavior(request, token);
                     return Task.FromResult(new NeedsHumanEscalationResult(true, true, true, true, []));
                 });
         }
@@ -376,6 +413,7 @@ public sealed class OperationalRetryCoordinatorTests
         internal AgentStageResult? LastComparisonLatest { get; private set; }
         internal Action<string>? OnAttempt { get; set; }
         internal Action? OnReset { get; set; }
+        internal Func<NeedsHumanRequest, CancellationToken, Task<NeedsHumanEscalationResult>>? EscalationBehavior { get; set; }
 
         internal Task<OperationalRetryOutcome> RunAsync(Action<OperationalRetryProgress>? progress = null) =>
             Coordinator.RunAsync(host, project, repository, Bead, AgentRole.Implementer, Owner,

@@ -175,6 +175,28 @@ internal static class Program
 
         switch (action)
         {
+            case "slot-implement":
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-slot.txt"), "slot implementation\n");
+                Directory.CreateDirectory(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored"));
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored", "slot-sentinel.bin"), "keep across roles\n");
+                Run("git", ["add", "delivery-slot.txt"]);
+                Run("git", ["commit", "-m", "slot fixture implementation"]);
+                UpdateLabels(beadId, "stage:implement", "stage:review");
+                break;
+            case "slot-implement-unlabeled":
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-slot.txt"), "slot implementation\n");
+                Directory.CreateDirectory(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored"));
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored", "slot-sentinel.bin"), "keep across roles\n");
+                Run("git", ["add", "delivery-slot.txt"]);
+                Run("git", ["commit", "-m", "slot fixture implementation"]);
+                Run("bd", ["update", beadId, "--add-label", "stage:review"]);
+                break;
+            case "slot-review":
+                UpdateLabels(beadId, "stage:review", "stage:qa");
+                break;
+            case "slot-qa":
+                UpdateLabels(beadId, "stage:qa", "stage:merge");
+                break;
             case "plan-challenge":
                 UpdateLabels(beadId, "stage:plan", "stage:plan-challenge");
                 break;

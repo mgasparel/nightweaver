@@ -112,12 +112,41 @@ public sealed class AgentStageCoordinatorTests
         Assert.Equal((2, 1, 0), (staleReads, staleProvisionCount, stalePrepareCount));
     }
 
+    [Fact]
+    public async Task ExpectedWorkflowStateIsCheckedBeforeProvisioning()
+    {
+        var provisionCount = 0;
+        var prepareCount = 0;
+        var runner = new RecordingProcessRunner((_, _) => Task.FromResult(
+            new ProcessResult(0, Inventory("product", "feature", "open", PlanLabels, repairCycles: 1), "")));
+        var coordinator = new AgentStageCoordinator(runner,
+            provision: (_, _, _, _, _, _) =>
+            {
+                provisionCount++;
+                return Task.FromResult(new ProvisionedWorktree("C:\\worktree", new string('a', 40)));
+            },
+            prepare: (_, _, _, _, _, _) =>
+            {
+                prepareCount++;
+                return Task.FromResult(Invocation());
+            });
+        var expectedState = new BeadWorkflowState("product", "feature", "open", "stage:plan",
+            false, false, false, 0);
+
+        await Assert.ThrowsAsync<AgentStageInputException>(() => coordinator.OpenSessionAsync(Host(), Project("target"),
+            new("target", "main"), "product", AgentRole.Planner, expectedAssignee: null,
+            TestContext.Current.CancellationToken, expectedState));
+
+        Assert.Equal((0, 0), (provisionCount, prepareCount));
+    }
+
     private static PreparedAgentInvocation Invocation() => new("claude", [], "C:\\worktree", "prompt",
         new Dictionary<string, string>(), TimeSpan.FromSeconds(1), "20261024T0000000000000Z-planner", "C:\\tmp", "C:\\logs\\planner.log");
 
-    private static string Inventory(string id, string type, string status, string[] labels) => JsonSerializer.Serialize(new[]
+    private static string Inventory(string id, string type, string status, string[] labels, int repairCycles = 0) => JsonSerializer.Serialize(new[]
     {
-        new { id, status, issue_type = type, priority = 2, created_at = "2026-10-24T00:00:00Z", labels }
+        new { id, status, issue_type = type, priority = 2, created_at = "2026-10-24T00:00:00Z", labels,
+            metadata = new { repair_cycles = repairCycles } }
     });
 
     private static HostPaths Host() => new("C:\\nightweaver");
