@@ -1,8 +1,72 @@
+using System.ComponentModel;
+using System.Text.Json;
+
 namespace Nightweaver.Inspection;
 
-/// <summary>Scoped local Beads writes for dispatch claims and needs-human escalation.</summary>
+internal sealed record ProductBeadIntakeSubmission(string Type, int Priority, string Title,
+    string Description, string AcceptanceCriteria);
+
+internal sealed record ProductBeadCreateResult(string Id, string Title, string Type, int Priority,
+    string Status, IReadOnlyList<string> Labels, string? Assignee);
+
+internal sealed class ProductBeadCreationException(string message, Exception innerException)
+    : Exception(message, innerException);
+
+/// <summary>Scoped local Beads writes for Product Bead intake, dispatch claims, and needs-human escalation.</summary>
 internal sealed class BeadsWriter(IProcessRunner processRunner)
 {
+    internal async Task<ProductBeadCreateResult> CreateProductBeadAsync(ValidatedTargetRepository repository,
+        ProductBeadIntakeSubmission submission, CancellationToken cancellationToken)
+    {
+        BeadsReader.EnsureMutationFreeBackend(repository);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var arguments = new List<string> { "create" };
+        AddStringOption(arguments, "--title", submission.Title);
+        arguments.Add("--type");
+        arguments.Add(submission.Type);
+        arguments.Add("--priority");
+        arguments.Add(submission.Priority.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        AddStringOption(arguments, "--description", submission.Description);
+        AddStringOption(arguments, "--acceptance", submission.AcceptanceCriteria);
+        arguments.Add("--status");
+        arguments.Add("open");
+        arguments.Add("--json");
+
+        ProcessResult result;
+        try
+        {
+            result = await processRunner.RunAsync(BeadsCommand.CreateWrite(repository.Path, arguments), cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is ToolExecutionException or IOException
+            or UnauthorizedAccessException or Win32Exception)
+        {
+            throw new ProductBeadCreationException(
+                "The Product Bead create command did not return a confirmed result.", exception);
+        }
+
+        if (result.ExitCode != 0)
+        {
+            throw new ProductBeadCreationException(
+                "The Product Bead create command did not return a confirmed result.",
+                new ToolExecutionException($"bd create exited {result.ExitCode}", result.StandardError));
+        }
+
+        try
+        {
+            return ParseProductBeadCreateResult(result.StandardOutput, submission);
+        }
+        catch (JsonException exception)
+        {
+            throw new ProductBeadCreationException(
+                "The Product Bead create command returned an incompatible result.", exception);
+        }
+    }
+
     internal Task AcquireDispatchClaimAsync(ValidatedTargetRepository repository, string beadId, string actor,
         CancellationToken cancellationToken) => RunAsync(repository,
         ["update", beadId, "--if-status", "open", "--if-assignee", "", "--status", "in_progress", "--assignee", actor, "--json"],
@@ -43,6 +107,107 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
         CancellationToken cancellationToken) => RunAsync(repository,
         ["update", beadId, "--status", "open", "--assignee", "", "--if-assignee", assignee, "--if-status", "in_progress"],
         $"release needs-human claim for Bead '{beadId}' guarded by its live claim", cancellationToken);
+
+    private static void AddStringOption(List<string> arguments, string option, string value)
+    {
+        if (value.StartsWith('-'))
+        {
+            arguments.Add($"{option}={value}");
+            return;
+        }
+
+        arguments.Add(option);
+        arguments.Add(value);
+    }
+
+    private static ProductBeadCreateResult ParseProductBeadCreateResult(string json,
+        ProductBeadIntakeSubmission submission)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new JsonException("created issue must be an object");
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        string? id = null;
+        string? title = null;
+        string? type = null;
+        string? status = null;
+        int? priority = null;
+        string? assignee = null;
+        List<string> labels = [];
+        var assigneeSeen = false;
+        var labelsSeen = false;
+
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!seen.Add(property.Name))
+                throw new JsonException("created issue contains a duplicate property");
+
+            switch (property.Name)
+            {
+                case "id":
+                    id = ReadNonblankString(property.Value, "id");
+                    break;
+                case "title":
+                    title = ReadNonblankString(property.Value, "title");
+                    break;
+                case "issue_type":
+                    type = ReadNonblankString(property.Value, "issue_type");
+                    break;
+                case "priority":
+                    if (property.Value.ValueKind != JsonValueKind.Number || !property.Value.TryGetInt32(out var parsedPriority))
+                        throw new JsonException("created issue priority must be an integer");
+                    priority = parsedPriority;
+                    break;
+                case "status":
+                    status = ReadNonblankString(property.Value, "status");
+                    break;
+                case "assignee":
+                    assigneeSeen = true;
+                    if (property.Value.ValueKind == JsonValueKind.Null)
+                        assignee = null;
+                    else if (property.Value.ValueKind == JsonValueKind.String)
+                        assignee = property.Value.GetString();
+                    else
+                        throw new JsonException("created issue assignee must be a string or null");
+                    break;
+                case "labels":
+                    labelsSeen = true;
+                    if (property.Value.ValueKind != JsonValueKind.Array)
+                        throw new JsonException("created issue labels must be an array");
+                    var parsedLabels = new List<string>();
+                    foreach (var label in property.Value.EnumerateArray())
+                    {
+                        if (label.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(label.GetString()))
+                            throw new JsonException("created issue labels must contain nonblank strings");
+                        parsedLabels.Add(label.GetString()!);
+                    }
+                    labels = parsedLabels;
+                    break;
+            }
+        }
+
+        if (id is null || title is null || type is null || priority is null || status is null)
+            throw new JsonException("created issue is missing a required field");
+        if (!string.Equals(title, submission.Title, StringComparison.Ordinal)
+            || !string.Equals(type, submission.Type, StringComparison.Ordinal)
+            || priority.Value != submission.Priority || !string.Equals(status, "open", StringComparison.Ordinal))
+            throw new JsonException("created issue does not match the requested Product Bead");
+        if (assigneeSeen && !string.IsNullOrWhiteSpace(assignee))
+            throw new JsonException("created Product Bead is assigned");
+        if (labelsSeen && labels.Count != 0)
+            throw new JsonException("created Product Bead unexpectedly has workflow labels");
+
+        return new ProductBeadCreateResult(id, title, type, priority.Value, status, labels, assignee);
+    }
+
+    private static string ReadNonblankString(JsonElement value, string propertyName)
+    {
+        if (value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(value.GetString()))
+            throw new JsonException($"created issue {propertyName} must be a nonblank string");
+        return value.GetString()!;
+    }
 
     private async Task RunAsync(ValidatedTargetRepository repository, IReadOnlyList<string> arguments,
         string operation, CancellationToken cancellationToken, string? actor = null)

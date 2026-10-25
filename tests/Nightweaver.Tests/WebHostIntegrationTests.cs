@@ -33,6 +33,14 @@ public sealed class WebHostIntegrationTests
         Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailable.StatusCode);
         Assert.Equal("application/problem+json", unavailable.Content.Headers.ContentType?.MediaType);
         Assert.Equal("no-store", unavailable.Headers.CacheControl?.ToString());
+        using var failedWrite = await client.PostAsync("/api/beads",
+            new StringContent("{\"type\":\"feature\",\"priority\":2,\"title\":\"Unavailable target\",\"description\":\"Context\",\"acceptanceCriteria\":\"Criteria\"}",
+                System.Text.Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, failedWrite.StatusCode);
+        Assert.Equal("application/problem+json", failedWrite.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("no-store", failedWrite.Headers.CacheControl?.ToString());
+        Assert.DoesNotContain(factory.TargetRoot,
+            await failedWrite.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.OrdinalIgnoreCase);
         using var stillHealthy = await client.GetAsync("/health", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, stillHealthy.StatusCode);
         using var shell = await client.GetAsync("/", TestContext.Current.CancellationToken);
@@ -325,6 +333,14 @@ public sealed class WebHostIntegrationTests
             Assert.Contains($"id=\"{section}\"", html, StringComparison.Ordinal);
             Assert.Contains($"href=\"#{section}\"", html, StringComparison.Ordinal);
         }
+        Assert.Contains("id=\"new-bead-trigger\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"bead-intake-dialog\"", html, StringComparison.Ordinal);
+        Assert.Contains("aria-labelledby=\"intake-title\"", html, StringComparison.Ordinal);
+        Assert.Contains("name=\"type\"", html, StringComparison.Ordinal);
+        Assert.Contains("name=\"priority\"", html, StringComparison.Ordinal);
+        Assert.Contains("name=\"title\" type=\"text\" maxlength=\"200\" required", html, StringComparison.Ordinal);
+        Assert.Contains("name=\"description\" maxlength=\"4000\"", html, StringComparison.Ordinal);
+        Assert.Contains("name=\"acceptanceCriteria\" maxlength=\"2000\"", html, StringComparison.Ordinal);
     }
 
     private static async Task AssertStaticAssetAsync(

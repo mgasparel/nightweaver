@@ -87,6 +87,202 @@ a:hover {
   margin-inline: auto;
 }
 
+.primary-action,
+.secondary-action,
+.icon-button {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.55rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: 0.65rem;
+  font: inherit;
+  font-weight: 680;
+  line-height: 1.25;
+  cursor: pointer;
+}
+
+.primary-action {
+  flex: 0 0 auto;
+  border-color: #7dd3fc66;
+  background: #075985;
+  color: #f8fafc;
+}
+
+.primary-action:hover:not(:disabled) {
+  background: #0369a1;
+}
+
+.secondary-action,
+.icon-button {
+  border-color: var(--color-border);
+  background: var(--color-page);
+  color: var(--color-secondary);
+}
+
+.secondary-action:hover:not(:disabled),
+.icon-button:hover:not(:disabled) {
+  border-color: var(--color-accent-strong);
+  color: var(--color-text);
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.intake-dialog {
+  width: min(42rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: min(90vh, 52rem);
+  margin: auto;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 1rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: 0 1.5rem 5rem #0009;
+}
+
+.intake-dialog::backdrop {
+  background: #020617cc;
+  backdrop-filter: blur(3px);
+}
+
+.intake-form {
+  display: grid;
+  gap: 1.15rem;
+  padding: clamp(1.1rem, 4vw, 2rem);
+  font-size: 1rem;
+}
+
+.intake-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.intake-heading h2 {
+  font-size: clamp(1.45rem, 4vw, 1.8rem);
+}
+
+.intake-heading .eyebrow {
+  margin-bottom: 0.35rem;
+}
+
+.intake-description {
+  margin: -0.4rem 0 0;
+  color: var(--color-secondary);
+}
+
+.intake-fields {
+  display: grid;
+  gap: 1rem;
+}
+
+.intake-field-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.intake-field {
+  display: grid;
+  min-width: 0;
+  gap: 0.38rem;
+}
+
+.intake-field label {
+  color: var(--color-text);
+  font-weight: 650;
+}
+
+.intake-field input,
+.intake-field select,
+.intake-field textarea {
+  width: 100%;
+  min-height: 2.9rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.6rem;
+  background: var(--color-page);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 1rem;
+}
+
+.intake-field textarea {
+  min-height: 7rem;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.intake-field [aria-invalid="true"] {
+  border-color: #fb7185;
+}
+
+.field-help,
+.field-error {
+  color: var(--color-muted);
+  font-size: 0.9rem;
+}
+
+.field-error {
+  color: #fda4af;
+}
+
+.field-error[hidden] {
+  display: none;
+}
+
+.intake-error {
+  padding: 0.8rem 0.9rem;
+  border: 1px solid #fb718566;
+  border-radius: 0.6rem;
+  background: #fb71850d;
+  color: #fecdd3;
+}
+
+.intake-error[hidden] {
+  display: none;
+}
+
+.intake-progress {
+  min-height: 1.6em;
+  margin: -0.75rem 0 0;
+  color: var(--color-secondary);
+}
+
+.intake-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.65rem;
+}
+
+.explorer-created {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #38bdf855;
+  border-radius: 0.65rem;
+  background: #0ea5e910;
+  color: var(--color-secondary);
+}
+
+.explorer-created[hidden] {
+  display: none;
+}
+
 .header-inner {
   display: flex;
   min-height: 5rem;
@@ -541,9 +737,14 @@ h3 {
     display: inline-flex;
   }
 
+  .primary-action {
+    order: 2;
+  }
+
   .primary-nav {
     width: 100%;
     flex-basis: 100%;
+    order: 3;
   }
 
   .nav-links {
@@ -600,6 +801,20 @@ h3 {
 
   .bay-card {
     min-height: auto;
+  }
+
+  .intake-dialog {
+    width: calc(100vw - 1rem);
+    max-height: 92vh;
+    border-radius: 0.8rem;
+  }
+
+  .intake-field-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .intake-actions > button {
+    flex: 1 1 9rem;
   }
 }
 
