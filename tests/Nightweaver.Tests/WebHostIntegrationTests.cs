@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Nightweaver.Configuration;
@@ -116,9 +117,15 @@ public sealed class WebHostIntegrationTests
             if (address is null)
                 Assert.Fail($"Web host exited before listening: {await stderr.WaitAsync(timeout.Token)}");
             using var client = new HttpClient { BaseAddress = new Uri(address!) };
+            await AssertDashboardPageAsync(client, "/", timeout.Token);
+            await AssertDashboardPageAsync(client, "/index.html", timeout.Token);
+            await AssertStaticAssetAsync(client, "/css/site.css", ["text/css"], timeout.Token);
+            await AssertStaticAssetAsync(client, "/js/app.js", JavaScriptMediaTypes, timeout.Token);
             using var response = await client.GetAsync("/health", timeout.Token);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Equal("{\"status\":\"ok\"}", await response.Content.ReadAsStringAsync(timeout.Token));
+            using var unknown = await client.GetAsync("/unknown", timeout.Token);
+            Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
             Assert.Empty(Directory.EnumerateFileSystemEntries(host));
         }
         finally
@@ -127,6 +134,18 @@ public sealed class WebHostIntegrationTests
             await process.WaitForExitAsync(TestContext.Current.CancellationToken);
             await stderr;
         }
+    }
+
+    [Fact]
+    public async Task DashboardAndAssetsAreServedFromTheWebRoot()
+    {
+        using var factory = new NightweaverWebApplicationFactory();
+        using var client = factory.CreateClient();
+
+        await AssertDashboardPageAsync(client, "/", TestContext.Current.CancellationToken);
+        await AssertDashboardPageAsync(client, "/index.html", TestContext.Current.CancellationToken);
+        await AssertStaticAssetAsync(client, "/css/site.css", ["text/css"], TestContext.Current.CancellationToken);
+        await AssertStaticAssetAsync(client, "/js/app.js", JavaScriptMediaTypes, TestContext.Current.CancellationToken);
     }
 
     [Theory]
@@ -184,11 +203,43 @@ public sealed class WebHostIntegrationTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("text/plain", response.Content.Headers.ContentType?.MediaType);
         Assert.Equal("static probe", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-        foreach (var path in new[] { "/", "/unknown", "/api/unknown", "/private.txt", "/../private.txt", "/%2e%2e/private.txt" })
+        foreach (var path in new[] { "/unknown", "/api/unknown", "/private.txt", "/../private.txt", "/%2e%2e/private.txt", "/css/missing.css" })
         {
             using var missing = await client.GetAsync(path, TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
         }
+    }
+
+    private static readonly string[] JavaScriptMediaTypes =
+        ["text/javascript", "application/javascript", "application/ecmascript", "text/ecmascript"];
+
+    private static async Task AssertDashboardPageAsync(HttpClient client, string path, CancellationToken cancellationToken)
+    {
+        using var response = await client.GetAsync(path, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
+        var html = await response.Content.ReadAsStringAsync(cancellationToken);
+        var title = Regex.Match(html, "<title>(.*?)</title>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        Assert.True(title.Success, "The dashboard document must contain a title element.");
+        Assert.Equal("Nightweaver UI — Unified Factory Console & Bead Workspace", WebUtility.HtmlDecode(title.Groups[1].Value));
+        Assert.Contains("Nightweaver", html, StringComparison.Ordinal);
+        foreach (var section in new[] { "catch-up", "attention", "factory", "beads", "workspace" })
+        {
+            Assert.Contains($"id=\"{section}\"", html, StringComparison.Ordinal);
+            Assert.Contains($"href=\"#{section}\"", html, StringComparison.Ordinal);
+        }
+    }
+
+    private static async Task AssertStaticAssetAsync(
+        HttpClient client,
+        string path,
+        IReadOnlyCollection<string> acceptedMediaTypes,
+        CancellationToken cancellationToken)
+    {
+        using var response = await client.GetAsync(path, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains(response.Content.Headers.ContentType?.MediaType, acceptedMediaTypes);
+        Assert.False(string.IsNullOrWhiteSpace(await response.Content.ReadAsStringAsync(cancellationToken)));
     }
 
 }

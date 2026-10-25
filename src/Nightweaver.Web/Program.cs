@@ -48,9 +48,10 @@ public sealed class Program
             }
         });
 
-        using var app = builder.Build();
+        var app = builder.Build();
         // Resolve before listening, after all host configuration providers have been applied.
         _ = app.Services.GetRequiredService<ProjectConfig>();
+        app.UseDefaultFiles();
         app.UseStaticFiles();
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
         app.Run();

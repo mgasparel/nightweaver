@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Nightweaver UI — Unified Factory Console &amp; Bead Workspace</title>
+  <link rel="stylesheet" href="/css/site.css">
+  <script src="/js/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="#main-content" aria-label="Nightweaver home">
+        <span class="brand-mark" aria-hidden="true">N</span>
+        <span>Nightweaver</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-controls="primary-navigation" aria-expanded="false">
+        <span class="nav-toggle-label">Menu</span>
+        <span class="nav-toggle-icon" aria-hidden="true"><span></span><span></span><span></span></span>
+      </button>
+      <nav class="primary-nav" id="primary-navigation" aria-label="Console sections">
+        <ul class="nav-links">
+          <li><a href="#catch-up">Catch-Up</a></li>
+          <li><a href="#attention">Attention</a></li>
+          <li><a href="#factory">Factory</a></li>
+          <li><a href="#beads">Beads</a></li>
+          <li><a href="#workspace">Workspace</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page-shell" id="main-content" tabindex="-1">
+    <div class="page-intro">
+      <p class="eyebrow">Factory console</p>
+      <h1>Nightweaver console</h1>
+      <p class="intro-copy">A single place to catch up, review work that needs attention, and follow factory activity.</p>
+    </div>
+
+    <section class="console-section digest-section" id="catch-up" aria-labelledby="catch-up-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Milestone rollups</p>
+          <h2 id="catch-up-title">Catch-Up Digest</h2>
+        </div>
+      </div>
+      <div class="surface digest-card">
+        <span class="section-mark" aria-hidden="true">01</span>
+        <div>
+          <h3>See what changed since your last visit</h3>
+          <p>Milestone summaries will appear here when catch-up data is connected.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="console-section" id="attention" aria-labelledby="attention-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Human triage</p>
+          <h2 id="attention-title">Human Attention Desk</h2>
+        </div>
+      </div>
+      <div class="surface placeholder-card">
+        <h3>Items needing a decision</h3>
+        <p>Items that need human input will appear here when tracker reads are connected.</p>
+      </div>
+    </section>
+
+    <section class="console-section" id="factory" aria-labelledby="factory-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Execution overview</p>
+          <h2 id="factory-title">Factory Execution Bays</h2>
+        </div>
+      </div>
+      <div class="bay-grid">
+        <article class="surface bay-card">
+          <span class="bay-number" aria-hidden="true">01</span>
+          <h3>Planning Pool</h3>
+          <p>Planning activity will be shown here when factory telemetry is connected.</p>
+        </article>
+        <article class="surface bay-card">
+          <span class="bay-number" aria-hidden="true">02</span>
+          <h3>Delivery Floor</h3>
+          <p>Delivery activity will be shown here when factory telemetry is connected.</p>
+        </article>
+        <article class="surface bay-card">
+          <span class="bay-number" aria-hidden="true">03</span>
+          <h3>Singleton Merger</h3>
+          <p>Merge activity will be shown here when factory telemetry is connected.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="console-section" id="beads" aria-labelledby="beads-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Issue inventory</p>
+          <h2 id="beads-title">Beads Explorer</h2>
+        </div>
+      </div>
+      <div class="surface placeholder-card">
+        <h3>Browse project work</h3>
+        <p>Beads will be listed here when the tracker connection is implemented.</p>
+      </div>
+    </section>
+
+    <section class="console-section" id="workspace" aria-labelledby="workspace-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Deep reading</p>
+          <h2 id="workspace-title">Full Bead Workspace</h2>
+        </div>
+      </div>
+      <div class="surface placeholder-card workspace-card">
+        <h3>Room for the full story</h3>
+        <p>A bead’s specification and history will have a dedicated workspace in a later release.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner"><span>Nightweaver</span><span>Console shell</span></div>
+  </footer>
+</body>
+</html>

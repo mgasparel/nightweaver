@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using System.Reflection;
 
 namespace Nightweaver.Tests;
 
@@ -15,6 +16,7 @@ internal sealed class NightweaverWebApplicationFactory : WebApplicationFactory<W
         HostRoot = directory.CreateDirectory("host");
         TargetRoot = directory.CreateDirectory("target");
         WebRoot = directory.CreateDirectory("wwwroot");
+        StageBuiltWebAssets();
         ConfigPath = Path.GetFullPath(directory.WriteFile("settings/project.json", """
             {"name":"web-test","target_repository":{"path":"../target"}}
             """));
@@ -25,6 +27,33 @@ internal sealed class NightweaverWebApplicationFactory : WebApplicationFactory<W
     internal string TargetRoot { get; }
     internal string WebRoot { get; }
     internal string ConfigPath { get; }
+
+    private void StageBuiltWebAssets()
+    {
+        var appDirectory = typeof(NightweaverWebApplicationFactory).Assembly
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .SingleOrDefault(attribute => attribute.Key == "NightweaverWebAppDir")?.Value
+            ?? throw new InvalidOperationException("NightweaverWebAppDir assembly metadata is required to stage the built Web assets.");
+        var sourceRoot = Path.Combine(appDirectory, "wwwroot");
+        var requiredAssets = new[] { "index.html", Path.Combine("css", "site.css"), Path.Combine("js", "app.js") };
+        var missingAssets = requiredAssets
+            .Select(relativePath => Path.Combine(sourceRoot, relativePath))
+            .Where(path => !File.Exists(path))
+            .ToArray();
+        if (missingAssets.Length > 0)
+        {
+            throw new DirectoryNotFoundException(
+                $"Required built Nightweaver.Web assets are missing from '{sourceRoot}': {string.Join(", ", missingAssets)}. Build Nightweaver.Web before running the integration tests.");
+        }
+
+        foreach (var sourcePath in Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(sourceRoot, sourcePath);
+            var destinationPath = Path.Combine(WebRoot, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+            File.Copy(sourcePath, destinationPath, overwrite: true);
+        }
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {

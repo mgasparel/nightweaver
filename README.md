@@ -83,7 +83,7 @@ dotnet run --project src/Nightweaver.Web
 
 The default local address is `http://localhost:5000`; set `ASPNETCORE_URLS` or pass `--urls` to override it. `GET /health` returns HTTP 200 with `{"status":"ok"}` after configuration validation. It checks host liveness and does not invoke Git, bd, Agents, or the Orchestrator. A plain target directory suffices for this scaffold. Invalid or missing configuration prevents startup.
 
-Static files are served only from the web application's own `wwwroot`, beside its executable. There is no index page or fallback route. The dashboard UI and a dashboard/serve CLI command are later work.
+The web application serves the static Nightweaver console at `/`, with `/index.html` available directly. Its responsive shell links the Catch-Up Digest, Human Attention Desk, Factory Execution Bays, Beads Explorer, and Full Bead Workspace. These sections are layout placeholders in this slice; tracker queries, intake, human-guidance actions, workspace history, and live factory telemetry are not connected yet. The page uses local HTML, CSS, and JavaScript assets from `wwwroot` beside the executable, so build and publish output can run independently of the source checkout. Static files remain restricted to that web root, unknown paths return 404, and there is no fallback route. `GET /health` continues to report host liveness after configuration validation.
 
 ## Single-stage dispatch
 
