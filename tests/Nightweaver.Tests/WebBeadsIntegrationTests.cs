@@ -386,6 +386,77 @@ public sealed class WebBeadsIntegrationTests
     }
 
     [Fact]
+    public async Task IntakeRejectsInvalidEscapedUnicodeWithoutLeakingOrWriting()
+    {
+        using var target = new BeadsFixture();
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        var inventoryBefore = target.Run("bd", ["--readonly", "--sandbox", "list", "--all", "--limit", "0",
+            "--include-ephemeral", "--include-gates", "--include-infra", "--include-templates", "--json"]);
+        var invalidBodies = new[]
+        {
+            "{\"type\":\"feature\",\"priority\":2,\"title\":\"bad\\uD800title\",\"description\":\"Description\",\"acceptanceCriteria\":\"Criteria\"}",
+            "{\"type\":\"feature\",\"priority\":2,\"title\":\"Title\",\"description\":\"bad\\uDC00description\",\"acceptanceCriteria\":\"Criteria\"}",
+            "{\"type\":\"feature\",\"priority\":2,\"title\":\"Title\",\"description\":\"Description\",\"acceptanceCriteria\":\"bad\\uD800criteria\"}",
+            "{\"type\":\"fe\\uD800ature\",\"priority\":2,\"title\":\"Title\",\"description\":\"Description\",\"acceptanceCriteria\":\"Criteria\"}",
+            "{\"type\":\"feature\",\"priority\":2,\"title\":\"Title\",\"description\":\"Description\",\"acceptanceCriteria\":\"Criteria\",\"bad\\uD800property\":\"PROSE-MUST-NOT-LEAK\"}",
+            "{\"type\":\"feature\",\"priority\":2,\"title\":\"Title\",\"description\":\"Description\",\"acceptanceCriteria\":\"Criteria\",\"bad\\uDC00property\":\"PROSE-MUST-NOT-LEAK\"}"
+        };
+
+        foreach (var body in invalidBodies)
+        {
+            using var response = await client.PostAsync("/api/beads",
+                new StringContent(body, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+            var problem = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            Assert.DoesNotContain("PROSE-MUST-NOT-LEAK", problem, StringComparison.Ordinal);
+            Assert.DoesNotContain("InvalidOperationException", problem, StringComparison.Ordinal);
+            Assert.DoesNotContain("surrogate", problem, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.Empty(runner.Requests);
+        Assert.Equal(inventoryBefore, target.Run("bd", ["--readonly", "--sandbox", "list", "--all", "--limit", "0",
+            "--include-ephemeral", "--include-gates", "--include-infra", "--include-templates", "--json"]));
+    }
+
+    [Fact]
+    public async Task IntakeAcceptsValidEscapedSurrogatePairUnicode()
+    {
+        using var target = new BeadsFixture();
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        const string title = "Keep 🐈 in escaped JSON";
+        const string description = "Preserve 🧪 in the issue text.";
+        const string acceptance = "The saved issue keeps 😀 intact.";
+        var json = JsonSerializer.Serialize(new
+        {
+            type = "feature",
+            priority = 2,
+            title,
+            description,
+            acceptanceCriteria = acceptance
+        });
+
+        using var response = await client.PostAsync("/api/beads",
+            new StringContent(json, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        using var row = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        var id = row.RootElement.GetProperty("id").GetString()!;
+        Assert.Equal(title, row.RootElement.GetProperty("title").GetString());
+
+        using var shown = JsonDocument.Parse(target.Run("bd", ["show", id, "--json"]));
+        var issue = shown.RootElement.ValueKind == JsonValueKind.Array
+            ? Assert.Single(shown.RootElement.EnumerateArray())
+            : shown.RootElement;
+        Assert.Equal(title, issue.GetProperty("title").GetString());
+        Assert.Equal(description, issue.GetProperty("description").GetString());
+        Assert.Equal(acceptance, issue.GetProperty("acceptance_criteria").GetString());
+    }
+
+    [Fact]
     public async Task MalformedCreateOutputReportsUncertainOutcomeWithoutRetryingOrDeleting()
     {
         using var target = new BeadsFixture();

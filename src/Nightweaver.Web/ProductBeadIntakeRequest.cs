@@ -35,14 +35,25 @@ internal static class ProductBeadIntakeRequest
             var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
             foreach (var property in root.EnumerateObject())
             {
-                if (!IsAllowedProperty(property.Name))
+                string propertyName;
+                try
                 {
-                    AddError(errors, property.Name, "This property is not allowed.");
+                    propertyName = property.Name;
+                }
+                catch (InvalidOperationException)
+                {
+                    AddError(errors, "request", "Property names must contain valid Unicode.");
                     continue;
                 }
 
-                if (!values.TryAdd(property.Name, property.Value))
-                    AddError(errors, property.Name, "This property may be supplied only once.");
+                if (!IsAllowedProperty(propertyName))
+                {
+                    AddError(errors, propertyName, "This property is not allowed.");
+                    continue;
+                }
+
+                if (!values.TryAdd(propertyName, property.Value))
+                    AddError(errors, propertyName, "This property may be supplied only once.");
             }
 
             foreach (var name in new[] { "type", "priority", "title", "description", "acceptanceCriteria" })
@@ -76,7 +87,8 @@ internal static class ProductBeadIntakeRequest
             return null;
         }
 
-        var type = value.GetString();
+        var type = ReadJsonString(value, "type", errors);
+        if (type is null) return null;
         if (type is not ("feature" or "bug"))
         {
             AddError(errors, "type", "Choose feature or bug.");
@@ -106,7 +118,8 @@ internal static class ProductBeadIntakeRequest
             return null;
         }
 
-        var raw = value.GetString()!;
+        var raw = ReadJsonString(value, name, errors);
+        if (raw is null) return null;
         if (raw.Contains('\0'))
         {
             AddError(errors, name, "NUL characters are not allowed.");
@@ -134,6 +147,19 @@ internal static class ProductBeadIntakeRequest
             return null;
         }
         return normalized;
+    }
+
+    private static string? ReadJsonString(JsonElement value, string field, Dictionary<string, List<string>> errors)
+    {
+        try
+        {
+            return value.GetString();
+        }
+        catch (InvalidOperationException)
+        {
+            AddError(errors, field, "This field must contain valid Unicode.");
+            return null;
+        }
     }
 
     private static Dictionary<string, string[]> Freeze(Dictionary<string, List<string>> errors)
