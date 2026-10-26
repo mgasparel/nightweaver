@@ -2,6 +2,7 @@ using Nightweaver.Configuration;
 using Nightweaver;
 using Nightweaver.Inspection;
 using System.Text.Json;
+using System.Net.Http.Headers;
 
 namespace Nightweaver.Web;
 
@@ -9,6 +10,8 @@ public sealed class Program
 {
     private static readonly Action<ILogger, Exception?> LogBeadsExplorerFailure = LoggerMessage.Define(
         LogLevel.Error, new EventId(1, "BeadsExplorerFailure"), "Beads Explorer query failed.");
+    private static readonly Action<ILogger, Exception?> LogProductBeadCreationFailure = LoggerMessage.Define(
+        LogLevel.Error, new EventId(2, "ProductBeadCreationFailure"), "Product Bead creation failed.");
 
     private Program() { }
 
@@ -57,7 +60,8 @@ public sealed class Program
         builder.Services.AddSingleton<IProcessRunner, SystemProcessRunner>();
         builder.Services.AddSingleton<TargetRepositoryValidator>();
         builder.Services.AddSingleton<BeadsReader>();
-        builder.Services.AddSingleton<BeadsExplorerService>();
+        builder.Services.AddSingleton<BeadsWriter>();
+        builder.Services.AddSingleton<TrackerBridge>();
 
         var app = builder.Build();
         // Resolve before listening, after all host configuration providers have been applied.
@@ -65,7 +69,7 @@ public sealed class Program
         app.UseDefaultFiles();
         app.UseStaticFiles();
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
-        app.MapGet("/api/beads", async (HttpContext context, BeadsExplorerService explorer, ILogger<Program> logger) =>
+        app.MapGet("/api/beads", async (HttpContext context, TrackerBridge explorer, ILogger<Program> logger) =>
         {
             context.Response.Headers.CacheControl = "no-store";
             var query = context.Request.Query;
@@ -100,7 +104,82 @@ public sealed class Program
                 return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: title, detail: detail);
             }
         });
+        app.MapPost("/api/beads", async (HttpContext context, TrackerBridge tracker, ILogger<Program> logger) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (context.Request.Query.Count != 0)
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Product Bead request", detail: "Query parameters are not supported.");
+            if (!IsAllowedMutationOrigin(context.Request))
+                return Results.Problem(statusCode: StatusCodes.Status403Forbidden,
+                    title: "Request origin rejected", detail: "This request must come from the same origin as the Nightweaver console.");
+            if (!IsJsonContentType(context.Request.ContentType))
+                return Results.Problem(statusCode: StatusCodes.Status415UnsupportedMediaType,
+                    title: "Unsupported media type", detail: "Submit the Product Bead as application/json.");
+
+            var body = await BoundedRequestBody.ReadAsync(context.Request, context.RequestAborted);
+            if (body is null)
+                return Results.Problem(statusCode: StatusCodes.Status413PayloadTooLarge,
+                    title: "Request body too large", detail: "The request body cannot exceed 64 KiB.");
+
+            var parsed = ProductBeadIntakeRequest.Parse(body);
+            if (parsed.Errors.Count > 0)
+                return Results.ValidationProblem(parsed.Errors, statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Product Bead request");
+
+            try
+            {
+                var created = await tracker.CreateProductBeadAsync(parsed.Submission!, context.RequestAborted);
+                return Results.Json(created, statusCode: StatusCodes.Status201Created);
+            }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (ProductBeadCreationException exception)
+            {
+                LogProductBeadCreationFailure(logger, exception);
+                return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable,
+                    title: "Creation could not be confirmed",
+                    detail: "The request may have created a Product Bead. Check the backlog before resubmitting.");
+            }
+            catch (Exception exception) when (exception is ToolExecutionException or TargetRepositoryException
+                or ProjectConfigurationException or JsonException or IOException or UnauthorizedAccessException)
+            {
+                LogProductBeadCreationFailure(logger, exception);
+                var detail = exception is JsonException || exception.Message.Contains("incompatible or malformed", StringComparison.OrdinalIgnoreCase)
+                    ? "The bd command returned data that Nightweaver could not read."
+                    : "The configured Beads tracker could not create the Product Bead safely. Check that bd is installed and the tracker is prepared.";
+                return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable,
+                    title: exception is JsonException ? "Incompatible Beads output" : "Beads tracker unavailable",
+                    detail: detail);
+            }
+        });
         app.Run();
+    }
+
+    private static bool IsJsonContentType(string? contentType)
+        => MediaTypeHeaderValue.TryParse(contentType, out var parsed)
+            && string.Equals(parsed.MediaType, "application/json", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAllowedMutationOrigin(HttpRequest request)
+    {
+        if (request.Headers["Sec-Fetch-Site"].Any(value =>
+            string.Equals(value, "cross-site", StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        if (!request.Headers.TryGetValue("Origin", out var origins))
+            return true;
+        if (origins.Count != 1 || !Uri.TryCreate(origins[0], UriKind.Absolute, out var origin)
+            || !string.IsNullOrEmpty(origin.UserInfo) || origin.AbsolutePath != "/"
+            || !string.IsNullOrEmpty(origin.Query) || !string.IsNullOrEmpty(origin.Fragment))
+            return false;
+
+        if (!Uri.TryCreate($"{request.Scheme}://{request.Host}/", UriKind.Absolute, out var requestOrigin))
+            return false;
+        return string.Equals(origin.Scheme, requestOrigin.Scheme, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(origin.IdnHost, requestOrigin.IdnHost, StringComparison.OrdinalIgnoreCase)
+            && origin.Port == requestOrigin.Port;
     }
 
     private static (string Title, string Detail) GetSafeFailure(Exception exception)

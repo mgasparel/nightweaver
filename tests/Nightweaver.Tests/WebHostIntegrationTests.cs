@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
@@ -33,6 +34,14 @@ public sealed class WebHostIntegrationTests
         Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailable.StatusCode);
         Assert.Equal("application/problem+json", unavailable.Content.Headers.ContentType?.MediaType);
         Assert.Equal("no-store", unavailable.Headers.CacheControl?.ToString());
+        using var failedWrite = await client.PostAsync("/api/beads",
+            new StringContent("{\"type\":\"feature\",\"priority\":2,\"title\":\"Unavailable target\",\"description\":\"Context\",\"acceptanceCriteria\":\"Criteria\"}",
+                System.Text.Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, failedWrite.StatusCode);
+        Assert.Equal("application/problem+json", failedWrite.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("no-store", failedWrite.Headers.CacheControl?.ToString());
+        Assert.DoesNotContain(factory.TargetRoot,
+            await failedWrite.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.OrdinalIgnoreCase);
         using var stillHealthy = await client.GetAsync("/health", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, stillHealthy.StatusCode);
         using var shell = await client.GetAsync("/", TestContext.Current.CancellationToken);
@@ -211,6 +220,36 @@ public sealed class WebHostIntegrationTests
             using var document = JsonDocument.Parse(await beads.Content.ReadAsStringAsync(timeout.Token));
             var row = Assert.Single(document.RootElement.EnumerateArray());
             Assert.Equal(expectedId, row.GetProperty("id").GetString());
+
+            const string productTitle = "Executable Product Bead smoke";
+            const string productDescription = "The shipped Web executable must create in its configured disposable tracker.";
+            const string acceptanceCriteria = "The created feature is open, unassigned, and visible to real bd.";
+            using var create = await client.PostAsync("/api/beads", new StringContent(JsonSerializer.Serialize(new
+            {
+                type = "feature",
+                priority = 1,
+                title = productTitle,
+                description = productDescription,
+                acceptanceCriteria
+            }), Encoding.UTF8, "application/json"), timeout.Token);
+            Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+            Assert.Equal("no-store", create.Headers.CacheControl?.ToString());
+            using var createdDocument = JsonDocument.Parse(await create.Content.ReadAsStringAsync(timeout.Token));
+            var createdId = createdDocument.RootElement.GetProperty("id").GetString()!;
+            using var independentShow = JsonDocument.Parse(target.Run("bd", ["show", createdId, "--json"]));
+            var shown = independentShow.RootElement.ValueKind == JsonValueKind.Array
+                ? Assert.Single(independentShow.RootElement.EnumerateArray())
+                : independentShow.RootElement;
+            Assert.Equal(createdId, shown.GetProperty("id").GetString());
+            Assert.Equal(productTitle, shown.GetProperty("title").GetString());
+            Assert.Equal(productDescription, shown.GetProperty("description").GetString());
+            Assert.Equal(acceptanceCriteria, shown.GetProperty("acceptance_criteria").GetString());
+            Assert.Equal("feature", shown.GetProperty("issue_type").GetString());
+            Assert.Equal(1, shown.GetProperty("priority").GetInt32());
+            Assert.Equal("open", shown.GetProperty("status").GetString());
+            using var ready = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "ready", "--limit", "0", "--json"]));
+            Assert.Contains(ready.RootElement.EnumerateArray(), bead => bead.GetProperty("id").GetString() == createdId);
+
             using var page = await client.GetAsync("/", timeout.Token);
             Assert.Equal(HttpStatusCode.OK, page.StatusCode);
             var html = await page.Content.ReadAsStringAsync(timeout.Token);
@@ -325,6 +364,14 @@ public sealed class WebHostIntegrationTests
             Assert.Contains($"id=\"{section}\"", html, StringComparison.Ordinal);
             Assert.Contains($"href=\"#{section}\"", html, StringComparison.Ordinal);
         }
+        Assert.Contains("id=\"new-bead-trigger\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"bead-intake-dialog\"", html, StringComparison.Ordinal);
+        Assert.Contains("aria-labelledby=\"intake-title\"", html, StringComparison.Ordinal);
+        Assert.Contains("name=\"type\"", html, StringComparison.Ordinal);
+        Assert.Contains("name=\"priority\"", html, StringComparison.Ordinal);
+        Assert.Contains("name=\"title\" type=\"text\" maxlength=\"200\" required", html, StringComparison.Ordinal);
+        Assert.Contains("name=\"description\" maxlength=\"4000\"", html, StringComparison.Ordinal);
+        Assert.Contains("name=\"acceptanceCriteria\" maxlength=\"2000\"", html, StringComparison.Ordinal);
     }
 
     private static async Task AssertStaticAssetAsync(

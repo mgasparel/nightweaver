@@ -100,7 +100,27 @@ The web application serves the static Nightweaver console at `/`, with `/index.h
 
 View names are case-insensitive. A blank view means `all`; unsupported or repeated `view`/`q` parameters return HTTP 400. Successful empty queries return `[]`. Expected repository, tool, timeout, backend, and incompatible-output failures return HTTP 503 Problem Details without exposing host paths, raw stderr, or stack traces. The console clears rows while loading or after errors and lets the maintainer retry.
 
-Explorer requests require Git and bd 1.3.1 on `PATH`, a Git root configured as the Target Repository, and an already initialized, prepared embedded Dolt tracker with its gate files. Requests run read-only bd commands against that configured repository; the web host never initializes a tracker, creates gate files, or starts the Dolt backend. Tracker validation happens when `/api/beads` is requested, so `/health` and the static console can start when the tracker is unavailable. This slice only reads and filters the inventory; it does not create or mutate Beads, provide workspace history, or expose factory telemetry.
+Explorer requests require Git and bd 1.3.1 on `PATH`, a Git root configured as the Target Repository, and an already initialized, prepared embedded Dolt tracker with its gate files. Requests run bd commands against that configured repository; the web host never initializes a tracker, creates gate files, or starts the Dolt backend. Tracker validation happens when an API request is made, so `/health` and the static console can start when the tracker is unavailable. Reads and intake writes share one host-local gate around embedded-Dolt operations.
+
+#### Product Bead intake
+
+The `+ New Feature / Bug` header action opens a modal that submits `POST /api/beads` as `application/json`:
+
+```json
+{
+  "type": "feature",
+  "priority": 2,
+  "title": "Explain the requested outcome",
+  "description": "Problem, context, and desired behavior",
+  "acceptanceCriteria": "Observable conditions for success"
+}
+```
+
+All five properties are required. `type` must be `feature` or `bug`; `priority` must be a JSON integer from 0 through 3. The server trims outer whitespace from text values, preserves internal Markdown, Unicode, and newlines in the multiline fields, and enforces these limits after trimming: title 200 UTF-16 code units, description 4,000, and acceptance criteria 2,000. NUL is rejected in every field; title rejects line breaks and control characters. The whole request body is limited to 64 KiB. Unknown or repeated properties and all query parameters are rejected.
+
+Creation requires the configured Target Repository and a prepared embedded Dolt tracker with its existing gate files, just like Explorer reads. The endpoint creates one open, unassigned `feature` or `bug` Product Bead with no workflow labels or dependencies. Ready is derived from bd's native readiness query; the endpoint does not assign an Agent, set a stored `ready` status, or launch Planning. Successful requests return HTTP 201 with the Explorer row shape.
+
+After a confirmed 201, the console clears its saved form draft, switches the Explorer to Ready, clears its search, and refreshes the list. If the new item is no longer in Ready, the console offers **Show in All** using its ID search. If the refresh fails, the creation success message remains visible and the Explorer's Retry control can reload the list. Validation and request-policy failures return 400, 403, 413, or 415 Problem Details. Expected tracker/tool failures return 503 without exposing paths, stderr, or submitted prose. If a create command was attempted but its result could not be confirmed, the response and console tell the operator to check the backlog before manually resubmitting; the console never retries a POST automatically. Creating a Product Bead does not launch Planning or start an Agent.
 
 ## Single-stage dispatch
 

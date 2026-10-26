@@ -17,6 +17,9 @@
         <span class="brand-mark" aria-hidden="true">N</span>
         <span>Nightweaver</span>
       </a>
+      <button class="primary-action" id="new-bead-trigger" type="button" aria-haspopup="dialog" aria-controls="bead-intake-dialog">
+        <span aria-hidden="true">+</span> New Feature / Bug
+      </button>
       <button class="nav-toggle" type="button" aria-controls="primary-navigation" aria-expanded="false">
         <span class="nav-toggle-label">Menu</span>
         <span class="nav-toggle-icon" aria-hidden="true"><span></span><span></span><span></span></span>
@@ -32,6 +35,63 @@
       </nav>
     </div>
   </header>
+
+  <dialog class="intake-dialog" id="bead-intake-dialog" aria-labelledby="intake-title" aria-describedby="intake-description">
+    <form id="bead-intake-form" class="intake-form">
+      <div class="intake-heading">
+        <div>
+          <p class="eyebrow">Product Bead</p>
+          <h2 id="intake-title">New Feature / Bug</h2>
+        </div>
+        <button class="icon-button" id="intake-close" type="button" aria-label="Close intake form">Close</button>
+      </div>
+      <p id="intake-description" class="intake-description">Feature and bug requests are saved as open, unassigned items in the Planning backlog.</p>
+      <div class="intake-fields">
+        <div class="intake-field-row">
+          <div class="intake-field">
+            <label for="intake-type">Type</label>
+            <select id="intake-type" name="type" required>
+              <option value="feature">Feature</option>
+              <option value="bug">Bug</option>
+            </select>
+          </div>
+          <div class="intake-field">
+            <label for="intake-priority">Priority</label>
+            <select id="intake-priority" name="priority" required>
+              <option value="0">P0 — Critical</option>
+              <option value="1">P1 — High</option>
+              <option value="2" selected>P2 — Normal</option>
+              <option value="3">P3 — Low</option>
+            </select>
+          </div>
+        </div>
+        <div class="intake-field">
+          <label for="intake-title-input">Title</label>
+          <input id="intake-title-input" name="title" type="text" maxlength="200" required autocomplete="off" aria-describedby="intake-title-help intake-title-error">
+          <span class="field-help" id="intake-title-help">Up to 200 characters.</span>
+          <span class="field-error" id="intake-title-error" hidden></span>
+        </div>
+        <div class="intake-field">
+          <label for="intake-description-input">Description</label>
+          <textarea id="intake-description-input" name="description" maxlength="4000" rows="5" required aria-describedby="intake-description-help intake-description-error"></textarea>
+          <span class="field-help" id="intake-description-help">Problem, context, and desired behavior. Up to 4,000 characters.</span>
+          <span class="field-error" id="intake-description-error" hidden></span>
+        </div>
+        <div class="intake-field">
+          <label for="intake-acceptance">Acceptance criteria</label>
+          <textarea id="intake-acceptance" name="acceptanceCriteria" maxlength="2000" rows="4" required aria-describedby="intake-acceptance-help intake-acceptance-criteria-error"></textarea>
+          <span class="field-help" id="intake-acceptance-help">Observable conditions for success. Up to 2,000 characters.</span>
+          <span class="field-error" id="intake-acceptance-criteria-error" hidden></span>
+        </div>
+      </div>
+      <div class="intake-error" id="intake-error" role="alert" tabindex="-1" hidden></div>
+      <p class="intake-progress" id="intake-progress" role="status" aria-live="polite" aria-atomic="true"></p>
+      <div class="intake-actions">
+        <button class="secondary-action" id="intake-cancel" type="button">Cancel</button>
+        <button class="primary-action" id="intake-submit" type="submit">Create Product Bead</button>
+      </div>
+    </form>
+  </dialog>
 
   <main class="page-shell" id="main-content" tabindex="-1">
     <div class="page-intro">
@@ -117,6 +177,10 @@
           </div>
         </div>
         <p class="explorer-note">Active means issues stored as in progress. It does not indicate a live factory slot.</p>
+        <div class="explorer-created" id="beads-create-success" role="status" aria-live="polite" aria-atomic="true" hidden>
+          <span id="beads-create-success-text"></span>
+          <button class="retry-button" id="beads-show-created" type="button" hidden>Show in All</button>
+        </div>
         <p class="sr-only" id="beads-live" aria-live="polite" aria-atomic="true"></p>
         <div class="explorer-message" id="beads-loading" role="status" hidden>Loading beads…</div>
         <div class="explorer-message" id="beads-empty" hidden>No beads are in the tracker yet.</div>
