@@ -9,13 +9,17 @@ internal static class TemporaryTreeDeleter
 {
     private const uint DeleteAccess = 0x00010000;
     private const uint FileReadAttributes = 0x0080;
+    private const uint FileWriteAttributes = 0x0100;
     private const uint FileShareRead = 0x00000001;
     private const uint FileShareWrite = 0x00000002;
     private const uint OpenExisting = 3;
     private const uint FileFlagBackupSemantics = 0x02000000;
     private const uint FileFlagOpenReparsePoint = 0x00200000;
-    private const uint AttributeDirectory = 0x10;
-    private const uint AttributeReparsePoint = 0x400;
+    private const uint AttributeReadOnly = 0x00000001;
+    private const uint AttributeDirectory = 0x00000010;
+    private const uint AttributeNormal = 0x00000080;
+    private const uint AttributeReparsePoint = 0x00000400;
+    private const int FileBasicInfoClass = 0;
     private const int FileDispositionInfoClass = 4;
     private const int ErrorFileNotFound = 2;
     private const int ErrorPathNotFound = 3;
@@ -88,6 +92,18 @@ internal static class TemporaryTreeDeleter
         }
 
         beforeDelete?.Invoke(path);
+
+        if ((attributes & AttributeReadOnly) != 0)
+        {
+            var cleared = attributes & ~AttributeReadOnly;
+            var clearReadOnly = new FileBasicInfo
+            {
+                FileAttributes = (cleared & ~AttributeDirectory) == 0 ? cleared | AttributeNormal : cleared
+            };
+            if (!SetFileInformationByHandle(handle, FileBasicInfoClass, ref clearReadOnly, (uint)Marshal.SizeOf<FileBasicInfo>()))
+                throw NativeError($"Could not clear read-only attribute on managed temporary entry '{path}'", Marshal.GetLastWin32Error());
+        }
+
         // The open handle denies delete-sharing. Disposition-by-handle removes this inspected object even if
         // its name would otherwise be substituted after enumeration.
         var disposition = new FileDispositionInfo { DeleteFile = 1 };
@@ -97,7 +113,7 @@ internal static class TemporaryTreeDeleter
 
     private static SafeFileHandle? TryOpen(string path, bool allowMissing, bool deleteAccess)
     {
-        var access = FileReadAttributes | (deleteAccess ? DeleteAccess : 0);
+        var access = FileReadAttributes | (deleteAccess ? (DeleteAccess | FileWriteAttributes) : 0);
         var handle = CreateFileW(path, access, FileShareRead | FileShareWrite, IntPtr.Zero, OpenExisting,
             FileFlagBackupSemantics | FileFlagOpenReparsePoint, IntPtr.Zero);
         if (!handle.IsInvalid) return handle;
@@ -126,6 +142,8 @@ internal static class TemporaryTreeDeleter
             attributes = File.GetAttributes(path);
             if ((attributes & FileAttributes.ReparsePoint) != 0 || (attributes & FileAttributes.Directory) == 0)
                 throw new IOException($"Temporary directory '{path}' changed identity during deletion.");
+            if ((attributes & FileAttributes.ReadOnly) != 0)
+                File.SetAttributes(path, FileAttributes.Normal);
             Directory.Delete(path, recursive: false);
         }
         else
@@ -134,6 +152,8 @@ internal static class TemporaryTreeDeleter
             attributes = File.GetAttributes(path);
             if ((attributes & FileAttributes.ReparsePoint) != 0 || (attributes & FileAttributes.Directory) != 0)
                 throw new IOException($"Temporary file '{path}' changed identity during deletion.");
+            if ((attributes & FileAttributes.ReadOnly) != 0)
+                File.SetAttributes(path, FileAttributes.Normal);
             File.Delete(path);
         }
     }
@@ -154,10 +174,25 @@ internal static class TemporaryTreeDeleter
     private static extern bool SetFileInformationByHandle(SafeFileHandle file, int fileInformationClass,
         ref FileDispositionInfo information, uint bufferSize);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetFileInformationByHandle(SafeFileHandle file, int fileInformationClass,
+        ref FileBasicInfo information, uint bufferSize);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct FileDispositionInfo
     {
         internal byte DeleteFile;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileBasicInfo
+    {
+        internal long CreationTime;
+        internal long LastAccessTime;
+        internal long LastWriteTime;
+        internal long ChangeTime;
+        internal uint FileAttributes;
     }
 
     [StructLayout(LayoutKind.Sequential)]
