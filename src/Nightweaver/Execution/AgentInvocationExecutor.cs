@@ -5,6 +5,14 @@ using Nightweaver.Configuration;
 
 namespace Nightweaver.Execution;
 
+internal interface IAgentProcessLauncher
+{
+    string ResolveExecutable(string name, IReadOnlyDictionary<string, string> environment);
+
+    WindowsProcessLauncher.WindowsAgentProcess Launch(string executable, IReadOnlyList<string> arguments,
+        string workingDirectory, IReadOnlyDictionary<string, string> environment);
+}
+
 /// <summary>Executes one already-prepared invocation and returns only after its complete process job is empty.</summary>
 internal sealed class AgentInvocationExecutor
 {
@@ -16,7 +24,20 @@ internal sealed class AgentInvocationExecutor
         PreparedAgentInvocation invocation,
         CancellationToken cancellationToken)
     {
-        var result = await ExecuteCoreAsync(hostPaths, project, invocation, null, cancellationToken).ConfigureAwait(false);
+        var result = await ExecuteCoreAsync(hostPaths, project, invocation, null, null, cancellationToken).ConfigureAwait(false);
+        return result.Execution;
+    }
+
+    internal static async Task<AgentExecutionResult> ExecuteAsync(
+        HostPaths hostPaths,
+        ProjectSlug project,
+        PreparedAgentInvocation invocation,
+        IAgentProcessLauncher processLauncher,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(processLauncher);
+        var result = await ExecuteCoreAsync(hostPaths, project, invocation, null, processLauncher, cancellationToken)
+            .ConfigureAwait(false);
         return result.Execution;
     }
 
@@ -28,7 +49,20 @@ internal sealed class AgentInvocationExecutor
         CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCapturedBytes);
-        return ExecuteCoreAsync(hostPaths, project, invocation, maximumCapturedBytes, cancellationToken);
+        return ExecuteCoreAsync(hostPaths, project, invocation, maximumCapturedBytes, null, cancellationToken);
+    }
+
+    internal static Task<AgentStandardOutputCaptureResult> ExecuteWithStandardOutputCaptureAsync(
+        HostPaths hostPaths,
+        ProjectSlug project,
+        PreparedAgentInvocation invocation,
+        int maximumCapturedBytes,
+        IAgentProcessLauncher processLauncher,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCapturedBytes);
+        ArgumentNullException.ThrowIfNull(processLauncher);
+        return ExecuteCoreAsync(hostPaths, project, invocation, maximumCapturedBytes, processLauncher, cancellationToken);
     }
 
     private static async Task<AgentStandardOutputCaptureResult> ExecuteCoreAsync(
@@ -36,6 +70,7 @@ internal sealed class AgentInvocationExecutor
         ProjectSlug project,
         PreparedAgentInvocation invocation,
         int? maximumCapturedBytes,
+        IAgentProcessLauncher? processLauncher,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(hostPaths);
@@ -62,14 +97,18 @@ internal sealed class AgentInvocationExecutor
             runtimeFiles = InvocationRuntimeFiles.Reserve(hostPaths, project, beadId, invocation);
             cancellationToken.ThrowIfCancellationRequested();
             var environment = BuildInheritedEnvironment(invocation.EnvironmentOverrides);
-            var executable = WindowsProcessLauncher.ResolveExecutable(invocation.Executable, environment);
+            var executable = processLauncher is null
+                ? WindowsProcessLauncher.ResolveExecutable(invocation.Executable, environment)
+                : processLauncher.ResolveExecutable(invocation.Executable, environment);
             cancellationToken.ThrowIfCancellationRequested();
             if (invocation.Timeout <= TimeSpan.Zero)
                 throw new InvalidDataException($"Prepared timeout '{invocation.Timeout}' must be positive.");
 
             // The role wall-clock budget starts immediately before native launch and includes prompt delivery.
             var launchStarted = Stopwatch.GetTimestamp();
-            child = WindowsProcessLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment);
+            child = processLauncher is null
+                ? WindowsProcessLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment)
+                : processLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment);
             rootExit = child.WaitForRootExitAsync();
             logGate = new SemaphoreSlim(1, 1);
             stdoutPump = PumpOutputAsync(child.StandardOutput, runtimeFiles.LogStream, logGate, stdoutCapture);

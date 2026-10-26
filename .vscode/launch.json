@@ -1,0 +1,37 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Nightweaver.Web",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${workspaceFolder}/src/Nightweaver.Web/bin/Debug/net10.0/Nightweaver.Web.dll",
+            "args": [
+                "--Nightweaver:ConfigPath",
+                "C:\\Tools\\Nightweaver\\Projects\\nightweaver.json",
+                "--Nightweaver:Root",
+                "C:\\Tools\\Nightweaver"
+            ],
+            "cwd": "${workspaceFolder}/src/Nightweaver.Web",
+            "console": "internalConsole",
+            "stopAtEntry": false
+        },
+        {
+            "name": "Nightweaver.Tests",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${workspaceFolder}/tests/Nightweaver.Tests/bin/Debug/net10.0/Nightweaver.Tests.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/tests/Nightweaver.Tests",
+            "console": "internalConsole",
+            "stopAtEntry": false
+        },
+        {
+            "name": ".NET Core Attach",
+            "type": "coreclr",
+            "request": "attach"
+        }
+    ]
+}

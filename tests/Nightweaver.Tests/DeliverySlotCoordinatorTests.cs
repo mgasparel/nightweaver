@@ -1,6 +1,7 @@
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
+using System.Text.Json;
 
 namespace Nightweaver.Tests;
 
@@ -40,31 +41,51 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task ReviewAndQaEntrySelectOnlyTheRemainingRoles()
     {
-        using var reviewFixture = new SlotFixture();
-        var reviewBead = reviewFixture.CreateTask("stage:review");
+        using var fixture = new FastSlotFixture();
+        var reviewBead = fixture.AddBead("task", "stage:review");
         var reviewRoles = new List<AgentRole>();
-        var review = await reviewFixture.RunAsync(reviewBead, (role, _) =>
+        var review = await fixture.RunAsync(reviewBead, (role, _) =>
         {
             reviewRoles.Add(role);
-            reviewFixture.Advance(reviewBead, role);
-            return Task.FromResult(Success(role, reviewBead, reviewFixture.ReadState(reviewBead)));
+            fixture.Advance(reviewBead, role);
+            return Task.FromResult(Success(role, reviewBead, fixture.ReadState(reviewBead)));
         });
 
         Assert.True(review.MergeReady, review.Diagnostic);
         Assert.Equal([AgentRole.Reviewer, AgentRole.Qa], reviewRoles);
+        var reviewStates = fixture.ExpectedStatesFor(reviewBead);
+        Assert.Equal(2, reviewStates.Length);
+        Assert.Equal("stage:review", reviewStates[0].Stage);
+        Assert.Equal("stage:qa", reviewStates[1].Stage);
+        Assert.Equal("stage:merge", review.FinalState!.Stage);
+        Assert.Equal("open", fixture.ReadBead(reviewBead).Status);
+        Assert.Null(fixture.ReadBead(reviewBead).Assignee);
+        var reviewClaims = fixture.Runner.ClaimWrites(reviewBead);
+        Assert.Equal(2, reviewClaims.Length);
+        Assert.Equal("open", FastBeadsProcessRunner.GuardedStatus(reviewClaims[0]));
+        Assert.Equal("in_progress", FastBeadsProcessRunner.GuardedStatus(reviewClaims[1]));
 
-        using var qaFixture = new SlotFixture();
-        var qaBead = qaFixture.CreateTask("stage:qa");
+        var qaBead = fixture.AddBead("task", "stage:qa");
         var qaRoles = new List<AgentRole>();
-        var qa = await qaFixture.RunAsync(qaBead, (role, _) =>
+        var qa = await fixture.RunAsync(qaBead, (role, _) =>
         {
             qaRoles.Add(role);
-            qaFixture.Advance(qaBead, role);
-            return Task.FromResult(Success(role, qaBead, qaFixture.ReadState(qaBead)));
+            fixture.Advance(qaBead, role);
+            return Task.FromResult(Success(role, qaBead, fixture.ReadState(qaBead)));
         });
 
         Assert.True(qa.MergeReady, qa.Diagnostic);
         Assert.Equal([AgentRole.Qa], qaRoles);
+        var qaStates = fixture.ExpectedStatesFor(qaBead);
+        Assert.Single(qaStates);
+        Assert.Equal("stage:qa", qaStates[0].Stage);
+        Assert.Equal("stage:merge", qa.FinalState!.Stage);
+        Assert.Equal("open", fixture.ReadBead(qaBead).Status);
+        Assert.Null(fixture.ReadBead(qaBead).Assignee);
+        var qaClaims = fixture.Runner.ClaimWrites(qaBead);
+        Assert.Equal(2, qaClaims.Length);
+        Assert.Equal("open", FastBeadsProcessRunner.GuardedStatus(qaClaims[0]));
+        Assert.Equal("in_progress", FastBeadsProcessRunner.GuardedStatus(qaClaims[1]));
     }
 
     [Fact]
@@ -417,18 +438,18 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task ProductPausedMergeAndMalformedPlanBeadsAreRejectedBeforeClaim()
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var ineligible = new[]
         {
-            fixture.CreateBead("feature"),
-            fixture.CreateTask("planned"),
-            fixture.CreateTask("product-decision-required"),
-            fixture.CreateTask("needs-human"),
-            fixture.CreateTask("stage:merge"),
-            fixture.CreateTask("stage:review", "stage:qa")
+            (fixture.AddBead("feature"), "accepts Plan Beads of type task"),
+            (fixture.AddBead("task", "planned"), "planned or paused"),
+            (fixture.AddBead("task", "product-decision-required"), "planned or paused"),
+            (fixture.AddBead("task", "needs-human"), "planned or paused"),
+            (fixture.AddBead("task", "stage:merge"), "cannot accept stage 'stage:merge'"),
+            (fixture.AddBead("task", "stage:review", "stage:qa"), "invalid workflow state")
         };
 
-        foreach (var bead in ineligible)
+        foreach (var (bead, diagnostic) in ineligible)
         {
             var launched = false;
             var outcome = await fixture.RunAsync(bead, (role, _) =>
@@ -439,13 +460,16 @@ public sealed class DeliverySlotCoordinatorTests
 
             Assert.Equal(DeliverySlotDisposition.Refused, outcome.Disposition);
             Assert.False(launched);
-            Assert.Empty(fixture.ClaimWrites(bead));
+            Assert.Contains(diagnostic, outcome.Diagnostic!, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(fixture.Runner.ClaimWrites(bead));
         }
 
         var missing = await fixture.RunAsync("missing-plan-bead", (_, _) =>
             throw new InvalidOperationException("Missing Bead must not launch."));
         Assert.Equal(DeliverySlotDisposition.Refused, missing.Disposition);
-        Assert.Empty(fixture.ClaimWrites("missing-plan-bead"));
+        Assert.Contains("was not found", missing.Diagnostic!, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(fixture.Runner.ClaimWrites("missing-plan-bead"));
+        Assert.Empty(fixture.Runner.WriteRequests);
     }
 
     private static OperationalRetryOutcome Success(AgentRole role, string beadId, BeadWorkflowState verifiedState)
@@ -602,6 +626,195 @@ public sealed class DeliverySlotCoordinatorTests
         {
             Target.Dispose();
             hostTemp.Dispose();
+        }
+    }
+
+    private sealed class FastSlotFixture : IDisposable
+    {
+        private readonly BeadsApplicationFixture target = new();
+        private readonly TempDirectory hostTemp = new();
+        private readonly ProjectConfig project;
+
+        internal FastSlotFixture()
+        {
+            Host = new HostPaths(hostTemp.Path);
+            var settings = new AgentSettings(AgentCli.Codex, null, "low", 1);
+            var roles = AgentRoles.All.ToDictionary(role => role, _ => settings);
+            project = new(ProjectSlug.Parse("demo"), Path.Combine(Host.Root, "demo.json"),
+                new(target.Path, "main"), new(1, 1, 1), new(3, 2), settings, new RoleSettings(roles));
+            Runner = new FastBeadsProcessRunner(target.Path, project.RecoveryActor);
+        }
+
+        internal HostPaths Host { get; }
+        internal FastBeadsProcessRunner Runner { get; }
+        private ValidatedTargetRepository Repository => new(target.Path, "main");
+        private List<(string BeadId, BeadWorkflowState State)> ExpectedStates { get; } = [];
+
+        internal string AddBead(string issueType, params string[] labels) => Runner.AddBead(issueType, labels);
+
+        internal BeadSnapshot ReadBead(string beadId) => Runner.ReadBead(beadId);
+
+        internal BeadWorkflowState ReadState(string beadId) => BeadWorkflowState.Parse(ReadBead(beadId));
+
+        internal BeadWorkflowState[] ExpectedStatesFor(string beadId) => ExpectedStates
+            .Where(item => item.BeadId == beadId).Select(item => item.State).ToArray();
+
+        internal void Advance(string beadId, AgentRole role) => Runner.Advance(beadId, role);
+
+        internal async Task<DeliverySlotOutcome> RunAsync(string beadId,
+            Func<AgentRole, CancellationToken, Task<OperationalRetryOutcome>> roleRunner)
+        {
+            var stageRunner = new DeliveryRoleRunner((_, _, _, requestedBead, role, _, expectedState, token, _) =>
+            {
+                Assert.Equal(beadId, requestedBead);
+                ExpectedStates.Add((beadId, expectedState));
+                return roleRunner(role, token);
+            });
+            return await new DeliverySlotCoordinator(Runner, stageRunner)
+                .RunAsync(Host, project, Repository, beadId, TestContext.Current.CancellationToken);
+        }
+
+        public void Dispose()
+        {
+            target.Dispose();
+            hostTemp.Dispose();
+        }
+    }
+
+    private sealed class FastBeadsProcessRunner(string repositoryPath, string recoveryActor) : IProcessRunner
+    {
+        private sealed class FakeBead(string id, string issueType, IReadOnlyList<string> labels)
+        {
+            internal string Id { get; } = id;
+            internal string IssueType { get; } = issueType;
+            internal List<string> Labels { get; } = [.. labels];
+            internal string Status { get; set; } = "open";
+            internal string? Assignee { get; set; }
+            internal int RepairCycles { get; set; }
+        }
+
+        private readonly List<FakeBead> beads = [];
+        private readonly List<ProcessRequest> requests = [];
+
+        internal IEnumerable<ProcessRequest> WriteRequests => requests.Where(IsWrite);
+
+        internal string AddBead(string issueType, IReadOnlyList<string> labels)
+        {
+            var id = $"fast-{beads.Count + 1:D3}";
+            beads.Add(new FakeBead(id, issueType, labels));
+            return id;
+        }
+
+        internal BeadSnapshot ReadBead(string beadId)
+        {
+            var bead = beads.Single(item => item.Id == beadId);
+            return BeadsReader.Parse(JsonSerializer.Serialize(new[] { ToRow(bead) })).ById[beadId];
+        }
+
+        internal void Advance(string beadId, AgentRole role)
+        {
+            var bead = beads.Single(item => item.Id == beadId);
+            var currentStage = bead.Labels.SingleOrDefault(label => label.StartsWith("stage:", StringComparison.Ordinal));
+            if (currentStage is not null) bead.Labels.Remove(currentStage);
+            bead.Labels.Add(role switch
+            {
+                AgentRole.Implementer => "stage:review",
+                AgentRole.Reviewer => "stage:qa",
+                AgentRole.Qa => "stage:merge",
+                _ => throw new InvalidOperationException($"Unexpected role {role}.")
+            });
+        }
+
+        internal ProcessRequest[] ClaimWrites(string beadId) => requests
+            .Where(request => IsWrite(request) && IsClaimWrite(request, beadId)).ToArray();
+
+        internal static string GuardedStatus(ProcessRequest request)
+        {
+            var args = request.Arguments;
+            var index = args.ToList().IndexOf("--if-status");
+            return index >= 0 && index + 1 < args.Count ? args[index + 1] : "";
+        }
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            requests.Add(request);
+            if (request.FileName != "bd")
+                throw new InvalidOperationException($"Unexpected executable '{request.FileName}' in fast coordinator fixture.");
+            if (!string.Equals(request.WorkingDirectory, repositoryPath, StringComparison.Ordinal))
+                throw new InvalidOperationException($"bd request used unexpected working directory '{request.WorkingDirectory}'.");
+
+            if (request.Arguments.SequenceEqual(BeadsCommand.Create(repositoryPath).Arguments))
+                return Task.FromResult(Json(beads.Select(ToRow)));
+            if (request.Arguments.SequenceEqual(BeadsCommand.CreateUnassignedReadiness(repositoryPath).Arguments))
+                return Task.FromResult(Json(beads.Where(bead => bead.Status == "open" && bead.Assignee is null).Select(ToRow)));
+            if (request.Arguments.SequenceEqual(BeadsCommand.CreateRecoverableReadiness(repositoryPath, recoveryActor).Arguments))
+                return Task.FromResult(Json(beads.Where(bead => bead.Status == "in_progress" && bead.Assignee == recoveryActor).Select(ToRow)));
+
+            return Task.FromResult(Update(request));
+        }
+
+        private ProcessResult Update(ProcessRequest request)
+        {
+            var args = request.Arguments;
+            var updateIndex = args.ToList().IndexOf("update");
+            if (updateIndex < 0 || updateIndex + 1 >= args.Count)
+                throw new InvalidOperationException($"Unexpected bd request: {string.Join(' ', args)}");
+            var updateArgs = args.Skip(updateIndex).ToArray();
+            var bead = beads.SingleOrDefault(item => item.Id == updateArgs[1]);
+            if (bead is null) return new ProcessResult(13, "", "guarded update target was not found");
+
+            var acquire = new[] { "update", bead.Id, "--if-status", "open", "--if-assignee", "", "--status", "in_progress",
+                "--assignee", recoveryActor, "--json" };
+            if (updateArgs.SequenceEqual(acquire))
+            {
+                if (bead.Status != "open" || bead.Assignee is not null)
+                    return new ProcessResult(13, "", "guarded claim state changed");
+                bead.Status = "in_progress";
+                bead.Assignee = recoveryActor;
+                return new ProcessResult(0, "{}", "");
+            }
+
+            var release = new[] { "update", bead.Id, "--status", "open", "--assignee", "", "--if-assignee", recoveryActor,
+                "--if-status", "in_progress", "--json" };
+            if (updateArgs.SequenceEqual(release))
+            {
+                if (bead.Status != "in_progress" || bead.Assignee != recoveryActor)
+                    return new ProcessResult(13, "", "guarded release state changed");
+                bead.Status = "open";
+                bead.Assignee = null;
+                return new ProcessResult(0, "{}", "");
+            }
+
+            throw new InvalidOperationException($"Unexpected bd write in fast coordinator fixture: {string.Join(' ', args)}");
+        }
+
+        private static ProcessResult Json(IEnumerable<object> rows) =>
+            new(0, JsonSerializer.Serialize(rows), "");
+
+        private static object ToRow(FakeBead bead) => new
+        {
+            id = bead.Id,
+            status = bead.Status,
+            issue_type = bead.IssueType,
+            priority = 2,
+            created_at = "2026-01-01T00:00:00Z",
+            assignee = bead.Assignee,
+            labels = bead.Labels,
+            metadata = new { repair_cycles = bead.RepairCycles }
+        };
+
+        private static bool IsWrite(ProcessRequest request) => request.FileName == "bd"
+            && request.Arguments.Contains("update", StringComparer.Ordinal)
+            && request.Arguments.Contains("--if-status", StringComparer.Ordinal);
+
+        private static bool IsClaimWrite(ProcessRequest request, string beadId)
+        {
+            var args = request.Arguments;
+            var updateIndex = args.ToList().IndexOf("update");
+            return updateIndex >= 0 && updateIndex + 1 < args.Count && args[updateIndex + 1] == beadId
+                && args.Contains("--if-status", StringComparer.Ordinal)
+                && args.Contains("--if-assignee", StringComparer.Ordinal);
         }
     }
 

@@ -9,6 +9,11 @@ internal sealed record RawProcessResult(int ExitCode, byte[] StandardOutput, byt
     internal string StandardErrorText => Encoding.UTF8.GetString(StandardError);
 }
 
+internal static class TestProjectBuildGate
+{
+    internal static readonly SemaphoreSlim NightweaverProject = new(1, 1);
+}
+
 public sealed class PublishedCliArtifactFixture : IDisposable
 {
     private readonly TempDirectory temp = new();
@@ -32,7 +37,9 @@ public sealed class PublishedCliArtifactFixture : IDisposable
 
         var projectPath = Path.GetFullPath(Path.Combine(RepositoryRoot, "src", "Nightweaver", "Nightweaver.csproj"));
         PublishCommand = $"dotnet publish {projectPath} -c Release --self-contained false -p:UseAppHost=true -o {PublishDirectory}";
-        RunDotnetPublish(projectPath, PublishDirectory);
+        TestProjectBuildGate.NightweaverProject.Wait();
+        try { RunDotnetPublish(projectPath, PublishDirectory); }
+        finally { TestProjectBuildGate.NightweaverProject.Release(); }
 
         var trapProjectPath = Path.GetFullPath(Path.Combine(RepositoryRoot, "tests", "AgentCliTrap", "AgentCliTrap.csproj"));
         RunDotnetPublish(trapProjectPath, helperPublishDirectory);
@@ -72,45 +79,33 @@ public sealed class PublishedCliArtifactFixture : IDisposable
 
     private void SelfTestTrapsAndPrerequisites()
     {
-        var originalPath = Environment.GetEnvironmentVariable("PATH");
-        var originalRecordPath = Environment.GetEnvironmentVariable("NIGHTWEAVER_AGENT_TRAP_RECORD");
         var environment = EnvironmentWithAgentTraps();
-        try
+        foreach (var tool in new[] { "git", "bd" })
         {
-            // Windows resolves a bare ProcessStartInfo.FileName using the parent's PATH.
-            // Give the test process the same trap-first PATH that the published child receives.
-            Environment.SetEnvironmentVariable("PATH", environment["PATH"]);
-            Environment.SetEnvironmentVariable("NIGHTWEAVER_AGENT_TRAP_RECORD", TrapRecordPath);
-            foreach (var tool in new[] { "git", "bd" })
-            {
-                var result = ProcessTool.RunAsync(tool, ["--version"], RepositoryRoot, environment, TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
-                if (result.ExitCode != 0)
-                    throw new InvalidOperationException($"Required real-tool prerequisite '{tool}' is not reachable with the process-guard PATH: {result.StandardErrorText}");
-            }
-
-            var trapResults = new List<(string Tool, RawProcessResult Result)>();
-            foreach (var tool in new[] { "claude", "codex" })
-            {
-                var result = ProcessTool.RunAsync(tool, ["--nightweaver-trap-self-test"], RepositoryRoot, environment, TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
-                if (result.ExitCode == 0)
-                    throw new InvalidOperationException($"The {tool} process trap must exit nonzero during its self-test");
-                trapResults.Add((tool, result));
-            }
-
-            if (!File.Exists(TrapRecordPath))
-                throw new InvalidOperationException("Agent CLI trap self-test did not create its invocation record: "
-                    + string.Join(" | ", trapResults.Select(item => $"{item.Tool} exit={item.Result.ExitCode}; stdout={item.Result.StandardOutputText}; stderr={item.Result.StandardErrorText}")));
-            var records = File.ReadAllLines(TrapRecordPath);
-            if (records.Length != 2 || !records.Any(record => record.Contains("\"executable\":\"claude\"", StringComparison.Ordinal))
-                || !records.Any(record => record.Contains("\"executable\":\"codex\"", StringComparison.Ordinal)))
-                throw new InvalidOperationException($"Agent CLI trap self-test did not record both executable names: {string.Join(" | ", records)}");
-            File.Delete(TrapRecordPath);
+            var result = ProcessTool.RunAsync(tool, ["--version"], RepositoryRoot, environment, TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
+            if (result.ExitCode != 0)
+                throw new InvalidOperationException($"Required real-tool prerequisite '{tool}' is not reachable with the process-guard PATH: {result.StandardErrorText}");
         }
-        finally
+
+        var trapResults = new List<(string Tool, RawProcessResult Result)>();
+        foreach (var tool in new[] { "claude", "codex" })
         {
-            Environment.SetEnvironmentVariable("PATH", originalPath);
-            Environment.SetEnvironmentVariable("NIGHTWEAVER_AGENT_TRAP_RECORD", originalRecordPath);
+            // Absolute paths force the fake CLIs while keeping the parent PATH untouched.
+            var trapExecutable = Path.Combine(TrapDirectory, tool + (OperatingSystem.IsWindows() ? ".exe" : string.Empty));
+            var result = ProcessTool.RunAsync(trapExecutable, ["--nightweaver-trap-self-test"], RepositoryRoot, environment, TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
+            if (result.ExitCode == 0)
+                throw new InvalidOperationException($"The {tool} process trap must exit nonzero during its self-test");
+            trapResults.Add((tool, result));
         }
+
+        if (!File.Exists(TrapRecordPath))
+            throw new InvalidOperationException("Agent CLI trap self-test did not create its invocation record: "
+                + string.Join(" | ", trapResults.Select(item => $"{item.Tool} exit={item.Result.ExitCode}; stdout={item.Result.StandardOutputText}; stderr={item.Result.StandardErrorText}")));
+        var records = File.ReadAllLines(TrapRecordPath);
+        if (records.Length != 2 || !records.Any(record => record.Contains("\"executable\":\"claude\"", StringComparison.Ordinal))
+            || !records.Any(record => record.Contains("\"executable\":\"codex\"", StringComparison.Ordinal)))
+            throw new InvalidOperationException($"Agent CLI trap self-test did not record both executable names: {string.Join(" | ", records)}");
+        File.Delete(TrapRecordPath);
     }
 
     private void RunDotnetPublish(string projectPath, string outputPath)

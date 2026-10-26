@@ -7,7 +7,7 @@ using Nightweaver.Inspection;
 
 namespace Nightweaver.Tests;
 
-[CollectionDefinition("Published CLI integration", DisableParallelization = true)]
+[CollectionDefinition("Published CLI integration")]
 public sealed class PublishedCliTestGroup : ICollectionFixture<PublishedCliArtifactFixture>
 {
     public const string Name = "Published CLI integration";
@@ -438,14 +438,9 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
         published.AssertNoAgentInvocations();
         return new SortedDictionary<string, string>(StringComparer.Ordinal)
         {
+            // Root trees include their ordinary child paths; reparse targets are snapshotted below.
             ["target-root"] = Snapshot.FileTree(fixture.Target.Root),
-            ["target-repository"] = Snapshot.FileTree(fixture.Target.Path),
-            ["isolated-user-root"] = Snapshot.FileTree(fixture.Target.UserHome),
             ["host-root"] = Snapshot.FileTree(fixture.Host),
-            ["host-projects"] = Snapshot.Location(Path.Combine(fixture.Host, "projects")),
-            ["host-worktrees"] = Snapshot.Location(Path.Combine(fixture.Host, "worktrees")),
-            ["host-tmp"] = Snapshot.Location(Path.Combine(fixture.Host, "tmp")),
-            ["host-logs"] = Snapshot.Location(Path.Combine(fixture.Host, "logs")),
             ["caller-root"] = Snapshot.FileTree(fixture.Caller),
             ["external-sentinel-root"] = Snapshot.FileTree(fixture.External),
             ["published-artifact"] = Snapshot.FileTree(published.PublishDirectory),
