@@ -10,7 +10,7 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task UnlabeledPlanRunsAllThreeRolesAndReleasesOnceAtMerge()
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
 
@@ -295,7 +295,7 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task ReviewerRejectionImmediatelyRunsImplementerReviewerAndQaUnderTheSameClaim()
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
 
@@ -318,7 +318,7 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task QaRejectionRerunsImplementationAndReviewBeforeQa()
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
 
@@ -340,7 +340,7 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task MixedReviewAndQaRejectionsShareThePersistedCounterWithoutResettingIt()
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
 
@@ -363,7 +363,7 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task RepairAtExactLimitRunsAndZeroLimitEscalatesFirstRejection()
     {
-        using (var atLimitFixture = new SlotFixture(maxRepairCycles: 2))
+        using (var atLimitFixture = new FastSlotFixture(maxRepairCycles: 2))
         {
             var bead = atLimitFixture.CreateTask("stage:review");
             atLimitFixture.SetRepairCycles(bead, 1);
@@ -381,7 +381,7 @@ public sealed class DeliverySlotCoordinatorTests
             Assert.Equal(2, outcome.FinalState!.RepairCycles);
         }
 
-        using (var zeroFixture = new SlotFixture(maxRepairCycles: 0))
+        using (var zeroFixture = new FastSlotFixture(maxRepairCycles: 0))
         {
             var bead = zeroFixture.CreateTask();
             var roles = new List<AgentRole>();
@@ -417,7 +417,7 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task PersistedOverLimitEntryEscalatesBeforeAnyRoleAndUsesCurrentStageRole()
     {
-        using var fixture = new SlotFixture(maxRepairCycles: 1);
+        using var fixture = new FastSlotFixture(maxRepairCycles: 1);
         var bead = fixture.CreateTask("stage:qa");
         fixture.SetRepairCycles(bead, 2);
         var roles = new List<AgentRole>();
@@ -448,7 +448,7 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task IncompleteBudgetEscalationIsReturnedOnceWithoutAnotherRoleOrRelease()
     {
-        using var fixture = new SlotFixture(maxRepairCycles: 0);
+        using var fixture = new FastSlotFixture(maxRepairCycles: 0);
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
         var calls = 0;
@@ -655,7 +655,7 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task IntMaxBoundaryAllowsRepairToReachLimitWithoutOverflow()
     {
-        using var fixture = new SlotFixture(maxRepairCycles: int.MaxValue);
+        using var fixture = new FastSlotFixture(maxRepairCycles: int.MaxValue);
         var bead = fixture.CreateTask("stage:review");
         fixture.SetRepairCycles(bead, int.MaxValue - 1);
         var roles = new List<AgentRole>();
@@ -692,7 +692,7 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task MissingVerifiedStateStopsWithoutReleasingTheClaim()
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
 
@@ -1043,43 +1043,71 @@ public sealed class DeliverySlotCoordinatorTests
         private readonly BeadsApplicationFixture target = new();
         private readonly TempDirectory hostTemp = new();
         private readonly ProjectConfig project;
+        private readonly List<(string BeadId, BeadWorkflowState State)> expectedStatesWithId = [];
 
-        internal FastSlotFixture()
+        internal FastSlotFixture(int maxRepairCycles = 3)
         {
             Host = new HostPaths(hostTemp.Path);
             var settings = new AgentSettings(AgentCli.Codex, null, "low", 1);
             var roles = AgentRoles.All.ToDictionary(role => role, _ => settings);
             project = new(ProjectSlug.Parse("demo"), Path.Combine(Host.Root, "demo.json"),
-                new(target.Path, "main"), new(1, 1, 1), new(3, 2), settings, new RoleSettings(roles));
+                new(target.Path, "main"), new(1, 1, 1), new(maxRepairCycles, 2), settings, new RoleSettings(roles));
             Runner = new FastBeadsProcessRunner(target.Path, project.RecoveryActor);
         }
 
         internal HostPaths Host { get; }
         internal FastBeadsProcessRunner Runner { get; }
         private ValidatedTargetRepository Repository => new(target.Path, "main");
-        private List<(string BeadId, BeadWorkflowState State)> ExpectedStates { get; } = [];
+        internal List<BeadWorkflowState> ExpectedStates { get; } = [];
 
+        internal string RecoveryActor => project.RecoveryActor;
+
+        internal Task SimulateEscalationAsync(string beadId)
+        {
+            Runner.SimulateEscalation(beadId);
+            return Task.CompletedTask;
+        }
+
+        internal string CreateTask(params string[] labels) => AddBead("task", labels);
         internal string AddBead(string issueType, params string[] labels) => Runner.AddBead(issueType, labels);
 
         internal BeadSnapshot ReadBead(string beadId) => Runner.ReadBead(beadId);
 
         internal BeadWorkflowState ReadState(string beadId) => BeadWorkflowState.Parse(ReadBead(beadId));
 
-        internal BeadWorkflowState[] ExpectedStatesFor(string beadId) => ExpectedStates
+        internal BeadWorkflowState[] ExpectedStatesFor(string beadId) => expectedStatesWithId
             .Where(item => item.BeadId == beadId).Select(item => item.State).ToArray();
 
         internal void Advance(string beadId, AgentRole role) => Runner.Advance(beadId, role);
 
-        internal async Task<DeliverySlotOutcome> RunAsync(string beadId,
-            Func<AgentRole, CancellationToken, Task<OperationalRetryOutcome>> roleRunner)
+        internal void Reject(string beadId, AgentRole role, string finding)
         {
+            var before = ReadState(beadId);
+            var expectedStage = role == AgentRole.Reviewer ? "stage:review" : "stage:qa";
+            if (before.Stage != expectedStage) throw new InvalidOperationException($"Cannot reject {before.Stage} as {role}.");
+            Runner.AddComment(beadId, finding);
+            Runner.Reject(beadId, expectedStage, checked(before.RepairCycles + 1));
+        }
+
+        internal void SetRepairCycles(string beadId, int count) => Runner.SetRepairCycles(beadId, count);
+
+        internal ProcessRequest[] ClaimWrites(string beadId) => Runner.ClaimWrites(beadId);
+
+        internal async Task<DeliverySlotOutcome> RunAsync(string beadId,
+            Func<AgentRole, CancellationToken, Task<OperationalRetryOutcome>> roleRunner,
+            IProcessRunner? processRunner = null,
+            Func<NeedsHumanRequest, Task<NeedsHumanEscalationResult>>? escalate = null)
+        {
+            var runner = processRunner ?? Runner;
             var stageRunner = new DeliveryRoleRunner((_, _, _, requestedBead, role, _, expectedState, token, _) =>
             {
                 Assert.Equal(beadId, requestedBead);
-                ExpectedStates.Add((beadId, expectedState));
+                ExpectedStates.Add(expectedState);
+                expectedStatesWithId.Add((requestedBead, expectedState));
                 return roleRunner(role, token);
             });
-            return await new DeliverySlotCoordinator(Runner, stageRunner)
+            DeliveryRepairBudgetEscalator? escalator = escalate is null ? null : (_, _, _, request, _) => escalate(request);
+            return await new DeliverySlotCoordinator(runner, stageRunner, escalator)
                 .RunAsync(Host, project, Repository, beadId, TestContext.Current.CancellationToken);
         }
 
@@ -1104,6 +1132,7 @@ public sealed class DeliverySlotCoordinatorTests
 
         private readonly List<FakeBead> beads = [];
         private readonly List<ProcessRequest> requests = [];
+        private readonly Dictionary<string, List<string>> comments = new(StringComparer.Ordinal);
 
         internal IEnumerable<ProcessRequest> WriteRequests => requests.Where(IsWrite);
 
@@ -1134,6 +1163,39 @@ public sealed class DeliverySlotCoordinatorTests
             });
         }
 
+        internal void Reject(string beadId, string expectedStage, int nextRepairCycles)
+        {
+            var bead = beads.Single(item => item.Id == beadId);
+            bead.Labels.Remove(expectedStage);
+            bead.Labels.Add("stage:implement");
+            bead.RepairCycles = nextRepairCycles;
+        }
+
+        internal void SetRepairCycles(string beadId, int count)
+        {
+            var bead = beads.Single(item => item.Id == beadId);
+            bead.RepairCycles = count;
+        }
+
+        internal void AddComment(string beadId, string text)
+        {
+            if (!comments.TryGetValue(beadId, out var list))
+            {
+                list = [];
+                comments[beadId] = list;
+            }
+            list.Add(text);
+        }
+
+        internal void SimulateEscalation(string beadId)
+        {
+            var bead = beads.Single(b => b.Id == beadId);
+            bead.Labels.Add("needs-human");
+            bead.Status = "open";
+            bead.Assignee = null;
+            AddComment(beadId, "fixture needs-human diagnostic");
+        }
+
         internal ProcessRequest[] ClaimWrites(string beadId) => requests
             .Where(request => IsWrite(request) && IsClaimWrite(request, beadId)).ToArray();
 
@@ -1159,6 +1221,22 @@ public sealed class DeliverySlotCoordinatorTests
                 return Task.FromResult(Json(beads.Where(bead => bead.Status == "open" && bead.Assignee is null).Select(ToRow)));
             if (request.Arguments.SequenceEqual(BeadsCommand.CreateRecoverableReadiness(repositoryPath, recoveryActor).Arguments))
                 return Task.FromResult(Json(beads.Where(bead => bead.Status == "in_progress" && bead.Assignee == recoveryActor).Select(ToRow)));
+
+            if (request.Arguments.Contains("comments", StringComparer.Ordinal) && request.Arguments.Contains("--readonly", StringComparer.Ordinal))
+            {
+                var commentIdx = request.Arguments.ToList().IndexOf("comments");
+                var beadId = commentIdx >= 0 && commentIdx + 1 < request.Arguments.Count ? request.Arguments[commentIdx + 1] : "";
+                var beadComments = comments.TryGetValue(beadId, out var list) ? list : [];
+                var row = 0;
+                var rows = beadComments.Select(text => new
+                {
+                    id = $"c-{++row}",
+                    issue_id = beadId,
+                    text,
+                    created_at = "2026-01-01T00:00:00Z"
+                });
+                return Task.FromResult(Json(rows));
+            }
 
             return Task.FromResult(Update(request));
         }
@@ -1215,15 +1293,16 @@ public sealed class DeliverySlotCoordinatorTests
 
         private static bool IsWrite(ProcessRequest request) => request.FileName == "bd"
             && request.Arguments.Contains("update", StringComparer.Ordinal)
-            && request.Arguments.Contains("--if-status", StringComparer.Ordinal);
+            && (request.Arguments.Contains("--if-status", StringComparer.Ordinal)
+                || request.Arguments.Contains("--if-assignee", StringComparer.Ordinal));
 
         private static bool IsClaimWrite(ProcessRequest request, string beadId)
         {
             var args = request.Arguments;
             var updateIndex = args.ToList().IndexOf("update");
             return updateIndex >= 0 && updateIndex + 1 < args.Count && args[updateIndex + 1] == beadId
-                && args.Contains("--if-status", StringComparer.Ordinal)
-                && args.Contains("--if-assignee", StringComparer.Ordinal);
+                && (args.Contains("--if-status", StringComparer.Ordinal)
+                    || args.Contains("--if-assignee", StringComparer.Ordinal));
         }
     }
 
