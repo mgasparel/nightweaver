@@ -13,6 +13,13 @@ public sealed class WebBeadsIntegrationTests
 {
     private static readonly string[] ExpectedDtoFields = ["assignee", "id", "labels", "priority", "status", "title", "type"];
     private static readonly string[] ExpectedTaggedLabels = ["ready-for-agent", "stage:implement"];
+    private static readonly string[] ExpectedDiagnosticLogs = ["C:\\not-read\\review.log"];
+    private static readonly string[] ExpectedAttentionFields =
+    [
+        "beadId", "title", "type", "priority", "status", "labels", "stage", "kind", "pausedAt",
+        "pauseTimeSource", "fromRole", "question", "diagnostic", "repairCycles", "maxRepairCycles",
+        "canDecide", "canRetry", "canAbort", "unavailableReason", "sourceAuthor"
+    ];
 
     [Fact]
     public async Task ExplorerReturnsCompleteReadOnlyInventoryAndAppliesNativeViewsAndSearch()
@@ -1201,6 +1208,466 @@ public sealed class WebBeadsIntegrationTests
 
     private sealed record ExplorerSeed(string Title, string Type = "task", string Status = "open",
         string? Assignee = null, int Priority = 2, IReadOnlyList<string>? Labels = null);
+    [Fact]
+    public async Task AttentionDeskProjectsPausedInventoryAndValidatedCommentContext()
+    {
+        using var target = new BeadsFixture("configured target");
+        using var foreign = new BeadsFixture("foreign target");
+        var decision = target.Create("Planner choice", type: "feature", priority: 0);
+        target.Run("bd", ["update", decision, "--add-label", "stage:plan", "--add-label", "product-decision-required"]);
+        var question = "Choose <safe> or <fast> for café ☕?";
+        target.Run("bd", ["--actor", "Planner Agent", "comments", "add", decision, question]);
+
+        var needsHuman = target.Create("Review repair exhausted", type: "task", priority: 1);
+        target.Run("bd", ["update", needsHuman, "--add-label", "stage:review", "--add-label", "needs-human",
+            "--set-metadata", "repair_cycles=3", "--set-metadata", "keep=unchanged"]);
+        var diagnostic = JsonSerializer.Serialize(new
+        {
+            schema = "nightweaver-needs-human-v1",
+            bead_id = needsHuman,
+            bead_type = "task",
+            stage = "stage:review",
+            cause = "repair-budget-exhausted",
+            failed_role = "reviewer",
+            reason = "A required check failed.",
+            latest_findings = "Literal <b>failure</b> detail.",
+            invocation_id = "fixture-invocation",
+            log_directory = "C:\\private-log-directory-not-to-read",
+            log_files = ExpectedDiagnosticLogs,
+            cleanup_preflight = "passed"
+        });
+        target.Run("bd", ["--actor", "Reviewer Agent", "comments", "add", needsHuman, diagnostic]);
+        await Task.Delay(TimeSpan.FromSeconds(1.1), TestContext.Current.CancellationToken);
+        var cleanup = JsonSerializer.Serialize(new
+        {
+            schema = "nightweaver-needs-human-cleanup-failure-v1",
+            bead_id = needsHuman,
+            failure = "The owned worktree was retained for inspection."
+        });
+        target.Run("bd", ["comments", "add", needsHuman, cleanup]);
+        await Task.Delay(TimeSpan.FromSeconds(1.1), TestContext.Current.CancellationToken);
+        var malformedDiagnostic = JsonSerializer.Serialize(new
+        {
+            schema = "nightweaver-needs-human-v1",
+            bead_id = needsHuman,
+            bead_type = "task",
+            stage = 42,
+            cause = "repair-budget-exhausted",
+            failed_role = "reviewer",
+            reason = "This malformed diagnostic must not replace the valid one.",
+            latest_findings = "Malformed stage field.",
+            invocation_id = "invalid-fixture-invocation",
+            log_directory = "not-read/invalid",
+            log_files = ExpectedDiagnosticLogs,
+            cleanup_preflight = "passed"
+        });
+        target.Run("bd", ["comments", "add", needsHuman, malformedDiagnostic]);
+
+        var missingDiagnostic = target.Create("Missing escalation details", priority: 2);
+        target.Run("bd", ["update", missingDiagnostic, "--add-label", "needs-human"]);
+        var active = target.Create("Claimed pause", actor: "nightweaver:web-test", status: "in_progress", priority: 0);
+        target.Run("bd", ["update", active, "--add-label", "stage:implement", "--add-label", "needs-human"]);
+        var malformed = target.Create("Malformed workflow", priority: 0);
+        target.Run("bd", ["update", malformed, "--add-label", "stage:implement", "--add-label", "stage:review",
+            "--add-label", "needs-human", "--set-metadata", "repair_cycles=broken"]);
+        var bothPauses = target.Create("Contradictory pauses", priority: 1);
+        target.Run("bd", ["update", bothPauses, "--add-label", "stage:qa", "--add-label", "needs-human",
+            "--add-label", "product-decision-required"]);
+        var closed = target.Create("Closed pause", status: "closed", priority: 0);
+        target.Run("bd", ["update", closed, "--add-label", "needs-human"]);
+        for (var index = 0; index < 52; index++) target.Create($"Ordinary row {index:D2}");
+        var foreignPause = foreign.Create("Foreign pause");
+
+        var runner = CreateFixtureRunner(target, foreign);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        var response = await client.GetAsync("/api/attention", TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+        using var document = JsonDocument.Parse(body);
+        var rows = document.RootElement.EnumerateArray().Select(row => row.Clone()).ToArray();
+        Assert.True(rows.Length > 3);
+        Assert.DoesNotContain(rows, row => row.GetProperty("beadId").GetString() == closed);
+        Assert.DoesNotContain(rows, row => row.GetProperty("beadId").GetString() == foreignPause);
+        Assert.Equal(rows.OrderBy(row => row.GetProperty("priority").GetInt32())
+                .ThenBy(row => row.GetProperty("pausedAt").ValueKind == JsonValueKind.Null ? 1 : 0)
+                .ThenBy(row => row.GetProperty("pausedAt").ValueKind == JsonValueKind.String
+                    ? row.GetProperty("pausedAt").GetDateTimeOffset() : DateTimeOffset.MaxValue)
+                .ThenBy(row => row.GetProperty("beadId").GetString(), StringComparer.Ordinal)
+                .Select(row => row.GetProperty("beadId").GetString()),
+            rows.Select(row => row.GetProperty("beadId").GetString()));
+
+        foreach (var row in rows)
+            Assert.Equal(ExpectedAttentionFields.Order(StringComparer.Ordinal),
+                row.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+
+        var decisionRow = FindAttention(rows, decision);
+        Assert.Equal("product-decision-required", decisionRow.GetProperty("kind").GetString());
+        Assert.Equal(question, decisionRow.GetProperty("question").GetString());
+        Assert.Equal("Planner Agent", decisionRow.GetProperty("sourceAuthor").GetString());
+        Assert.Equal("planner", decisionRow.GetProperty("fromRole").GetString());
+        Assert.Equal("comment", decisionRow.GetProperty("pauseTimeSource").GetString());
+        Assert.Equal(3, decisionRow.GetProperty("maxRepairCycles").GetInt32());
+        Assert.True(decisionRow.GetProperty("canDecide").GetBoolean());
+
+        var needsHumanRow = FindAttention(rows, needsHuman);
+        Assert.Equal("needs-human", needsHumanRow.GetProperty("kind").GetString());
+        Assert.Equal("reviewer", needsHumanRow.GetProperty("fromRole").GetString());
+        var projectedDiagnostic = needsHumanRow.GetProperty("diagnostic").GetString()!;
+        Assert.Contains("Cause: repair-budget-exhausted", projectedDiagnostic, StringComparison.Ordinal);
+        Assert.Contains("Reason: A required check failed.", projectedDiagnostic, StringComparison.Ordinal);
+        Assert.Contains("Literal <b>failure</b> detail.", projectedDiagnostic, StringComparison.Ordinal);
+        Assert.Contains("C:\\not-read\\review.log", projectedDiagnostic, StringComparison.Ordinal);
+        Assert.Contains("Cleanup warning: The owned worktree was retained for inspection.", projectedDiagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("This malformed diagnostic must not replace the valid one.", projectedDiagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("C:\\private-log-directory-not-to-read", projectedDiagnostic, StringComparison.Ordinal);
+        Assert.Equal(3, needsHumanRow.GetProperty("repairCycles").GetInt32());
+
+        var activeRow = FindAttention(rows, active);
+        Assert.Equal("in_progress", activeRow.GetProperty("status").GetString());
+        Assert.False(activeRow.GetProperty("canRetry").GetBoolean());
+        Assert.False(activeRow.GetProperty("canAbort").GetBoolean());
+        Assert.NotNull(activeRow.GetProperty("unavailableReason").GetString());
+
+        var malformedRow = FindAttention(rows, malformed);
+        Assert.Equal("invalid-workflow", malformedRow.GetProperty("kind").GetString());
+        Assert.Equal(JsonValueKind.Null, malformedRow.GetProperty("repairCycles").ValueKind);
+        Assert.False(malformedRow.GetProperty("canRetry").GetBoolean());
+        var bothRow = FindAttention(rows, bothPauses);
+        Assert.Equal("invalid-workflow", bothRow.GetProperty("kind").GetString());
+        Assert.False(bothRow.GetProperty("canDecide").GetBoolean());
+        var fallbackRow = FindAttention(rows, missingDiagnostic);
+        Assert.Contains("no valid matching escalation diagnostic", fallbackRow.GetProperty("diagnostic").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(JsonValueKind.Null, fallbackRow.GetProperty("pausedAt").ValueKind);
+        Assert.Equal("unknown", fallbackRow.GetProperty("pauseTimeSource").GetString());
+    }
+
+    [Fact]
+    public async Task AttentionDecisionActionsPreserveWorkflowAndRecordExactGuidance()
+    {
+        using var target = new BeadsFixture("configured target");
+        using var foreign = new BeadsFixture("foreign target");
+        var parent = target.Create("Product parent", type: "feature");
+        var feature = target.Create("Product decision", type: "feature", priority: 1);
+        target.Run("bd", ["dep", "add", feature, parent]);
+        target.Run("bd", ["update", feature, "--add-label", "stage:plan", "--add-label", "product-decision-required",
+            "--add-label", "keep-this", "--set-metadata", "repair_cycles=2", "--set-metadata", "owner=human"]);
+        target.Run("bd", ["--actor", "Planner Agent", "comments", "add", feature, "Which endpoint should the plan use?"]);
+        var task = target.Create("Plan decision", type: "task", priority: 2);
+        target.Run("bd", ["update", task, "--add-label", "stage:review", "--add-label", "product-decision-required"]);
+        target.Run("bd", ["--actor", "Reviewer Agent", "comments", "add", task, "May this add a dependency?"]);
+
+        var runner = CreateFixtureRunner(target, foreign);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        var instruction = "  Use the existing route. café ☕\nKeep <markup> as literal text.  ";
+
+        using (var noteRequest = CreateAttentionRequest(client, $"/api/beads/{feature}/decide",
+                   JsonSerializer.Serialize(new { instruction, action = "note_only" })))
+        using (var noteResponse = await client.SendAsync(noteRequest, TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(HttpStatusCode.OK, noteResponse.StatusCode);
+            Assert.Equal("no-store", noteResponse.Headers.CacheControl?.ToString());
+            using var result = JsonDocument.Parse(await noteResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            Assert.False(result.RootElement.GetProperty("resolved").GetBoolean());
+            Assert.True(result.RootElement.GetProperty("commentRecorded").GetBoolean());
+            Assert.False(result.RootElement.GetProperty("stateChanged").GetBoolean());
+        }
+
+        var shownAfterNote = ReadShownBead(target, feature);
+        Assert.Contains("product-decision-required", shownAfterNote.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
+        Assert.Equal(2, shownAfterNote.GetProperty("metadata").GetProperty("repair_cycles").GetInt32());
+        var commentsAfterNote = ReadComments(target, feature);
+        Assert.Contains(commentsAfterNote, comment => comment.GetProperty("text").GetString() is { } text
+            && GuidanceMatches(text, "note_only", instruction.Trim()));
+
+        using (var resumeRequest = CreateAttentionRequest(client, $"/api/beads/{feature}/decide",
+                   JsonSerializer.Serialize(new { instruction, action = "resume" })))
+        using (var resumeResponse = await client.SendAsync(resumeRequest, TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(HttpStatusCode.OK, resumeResponse.StatusCode);
+            using var result = JsonDocument.Parse(await resumeResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            Assert.True(result.RootElement.GetProperty("resolved").GetBoolean());
+            Assert.True(result.RootElement.GetProperty("commentRecorded").GetBoolean());
+            Assert.True(result.RootElement.GetProperty("stateChanged").GetBoolean());
+        }
+
+        var shownAfterResume = ReadShownBead(target, feature);
+        var featureLabels = shownAfterResume.GetProperty("labels").EnumerateArray().Select(label => label.GetString()).ToArray();
+        Assert.Contains("stage:plan", featureLabels);
+        Assert.Contains("keep-this", featureLabels);
+        Assert.DoesNotContain("product-decision-required", featureLabels);
+        Assert.False(shownAfterResume.GetProperty("metadata").TryGetProperty("repair_cycles", out _));
+        Assert.Equal("human", shownAfterResume.GetProperty("metadata").GetProperty("owner").GetString());
+        using var featureDeps = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "dep", "list", feature,
+            "--direction", "down", "--json"]));
+        Assert.Contains(featureDeps.RootElement.EnumerateArray(), edge => edge.GetProperty("id").GetString() == parent);
+
+        using (var taskRequest = CreateAttentionRequest(client, $"/api/beads/{task}/decide",
+                   JsonSerializer.Serialize(new { instruction = "Approve this plan.", action = "resume" }), includeOrigin: false))
+        using (var taskResponse = await client.SendAsync(taskRequest, TestContext.Current.CancellationToken))
+            Assert.Equal(HttpStatusCode.OK, taskResponse.StatusCode);
+        var taskAfter = ReadShownBead(target, task);
+        Assert.Contains("stage:review", taskAfter.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
+        Assert.DoesNotContain("product-decision-required", taskAfter.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
+    }
+
+    [Fact]
+    public async Task AttentionRetryResetsBudgetAndAbortClosesWithoutRemovingHistory()
+    {
+        using var target = new BeadsFixture("configured target");
+        var retry = target.Create("Retry this task", type: "task", priority: 1);
+        target.Run("bd", ["update", retry, "--add-label", "stage:qa", "--add-label", "needs-human", "--add-label", "keep-label",
+            "--set-metadata", "repair_cycles=3", "--set-metadata", "keep=untouched"]);
+        var abort = target.Create("Abort this task", type: "task", priority: 2);
+        target.Run("bd", ["update", abort, "--add-label", "stage:merge", "--add-label", "needs-human",
+            "--set-metadata", "repair_cycles=2", "--set-metadata", "keep=untouched"]);
+
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        using (var retryRequest = CreateAttentionRequest(client, $"/api/beads/{retry}/retry"))
+        using (var retryResponse = await client.SendAsync(retryRequest, TestContext.Current.CancellationToken))
+        {
+            var retryBody = await retryResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            Assert.True(retryResponse.StatusCode == HttpStatusCode.OK, $"Retry response: {retryBody}");
+            using var result = JsonDocument.Parse(retryBody);
+            Assert.Equal("retry", result.RootElement.GetProperty("action").GetString());
+            Assert.True(result.RootElement.GetProperty("resolved").GetBoolean());
+        }
+
+        var retryAfter = ReadShownBead(target, retry);
+        var retryLabels = retryAfter.GetProperty("labels").EnumerateArray().Select(label => label.GetString()).ToArray();
+        Assert.Contains("stage:qa", retryLabels);
+        Assert.Contains("keep-label", retryLabels);
+        Assert.DoesNotContain("needs-human", retryLabels);
+        Assert.False(retryAfter.GetProperty("metadata").TryGetProperty("repair_cycles", out _));
+        Assert.Equal("untouched", retryAfter.GetProperty("metadata").GetProperty("keep").GetString());
+        Assert.Contains(ReadComments(target, retry), comment => comment.GetProperty("text").GetString() is { } text
+            && ActionMatches(text, "retry"));
+
+        using (var abortRequest = CreateAttentionRequest(client, $"/api/beads/{abort}/abort", "{}"))
+        using (var abortResponse = await client.SendAsync(abortRequest, TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(HttpStatusCode.OK, abortResponse.StatusCode);
+            using var result = JsonDocument.Parse(await abortResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            Assert.Equal("abort", result.RootElement.GetProperty("action").GetString());
+            Assert.True(result.RootElement.GetProperty("resolved").GetBoolean());
+        }
+
+        var abortAfter = ReadShownBead(target, abort);
+        Assert.Equal("closed", abortAfter.GetProperty("status").GetString());
+        Assert.Contains("needs-human", abortAfter.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
+        Assert.Equal(2, abortAfter.GetProperty("metadata").GetProperty("repair_cycles").GetInt32());
+        Assert.Contains(ReadComments(target, abort), comment => comment.GetProperty("text").GetString() is { } text
+            && ActionMatches(text, "abort"));
+        var attention = await GetAttentionRowsAsync(client);
+        Assert.DoesNotContain(attention, row => row.GetProperty("beadId").GetString() == abort);
+    }
+
+    [Fact]
+    public async Task AttentionRejectsUnsafeRequestsBeforeLaunchingTrackerCommands()
+    {
+        using var target = new BeadsFixture();
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        var invalidBodies = new[]
+        {
+            "{ malformed",
+            "null",
+            "[]",
+            "{}",
+            "{\"instruction\":\"hello\",\"action\":\"resume\",\"extra\":1}",
+            "{\"instruction\":\"one\",\"instruction\":\"two\",\"action\":\"resume\"}",
+            "{\"instruction\":3,\"action\":\"resume\"}",
+            "{\"instruction\":\"hello\",\"action\":\"restart\"}",
+            "{\"instruction\":\"   \",\"action\":\"resume\"}"
+        };
+        foreach (var body in invalidBodies)
+        {
+            using var request = CreateAttentionRequest(client, "/api/beads/fixture-unsafe/decide", body);
+            using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+            Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+        }
+
+        var largeUnicode = JsonSerializer.Serialize(new { instruction = new string('x', 17 * 1024), action = "resume" });
+        using (var request = CreateAttentionRequest(client, "/api/beads/fixture-unsafe/decide", largeUnicode))
+        using (var response = await client.SendAsync(request, TestContext.Current.CancellationToken))
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var oversized = JsonSerializer.Serialize(new { instruction = new string('x', 33 * 1024), action = "resume" });
+        using (var request = CreateAttentionRequest(client, "/api/beads/fixture-unsafe/decide", oversized))
+        using (var response = await client.SendAsync(request, TestContext.Current.CancellationToken))
+            Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+
+        using (var request = CreateAttentionRequest(client, "/api/beads/fixture-unsafe/decide", "{}", includeHeader: false))
+        using (var response = await client.SendAsync(request, TestContext.Current.CancellationToken))
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        using (var request = CreateAttentionRequest(client, "/api/beads/fixture-unsafe/decide", "{}", origin: "https://attacker.invalid"))
+        using (var response = await client.SendAsync(request, TestContext.Current.CancellationToken))
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        using (var request = CreateAttentionRequest(client, "/api/beads/fixture-unsafe/decide", "{}", origin: "null"))
+        using (var response = await client.SendAsync(request, TestContext.Current.CancellationToken))
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        using (var request = CreateAttentionRequest(client, "/api/beads/fixture-unsafe/decide", "{}"))
+        {
+            request.Headers.Host = "attacker.invalid";
+            using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+        using (var request = CreateAttentionRequest(client, "/api/beads/fixture-unsafe/decide", "{}"))
+        {
+            request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "same-site");
+            using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+        using (var request = CreateAttentionRequest(client, "/api/beads/fixture-unsafe/decide", "{}", contentType: "text/plain"))
+        using (var response = await client.SendAsync(request, TestContext.Current.CancellationToken))
+            Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        using (var request = CreateAttentionRequest(client, "/api/beads/fixture-unsafe/retry", "{\"force\":true}"))
+        using (var response = await client.SendAsync(request, TestContext.Current.CancellationToken))
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using (var request = CreateAttentionRequest(client, "/api/beads/fixture-unsafe/abort?target=other", "{}"))
+        using (var response = await client.SendAsync(request, TestContext.Current.CancellationToken))
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(runner.Requests);
+    }
+
+    [Fact]
+    public async Task AttentionReportsPartialCommentAndUpdateFailuresAndKeepsPauseVisible()
+    {
+        using var target = new BeadsFixture();
+        var beadId = target.Create("Partial update", type: "feature");
+        target.Run("bd", ["update", beadId, "--add-label", "stage:plan", "--add-label", "product-decision-required"]);
+        target.Run("bd", ["comments", "add", beadId, "Should the retry preserve the route?"]);
+        var actual = new SystemProcessRunner();
+        var failFinalUpdate = 1;
+        var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
+        {
+            var args = request.Arguments;
+            var updateIndex = args.ToList().IndexOf("update");
+            if (updateIndex >= 0 && args.Contains("--remove-label") && Interlocked.Exchange(ref failFinalUpdate, 0) == 1)
+                return new ProcessResult(1, string.Empty, "simulated final update failure");
+            return await actual.RunAsync(AddFixtureEnvironment(target, request), cancellationToken);
+        });
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        using var request = CreateAttentionRequest(client, $"/api/beads/{beadId}/decide",
+            JsonSerializer.Serialize(new { instruction = "Continue with route A.", action = "resume" }));
+        using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        Assert.True(problem.RootElement.GetProperty("commentRecorded").GetBoolean());
+        Assert.False(problem.RootElement.GetProperty("stateChanged").GetBoolean());
+        Assert.Contains("Refresh", problem.RootElement.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
+        var shown = ReadShownBead(target, beadId);
+        Assert.Contains("product-decision-required", shown.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
+        Assert.Contains(ReadComments(target, beadId), comment => comment.GetProperty("text").GetString() is { } text
+            && GuidanceMatches(text, "resume", "Continue with route A."));
+    }
+
+    [Fact]
+    public async Task AttentionReportsGuardConflictAfterRecordingTheDecision()
+    {
+        using var target = new BeadsFixture();
+        var beadId = target.Create("Guarded decision", type: "feature");
+        target.Run("bd", ["update", beadId, "--add-label", "stage:plan", "--add-label", "product-decision-required"]);
+        target.Run("bd", ["comments", "add", beadId, "Should the plan keep its current route?"]);
+        var actual = new SystemProcessRunner();
+        var changeBeforeUpdate = 1;
+        var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
+        {
+            var args = request.Arguments;
+            if (args.ToList().IndexOf("update") >= 0 && args.Contains("--remove-label")
+                && Interlocked.Exchange(ref changeBeforeUpdate, 0) == 1)
+                target.Run("bd", ["update", beadId, "--status", "in_progress"]);
+            return await actual.RunAsync(AddFixtureEnvironment(target, request), cancellationToken);
+        });
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        using var request = CreateAttentionRequest(client, $"/api/beads/{beadId}/decide",
+            JsonSerializer.Serialize(new { instruction = "Keep the current route.", action = "resume" }));
+        using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        Assert.True(problem.RootElement.GetProperty("commentRecorded").GetBoolean());
+        Assert.True(problem.RootElement.GetProperty("stateChanged").GetBoolean());
+        var shown = ReadShownBead(target, beadId);
+        Assert.Equal("in_progress", shown.GetProperty("status").GetString());
+        Assert.Contains("product-decision-required", shown.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
+        Assert.Contains(ReadComments(target, beadId), comment => comment.GetProperty("text").GetString() is { } text
+            && GuidanceMatches(text, "resume", "Keep the current route."));
+    }
+
+    private static JsonElement FindAttention(IEnumerable<JsonElement> rows, string id)
+        => Assert.Single(rows, row => row.GetProperty("beadId").GetString() == id);
+
+    private static async Task<JsonElement[]> GetAttentionRowsAsync(HttpClient client)
+    {
+        using var response = await client.GetAsync("/api/attention", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        return document.RootElement.EnumerateArray().Select(row => row.Clone()).ToArray();
+    }
+
+    private static HttpRequestMessage CreateAttentionRequest(HttpClient client, string path, string? body = null,
+        bool includeHeader = true, string? origin = null, string contentType = "application/json", bool includeOrigin = true)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, path);
+        if (body is not null) request.Content = new StringContent(body, Encoding.UTF8, contentType);
+        if (includeHeader) request.Headers.TryAddWithoutValidation("X-Nightweaver-Request", "console-v1");
+        if (origin is not null) request.Headers.TryAddWithoutValidation("Origin", origin);
+        else if (includeHeader && includeOrigin) request.Headers.TryAddWithoutValidation("Origin", client.BaseAddress!.GetLeftPart(UriPartial.Authority));
+        return request;
+    }
+
+    private static JsonElement ReadShownBead(BeadsFixture target, string id)
+    {
+        using var document = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "show", id, "--json"]));
+        var root = document.RootElement;
+        return (root.ValueKind == JsonValueKind.Array ? Assert.Single(root.EnumerateArray()) : root).Clone();
+    }
+
+    private static JsonElement[] ReadComments(BeadsFixture target, string id)
+    {
+        using var document = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "comments", id, "--json"]));
+        return document.RootElement.EnumerateArray().Select(comment => comment.Clone()).ToArray();
+    }
+
+    private static bool GuidanceMatches(string text, string action, string instruction)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            return document.RootElement.GetProperty("schema").GetString() == "nightweaver-human-guidance-v1"
+                && document.RootElement.GetProperty("action").GetString() == action
+                && document.RootElement.GetProperty("instruction").GetString() == instruction
+                && document.RootElement.GetProperty("actor").GetString() == "local-console";
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool ActionMatches(string text, string action)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            return document.RootElement.GetProperty("schema").GetString() == "nightweaver-human-action-v1"
+                && document.RootElement.GetProperty("action").GetString() == action
+                && document.RootElement.GetProperty("actor").GetString() == "local-console";
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     private static RecordingProcessRunner CreateFixtureRunner(BeadsFixture target, BeadsFixture? foreign = null)
     {

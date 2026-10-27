@@ -190,9 +190,10 @@ internal static class BoundedRequestBody
 {
     internal const int MaximumBytes = 64 * 1024;
 
-    internal static async Task<byte[]?> ReadAsync(HttpRequest request, CancellationToken cancellationToken)
+    internal static async Task<byte[]?> ReadAsync(HttpRequest request, CancellationToken cancellationToken,
+        int maximumBytes = MaximumBytes)
     {
-        if (request.ContentLength is > MaximumBytes)
+        if (request.ContentLength is { } contentLength && contentLength > maximumBytes)
             return null;
 
         using var buffer = new MemoryStream();
@@ -201,7 +202,7 @@ internal static class BoundedRequestBody
         {
             var count = await request.Body.ReadAsync(chunk.AsMemory(), cancellationToken);
             if (count == 0) return buffer.ToArray();
-            if (buffer.Length + count > MaximumBytes) return null;
+            if (buffer.Length + count > maximumBytes) return null;
             buffer.Write(chunk, 0, count);
         }
     }

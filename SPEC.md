@@ -189,8 +189,9 @@ stateDiagram-v2
    - Its parent `planned` **Product Bead** remains `planned`, unrelated sibling **Plan Beads** continue executing normally, and `blocks`-dependent sibling **Plan Beads** remain naturally blocked by `bd ready`.
 3. **Automatic Resumption**:
    - The **Orchestrator** skips any Bead carrying `product-decision-required` or `needs-human` until it detects either:
-     - New human comment or description update activity timestamped after the escalation comment/event, or
+     - A new ordinary human comment or description update timestamped after the escalation comment/event.
      - Manual removal of the `product-decision-required` / `needs-human` label.
+   - Structured Web guidance tagged `nightweaver-human-guidance-v1` with action `note_only` and abort audit comments tagged `nightweaver-human-action-v1` are not auto-resume signals. Web `resume` and `retry` actions explicitly remove their pause label and reset `repair_cycles` under guarded tracker updates; they do not wait for a later automatic-resumption check.
    - Upon detection, the **Orchestrator** removes the escalation label (if still present), resets the repair budget (`bd update <id> --unset-metadata repair_cycles`), and schedules the Bead to resume at its current `stage:*` label (recreating the worktree from `origin/nightweaver/<bead-id>` if a remote branch exists, automatically incorporating any human-pushed commits).
 
 ---
