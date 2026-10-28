@@ -247,7 +247,7 @@ public sealed class NightweaverAppTests
     public async Task DryRunPrintsResolvedRoleSettingsInCanonicalOrder()
     {
         using var temp = new TempDirectory();
-        using var repository = new BeadsFixture();
+        using var repository = new BeadsApplicationFixture();
         var host = temp.CreateDirectory("host");
         var caller = temp.CreateDirectory("caller");
         var configPath = Path.Combine(host, "projects", "demo.json");
@@ -265,7 +265,9 @@ public sealed class NightweaverAppTests
         }));
         var output = new StringWriter();
         var error = new StringWriter();
-        var runner = new RecordingProcessRunner((request, token) => new SystemProcessRunner().RunAsync(request, token));
+        var runner = new RecordingProcessRunner((request, token) => request.FileName == "git"
+            ? new SystemProcessRunner().RunAsync(request, token)
+            : Task.FromResult(new ProcessResult(0, "[]", "")));
 
         var code = await NightweaverApp.RunAsync(
             ["--project", "demo", "--dry-run"],

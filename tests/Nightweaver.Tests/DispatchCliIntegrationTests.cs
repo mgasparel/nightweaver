@@ -4,7 +4,6 @@ using Nightweaver.Inspection;
 
 namespace Nightweaver.Tests;
 
-[Collection(PublishedCliTestGroup.Name)]
 public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture published)
 {
     [Fact]

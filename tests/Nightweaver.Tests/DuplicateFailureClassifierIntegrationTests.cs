@@ -7,7 +7,7 @@ using Nightweaver.Execution;
 
 namespace Nightweaver.Tests;
 
-[CollectionDefinition("Duplicate failure classifier native integration", DisableParallelization = true)]
+[CollectionDefinition("Duplicate failure classifier native integration")]
 public sealed class DuplicateFailureClassifierNativeIntegration { }
 
 [Collection("Duplicate failure classifier native integration")]
@@ -18,7 +18,7 @@ public sealed class DuplicateFailureClassifierIntegrationTests
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration requires Win32 Job Objects and native fake CLI executables.");
         using var fixture = new ClassifierNativeFixture();
-        using var environment = fixture.Install("duplicate");
+        var environment = fixture.Install("duplicate");
 
         foreach (var (cli, action, expected) in new[]
         {
@@ -34,7 +34,9 @@ public sealed class DuplicateFailureClassifierIntegrationTests
             environment.Set("NIGHTWEAVER_FIXTURE_CLASSIFIER_REPORT", reportPath);
             var project = fixture.CreateProject(cli);
 
-            var result = await new DuplicateFailureClassifier().CompareAsync(fixture.Paths, project, fixture.Context,
+            var classifier = new DuplicateFailureClassifier(execute: (paths, slug, invocation, limit, token) =>
+                AgentInvocationExecutor.ExecuteWithStandardOutputCaptureAsync(paths, slug, invocation, limit, environment, token));
+            var result = await classifier.CompareAsync(fixture.Paths, project, fixture.Context,
                 AgentRole.Implementer, fixture.Worktree, fixture.Previous, fixture.Latest, TestContext.Current.CancellationToken);
 
             Assert.True(result.Verdict == expected,
@@ -68,7 +70,7 @@ public sealed class DuplicateFailureClassifierIntegrationTests
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration requires Win32 Job Objects and native fake CLI executables.");
         using var fixture = new ClassifierNativeFixture();
-        using var environment = fixture.Install("timeout-descendant");
+        var environment = fixture.Install("timeout-descendant");
         var handshake = Path.Combine(fixture.Temp.Path, "classifier job handshake");
         environment.Set("NIGHTWEAVER_FIXTURE_CLASSIFIER_HANDSHAKE", handshake);
         var project = fixture.CreateProject(AgentCli.Claude);
@@ -77,7 +79,7 @@ public sealed class DuplicateFailureClassifierIntegrationTests
             var shortTimeout = new PreparedAgentInvocation(invocation.Executable, invocation.Arguments,
                 invocation.WorkingDirectory, invocation.StandardInput, invocation.EnvironmentOverrides,
                 TimeSpan.FromSeconds(2), invocation.InvocationId, invocation.TemporaryDirectory, invocation.LogFilePath);
-            return AgentInvocationExecutor.ExecuteWithStandardOutputCaptureAsync(paths, slug, shortTimeout, limit, token);
+            return AgentInvocationExecutor.ExecuteWithStandardOutputCaptureAsync(paths, slug, shortTimeout, limit, environment, token);
         });
 
         var comparison = classifier.CompareAsync(fixture.Paths, project, fixture.Context, AgentRole.Implementer,
@@ -158,9 +160,9 @@ public sealed class DuplicateFailureClassifierIntegrationTests
         internal AgentStageResult Previous { get; }
         internal AgentStageResult Latest { get; }
 
-        internal TestEnvironment Install(string action)
+        internal FixtureProcessLauncher Install(string action)
         {
-            var environment = new TestEnvironment();
+            var environment = new FixtureProcessLauncher();
             environment.Set("PATH", fakeCliRoot + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty));
             environment.Set("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", action);
             return environment;
@@ -195,19 +197,30 @@ public sealed class DuplicateFailureClassifierIntegrationTests
         public void Dispose() => Temp.Dispose();
     }
 
-    private sealed class TestEnvironment : IDisposable
+    // Fixture values affect only the native child; parallel tests retain their inherited environment.
+    private sealed class FixtureProcessLauncher : IAgentProcessLauncher
     {
-        private readonly Dictionary<string, string?> priorValues = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string?> overrides = new(StringComparer.OrdinalIgnoreCase);
 
-        internal void Set(string name, string? value)
-        {
-            if (!priorValues.ContainsKey(name)) priorValues.Add(name, Environment.GetEnvironmentVariable(name));
-            Environment.SetEnvironmentVariable(name, value);
-        }
+        internal void Set(string name, string? value) => overrides[name] = value;
 
-        public void Dispose()
+        public string ResolveExecutable(string name, IReadOnlyDictionary<string, string> environment) =>
+            WindowsProcessLauncher.ResolveExecutable(name, MergeEnvironment(environment));
+
+        public WindowsProcessLauncher.WindowsAgentProcess Launch(string executable, IReadOnlyList<string> arguments,
+            string workingDirectory, IReadOnlyDictionary<string, string> environment) =>
+            WindowsProcessLauncher.Launch(executable, arguments, workingDirectory, MergeEnvironment(environment));
+
+        private Dictionary<string, string> MergeEnvironment(IReadOnlyDictionary<string, string> environment)
         {
-            foreach (var (name, value) in priorValues) Environment.SetEnvironmentVariable(name, value);
+            var merged = new Dictionary<string, string>(environment, StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, value) in overrides)
+            {
+                var existing = merged.Keys.FirstOrDefault(key => string.Equals(key, name, StringComparison.OrdinalIgnoreCase));
+                if (existing is not null) merged.Remove(existing);
+                if (value is not null) merged[name] = value;
+            }
+            return merged;
         }
     }
 }

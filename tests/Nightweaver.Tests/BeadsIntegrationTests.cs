@@ -132,7 +132,7 @@ public sealed class BeadsIntegrationTests
     [InlineData("env-routing")]
     public async Task UnpreparedEmbeddedBackendFailsBeforeAnyProcessOrMutation(string failure)
     {
-        using var repository = new BeadsFixture();
+        using var repository = new BeadsApplicationFixture();
         if (failure == "missing-gate") File.Delete(Path.Combine(repository.Path, ".beads", "embeddeddolt.gate.lock"));
         if (failure == "server") File.WriteAllText(Path.Combine(repository.Path, ".beads", "metadata.json"), "{\"backend\":\"dolt\",\"dolt_mode\":\"server\"}");
         if (failure == "env-routing") File.WriteAllText(Path.Combine(repository.Path, ".beads", ".env"), "export BEADS_DIR=somewhere-else");

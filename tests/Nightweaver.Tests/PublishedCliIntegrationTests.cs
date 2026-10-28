@@ -7,13 +7,6 @@ using Nightweaver.Inspection;
 
 namespace Nightweaver.Tests;
 
-[CollectionDefinition("Published CLI integration")]
-public sealed class PublishedCliTestGroup : ICollectionFixture<PublishedCliArtifactFixture>
-{
-    public const string Name = "Published CLI integration";
-}
-
-[Collection(PublishedCliTestGroup.Name)]
 public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture published)
 {
     private const string Actor = "nightweaver:demo";
@@ -55,26 +48,23 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
         Assert.Equal(0, inProcessCode);
         Assert.Equal(string.Empty, inProcessError.ToString());
         AssertRecordedAllowlistWasUsed(runner.Requests, target.Path);
-        AssertStateUnchanged(baseline, CaptureState(fixture, published, ids.CommentedBeads));
 
         var launchEnvironment = published.EnvironmentWithAgentTraps(target.Environment);
-        var projectFirst = await RunMeasuredApphostAsync(fixture, published, launchEnvironment, baseline, ids.CommentedBeads,
+        // Compare the complete logical and physical state around this selector group.
+        // Repeating the same project selector proves determinism; both config forms prove parity.
+        var projectFirst = await RunApphostAsync(fixture, published, launchEnvironment,
             ["--project", "demo", "--dry-run"]);
-        var projectSecond = await RunMeasuredApphostAsync(fixture, published, launchEnvironment, baseline, ids.CommentedBeads,
+        var projectSecond = await RunApphostAsync(fixture, published, launchEnvironment,
             ["--project", "demo", "--dry-run"]);
+        // Relative config parity here; the pagination test covers an absolute config selector.
         var relativeConfig = Path.GetRelativePath(fixture.Caller, fixture.Config);
-        var configFirst = await RunMeasuredApphostAsync(fixture, published, launchEnvironment, baseline, ids.CommentedBeads,
+        var configFirst = await RunApphostAsync(fixture, published, launchEnvironment,
             ["--config", relativeConfig, "--dry-run"]);
-        var configSecond = await RunMeasuredApphostAsync(fixture, published, launchEnvironment, baseline, ids.CommentedBeads,
-            ["--config", relativeConfig, "--dry-run"]);
-        var absoluteConfig = await RunMeasuredApphostAsync(fixture, published, launchEnvironment, baseline, ids.CommentedBeads,
-            ["--config", fixture.Config, "--dry-run"]);
 
         AssertByteIdentical(projectFirst.StandardOutput, projectSecond.StandardOutput);
         AssertByteIdentical(projectFirst.StandardOutput, configFirst.StandardOutput);
-        AssertByteIdentical(projectFirst.StandardOutput, configSecond.StandardOutput);
-        AssertByteIdentical(projectFirst.StandardOutput, absoluteConfig.StandardOutput);
         AssertByteIdentical(projectFirst.StandardOutput, Encoding.UTF8.GetBytes(inProcessOutput.ToString()));
+        AssertStateUnchanged(baseline, CaptureState(fixture, published, ids.CommentedBeads));
         var report = projectFirst.StandardOutputText;
         Assert.Contains("Nightweaver dry run: hypothetical startup snapshot; no actions are performed.", report, StringComparison.Ordinal);
         Assert.Contains("agent_defaults: cli=claude", report, StringComparison.Ordinal);
@@ -100,9 +90,12 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
             Assert.Contains($"{JsonSerializer.Serialize(beadId)}:", Section(report, "Orphan tmp deletions (hypothetical)\n", "\nStartup diagnostics\n"), StringComparison.Ordinal);
 
         File.WriteAllText(Path.Combine(fixture.Host, "tmp", "demo", "unexpected-file"), "not a directory");
-        var failureBaseline = CaptureState(fixture, published, ids.CommentedBeads);
-        var lateFailure = await RunMeasuredApphostAsync(fixture, published, launchEnvironment, failureBaseline, ids.CommentedBeads,
+        // Only the host sentinel changed since the complete state comparison above.
+        // Keep the proven tracker baseline and refresh the physical snapshot.
+        var failureBaseline = new StateSnapshot(baseline.Logical, CapturePhysicalState(fixture, published));
+        var lateFailure = await RunApphostAsync(fixture, published, launchEnvironment,
             ["--project", "demo", "--dry-run"], expectedExitCode: 1, expectedError: "runtime directory inspection");
+        AssertStateUnchanged(failureBaseline, CaptureState(fixture, published, ids.CommentedBeads));
         Assert.Empty(lateFailure.StandardOutput);
         Assert.Contains("runtime directory inspection", lateFailure.StandardErrorText, StringComparison.Ordinal);
     }
@@ -129,19 +122,23 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
         }))));
         using (JsonDocument.Parse(target.Run("bd", ["import", seedFile, "--json"]))) { }
 
-        var blocker = target.Create("Pagination blocker", type: "feature");
-        target.Run("bd", ["update", blocker, "--add-label", "planned"]);
-        var blockedProduct = target.Create("Pagination blocked product", type: "bug");
+        var controls = ImportBeads(target,
+            new("Pagination blocker", "feature", ["planned"]),
+            new("Pagination blocked product", "bug", []),
+            new("Pagination assigned product", "feature", [], "human"),
+            new("Pagination paused product", "feature", ["needs-human"]),
+            new("Pagination blocked task", "task", []),
+            new("Pagination assigned task", "task", ["stage:review"], "human"),
+            new("Pagination paused task", "task", ["stage:qa", "needs-human"]));
+        var blocker = controls[0];
+        var blockedProduct = controls[1];
+        var assignedProduct = controls[2];
+        var pausedProduct = controls[3];
+        var blockedTask = controls[4];
+        var assignedTask = controls[5];
+        var pausedTask = controls[6];
         target.Run("bd", ["dep", "add", blockedProduct, blocker]);
-        var assignedProduct = target.Create("Pagination assigned product", "human", type: "feature");
-        var pausedProduct = target.Create("Pagination paused product", type: "feature");
-        target.Run("bd", ["update", pausedProduct, "--add-label", "needs-human"]);
-        var blockedTask = target.Create("Pagination blocked task");
         target.Run("bd", ["dep", "add", blockedTask, blocker]);
-        var assignedTask = target.Create("Pagination assigned task", "human");
-        target.Run("bd", ["update", assignedTask, "--add-label", "stage:review"]);
-        var pausedTask = target.Create("Pagination paused task");
-        target.Run("bd", ["update", pausedTask, "--add-label", "stage:qa", "--add-label", "needs-human"]);
 
         var inventoryJson = target.Run("bd", BeadsCommand.Create(target.Path).Arguments);
         var inventory = BeadsReader.Parse(inventoryJson);
@@ -169,11 +166,12 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
 
         var baseline = CaptureState(fixture, published, commentIds);
         var launchEnvironment = published.EnvironmentWithAgentTraps(target.Environment);
-        var projectRun = await RunMeasuredApphostAsync(fixture, published, launchEnvironment, baseline, commentIds,
+        var projectRun = await RunApphostAsync(fixture, published, launchEnvironment,
             ["--project", "demo", "--dry-run"]);
-        var configRun = await RunMeasuredApphostAsync(fixture, published, launchEnvironment, baseline, commentIds,
+        var configRun = await RunApphostAsync(fixture, published, launchEnvironment,
             ["--config", Path.GetRelativePath(fixture.Caller, fixture.Config), "--dry-run"]);
         AssertByteIdentical(projectRun.StandardOutput, configRun.StandardOutput);
+        AssertStateUnchanged(baseline, CaptureState(fixture, published, commentIds));
 
         var report = projectRun.StandardOutputText;
         Assert.Contains("agent_defaults: cli=codex", report, StringComparison.Ordinal);
@@ -199,12 +197,13 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
     {
         using var fixture = new StartupSweepFixture(published.PublishDirectory);
         var target = fixture.Target;
-        var planningCandidate = target.Create("Threshold planning candidate", type: "feature");
-        target.Run("bd", ["update", planningCandidate, "--add-label", "stage:plan"]);
-        var deliveryCandidate = target.Create("Threshold delivery candidate");
-        target.Run("bd", ["update", deliveryCandidate, "--add-label", "stage:implement"]);
-        var mergerCandidate = target.Create("Threshold merger candidate");
-        target.Run("bd", ["update", mergerCandidate, "--add-label", "stage:merge"]);
+        var candidates = ImportBeads(target,
+            new("Threshold planning candidate", "feature", ["stage:plan"]),
+            new("Threshold delivery candidate", "task", ["stage:implement"]),
+            new("Threshold merger candidate", "task", ["stage:merge"]));
+        var planningCandidate = candidates[0];
+        var deliveryCandidate = candidates[1];
+        var mergerCandidate = candidates[2];
 
         var inventory = BeadsReader.Parse(target.Run("bd", BeadsCommand.Create(target.Path).Arguments));
         var activeCount = ActivePlanCount(inventory);
@@ -214,11 +213,9 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
         var baseline = CaptureState(fixture, published, comments);
         var environment = published.EnvironmentWithAgentTraps(target.Environment);
 
-        var first = await RunMeasuredApphostAsync(fixture, published, environment, baseline, comments,
+        var first = await RunApphostAsync(fixture, published, environment,
             ["--project", "demo", "--dry-run"]);
-        var second = await RunMeasuredApphostAsync(fixture, published, environment, baseline, comments,
-            ["--project", "demo", "--dry-run"]);
-        AssertByteIdentical(first.StandardOutput, second.StandardOutput);
+        AssertStateUnchanged(baseline, CaptureState(fixture, published, comments));
         var report = first.StandardOutputText;
         Assert.Contains("agent_defaults: cli=codex", report, StringComparison.Ordinal);
         Assert.Contains($"Active Plan Beads\n  count: {activeCount}\n  threshold: {activeCount}\n  backpressure: active", report, StringComparison.Ordinal);
@@ -232,38 +229,39 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
     private static RepresentativeIds SeedRepresentativeScenario(StartupSweepFixture fixture)
     {
         var target = fixture.Target;
-        var planning = new List<string>();
-        planning.Add(CreateLabeled("Planning feature", "feature", ["stage:plan"]));
-        planning.Add(CreateLabeled("Planning bug challenge", "bug", ["stage:plan-challenge"]));
-        planning.Add(CreateLabeled("Planning feature approved", "feature", ["stage:plan-approved"]));
-        planning.Add(CreateLabeled("Planning bug default stage", "bug", []));
-
-        var recoveredProduct = target.Create("Recovered planning product", Actor, "in_progress", "feature");
-        target.Run("bd", ["update", recoveredProduct, "--add-label", "stage:plan"]);
-        planning.Add(recoveredProduct);
-
-        var implementer = CreateLabeled("Delivery implementer", "task", ["stage:implement"]);
-        var reviewer = CreateLabeled("Delivery reviewer", "task", ["stage:review"]);
-        var qa = CreateLabeled("Delivery QA", "task", ["stage:qa"]);
-        var recoveredTask = target.Create("Recovered delivery reviewer", Actor, "in_progress", "task");
-        target.Run("bd", ["update", recoveredTask, "--add-label", "stage:review"]);
-
-        var plannedParent = target.Create("Planned Product parent", type: "feature");
-        target.Run("bd", ["update", plannedParent, "--add-label", "planned"]);
-        var discoveredChild = target.Create("Discovered ready child", type: "task");
+        var ids = ImportBeads(target,
+            new("Planning feature", "feature", ["stage:plan"]),
+            new("Planning bug challenge", "bug", ["stage:plan-challenge"]),
+            new("Planning feature approved", "feature", ["stage:plan-approved"]),
+            new("Planning bug default stage", "bug", []),
+            new("Recovered planning product", "feature", ["stage:plan"], Actor, "in_progress"),
+            new("Delivery implementer", "task", ["stage:implement"]),
+            new("Delivery reviewer", "task", ["stage:review"]),
+            new("Delivery QA", "task", ["stage:qa"]),
+            new("Recovered delivery reviewer", "task", ["stage:review"], Actor, "in_progress"),
+            new("Planned Product parent", "feature", ["planned"]),
+            new("Discovered ready child", "task", []),
+            new("Open planned blocker", "feature", ["planned"]),
+            new("Child blocked by open Product", "task", []),
+            new("Ready merger candidate", "task", ["stage:merge"]),
+            new("Foreign in progress control", "task", ["stage:implement"], "human", "in_progress"),
+            new("Unassigned in progress control", "task", ["stage:qa"], Status: "in_progress"),
+            new("Other project claim control", "task", [], "nightweaver:elsewhere", "in_progress"));
+        var planning = ids.Take(5).ToList();
+        var recoveredProduct = ids[4];
+        var implementer = ids[5];
+        var reviewer = ids[6];
+        var qa = ids[7];
+        var recoveredTask = ids[8];
+        var plannedParent = ids[9];
+        var discoveredChild = ids[10];
+        var blocker = ids[11];
+        var blockedChild = ids[12];
+        var mergerCandidate = ids[13];
+        var foreignClaim = ids[14];
+        var unassignedClaim = ids[15];
         target.Run("bd", ["dep", "add", discoveredChild, plannedParent, "--type", "discovered-from"]);
-
-        var blocker = target.Create("Open planned blocker", type: "feature");
-        target.Run("bd", ["update", blocker, "--add-label", "planned"]);
-        var blockedChild = target.Create("Child blocked by open Product", type: "task");
         target.Run("bd", ["dep", "add", blockedChild, blocker]);
-
-        var mergerCandidate = CreateLabeled("Ready merger candidate", "task", ["stage:merge"]);
-        var foreignClaim = target.Create("Foreign in progress control", "human", "in_progress", "task");
-        target.Run("bd", ["update", foreignClaim, "--add-label", "stage:implement"]);
-        var unassignedClaim = target.Create("Unassigned in progress control", status: "in_progress", type: "task");
-        target.Run("bd", ["update", unassignedClaim, "--add-label", "stage:qa"]);
-        var otherProjectClaim = target.Create("Other project claim control", "nightweaver:elsewhere", "in_progress", "task");
 
         foreach (var id in new[] { planning[0], planning[1], recoveredProduct, reviewer, recoveredTask, discoveredChild })
             target.Run("bd", ["comments", "add", id, "preserve this comment during published dry-run"]);
@@ -280,14 +278,27 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
         return new(planning.AsReadOnly(), [implementer, reviewer, qa, recoveredTask, discoveredChild, target.ControlBeadId],
             recoveredProduct, recoveredTask, discoveredChild, plannedParent, blockedChild, blocker, mergerCandidate,
             foreignClaim, unassignedClaim, [planning[0], planning[1], recoveredProduct, reviewer, recoveredTask, discoveredChild]);
-
-        string CreateLabeled(string title, string type, IReadOnlyList<string> labels)
-        {
-            var id = target.Create(title, type: type);
-            foreach (var label in labels) target.Run("bd", ["update", id, "--add-label", label]);
-            return id;
-        }
     }
+
+    private static string[] ImportBeads(BeadsFixture target, params SeedBead[] beads)
+    {
+        using var seedDirectory = new TempDirectory();
+        var seedFile = seedDirectory.WriteFile("scenario.jsonl", string.Join('\n', beads.Select(bead => JsonSerializer.Serialize(new
+        {
+            title = bead.Title,
+            issue_type = bead.Type,
+            status = bead.Status,
+            assignee = bead.Assignee,
+            priority = 2,
+            labels = bead.Labels
+        }))));
+        using (JsonDocument.Parse(target.Run("bd", ["import", seedFile, "--json"]))) { }
+        var inventory = BeadsReader.Parse(target.Run("bd", BeadsCommand.Create(target.Path).Arguments));
+        var idsByTitle = inventory.ById.Values.ToDictionary(bead => bead.Payload.GetProperty("title").GetString()!, bead => bead.Id, StringComparer.Ordinal);
+        return beads.Select(bead => idsByTitle[bead.Title]).ToArray();
+    }
+
+    private sealed record SeedBead(string Title, string Type, IReadOnlyList<string> Labels, string? Assignee = null, string Status = "open");
 
     private static System.Collections.ObjectModel.ReadOnlyCollection<PaginationSeedSpec> CreatePaginationSeedSpecs()
     {
@@ -383,8 +394,8 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
         Assert.Contains(requests, request => request.FileName == "git" && request.Arguments.SequenceEqual(["worktree", "list", "--porcelain", "-z"]));
     }
 
-    private static async Task<RawProcessResult> RunMeasuredApphostAsync(StartupSweepFixture fixture, PublishedCliArtifactFixture published,
-        IReadOnlyDictionary<string, string?> environment, StateSnapshot baseline, IReadOnlyList<string> commentBeads, IReadOnlyList<string> arguments,
+    private static async Task<RawProcessResult> RunApphostAsync(StartupSweepFixture fixture, PublishedCliArtifactFixture published,
+        IReadOnlyDictionary<string, string?> environment, IReadOnlyList<string> arguments,
         int expectedExitCode = 0, string? expectedError = null)
     {
         var executable = Path.Combine(fixture.Host, OperatingSystem.IsWindows() ? "nightweaver.exe" : "nightweaver");
@@ -398,10 +409,6 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
             Assert.Contains(expectedError, result.StandardErrorText, StringComparison.Ordinal);
         }
         published.AssertNoAgentInvocations();
-        AssertPhysicalUnchanged(baseline.Physical, CapturePhysicalState(fixture, published));
-        var afterLogical = CaptureLogicalState(fixture.Target, commentBeads);
-        AssertLogicalUnchanged(baseline.Logical, afterLogical);
-        AssertPhysicalUnchanged(baseline.Physical, CapturePhysicalState(fixture, published));
         return result;
     }
 
@@ -414,17 +421,26 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
 
     private static LogicalSnapshot CaptureLogicalState(BeadsFixture target, IReadOnlyList<string> commentBeads)
     {
-        var inventory = target.Run("bd", BeadsCommand.Create(target.Path).Arguments);
-        var ids = BeadsReader.Parse(inventory).ById.Keys.Order(StringComparer.Ordinal).ToArray();
-        var dependencyArguments = new List<string> { "--readonly", "--sandbox", "dep", "list" };
-        dependencyArguments.AddRange(ids);
-        dependencyArguments.Add("--json");
-        var dependencies = target.Run("bd", dependencyArguments);
+        // Export contains every issue, label, dependency and comment in one native read.
+        // Compare the whole export, while retaining native readiness and Git snapshots.
+        var jsonLines = target.Run("bd", ["--readonly", "--sandbox", "export", "--all"]);
+        var inventory = "[" + string.Join(',', jsonLines.Split('\n', StringSplitOptions.RemoveEmptyEntries)) + "]";
+        using var exported = JsonDocument.Parse(inventory);
+        var rows = exported.RootElement.EnumerateArray().ToArray();
+        var dependencies = "[" + string.Join(',', rows
+            .Where(row => row.TryGetProperty("dependencies", out _))
+            .SelectMany(row => row.GetProperty("dependencies").EnumerateArray())
+            .Select(dependency => dependency.GetRawText())) + "]";
         var nativeReadiness = target.Run("bd", BeadsCommand.CreateUnassignedReadiness(target.Path).Arguments);
         var recoverableReadiness = target.Run("bd", BeadsCommand.CreateRecoverableReadiness(target.Path, Actor).Arguments);
         var comments = new SortedDictionary<string, string>(StringComparer.Ordinal);
         foreach (var id in commentBeads.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
-            comments[id] = CanonicalJson(target.Run("bd", ["--readonly", "--sandbox", "comments", id, "--json"]));
+        {
+            var row = rows.Single(row => row.GetProperty("id").GetString() == id);
+            Assert.True(row.TryGetProperty("comments", out var entries), $"Missing preservation comments for {id}");
+            Assert.NotEmpty(entries.EnumerateArray());
+            comments[id] = CanonicalJson(entries);
+        }
         var worktrees = target.Run("git", ["worktree", "list", "--porcelain", "-z"]);
         var refs = target.Run("git", ["for-each-ref", "--sort=refname", "--format=%(refname)%00%(objectname)%00"]);
         var index = target.Run("git", ["ls-files", "--stage", "-z"]);

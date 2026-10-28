@@ -20,42 +20,55 @@ public sealed class WebBeadsIntegrationTests
         using var target = new BeadsFixture("configured target");
         using var foreign = new BeadsFixture("foreign target");
 
-        var unassigned = target.Create("Ready unassigned P0", priority: 0);
-        var assigned = target.Create("Assigned open P4", actor: "human", priority: 4);
-        var active = target.Create("Active Needle", status: "in_progress", priority: 1);
-        var explicitlyBlocked = target.Create("Explicitly blocked", status: "blocked", priority: 2);
-        var deferred = target.Create("Deferred issue", priority: 3);
-        target.Run("bd", ["defer", deferred]);
-        var closed = target.Create("Closed issue", status: "closed", priority: 3);
-        var taggedAssigned = target.Create("Tagged assigned feature", actor: "maintainer", type: "feature", priority: 1);
-        target.Run("bd", ["update", taggedAssigned, "--add-label", "ready-for-agent", "--add-label", "stage:implement"]);
         var htmlTitle = "<img src=x onerror=alert(1)> café & needle";
-        var htmlLooking = target.Create(htmlTitle, priority: 4);
-        target.Run("bd", ["update", htmlLooking, "--add-label", "alpha", "--add-label", "beta"]);
-        target.Run("bd", ["comments", "add", htmlLooking, "fixture comment"]);
-
-        var activeBlocker = target.Create("Active dependency blocker");
-        var blockedChild = target.Create("Open dependency child");
-        target.Run("bd", ["dep", "add", blockedChild, activeBlocker]);
-        var closingBlocker = target.Create("Blocker to close and reopen");
-        var changingChild = target.Create("Dependency changes after blocker update");
-        target.Run("bd", ["dep", "add", changingChild, closingBlocker]);
-        var relatedIssue = target.Create("Nonblocking relation child");
-        var relatedControl = target.Create("Nonblocking relation control");
-        target.Run("bd", ["dep", "relate", relatedIssue, relatedControl]);
-
-        using var temp = new TempDirectory();
-        var records = Enumerable.Range(0, 53).Select(index => new
+        var seeds = new[]
         {
-            title = $"Ordinary record {index:D2}",
-            issue_type = "task",
-            status = "open",
-            priority = index % 5,
-            created_at = "2025-01-01T00:00:00Z",
-            labels = Array.Empty<string>()
-        }).ToArray();
-        var recordsFile = temp.WriteFile("ordinary-records.jsonl", string.Join('\n', records.Select(r => JsonSerializer.Serialize(r))));
+            new ExplorerSeed("Ready unassigned P0", Priority: 0),
+            new ExplorerSeed("Assigned open P4", Assignee: "human", Priority: 4),
+            new ExplorerSeed("Active Needle", Status: "in_progress", Priority: 1),
+            new ExplorerSeed("Explicitly blocked", Status: "blocked"),
+            new ExplorerSeed("Deferred issue", Priority: 3),
+            new ExplorerSeed("Closed issue", Status: "closed", Priority: 3),
+            new ExplorerSeed("Tagged assigned feature", Type: "feature", Assignee: "maintainer", Priority: 1,
+                Labels: ["ready-for-agent", "stage:implement"]),
+            new ExplorerSeed(htmlTitle, Priority: 4, Labels: ["alpha", "beta"]),
+            new ExplorerSeed("Active dependency blocker"),
+            new ExplorerSeed("Open dependency child"),
+            new ExplorerSeed("Blocker to close and reopen"),
+            new ExplorerSeed("Dependency changes after blocker update"),
+            new ExplorerSeed("Nonblocking relation child"),
+            new ExplorerSeed("Nonblocking relation control")
+        }.Concat(Enumerable.Range(0, 53).Select(index => new ExplorerSeed($"Ordinary record {index:D2}", Priority: index % 5)));
+        using var temp = new TempDirectory();
+        var recordsFile = temp.WriteFile("explorer-records.jsonl", string.Join('\n', seeds.Select(seed => JsonSerializer.Serialize(new
+        {
+            title = seed.Title, issue_type = seed.Type, status = seed.Status, assignee = seed.Assignee,
+            priority = seed.Priority, created_at = "2025-01-01T00:00:00Z", labels = seed.Labels ?? []
+        }))));
         using (JsonDocument.Parse(target.Run("bd", ["import", recordsFile, "--json"]))) { }
+        var seededInventory = BeadsReader.Parse(target.Run("bd", BeadsCommand.Create(target.Path).Arguments));
+        var idsByTitle = seededInventory.ById.Values.ToDictionary(bead => bead.Payload.GetProperty("title").GetString()!, bead => bead.Id,
+            StringComparer.Ordinal);
+        var unassigned = idsByTitle["Ready unassigned P0"];
+        var assigned = idsByTitle["Assigned open P4"];
+        var active = idsByTitle["Active Needle"];
+        var explicitlyBlocked = idsByTitle["Explicitly blocked"];
+        var deferred = idsByTitle["Deferred issue"];
+        var closed = idsByTitle["Closed issue"];
+        var taggedAssigned = idsByTitle["Tagged assigned feature"];
+        var htmlLooking = idsByTitle[htmlTitle];
+        var activeBlocker = idsByTitle["Active dependency blocker"];
+        var blockedChild = idsByTitle["Open dependency child"];
+        var closingBlocker = idsByTitle["Blocker to close and reopen"];
+        var changingChild = idsByTitle["Dependency changes after blocker update"];
+        var relatedIssue = idsByTitle["Nonblocking relation child"];
+        var relatedControl = idsByTitle["Nonblocking relation control"];
+        // Exercise native scheduling and dependency transitions after the bulk seed.
+        target.Run("bd", ["defer", deferred]);
+        target.Run("bd", ["comments", "add", htmlLooking, "fixture comment"]);
+        target.Run("bd", ["dep", "add", blockedChild, activeBlocker]);
+        target.Run("bd", ["dep", "add", changingChild, closingBlocker]);
+        target.Run("bd", ["dep", "relate", relatedIssue, relatedControl]);
         var beyondDefaultLimit = target.Create("Inventory beyond default limit", priority: 4);
         var foreignBead = foreign.Create("Must not appear in configured target");
 
@@ -213,6 +226,7 @@ public sealed class WebBeadsIntegrationTests
         var literalDescription = "  --description=literal\n\nContext: café ☕\nMarkup: <img src=x onerror=alert(1)>\nQuoted: \"double\", 'single', C:\\temp\\file\nShell-looking: $(do-not-run) `ticks`\n  ";
         var literalAcceptance = "  --acceptance=Given an input\nWhen it is submitted\nThen preserve Markdown **and Unicode** ✓\n  ";
         var expectedIds = new List<string>();
+        var expectedIssues = new List<(string Id, string Title, string Type, int Priority, string Description, string Acceptance)>();
 
         foreach (var type in new[] { "feature", "bug" })
         {
@@ -256,28 +270,31 @@ public sealed class WebBeadsIntegrationTests
                 var id = row.GetProperty("id").GetString()!;
                 expectedIds.Add(id);
 
-                using var shownDocument = JsonDocument.Parse(target.Run("bd", ["show", id, "--json"]));
-                var shown = shownDocument.RootElement.ValueKind == JsonValueKind.Array
-                    ? Assert.Single(shownDocument.RootElement.EnumerateArray())
-                    : shownDocument.RootElement;
-                Assert.Equal(id, shown.GetProperty("id").GetString());
-                Assert.Equal(title, shown.GetProperty("title").GetString());
-                Assert.Equal(description.Trim(), shown.GetProperty("description").GetString());
-                Assert.Equal(acceptance.Trim(), shown.GetProperty("acceptance_criteria").GetString());
-                Assert.Equal(type, shown.GetProperty("issue_type").GetString());
-                Assert.Equal(priority, shown.GetProperty("priority").GetInt32());
-                Assert.Equal("open", shown.GetProperty("status").GetString());
-                foreach (var direction in new[] { "up", "down" })
-                {
-                    using var dependencies = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "dep", "list", id,
-                        "--direction", direction, "--json"]));
-                    Assert.Equal(JsonValueKind.Array, dependencies.RootElement.ValueKind);
-                    Assert.Empty(dependencies.RootElement.EnumerateArray());
-                }
-                using var comments = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "comments", id, "--json"]));
-                Assert.Empty(comments.RootElement.EnumerateArray());
+                expectedIssues.Add((id, title, type, priority, description.Trim(), acceptance.Trim()));
             }
         }
+
+        // One real export proves all stored fields and absence of side-effect rows,
+        // including both incoming and outgoing dependencies across the entire tracker.
+        var exportedLines = target.Run("bd", ["--readonly", "--sandbox", "export", "--all"]);
+        using var stored = JsonDocument.Parse("[" + string.Join(',', exportedLines.Split('\n', StringSplitOptions.RemoveEmptyEntries)) + "]");
+        var storedRows = stored.RootElement.EnumerateArray().ToArray();
+        foreach (var expected in expectedIssues)
+        {
+            var shown = Assert.Single(storedRows, issue => issue.GetProperty("id").GetString() == expected.Id);
+            Assert.Equal(expected.Id, shown.GetProperty("id").GetString());
+            Assert.Equal(expected.Title, shown.GetProperty("title").GetString());
+            Assert.Equal(expected.Description, shown.GetProperty("description").GetString());
+            Assert.Equal(expected.Acceptance, shown.GetProperty("acceptance_criteria").GetString());
+            Assert.Equal(expected.Type, shown.GetProperty("issue_type").GetString());
+            Assert.Equal(expected.Priority, shown.GetProperty("priority").GetInt32());
+            Assert.Equal("open", shown.GetProperty("status").GetString());
+            if (shown.TryGetProperty("comments", out var comments)) Assert.Empty(comments.EnumerateArray());
+        }
+        Assert.All(storedRows, issue =>
+        {
+            if (issue.TryGetProperty("dependencies", out var dependencies)) Assert.Empty(dependencies.EnumerateArray());
+        });
 
         using var nativeInventory = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "list", "--all", "--limit", "0",
             "--include-ephemeral", "--include-gates", "--include-infra", "--include-templates", "--json"]));
@@ -297,7 +314,7 @@ public sealed class WebBeadsIntegrationTests
     [Fact]
     public async Task IntakeRejectsInvalidRequestsBeforeLaunchingTools()
     {
-        using var target = new BeadsFixture();
+        using var target = new BeadsApplicationFixture();
         var runner = CreateFixtureRunner(target);
         using var factory = CreateFactory(target, runner);
         using var client = factory.CreateClient();
@@ -400,12 +417,11 @@ public sealed class WebBeadsIntegrationTests
     [Fact]
     public async Task IntakeRejectsInvalidEscapedUnicodeWithoutLeakingOrWriting()
     {
-        using var target = new BeadsFixture();
+        using var target = new BeadsApplicationFixture();
         var runner = CreateFixtureRunner(target);
         using var factory = CreateFactory(target, runner);
         using var client = factory.CreateClient();
-        var inventoryBefore = target.Run("bd", ["--readonly", "--sandbox", "list", "--all", "--limit", "0",
-            "--include-ephemeral", "--include-gates", "--include-infra", "--include-templates", "--json"]);
+        var inventoryBefore = Snapshot.FileTree(target.Path);
         var invalidBodies = new[]
         {
             "{\"type\":\"feature\",\"priority\":2,\"title\":\"bad\\uD800title\",\"description\":\"Description\",\"acceptanceCriteria\":\"Criteria\"}",
@@ -429,15 +445,15 @@ public sealed class WebBeadsIntegrationTests
         }
 
         Assert.Empty(runner.Requests);
-        Assert.Equal(inventoryBefore, target.Run("bd", ["--readonly", "--sandbox", "list", "--all", "--limit", "0",
-            "--include-ephemeral", "--include-gates", "--include-infra", "--include-templates", "--json"]));
+        Assert.Equal(inventoryBefore, Snapshot.FileTree(target.Path));
     }
 
     [Fact]
     public async Task IntakeAcceptsValidEscapedSurrogatePairUnicode()
     {
-        using var target = new BeadsFixture();
-        var runner = CreateFixtureRunner(target);
+        using var target = new BeadsApplicationFixture();
+        var actual = new WebBeadsProcessRunner(target.Path);
+        var runner = new RecordingProcessRunner(actual.RunAsync);
         using var factory = CreateFactory(target, runner);
         using var client = factory.CreateClient();
         const string title = "Keep 🐈 in escaped JSON";
@@ -459,7 +475,7 @@ public sealed class WebBeadsIntegrationTests
         var id = row.RootElement.GetProperty("id").GetString()!;
         Assert.Equal(title, row.RootElement.GetProperty("title").GetString());
 
-        using var shown = JsonDocument.Parse(target.Run("bd", ["show", id, "--json"]));
+        using var shown = JsonDocument.Parse(actual.Show(id));
         var issue = shown.RootElement.ValueKind == JsonValueKind.Array
             ? Assert.Single(shown.RootElement.EnumerateArray())
             : shown.RootElement;
@@ -473,7 +489,7 @@ public sealed class WebBeadsIntegrationTests
     [InlineData('\u2029')]
     public async Task IntakeRejectsUnicodeLineSeparatorsInTitle(char separator)
     {
-        using var target = new BeadsFixture();
+        using var target = new BeadsApplicationFixture();
         var runner = CreateFixtureRunner(target);
         using var factory = CreateFactory(target, runner);
         using var client = factory.CreateClient();
@@ -501,8 +517,9 @@ public sealed class WebBeadsIntegrationTests
     [InlineData('\u2029')]
     public async Task IntakeAcceptsUnicodeLineSeparatorsInMultilineFields(char separator)
     {
-        using var target = new BeadsFixture();
-        var runner = CreateFixtureRunner(target);
+        using var target = new BeadsApplicationFixture();
+        var actual = new WebBeadsProcessRunner(target.Path);
+        var runner = new RecordingProcessRunner(actual.RunAsync);
         using var factory = CreateFactory(target, runner);
         using var client = factory.CreateClient();
         var description = $"Line 1{separator}Line 2";
@@ -522,7 +539,7 @@ public sealed class WebBeadsIntegrationTests
         using var row = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         var id = row.RootElement.GetProperty("id").GetString()!;
 
-        using var shown = JsonDocument.Parse(target.Run("bd", ["show", id, "--json"]));
+        using var shown = JsonDocument.Parse(actual.Show(id));
         var issue = shown.RootElement.ValueKind == JsonValueKind.Array
             ? Assert.Single(shown.RootElement.EnumerateArray())
             : shown.RootElement;
@@ -537,13 +554,13 @@ public sealed class WebBeadsIntegrationTests
     [InlineData("low-property")]
     public async Task InvalidUnicodeCreateOutputReportsUncertainOutcomeWithoutRetryingOrDeleting(string corruption)
     {
-        using var target = new BeadsFixture();
-        var actual = new SystemProcessRunner();
+        using var target = new BeadsApplicationFixture();
+        var actual = new WebBeadsProcessRunner(target.Path);
         string? createdId = null;
         var createCalls = 0;
         var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
         {
-            var result = await actual.RunAsync(AddFixtureEnvironment(target, request), cancellationToken);
+            var result = await actual.RunAsync(request, cancellationToken);
             if (request.FileName == "bd" && request.Arguments.Contains("create", StringComparer.Ordinal))
             {
                 Interlocked.Increment(ref createCalls);
@@ -592,11 +609,11 @@ public sealed class WebBeadsIntegrationTests
         Assert.DoesNotContain(target.Path, body, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, Volatile.Read(ref createCalls));
         Assert.NotNull(createdId);
-        var shown = target.Run("bd", ["show", createdId!]);
+        var shown = actual.Show(createdId!);
         Assert.Contains(submittedTitle, shown, StringComparison.Ordinal);
         Assert.Contains("The real issue remains discoverable.", shown, StringComparison.Ordinal);
 
-        using var ready = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "ready", "--limit", "0", "--json"]));
+        using var ready = JsonDocument.Parse(actual.Inventory());
         Assert.Equal(1, ready.RootElement.EnumerateArray()
             .Count(bead => bead.GetProperty("id").GetString() == createdId));
         using var nextRead = await client.GetAsync("/api/beads?view=ready", TestContext.Current.CancellationToken);
@@ -606,13 +623,13 @@ public sealed class WebBeadsIntegrationTests
     [Fact]
     public async Task CreateOutputAcceptsValidEscapedSurrogatePair()
     {
-        using var target = new BeadsFixture();
-        var actual = new SystemProcessRunner();
+        using var target = new BeadsApplicationFixture();
+        var actual = new WebBeadsProcessRunner(target.Path);
         string? createdId = null;
         var createCalls = 0;
         var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
         {
-            var result = await actual.RunAsync(AddFixtureEnvironment(target, request), cancellationToken);
+            var result = await actual.RunAsync(request, cancellationToken);
             if (request.FileName == "bd" && request.Arguments.Contains("create", StringComparer.Ordinal))
             {
                 Interlocked.Increment(ref createCalls);
@@ -643,7 +660,8 @@ public sealed class WebBeadsIntegrationTests
         Assert.Equal(title, row.RootElement.GetProperty("title").GetString());
         Assert.Equal(1, Volatile.Read(ref createCalls));
         Assert.NotNull(createdId);
-        Assert.Contains(title, target.Run("bd", ["show", createdId!]), StringComparison.Ordinal);
+        using var saved = JsonDocument.Parse(actual.Show(createdId!));
+        Assert.Equal(title, saved.RootElement.GetProperty("title").GetString());
 
         using var nextRead = await client.GetAsync("/api/beads?view=ready", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, nextRead.StatusCode);
@@ -652,11 +670,11 @@ public sealed class WebBeadsIntegrationTests
     [Fact]
     public async Task NonzeroCreateExitReturnsSafeProblemAndLeavesTheHostUsable()
     {
-        using var target = new BeadsFixture();
+        using var target = new BeadsApplicationFixture();
         const string secret = "private-stderr-marker";
         var targetTreeBefore = Snapshot.FileTree(target.Path);
         var targetGitBefore = Snapshot.GitStatus(target.Path);
-        var actual = new SystemProcessRunner();
+        var actual = new WebBeadsProcessRunner(target.Path);
         var createCalls = 0;
         var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
         {
@@ -665,7 +683,7 @@ public sealed class WebBeadsIntegrationTests
                 if (Interlocked.Increment(ref createCalls) == 1)
                     return new ProcessResult(23, string.Empty, $"{secret} {target.Path} submitted prose");
             }
-            return await actual.RunAsync(AddFixtureEnvironment(target, request), cancellationToken);
+            return await actual.RunAsync(request, cancellationToken);
         });
         using var factory = CreateFactory(target, runner);
         using var client = factory.CreateClient();
@@ -713,11 +731,11 @@ public sealed class WebBeadsIntegrationTests
     [InlineData("timeout")]
     public async Task IntakeToolFailuresReportUncertainOutcomeAndReleaseTheTrackerGate(string failure)
     {
-        using var target = new BeadsFixture();
+        using var target = new BeadsApplicationFixture();
         const string secret = "intake-tool-failure-secret";
         var targetTreeBefore = Snapshot.FileTree(target.Path);
         var targetGitBefore = Snapshot.GitStatus(target.Path);
-        var actual = new SystemProcessRunner();
+        var actual = new WebBeadsProcessRunner(target.Path);
         var createCalls = 0;
         var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
         {
@@ -728,7 +746,7 @@ public sealed class WebBeadsIntegrationTests
                     throw new ToolExecutionException($"required executable 'bd' was not found at {target.Path}", $"{secret} {target.Path}");
                 throw new ToolExecutionException($"bd timed out after 0.01s at {target.Path}", $"{secret} {target.Path}");
             }
-            return await actual.RunAsync(AddFixtureEnvironment(target, request), cancellationToken);
+            return await actual.RunAsync(request, cancellationToken);
         });
         using var factory = CreateFactory(target, runner);
         using var client = factory.CreateClient();
@@ -765,13 +783,13 @@ public sealed class WebBeadsIntegrationTests
     [Fact]
     public async Task InconsistentSuccessfulCreateOutputReportsUncertainOutcomeWithoutDeletingTheIssue()
     {
-        using var target = new BeadsFixture();
-        var actual = new SystemProcessRunner();
+        using var target = new BeadsApplicationFixture();
+        var actual = new WebBeadsProcessRunner(target.Path);
         string? createdId = null;
         var createCalls = 0;
         var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
         {
-            var result = await actual.RunAsync(AddFixtureEnvironment(target, request), cancellationToken);
+            var result = await actual.RunAsync(request, cancellationToken);
             if (request.FileName == "bd" && request.Arguments.Contains("create", StringComparer.Ordinal))
             {
                 if (Interlocked.Increment(ref createCalls) == 1)
@@ -806,10 +824,10 @@ public sealed class WebBeadsIntegrationTests
         Assert.DoesNotContain(submittedTitle, body, StringComparison.Ordinal);
         Assert.Equal(1, Volatile.Read(ref createCalls));
         Assert.NotNull(createdId);
-        var shown = target.Run("bd", ["show", createdId!, "--json"]);
+        var shown = actual.Show(createdId!);
         Assert.Contains(submittedTitle, shown, StringComparison.Ordinal);
         Assert.Contains("The real issue should remain discoverable.", shown, StringComparison.Ordinal);
-        using (var ready = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "ready", "--limit", "0", "--json"])))
+        using (var ready = JsonDocument.Parse(actual.Inventory()))
             Assert.Contains(ready.RootElement.EnumerateArray(), bead => bead.GetProperty("id").GetString() == createdId);
 
         using var nextWrite = await client.PostAsync("/api/beads",
@@ -994,7 +1012,7 @@ public sealed class WebBeadsIntegrationTests
     [Fact]
     public async Task InvalidQueriesReturnProblemDetailsWithoutLaunchingTools()
     {
-        using var target = new BeadsFixture();
+        using var target = new BeadsApplicationFixture();
         var runner = CreateFixtureRunner(target);
         using var factory = CreateFactory(target, runner);
         using var client = factory.CreateClient();
@@ -1020,18 +1038,18 @@ public sealed class WebBeadsIntegrationTests
     [InlineData("malformed-json", "Incompatible Beads output")]
     public async Task ToolFailuresReturnSafeProblemDetailsAndLeaveHostAvailable(string failure, string expectedTitle)
     {
-        using var target = new BeadsFixture();
-        using var foreign = new BeadsFixture("foreign tracker");
+        using var target = new BeadsApplicationFixture();
+        using var foreign = new BeadsApplicationFixture();
         const string secret = "raw-stderr-secret";
         var targetTreeBefore = Snapshot.FileTree(target.Path);
         var foreignTreeBefore = Snapshot.FileTree(foreign.Path);
         var targetGitBefore = Snapshot.GitStatus(target.Path);
         var foreignGitBefore = Snapshot.GitStatus(foreign.Path);
-        var actual = new SystemProcessRunner();
+        var actual = new WebBeadsProcessRunner(target.Path);
         var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
         {
             if (request.FileName != "bd")
-                return await actual.RunAsync(AddFixtureEnvironment(target, request, foreign), cancellationToken);
+                return await actual.RunAsync(request, cancellationToken);
             return failure switch
             {
                 "missing-executable" => throw new ToolExecutionException($"required executable 'bd' was not found at {target.Path}", $"{secret} {target.Path}"),
@@ -1071,7 +1089,7 @@ public sealed class WebBeadsIntegrationTests
     [InlineData("{\"dolt_mode\":7}")]
     public async Task MalformedMetadataReturnsSafeProblemDetailsAndLeavesHostAvailable(string metadataJson)
     {
-        using var target = new BeadsFixture();
+        using var target = new BeadsApplicationFixture();
         var metadataPath = Path.Combine(target.Path, ".beads", "metadata.json");
         var validMetadata = File.ReadAllText(metadataPath);
         File.WriteAllText(metadataPath, metadataJson);
@@ -1171,8 +1189,7 @@ public sealed class WebBeadsIntegrationTests
     [Fact]
     public async Task PreparedEmptyTrackerReturnsAnEmptyArray()
     {
-        using var target = new BeadsFixture();
-        target.Run("bd", ["delete", target.ControlBeadId, "--force"]);
+        using var target = new BeadsApplicationFixture();
         var runner = CreateFixtureRunner(target);
         using var factory = CreateFactory(target, runner);
         using var client = factory.CreateClient();
@@ -1181,6 +1198,9 @@ public sealed class WebBeadsIntegrationTests
         Assert.Equal(HttpStatusCode.OK, response.Status);
         Assert.Empty(response.Rows);
     }
+
+    private sealed record ExplorerSeed(string Title, string Type = "task", string Status = "open",
+        string? Assignee = null, int Priority = 2, IReadOnlyList<string>? Labels = null);
 
     private static RecordingProcessRunner CreateFixtureRunner(BeadsFixture target, BeadsFixture? foreign = null)
     {
@@ -1204,7 +1224,16 @@ public sealed class WebBeadsIntegrationTests
         return request with { Environment = environment };
     }
 
+    private static RecordingProcessRunner CreateFixtureRunner(BeadsApplicationFixture target)
+        => new(new WebBeadsProcessRunner(target.Path).RunAsync);
+
+    private static NightweaverWebApplicationFactory CreateFactory(BeadsApplicationFixture target, IProcessRunner runner)
+        => CreateFactory(target.Path, runner);
+
     private static NightweaverWebApplicationFactory CreateFactory(BeadsFixture target, IProcessRunner runner)
+        => CreateFactory(target.Path, runner);
+
+    private static NightweaverWebApplicationFactory CreateFactory(string targetPath, IProcessRunner runner)
     {
         var factory = new NightweaverWebApplicationFactory(configureServices: services =>
         {
@@ -1214,7 +1243,7 @@ public sealed class WebBeadsIntegrationTests
         File.WriteAllText(factory.ConfigPath, JsonSerializer.Serialize(new
         {
             name = "web-test",
-            target_repository = new { path = target.Path }
+            target_repository = new { path = targetPath }
         }));
         return factory;
     }
@@ -1259,6 +1288,47 @@ public sealed class WebBeadsIntegrationTests
             var current = Volatile.Read(ref maximum);
             if (observed <= current || Interlocked.CompareExchange(ref maximum, observed, current) == current)
                 return;
+        }
+    }
+
+    // HTTP validation and output parsing tests exercise the real application with a
+    // stateful bd boundary; native create/read semantics stay covered by the intake E2E test.
+    private sealed class WebBeadsProcessRunner(string repositoryPath) : IProcessRunner
+    {
+        private readonly Dictionary<string, JsonObject> beads = new(StringComparer.Ordinal);
+
+        internal string Inventory() => JsonSerializer.Serialize(beads.Values);
+        internal string Show(string id) => beads[id].ToJsonString();
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.FileName == "git") return new SystemProcessRunner().RunAsync(request, cancellationToken);
+            Assert.Equal("bd", request.FileName);
+            Assert.Equal(repositoryPath, request.WorkingDirectory);
+            var args = request.Arguments.ToList();
+            if (args.Contains("create", StringComparer.Ordinal))
+            {
+                string Value(string option)
+                {
+                    var inline = args.SingleOrDefault(argument => argument.StartsWith(option + "=", StringComparison.Ordinal));
+                    return inline is null ? args[args.IndexOf(option) + 1] : inline[(option.Length + 1)..];
+                }
+                var id = $"web-{beads.Count + 1:D3}";
+                var row = new JsonObject
+                {
+                    ["id"] = id, ["title"] = Value("--title"), ["issue_type"] = Value("--type"),
+                    ["priority"] = int.Parse(Value("--priority"), System.Globalization.CultureInfo.InvariantCulture),
+                    ["description"] = Value("--description"), ["acceptance_criteria"] = Value("--acceptance"),
+                    ["status"] = "open", ["assignee"] = null, ["labels"] = new JsonArray(),
+                    ["created_at"] = "2026-01-01T00:00:00Z"
+                };
+                beads.Add(id, row);
+                return Task.FromResult(new ProcessResult(0, row.ToJsonString(), ""));
+            }
+            Assert.True(args.Contains("--readonly", StringComparer.Ordinal), "Only creates and read-only queries are allowed.");
+            Assert.True(args.Contains("list", StringComparer.Ordinal) || args.Contains("ready", StringComparer.Ordinal));
+            return Task.FromResult(new ProcessResult(0, Inventory(), ""));
         }
     }
 

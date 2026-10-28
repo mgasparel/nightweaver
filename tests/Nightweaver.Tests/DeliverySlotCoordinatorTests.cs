@@ -91,12 +91,12 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task WorkflowChangeAfterClaimRefusesBeforeLaunchingAndSafelyReleasesOwnedClaim()
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
-        var runner = new MutatingProcessRunner(request => SlotFixture.IsAcquire(bead, request), () =>
+        var runner = new MutatingProcessRunner(fixture.Runner, request => SlotFixture.IsAcquire(bead, request), () =>
         {
-            _ = fixture.Target.Run("bd", ["update", bead, "--add-label", "stage:qa"]);
+            fixture.SetStage(bead, "stage:qa");
             return Task.CompletedTask;
         });
 
@@ -118,10 +118,10 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task CompetingOwnerAfterClaimIsNeverReleasedOrDispatched()
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
-        var runner = new MutatingProcessRunner(request => SlotFixture.IsAcquire(bead, request),
+        var runner = new MutatingProcessRunner(fixture.Runner, request => SlotFixture.IsAcquire(bead, request),
             () => fixture.SimulateCompetingClaimAsync(bead));
 
         var outcome = await fixture.RunAsync(bead, (role, _) =>
@@ -141,10 +141,10 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task SameActorClaimWinnerIsNotReleasedWhenGuardedAcquireReturnsExitThirteen()
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
-        var runner = new MutatingProcessRunner(SlotFixture.IsRecoverableReadiness,
+        var runner = new MutatingProcessRunner(fixture.Runner, SlotFixture.IsRecoverableReadiness,
             () => fixture.SimulateClaimAsync(bead, fixture.RecoveryActor));
 
         var outcome = await fixture.RunAsync(bead, (role, _) =>
@@ -168,16 +168,16 @@ public sealed class DeliverySlotCoordinatorTests
     public async Task RepairCounterChangeDuringInterstageReadinessStopsBeforeTheNextRole(
         int readinessQueryToMutate, string roleThatMustNotRun)
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
         var recoverableReadinessCount = 0;
-        var runner = new MutatingProcessRunner(request =>
+        var runner = new MutatingProcessRunner(fixture.Runner, request =>
                 SlotFixture.IsRecoverableReadiness(request)
                 && Interlocked.Increment(ref recoverableReadinessCount) == readinessQueryToMutate,
             () =>
             {
-                fixture.Target.Run("bd", ["update", bead, "--set-metadata", "repair_cycles=1"]);
+                fixture.SetRepairCycles(bead, 1);
                 return Task.CompletedTask;
             });
 
@@ -208,7 +208,7 @@ public sealed class DeliverySlotCoordinatorTests
     [InlineData("cancelled")]
     public async Task IncompleteEscalationProgressSurvivesAndIsNotReleasedAgain(string failureKind)
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
         var progress = new NeedsHumanEscalationResult(true, true, false, true, ["worktree cleanup failed"]);
@@ -272,7 +272,7 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task InterstageOwnerChangePreventsNextRoleAndPreservesForeignClaim()
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
 
@@ -483,11 +483,11 @@ public sealed class DeliverySlotCoordinatorTests
     [InlineData("workflow")]
     public async Task BudgetEscalationPreflightRefusesOwnerOrWorkflowRaces(string race)
     {
-        using var fixture = new SlotFixture(maxRepairCycles: 0);
+        using var fixture = new FastSlotFixture(maxRepairCycles: 0);
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
         var escalationCalls = 0;
-        var runner = new MutatingProcessRunner(request => SlotFixture.IsCommentsRead(bead, request), async () =>
+        var runner = new MutatingProcessRunner(fixture.Runner, request => SlotFixture.IsCommentsRead(bead, request), async () =>
         {
             if (race == "owner") await fixture.SimulateCompetingClaimAsync(bead);
             else fixture.SetRepairCycles(bead, 2);
@@ -528,13 +528,13 @@ public sealed class DeliverySlotCoordinatorTests
     [InlineData("qa-rejection", 3)]
     public async Task BudgetEscalationRechecksWorkflowAfterRecoverableReadiness(string entry, int readinessResponse)
     {
-        using var fixture = new SlotFixture(maxRepairCycles: 0);
+        using var fixture = new FastSlotFixture(maxRepairCycles: 0);
         var bead = entry == "qa-rejection" ? fixture.CreateTask("stage:qa") : fixture.CreateTask();
         if (entry == "admission") fixture.SetRepairCycles(bead, 1);
         var runtime = fixture.CreateRuntimeSentinels(bead);
         var roles = new List<AgentRole>();
         var readinessResponses = 0;
-        var runner = new MutatingProcessRunner(request => SlotFixture.IsRecoverableReadiness(request)
+        var runner = new MutatingProcessRunner(fixture.Runner, request => SlotFixture.IsRecoverableReadiness(request)
             && ++readinessResponses == readinessResponse, () =>
         {
             fixture.SetRepairCycles(bead, fixture.ReadState(bead).RepairCycles + 1);
@@ -573,13 +573,13 @@ public sealed class DeliverySlotCoordinatorTests
     [InlineData("qa-rejection", 6)]
     public async Task RealBudgetEscalatorRejectsWorkflowDriftBeforeItsInitialRead(string entry, int inventoryRead)
     {
-        using var fixture = new SlotFixture(maxRepairCycles: 0);
+        using var fixture = new FastSlotFixture(maxRepairCycles: 0);
         var bead = entry == "qa-rejection" ? fixture.CreateTask("stage:qa") : fixture.CreateTask();
         if (entry == "admission") fixture.SetRepairCycles(bead, 1);
         var runtime = fixture.CreateRuntimeSentinels(bead);
         var roles = new List<AgentRole>();
         var inventoryResponses = 0;
-        var runner = new MutatingProcessRunner(request => SlotFixture.IsInventoryRead(request)
+        var runner = new MutatingProcessRunner(fixture.Runner, request => SlotFixture.IsInventoryRead(request)
             && ++inventoryResponses == inventoryRead, () =>
         {
             fixture.SetRepairCycles(bead, fixture.ReadState(bead).RepairCycles + 1);
@@ -629,10 +629,10 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task BudgetDiagnosticRecordsWhenLatestCommentsCannotBeRead()
     {
-        using var fixture = new SlotFixture(maxRepairCycles: 0);
+        using var fixture = new FastSlotFixture(maxRepairCycles: 0);
         var bead = fixture.CreateTask();
         NeedsHumanRequest? request = null;
-        var runner = new FailingCommentsProcessRunner(bead);
+        var runner = new FailingCommentsProcessRunner(fixture.Runner, bead);
 
         var outcome = await fixture.RunAsync(bead, (role, _) =>
         {
@@ -713,7 +713,7 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task CancellationAfterRoleExecutionStopsWithClaimAndNoFollowOnRole()
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         fixture.CancellationTokenOverride = cancellation.Token;
@@ -737,11 +737,11 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task StaleStateAfterGuardedMergeReleaseIsNotReportedAsMergeReady()
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask("stage:qa");
-        var runner = new MutatingProcessRunner(request => SlotFixture.IsRelease(bead, request), () =>
+        var runner = new MutatingProcessRunner(fixture.Runner, request => SlotFixture.IsRelease(bead, request), () =>
         {
-            _ = fixture.Target.Run("bd", ["update", bead, "--remove-label", "stage:merge", "--add-label", "stage:implement"]);
+            fixture.SetStage(bead, "stage:implement");
             return Task.CompletedTask;
         });
 
@@ -763,9 +763,9 @@ public sealed class DeliverySlotCoordinatorTests
     [Fact]
     public async Task RetryEscalationStopsSlotWithoutDuplicateClaimRelease()
     {
-        using var fixture = new SlotFixture();
+        using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
-        var runner = new RecordingProcessRunner((request, token) => new SystemProcessRunner().RunAsync(request, token));
+        var runner = new RecordingProcessRunner(fixture.Runner.RunAsync);
 
         var outcome = await fixture.RunAsync(bead, async (role, _) =>
         {
@@ -878,8 +878,6 @@ public sealed class DeliverySlotCoordinatorTests
 
         internal BeadsFixture Target { get; }
         internal HostPaths Host { get; }
-        internal string RecoveryActor => project.RecoveryActor;
-        internal CancellationToken? CancellationTokenOverride { get; set; }
         private IReadOnlyList<ProcessRequest> LastRequests { get; set; } = [];
         private ValidatedTargetRepository Repository => new(Target.Path, "main");
 
@@ -898,79 +896,8 @@ public sealed class DeliverySlotCoordinatorTests
             return bead;
         }
 
-        internal (string Worktree, string Temporary) CreateRuntimeSentinels(string beadId)
-        {
-            var slug = ProjectSlug.Parse("demo");
-            var worktree = Path.Combine(Host.WorktreesRoot(slug), beadId);
-            var temporary = Path.Combine(Host.TmpRoot(slug), beadId);
-            Directory.CreateDirectory(worktree);
-            Directory.CreateDirectory(temporary);
-            File.WriteAllText(Path.Combine(worktree, "sentinel.txt"), "worktree sentinel");
-            File.WriteAllText(Path.Combine(temporary, "sentinel.txt"), "temporary sentinel");
-            return (worktree, temporary);
-        }
-
         internal BeadSnapshot ReadBead(string beadId) => BeadsReader.Parse(
             Target.Run("bd", BeadsCommand.Create(Target.Path).Arguments)).ById[beadId];
-
-        internal BeadWorkflowState ReadState(string beadId) => BeadWorkflowState.Parse(ReadBead(beadId));
-
-        internal void Advance(string beadId, AgentRole role)
-        {
-            var next = role switch
-            {
-                AgentRole.Implementer => "stage:review",
-                AgentRole.Reviewer => "stage:qa",
-                AgentRole.Qa => "stage:merge",
-                _ => throw new InvalidOperationException($"Unexpected role {role}.")
-            };
-            var current = ReadState(beadId).Stage;
-            var args = new List<string> { "update", beadId };
-            if (current is not null) { args.Add("--remove-label"); args.Add(current); }
-            args.Add("--add-label");
-            args.Add(next);
-            Target.Run("bd", args);
-        }
-
-        internal void Reject(string beadId, AgentRole role, string finding)
-        {
-            var before = ReadState(beadId);
-            var expectedStage = role == AgentRole.Reviewer ? "stage:review" : "stage:qa";
-            if (before.Stage != expectedStage) throw new InvalidOperationException($"Cannot reject {before.Stage} as {role}.");
-            Target.Run("bd", ["comments", "add", beadId, finding]);
-            Target.Run("bd", ["update", beadId, "--remove-label", expectedStage, "--add-label", "stage:implement",
-                "--set-metadata", $"repair_cycles={checked(before.RepairCycles + 1)}"]);
-        }
-
-        internal void SetRepairCycles(string beadId, int count) =>
-            Target.Run("bd", ["update", beadId, "--set-metadata", $"repair_cycles={count}"]);
-
-        internal async Task SimulateEscalationAsync(string beadId)
-        {
-            var escalationWriter = new BeadsWriter(new SystemProcessRunner());
-            await escalationWriter.ApplyNeedsHumanAsync(Repository, beadId, project.RecoveryActor, "in_progress", CancellationToken.None);
-            await escalationWriter.AddCommentAsync(Repository, beadId, "fixture needs-human diagnostic", CancellationToken.None);
-            await escalationWriter.ReleaseClaimAsync(Repository, beadId, project.RecoveryActor, CancellationToken.None);
-        }
-
-        internal async Task SimulateCompetingClaimAsync(string beadId)
-        {
-            var systemRunner = new SystemProcessRunner();
-            var beadsWriter = new BeadsWriter(systemRunner);
-            await beadsWriter.ReleaseDispatchClaimAsync(Repository, beadId, project.RecoveryActor, "in_progress", CancellationToken.None);
-            var request = BeadsCommand.CreateWrite(Target.Path, ["update", beadId, "--claim"], "other:worker");
-            var result = await systemRunner.RunAsync(request, CancellationToken.None);
-            if (result.ExitCode != 0)
-                throw new InvalidOperationException($"Fixture competing claim failed ({result.ExitCode}): {result.StandardError}{result.StandardOutput}");
-        }
-
-        internal async Task SimulateClaimAsync(string beadId, string actor)
-        {
-            var request = BeadsCommand.CreateWrite(Target.Path, ["update", beadId, "--claim"], actor);
-            var result = await new SystemProcessRunner().RunAsync(request, CancellationToken.None);
-            if (result.ExitCode != 0)
-                throw new InvalidOperationException($"Fixture claim failed ({result.ExitCode}): {result.StandardError}{result.StandardOutput}");
-        }
 
         internal async Task<DeliverySlotOutcome> RunAsync(string beadId,
             Func<AgentRole, CancellationToken, Task<OperationalRetryOutcome>> roleRunner,
@@ -994,7 +921,7 @@ public sealed class DeliverySlotCoordinatorTests
             DeliveryRepairBudgetEscalator? escalator = escalate is null ? null : (_, _, _, request, _) => escalate(request);
             return await new DeliverySlotCoordinator(runner, stageRunner, escalator)
                 .RunAsync(Host, project, Repository, beadId,
-                    CancellationTokenOverride ?? TestContext.Current.CancellationToken);
+                    TestContext.Current.CancellationToken);
         }
 
         internal static bool IsAcquire(string bead, ProcessRequest request) => IsClaimWrite(bead, request, "open");
@@ -1061,6 +988,29 @@ public sealed class DeliverySlotCoordinatorTests
         internal List<BeadWorkflowState> ExpectedStates { get; } = [];
 
         internal string RecoveryActor => project.RecoveryActor;
+        internal CancellationToken? CancellationTokenOverride { get; set; }
+
+        internal (string Worktree, string Temporary) CreateRuntimeSentinels(string beadId)
+        {
+            var slug = ProjectSlug.Parse("demo");
+            var worktree = Path.Combine(Host.WorktreesRoot(slug), beadId);
+            var temporary = Path.Combine(Host.TmpRoot(slug), beadId);
+            Directory.CreateDirectory(worktree);
+            Directory.CreateDirectory(temporary);
+            File.WriteAllText(Path.Combine(worktree, "sentinel.txt"), "worktree sentinel");
+            File.WriteAllText(Path.Combine(temporary, "sentinel.txt"), "temporary sentinel");
+            return (worktree, temporary);
+        }
+
+        internal Task SimulateCompetingClaimAsync(string beadId) => SimulateClaimAsync(beadId, "other:worker");
+
+        internal Task SimulateClaimAsync(string beadId, string actor)
+        {
+            Runner.SetClaim(beadId, actor);
+            return Task.CompletedTask;
+        }
+
+        internal void SetStage(string beadId, string stage) => Runner.SetStage(beadId, stage);
 
         internal Task SimulateEscalationAsync(string beadId)
         {
@@ -1108,7 +1058,7 @@ public sealed class DeliverySlotCoordinatorTests
             });
             DeliveryRepairBudgetEscalator? escalator = escalate is null ? null : (_, _, _, request, _) => escalate(request);
             return await new DeliverySlotCoordinator(runner, stageRunner, escalator)
-                .RunAsync(Host, project, Repository, beadId, TestContext.Current.CancellationToken);
+                .RunAsync(Host, project, Repository, beadId, CancellationTokenOverride ?? TestContext.Current.CancellationToken);
         }
 
         public void Dispose()
@@ -1147,6 +1097,20 @@ public sealed class DeliverySlotCoordinatorTests
         {
             var bead = beads.Single(item => item.Id == beadId);
             return BeadsReader.Parse(JsonSerializer.Serialize(new[] { ToRow(bead) })).ById[beadId];
+        }
+
+        internal void SetClaim(string beadId, string actor)
+        {
+            var bead = beads.Single(item => item.Id == beadId);
+            bead.Status = "in_progress";
+            bead.Assignee = actor;
+        }
+
+        internal void SetStage(string beadId, string stage)
+        {
+            var bead = beads.Single(item => item.Id == beadId);
+            bead.Labels.RemoveAll(label => label.StartsWith("stage:", StringComparison.Ordinal));
+            bead.Labels.Add(stage);
         }
 
         internal void Advance(string beadId, AgentRole role)
@@ -1307,11 +1271,11 @@ public sealed class DeliverySlotCoordinatorTests
     }
 
     private sealed class MutatingProcessRunner(
+        IProcessRunner inner,
         Func<ProcessRequest, bool> shouldMutate,
         Func<Task> mutate,
         bool mutateBefore = false) : IProcessRunner
     {
-        private readonly SystemProcessRunner inner = new();
         private int didMutate;
         private readonly List<ProcessRequest> requests = [];
         internal IReadOnlyList<ProcessRequest> Requests => requests;
@@ -1327,10 +1291,8 @@ public sealed class DeliverySlotCoordinatorTests
         }
     }
 
-    private sealed class FailingCommentsProcessRunner(string beadId) : IProcessRunner
+    private sealed class FailingCommentsProcessRunner(IProcessRunner inner, string beadId) : IProcessRunner
     {
-        private readonly SystemProcessRunner inner = new();
-
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken) =>
             SlotFixture.IsCommentsRead(beadId, request)
                 ? Task.FromResult(new ProcessResult(2, string.Empty, "fixture comments read failure"))

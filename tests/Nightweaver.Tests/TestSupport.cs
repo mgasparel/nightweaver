@@ -37,23 +37,6 @@ internal sealed class TempDirectory : IDisposable
             return;
         }
 
-        foreach (var entry in Snapshot.SafeEntries(Path))
-        {
-            try
-            {
-                if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0) continue;
-                File.SetAttributes(entry, FileAttributes.Normal);
-            }
-            catch (IOException)
-            {
-                // Directories and files can disappear during recursive cleanup.
-            }
-            catch (UnauthorizedAccessException)
-            {
-                // Clear attributes where the current account permits it; Directory.Delete reports the rest.
-            }
-        }
-
         DeleteTree(Path);
     }
 
@@ -67,8 +50,15 @@ internal sealed class TempDirectory : IDisposable
                 if ((attributes & FileAttributes.Directory) != 0) Directory.Delete(entry);
                 else File.Delete(entry);
             }
-            else if ((attributes & FileAttributes.Directory) != 0) DeleteTree(entry);
-            else File.Delete(entry);
+            else
+            {
+                // Most copied files only have Archive/Directory attributes. Avoid
+                // rewriting metadata for every entry just before deleting it.
+                if ((attributes & FileAttributes.ReadOnly) != 0)
+                    File.SetAttributes(entry, FileAttributes.Normal);
+                if ((attributes & FileAttributes.Directory) != 0) DeleteTree(entry);
+                else File.Delete(entry);
+            }
         }
         Directory.Delete(root);
     }
@@ -252,6 +242,12 @@ internal sealed class BeadsApplicationFixture : IDisposable
 // A real, isolated embedded Dolt tracker. Setup writes are outside measured runs.
 internal sealed class BeadsFixture : IDisposable
 {
+    private static readonly Lazy<BeadsFixture> Template = new(() =>
+    {
+        var fixture = new BeadsFixture(initializeTemplate: true);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => fixture.Dispose();
+        return fixture;
+    });
     private readonly TempDirectory temp = new();
     internal string Path { get; }
     internal string Root => temp.Path;
@@ -259,7 +255,9 @@ internal sealed class BeadsFixture : IDisposable
     internal IReadOnlyDictionary<string, string?> Environment { get; }
     internal string ControlBeadId { get; }
 
-    internal BeadsFixture(string relativePath = "repo")
+    internal BeadsFixture(string relativePath = "repo") : this(relativePath, initializeTemplate: false) { }
+
+    private BeadsFixture(string relativePath = "repo", bool initializeTemplate = false)
     {
         Path = temp.CreateDirectory(relativePath);
         UserHome = temp.CreateDirectory("isolated user");
@@ -271,11 +269,30 @@ internal sealed class BeadsFixture : IDisposable
             ["GIT_COMMITTER_NAME"] = "Fixture", ["GIT_COMMITTER_EMAIL"] = "fixture@example.invalid"
         };
         Environment = environment;
+        if (!initializeTemplate)
+        {
+            var template = Template.Value;
+            TestDirectoryTemplate.Copy(template.Path, Path);
+            ControlBeadId = template.ControlBeadId;
+            return;
+        }
+
         Run("git", ["init", "-b", "main"]);
         Run("bd", ["init", "--prefix", "fixture", "--non-interactive", "--skip-agents", "--skip-hooks"]);
         // A genuine fixture write establishes bd's physical-root gate, which init
         // alone omits. Production refuses such unprepared trackers without writes.
         ControlBeadId = Create("Fixture control");
+    }
+
+    // Attach the same prepared tracker baseline to a separately provisioned Git repository.
+    internal static string CopyTrackerTo(string repositoryPath)
+    {
+        var template = Template.Value;
+        TestDirectoryTemplate.Copy(System.IO.Path.Combine(template.Path, ".beads"),
+            System.IO.Path.Combine(repositoryPath, ".beads"));
+        File.Copy(System.IO.Path.Combine(template.Path, ".beads.gate.lock"),
+            System.IO.Path.Combine(repositoryPath, ".beads.gate.lock"));
+        return template.ControlBeadId;
     }
 
     internal string Run(string tool, IReadOnlyList<string> args)
@@ -285,15 +302,36 @@ internal sealed class BeadsFixture : IDisposable
         return result.StandardOutput;
     }
 
-    internal string Create(string title, string? actor = null, string status = "open", string type = "task", int priority = 2)
+    internal string Create(string title, string? actor = null, string status = "open", string type = "task", int priority = 2, IReadOnlyList<string>? labels = null)
     {
         var args = new List<string> { "create", "--title", title, "--type", type, "--priority", priority.ToString(System.Globalization.CultureInfo.InvariantCulture), "--json" };
         if (actor is not null) { args.Add("--assignee"); args.Add(actor); }
+        if (status != "open") { args.Add("--status"); args.Add(status); }
+        if (labels is { Count: > 0 }) { args.Add("--labels"); args.Add(string.Join(',', labels)); }
         using var document = System.Text.Json.JsonDocument.Parse(Run("bd", args));
         var id = document.RootElement.GetProperty("id").GetString()!;
-        if (status != "open") Run("bd", ["update", id, "--status", status]);
         return id;
     }
 
     public void Dispose() => temp.Dispose();
+}
+
+// Templates are fully initialized and all child processes have exited before
+// publication through Lazy<T>. Every consumer receives independent file bytes,
+// including Git objects and Dolt journals; no hard links or shared mutable stores.
+internal static class TestDirectoryTemplate
+{
+    internal static void Copy(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var entry in Directory.EnumerateFileSystemEntries(source))
+        {
+            var attributes = File.GetAttributes(entry);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"Fixture templates must not contain links: {entry}");
+            var target = System.IO.Path.Combine(destination, System.IO.Path.GetFileName(entry));
+            if ((attributes & FileAttributes.Directory) != 0) Copy(entry, target);
+            else File.Copy(entry, target);
+        }
+    }
 }

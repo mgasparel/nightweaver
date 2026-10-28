@@ -104,6 +104,7 @@ public sealed class WorktreeIntegrationTests
 internal sealed class StartupSweepFixture : IDisposable
 {
     private readonly TempDirectory temp = new();
+    private readonly Dictionary<string, string> seededIds;
     internal BeadsFixture Target { get; } = new("target repo with spaces");
     internal string Host { get; }
     internal string Caller { get; }
@@ -136,16 +137,38 @@ internal sealed class StartupSweepFixture : IDisposable
         Config = temp.WriteFile("nightweaver host/projects/demo.json", JsonSerializer.Serialize(new { name = "demo", target_repository = new { path = Target.Path } }));
         temp.WriteFile("nightweaver host/logs/demo/retained.log", "preserve logs");
         Target.Run("git", ["commit", "--allow-empty", "-m", "fixture base"]);
-        var closed = Worktree("closed", "closed");
-        var planned = Worktree("planned", label: "planned", named: true);
-        var paused = Worktree("paused", label: "product-decision-required");
-        var needsHuman = Worktree("needs human", label: "needs-human");
-        var active = Worktree("active", "in_progress");
-        var merge = Worktree("merge", label: "stage:merge", named: true);
+        // These rows describe a scenario, not create/update command contracts.
+        // Import them in one transaction before constructing real Git worktrees.
+        var seeds = new[]
+        {
+            new { title = "closed", status = "closed", labels = Array.Empty<string>() },
+            new { title = "planned", status = "open", labels = new[] { "planned" } },
+            new { title = "paused", status = "open", labels = new[] { "product-decision-required" } },
+            new { title = "needs human", status = "open", labels = new[] { "needs-human" } },
+            new { title = "active", status = "in_progress", labels = Array.Empty<string>() },
+            new { title = "merge", status = "open", labels = new[] { "stage:merge" } },
+            new { title = "locked closed", status = "closed", labels = Array.Empty<string>() },
+            new { title = "missing path", status = "closed", labels = Array.Empty<string>() }
+        };
+        var seedFile = Path.Combine(temp.Path, "startup-seed.jsonl");
+        File.WriteAllText(seedFile, string.Join('\n', seeds.Select(seed => JsonSerializer.Serialize(new
+        {
+            seed.title, seed.status, seed.labels, issue_type = "task", priority = 2, assignee = "nightweaver:demo"
+        }))));
+        Target.Run("bd", ["import", seedFile, "--json"]);
+        seededIds = BeadsReader.Parse(Target.Run("bd", BeadsCommand.Create(Target.Path).Arguments)).ById.Values
+            .ToDictionary(bead => bead.Payload.GetProperty("title").GetString()!, bead => bead.Id, StringComparer.Ordinal);
+        File.Delete(seedFile);
+        var closed = Worktree("closed");
+        var planned = Worktree("planned", named: true);
+        var paused = Worktree("paused");
+        var needsHuman = Worktree("needs human");
+        var active = Worktree("active");
+        var merge = Worktree("merge", named: true);
         Target.Run("bd", ["dep", "add", active, merge]);
-        var locked = Worktree("locked closed", "closed");
+        var locked = Worktree("locked closed");
         Target.Run("git", ["worktree", "lock", "--reason", "human inspection\nkeep this worktree", WorktreePath(locked)]);
-        var missing = Worktree("missing path", "closed");
+        var missing = Worktree("missing path");
         Directory.Delete(WorktreePath(missing), recursive: true);
         Target.Run("git", ["worktree", "add", "--detach", WorktreePath("fixture.absent"), "HEAD"]);
         temp.CreateDirectory("nightweaver host/worktrees/demo/unregistered");
@@ -162,10 +185,9 @@ internal sealed class StartupSweepFixture : IDisposable
     }
 
     private string WorktreePath(string id) => Path.Combine(Host, "worktrees", "demo", id);
-    private string Worktree(string title, string status = "open", string? label = null, bool named = false)
+    private string Worktree(string title, bool named = false)
     {
-        var id = Target.Create(title, "nightweaver:demo", status);
-        if (label is not null) Target.Run("bd", ["update", id, "--add-label", label]);
+        var id = seededIds[title];
         if (named) Target.Run("git", ["worktree", "add", "-b", "nightweaver/" + id, WorktreePath(id), "HEAD"]);
         else Target.Run("git", ["worktree", "add", "--detach", WorktreePath(id), "HEAD"]);
         return id;

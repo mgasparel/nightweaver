@@ -231,6 +231,12 @@ public sealed class WorktreeProvisionerIntegrationTests
 
 internal sealed class ProvisioningGitFixture : IDisposable
 {
+    private static readonly Lazy<ProvisioningGitFixture> Template = new(() =>
+    {
+        var fixture = new ProvisioningGitFixture(initializeTemplate: true);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => fixture.Dispose();
+        return fixture;
+    });
     private readonly TempDirectory temp = new();
     private readonly string seed;
     private readonly string bare;
@@ -238,7 +244,9 @@ internal sealed class ProvisioningGitFixture : IDisposable
     private readonly string beadId = "ns-xci.1";
     private readonly ProjectSlug project = new("demo");
 
-    internal ProvisioningGitFixture()
+    internal ProvisioningGitFixture() : this(initializeTemplate: false) { }
+
+    private ProvisioningGitFixture(bool initializeTemplate)
     {
         TempRoot = temp.Path;
         seed = temp.CreateDirectory("seed repo");
@@ -248,15 +256,25 @@ internal sealed class ProvisioningGitFixture : IDisposable
         Directory.CreateDirectory(Host);
         globalConfig = Path.Combine(temp.Path, "no global git config");
 
+        if (!initializeTemplate)
+        {
+            var template = Template.Value;
+            TestDirectoryTemplate.Copy(template.TempRoot, TempRoot);
+            InitialSha = template.InitialSha;
+            return;
+        }
+
         Git(seed, ["init", "-b", "main"]);
         File.WriteAllText(Path.Combine(seed, "README.md"), "base\n");
         File.WriteAllText(Path.Combine(seed, ".gitignore"), "ignored-cache/\n");
         Commit(seed, "initial base");
         Git(temp.Path, ["init", "--bare", bare]);
-        Git(seed, ["remote", "add", "origin", bare]);
+        Git(seed, ["remote", "add", "origin", "../bare origin.git"]);
         Git(seed, ["push", "-u", "origin", "main"]);
         Git(bare, ["symbolic-ref", "HEAD", "refs/heads/main"]);
         Git(temp.Path, ["clone", bare, Target]);
+        // Relative remotes keep every copied baseline self-contained.
+        Git(Target, ["remote", "set-url", "origin", "../bare origin.git"]);
         InitialSha = Git(seed, ["rev-parse", "HEAD"]).Output.Trim();
 
         // Sentinels include staged, unstaged, untracked, and ignored root data.

@@ -1,10 +1,11 @@
+using System.Reflection;
 using System.Text;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 
 namespace Nightweaver.Tests;
 
-public sealed class PromptPackagingIntegrationTests
+public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture published)
 {
     private static readonly (AgentRole Role, string FileName)[] PromptFiles =
     [
@@ -58,25 +59,14 @@ public sealed class PromptPackagingIntegrationTests
     {
         using var temp = new TempDirectory();
         var repositoryRoot = FindRepositoryRoot();
-        var projectPath = Path.Combine(repositoryRoot, "src", "Nightweaver", "Nightweaver.csproj");
-        var buildOutput = Path.Combine(temp.Path, "dedicated build output");
-        var publishOutput = Path.Combine(temp.Path, "dedicated publish output");
-
-        await TestProjectBuildGate.NightweaverProject.WaitAsync(TestContext.Current.CancellationToken);
-        try
-        {
-            var build = await ProcessTool.RunAsync("dotnet", ["build", projectPath, "--configuration", "Release", "--output", buildOutput, "-p:UseAppHost=true"],
-                repositoryRoot, null, TimeSpan.FromMinutes(3));
-            Assert.True(build.ExitCode == 0, $"dotnet build failed (exit {build.ExitCode})\n{build.StandardOutputText}\n{build.StandardErrorText}");
-
-            var publish = await ProcessTool.RunAsync("dotnet", ["publish", projectPath, "--configuration", "Release", "--self-contained", "false", "-p:UseAppHost=true", "--output", publishOutput],
-                repositoryRoot, null, TimeSpan.FromMinutes(3));
-            Assert.True(publish.ExitCode == 0, $"dotnet publish failed (exit {publish.ExitCode})\n{publish.StandardOutputText}\n{publish.StandardErrorText}");
-        }
-        finally
-        {
-            TestProjectBuildGate.NightweaverProject.Release();
-        }
+        // Project references have already staged the build output for this test run.
+        // Copy both artifacts before testing operator edits so shared outputs stay pristine.
+        var stagedBuild = typeof(PromptPackagingIntegrationTests).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+            .Single(attribute => attribute.Key == "NightweaverAppDir").Value!;
+        var buildOutput = Path.Combine(temp.Path, "build output copy");
+        var publishOutput = Path.Combine(temp.Path, "publish output copy");
+        PublishedCliArtifactFixture.CopyDirectory(stagedBuild, buildOutput);
+        published.CopyPublishedAppTo(publishOutput);
 
         foreach (var output in new[] { buildOutput, publishOutput })
         {

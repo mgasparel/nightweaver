@@ -39,20 +39,13 @@ public sealed class DeliveryDiscoveryIntegrationTests
         var multiple = CreateTask("Conflicting stage task", labels: ["stage:merge", "stage:review"]);
         var decisionPaused = CreateTask("Decision paused task", labels: ["product-decision-required"]);
         var humanPaused = CreateTask("Human paused task", labels: ["needs-human"]);
-        var plannedParent = target.Create("Planned product parent", type: "feature");
-        target.Run("bd", ["update", plannedParent, "--add-label", "planned"]);
+        var plannedParent = target.Create("Planned product parent", type: "feature", labels: ["planned"]);
         var provenanceChild = CreateTask("Task with discovered-from provenance");
         target.Run("bd", ["dep", "add", provenanceChild, plannedParent, "--type", "discovered-from"]);
-        var planningCandidate = target.Create("Planning remains backpressured", type: "feature");
-        target.Run("bd", ["update", planningCandidate, "--add-label", "stage:plan"]);
+        var planningCandidate = target.Create("Planning remains backpressured", type: "feature", labels: ["stage:plan"]);
 
         string CreateTask(string title, string? assignee = null, string status = "open", string[]? labels = null, int? priority = null)
-        {
-            var id = target.Create(title, assignee, status);
-            if (priority is not null) target.Run("bd", ["update", id, "--priority", priority.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)]);
-            foreach (var label in labels ?? []) target.Run("bd", ["update", id, "--add-label", label]);
-            return id;
-        }
+            => target.Create(title, assignee, status, priority: priority ?? 2, labels: labels);
 
         var inventoryArguments = BeadsCommand.Create(target.Path).Arguments;
         var inventoryJson = target.Run("bd", inventoryArguments);

@@ -9,42 +9,8 @@ using Nightweaver.Inspection;
 
 namespace Nightweaver.Tests;
 
-[CollectionDefinition("Agent stage native integration")]
-public sealed class AgentStageNativeIntegration { }
-
-[Collection("Agent stage native integration")]
-public sealed class AgentStageIntegrationTests
+public sealed class AgentStageRetryIntegrationTests : AgentStageIntegrationTestSupport
 {
-    [Fact]
-    public async Task OperationalRetryRunsRealAgentJobAfterResettingTheSameClaimedWorktree()
-    {
-        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
-        using var target = new AgentStageTargetFixture();
-        var bead = target.CreateBead("Operational retry integration", "task", "stage:implement");
-
-        var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer, ["nonzero-dirty", "review"], verifyResetSentinels: true);
-
-        Assert.True(outcome.Succeeded, outcome.StageResult.Failure?.Reason);
-        Assert.Equal(2, outcome.AttemptCount);
-        Assert.Equal("stage:review", target.ReadState(bead).Stage);
-        Assert.Equal(4, target.ReadState(bead).RepairCycles);
-        var beadSnapshot = target.ReadBead(bead);
-        Assert.Equal("in_progress", beadSnapshot.Status);
-        Assert.Equal("nightweaver:demo", beadSnapshot.Assignee);
-
-        var worktree = target.WorktreePath(bead);
-        Assert.Equal("fixture base\n", File.ReadAllText(System.IO.Path.Combine(worktree, "README.md")).Replace("\r\n", "\n", StringComparison.Ordinal));
-        Assert.False(File.Exists(System.IO.Path.Combine(worktree, "retry-untracked.txt")));
-        Assert.Equal("ignored sentinel\n", File.ReadAllText(System.IO.Path.Combine(worktree, ".nightweaver-ignored", "keep.bin")));
-        Assert.Equal(2, Directory.GetFiles(System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead), "*.log").Length);
-        Assert.True(File.Exists(outcome.StageResult.LogFilePath), outcome.StageResult.LogFilePath);
-        var retryCommands = target.LastRetryRequests.Where(request => request.FileName == "git"
-            && request.WorkingDirectory == worktree && request.Arguments.SequenceEqual(["reset", "--hard", "HEAD"])).ToArray();
-        Assert.Equal(2, retryCommands.Length); // initial provision plus one same-worktree pre-retry reset
-        Assert.Equal(2, target.LastRetryRequests.Count(request => request.FileName == "git"
-            && request.WorkingDirectory == worktree && request.Arguments.SequenceEqual(["clean", "-fd"])));
-    }
-
     [Fact]
     public async Task PlanningRetryKeepsWarmProvisionedWorktreeDetachedAndRetainsClaim()
     {
@@ -56,9 +22,11 @@ public sealed class AgentStageIntegrationTests
 
         Assert.True(outcome.Succeeded, outcome.StageResult.Failure?.Reason);
         Assert.Equal(2, outcome.AttemptCount);
-        Assert.Equal("stage:plan-challenge", target.ReadState(bead).Stage);
-        Assert.Equal(4, target.ReadState(bead).RepairCycles);
-        Assert.Equal("nightweaver:demo", target.ReadBead(bead).Assignee);
+        var beadSnapshot = target.ReadBead(bead);
+        var state = BeadWorkflowState.Parse(beadSnapshot);
+        Assert.Equal("stage:plan-challenge", state.Stage);
+        Assert.Equal(4, state.RepairCycles);
+        Assert.Equal("nightweaver:demo", beadSnapshot.Assignee);
         Assert.Equal("", target.CurrentBranch(bead));
         Assert.Equal(2, Directory.GetFiles(System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead), "*.log").Length);
     }
@@ -77,10 +45,10 @@ public sealed class AgentStageIntegrationTests
         Assert.Equal(2, outcome.AttemptCount);
         Assert.Equal(NeedsHumanCause.DuplicateFailure, outcome.EscalationCause);
         Assert.Equal(DuplicateFailureVerdict.Duplicate, outcome.LastClassification!.Verdict);
-        var state = target.ReadState(bead);
+        var beadSnapshot = target.ReadBead(bead);
+        var state = BeadWorkflowState.Parse(beadSnapshot);
         Assert.Equal("stage:implement", state.Stage);
         Assert.True(state.NeedsHuman);
-        var beadSnapshot = target.ReadBead(bead);
         Assert.Equal("open", beadSnapshot.Status);
         Assert.Null(beadSnapshot.Assignee);
         Assert.False(Directory.Exists(target.WorktreePath(bead)));
@@ -102,87 +70,38 @@ public sealed class AgentStageIntegrationTests
     }
 
     [Fact]
-    public async Task DeliverySlotKeepsOneClaimAndPersistentWorktreeAcrossEverySupportedEntryStage()
+    public async Task DistinctRetryFailuresExhaustDefaultBudgetAfterThreeNativeAttempts()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
-        var entries = new[]
-        {
-            (Label: (string?)null, Roles: new[] { AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa }),
-            (Label: (string?)"stage:implement", Roles: new[] { AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa }),
-            (Label: (string?)"stage:review", Roles: new[] { AgentRole.Reviewer, AgentRole.Qa }),
-            (Label: (string?)"stage:qa", Roles: new[] { AgentRole.Qa })
-        };
+        var bead = target.CreateBead("Retry exhaustion integration", "task", "stage:implement");
 
-        foreach (var entry in entries)
-        {
-            var bead = entry.Label is null
-                ? target.CreateBead($"Delivery slot {Guid.NewGuid():N}", "task")
-                : target.CreateBead($"Delivery slot {Guid.NewGuid():N}", "task", entry.Label);
-            var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-observations.jsonl");
-            var actions = entry.Roles.Select(role => (role, Action: role switch
-            {
-                AgentRole.Implementer => entry.Label is null ? "slot-implement-unlabeled" : "slot-implement",
-                AgentRole.Reviewer => "slot-review",
-                AgentRole.Qa => "slot-qa",
-                _ => throw new InvalidOperationException($"Unexpected Delivery role {role}.")
-            })).ToArray();
+        var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer,
+            ["failure", "failure", "failure"], classifierAction: "different");
 
-            var outcome = await target.RunDeliverySlotAsync(bead, actions, observations);
-
-            var failureLog = outcome.LastStage is { } lastStage && File.Exists(lastStage.StageResult.LogFilePath)
-                ? File.ReadAllText(lastStage.StageResult.LogFilePath)
-                : "(no invocation log)";
-            Assert.True(outcome.MergeReady,
-                $"{outcome.Disposition}: {outcome.Diagnostic}; last role {outcome.LastRole}; "
-                + $"retry status {outcome.LastStage?.Status}; failure {outcome.LastStage?.StageResult.Failure?.Kind}: {outcome.LastStage?.StageResult.Failure?.Reason}; "
-                + $"logs {outcome.LastStage?.StageResult.LogFilePath}\n{failureLog}");
-            Assert.Equal(entry.Roles, target.LastSlotRoles);
-            var claimWrites = AgentStageTargetFixture.ClaimWrites(target.LastSlotRequests, bead);
-            Assert.Single(claimWrites, request => AgentStageTargetFixture.ClaimWriteStatus(request) == "open");
-            Assert.Single(claimWrites, request => AgentStageTargetFixture.ClaimWriteStatus(request) == "in_progress");
-            var final = target.ReadBead(bead);
-            Assert.Equal("open", final.Status);
-            Assert.Null(final.Assignee);
-            Assert.Equal("stage:merge", target.ReadState(bead).Stage);
-
-            var records = File.ReadAllLines(observations)
-                .Select(line => JsonSerializer.Deserialize<SlotObservation>(line)!)
-                .ToArray();
-            Assert.Equal(entry.Roles.Length, records.Length);
-            Assert.Equal(entry.Roles, records.Select(record => record.Role).ToArray());
-            Assert.All(records, record =>
-            {
-                Assert.Equal("in_progress", record.Status);
-                Assert.Equal("nightweaver:demo", record.Assignee);
-                Assert.Equal(target.WorktreePath(bead), record.Worktree);
-                Assert.Equal(3 - record.RepairCycles, record.RemainingRepairBudget);
-            });
-            Assert.Equal($"nightweaver/{bead}", records[^1].Branch);
-            Assert.All(records, record => Assert.Equal(records[0].Worktree, record.Worktree));
-            var expectedInputStages = entry.Label switch
-            {
-                null or "stage:implement" => new[] { entry.Label, "stage:review", "stage:qa" },
-                "stage:review" => new[] { "stage:review", "stage:qa" },
-                _ => new[] { "stage:qa" }
-            };
-            Assert.Equal(expectedInputStages, records.Select(record => record.Stage).ToArray());
-
-            var worktree = target.WorktreePath(bead);
-            Assert.Equal($"nightweaver/{bead}", target.CurrentBranch(bead));
-            var status = target.RunTarget("git", ["status", "--porcelain"], worktree);
-            Assert.True(status.Length == 0,
-                $"Entry {entry.Label ?? "(unlabeled)"} left worktree dirty:\n{status}"
-                + target.RunTarget("git", ["diff", "--", ".gitignore", "README.md"], worktree));
-            if (entry.Roles.Contains(AgentRole.Implementer))
-            {
-                Assert.True(File.Exists(System.IO.Path.Combine(worktree, "delivery-slot.txt")));
-                Assert.True(File.Exists(System.IO.Path.Combine(worktree, ".nightweaver-ignored", "slot-sentinel.bin")));
-                Assert.Contains("slot fixture implementation", target.RunTarget("git", ["log", "-1", "--format=%s"], worktree), StringComparison.Ordinal);
-            }
-        }
+        Assert.Equal(OperationalRetryStatus.Escalated, outcome.Status);
+        Assert.Equal(3, outcome.AttemptCount);
+        Assert.Equal(NeedsHumanCause.OperationalRetriesExhausted, outcome.EscalationCause);
+        Assert.Equal(DuplicateFailureVerdict.Different, outcome.LastClassification!.Verdict);
+        Assert.Equal(3, target.LastRetryLifecycleCount);
+        var beadSnapshot = target.ReadBead(bead);
+        var state = BeadWorkflowState.Parse(beadSnapshot);
+        Assert.Equal("stage:implement", state.Stage);
+        Assert.True(state.NeedsHuman);
+        Assert.Equal("open", beadSnapshot.Status);
+        Assert.Null(beadSnapshot.Assignee);
+        Assert.False(Directory.Exists(target.WorktreePath(bead)));
+        Assert.False(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
+        Assert.Equal(1, GitFixture.RunGit(target.Path, ["show-ref", "--verify", "--quiet", $"refs/heads/nightweaver/{bead}"], allowFailure: true));
+        var logs = Directory.GetFiles(System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead), "*.log");
+        Assert.Equal(4, logs.Length); // three lifecycle invocations and one comparison
     }
 
+
+}
+
+public sealed class AgentStageRepairIntegrationTests : AgentStageIntegrationTestSupport
+{
     [Fact]
     public async Task ReviewerAndQaRepairsReuseTheClaimWorktreeBranchAndFreshBudgetHeaders()
     {
@@ -230,55 +149,20 @@ public sealed class AgentStageIntegrationTests
         Assert.Contains(commentTexts, value => value.Contains("QA reproduction cycle 2", StringComparison.Ordinal));
     }
 
+
     [Fact]
-    public async Task PersistedPriorMergerCounterAtTheDefaultLimitCanContinueDelivery()
+    public async Task PersistedDefaultBudgetEscalatesTheNextRejectionWithoutAnotherInvocation()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
-        var bead = target.CreateBead("Prior Merger repair count", "task", "stage:review");
+        var bead = target.CreateBead("Default repair budget exhaustion", "task", "stage:qa");
         target.SetRepairCycles(bead, 3);
-        target.AddComment(bead, "Merger returned the Bead for a rebase conflict; repair_cycles is already at the default limit of 3.");
-        _ = target.SeedRemoteDeliveryBranch(bead);
-        (AgentRole Role, string Action)[] actions =
-        [
-            (AgentRole.Reviewer, "slot-review"),
-            (AgentRole.Qa, "slot-qa")
-        ];
-        var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-merger-count.jsonl");
-
-        var outcome = await target.RunDeliverySlotAsync(bead, actions, observations);
-
-        Assert.True(outcome.MergeReady, outcome.Diagnostic);
-        Assert.Equal(3, target.ReadState(bead).RepairCycles);
-        var records = File.ReadAllLines(observations).Select(line => JsonSerializer.Deserialize<SlotObservation>(line)!).ToArray();
-        Assert.Equal([3, 3], records.Select(record => record.RepairCycles));
-        Assert.Equal([0, 0], records.Select(record => record.RemainingRepairBudget));
-        Assert.Equal(actions.Select(step => step.Role), target.LastSlotRoles);
-    }
-
-    [Fact]
-    public async Task DefaultBudgetThreeAllowsThreeRepairsThenEscalatesFourthWithoutAnotherInvocation()
-    {
-        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
-        using var target = new AgentStageTargetFixture();
-        var bead = target.CreateBead("Default repair budget exhaustion", "task", "stage:implement");
         var initialRemoteSha = target.SeedRemoteDeliveryBranch(bead);
-        (AgentRole Role, string Action)[] actions =
-        [
-            (AgentRole.Implementer, "slot-implement-push"),
-            (AgentRole.Reviewer, "slot-review-reject-1"),
-            (AgentRole.Implementer, "slot-implement-repair"),
-            (AgentRole.Reviewer, "slot-review"),
-            (AgentRole.Qa, "slot-qa-reject-2"),
-            (AgentRole.Implementer, "slot-implement-repair"),
-            (AgentRole.Reviewer, "slot-review-reject-3"),
-            (AgentRole.Implementer, "slot-implement-repair"),
-            (AgentRole.Reviewer, "slot-review"),
-            (AgentRole.Qa, "slot-qa-reject-4")
-        ];
+        // Full repair-loop continuity is covered above; the fast slot tests cover counter math.
+        (AgentRole Role, string Action)[] actions = [(AgentRole.Qa, "slot-qa-reject-4")];
         var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-budget-observations.jsonl");
 
-        var outcome = await target.RunDeliverySlotAsync(bead, actions, observations, verifyRepairContinuity: true);
+        var outcome = await target.RunDeliverySlotAsync(bead, actions, observations);
 
         Assert.True(outcome.Disposition == DeliverySlotDisposition.Escalated,
             $"{outcome.Disposition}: {outcome.Diagnostic}; last role {outcome.LastRole}; retry {outcome.LastStage?.Status}; "
@@ -286,22 +170,24 @@ public sealed class AgentStageIntegrationTests
             + $"log {outcome.LastStage?.StageResult.LogFilePath}\n{ReadInvocationLog(outcome.LastStage?.StageResult.LogFilePath)}");
         Assert.True(outcome.ClaimReleased);
         Assert.Equal(actions.Select(step => step.Role), target.LastSlotRoles);
-        Assert.Equal(4, target.ReadState(bead).RepairCycles);
-        Assert.Equal("stage:implement", target.ReadState(bead).Stage);
-        Assert.True(target.ReadState(bead).NeedsHuman);
-        Assert.Equal("open", target.ReadBead(bead).Status);
-        Assert.Null(target.ReadBead(bead).Assignee);
+        var beadSnapshot = target.ReadBead(bead);
+        var state = BeadWorkflowState.Parse(beadSnapshot);
+        Assert.Equal(4, state.RepairCycles);
+        Assert.Equal("stage:implement", state.Stage);
+        Assert.True(state.NeedsHuman);
+        Assert.Equal("open", beadSnapshot.Status);
+        Assert.Null(beadSnapshot.Assignee);
         Assert.False(Directory.Exists(target.WorktreePath(bead)));
         Assert.False(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
         Assert.Equal(1, GitFixture.RunGit(target.Path, ["show-ref", "--verify", "--quiet", $"refs/heads/nightweaver/{bead}"], allowFailure: true));
-        Assert.NotEqual(initialRemoteSha, target.RemoteBranchSha(bead));
+        Assert.Equal(initialRemoteSha, target.RemoteBranchSha(bead));
         Assert.DoesNotContain(target.LastSlotRequests, request => request.FileName == "gh");
         Assert.NotNull(outcome.LastStage?.StageResult.LogFilePath);
         Assert.True(File.Exists(outcome.LastStage!.StageResult.LogFilePath));
 
         var observed = File.ReadAllLines(observations).Select(line => JsonSerializer.Deserialize<SlotObservation>(line)!).ToArray();
-        Assert.Equal([3, 3, 2, 2, 2, 1, 1, 0, 0, 0], observed.Select(record => record.RemainingRepairBudget));
-        Assert.DoesNotContain(observed.Skip(9), record => record.Role == AgentRole.Implementer);
+        Assert.Equal([0], observed.Select(record => record.RemainingRepairBudget));
+        Assert.DoesNotContain(observed, record => record.Role == AgentRole.Implementer);
         using var comments = JsonDocument.Parse(target.ReadComments(bead));
         var diagnosticText = StringValues(comments.RootElement).Single(value => value.Contains("nightweaver-needs-human-v1", StringComparison.Ordinal));
         using var diagnostic = JsonDocument.Parse(diagnosticText);
@@ -313,99 +199,129 @@ public sealed class AgentStageIntegrationTests
         Assert.Equal(outcome.LastStage.StageResult.LogFilePath, diagnostic.RootElement.GetProperty("log_files")[0].GetString());
     }
 
-    [Theory]
-    [InlineData(0, 1, "slot-review-reject-1", 2, 0)]
-    [InlineData(1, 2, "slot-review-reject-2", 4, 0)]
-    public async Task ZeroAndCustomBudgetsAllowEarnedRepairThenEscalateBeforeAnotherImplementer(
-        int maxRepairCycles, int rejectionCount, string finalRejectionAction, int expectedInvocations, int expectedRepairDispatchBudget)
+
+}
+
+public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTestSupport
+{
+    [Fact]
+    public async Task DeliverySlotKeepsOneClaimAndPersistentWorktreeAcrossEverySupportedEntryStage()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
-        var bead = target.CreateBead($"Repair limit {maxRepairCycles}", "task", "stage:implement");
-        _ = target.SeedRemoteDeliveryBranch(bead);
-        var actions = new List<(AgentRole Role, string Action)>
+        var entries = new[]
         {
-            (AgentRole.Implementer, "slot-implement-push"),
-            (AgentRole.Reviewer, "slot-review-reject-1")
+            (Label: (string?)null, Roles: new[] { AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa }),
+            (Label: (string?)"stage:implement", Roles: new[] { AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa }),
+            (Label: (string?)"stage:review", Roles: new[] { AgentRole.Reviewer, AgentRole.Qa }),
+            (Label: (string?)"stage:qa", Roles: new[] { AgentRole.Qa })
         };
-        if (maxRepairCycles > 0)
+
+        var entryBeads = target.CreateBeads(entries.Select(entry =>
+            (Title: $"Delivery slot {entry.Label ?? "(unlabeled)"}", Type: "task",
+                Labels: entry.Label is { } label ? new[] { label } : Array.Empty<string>())).ToArray());
+        foreach (var entry in entries)
         {
-            actions.Add((AgentRole.Implementer, "slot-implement-repair"));
-            actions.Add((AgentRole.Reviewer, finalRejectionAction));
+            var bead = entryBeads[$"Delivery slot {entry.Label ?? "(unlabeled)"}"];
+            var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-observations.jsonl");
+            var actions = entry.Roles.Select(role => (role, Action: role switch
+            {
+                AgentRole.Implementer => entry.Label is null ? "slot-implement-unlabeled" : "slot-implement",
+                AgentRole.Reviewer => "slot-review",
+                AgentRole.Qa => "slot-qa",
+                _ => throw new InvalidOperationException($"Unexpected Delivery role {role}.")
+            })).ToArray();
+
+            var outcome = await target.RunDeliverySlotAsync(bead, actions, observations);
+
+            var failureLog = outcome.LastStage is { } lastStage && File.Exists(lastStage.StageResult.LogFilePath)
+                ? File.ReadAllText(lastStage.StageResult.LogFilePath)
+                : "(no invocation log)";
+            Assert.True(outcome.MergeReady,
+                $"{outcome.Disposition}: {outcome.Diagnostic}; last role {outcome.LastRole}; "
+                + $"retry status {outcome.LastStage?.Status}; failure {outcome.LastStage?.StageResult.Failure?.Kind}: {outcome.LastStage?.StageResult.Failure?.Reason}; "
+                + $"logs {outcome.LastStage?.StageResult.LogFilePath}\n{failureLog}");
+            Assert.Equal(entry.Roles, target.LastSlotRoles);
+            var claimWrites = AgentStageTargetFixture.ClaimWrites(target.LastSlotRequests, bead);
+            Assert.Single(claimWrites, request => AgentStageTargetFixture.ClaimWriteStatus(request) == "open");
+            Assert.Single(claimWrites, request => AgentStageTargetFixture.ClaimWriteStatus(request) == "in_progress");
+            var final = target.ReadBead(bead);
+            Assert.Equal("open", final.Status);
+            Assert.Null(final.Assignee);
+            Assert.Equal("stage:merge", BeadWorkflowState.Parse(final).Stage);
+
+            var records = File.ReadAllLines(observations)
+                .Select(line => JsonSerializer.Deserialize<SlotObservation>(line)!)
+                .ToArray();
+            Assert.Equal(entry.Roles.Length, records.Length);
+            Assert.Equal(entry.Roles, records.Select(record => record.Role).ToArray());
+            Assert.All(records, record =>
+            {
+                Assert.Equal("in_progress", record.Status);
+                Assert.Equal("nightweaver:demo", record.Assignee);
+                Assert.Equal(target.WorktreePath(bead), record.Worktree);
+                Assert.Equal(3 - record.RepairCycles, record.RemainingRepairBudget);
+            });
+            Assert.Equal($"nightweaver/{bead}", records[^1].Branch);
+            Assert.All(records, record => Assert.Equal(records[0].Worktree, record.Worktree));
+            var expectedInputStages = entry.Label switch
+            {
+                null or "stage:implement" => new[] { entry.Label, "stage:review", "stage:qa" },
+                "stage:review" => new[] { "stage:review", "stage:qa" },
+                _ => new[] { "stage:qa" }
+            };
+            Assert.Equal(expectedInputStages, records.Select(record => record.Stage).ToArray());
+
+            var worktree = target.WorktreePath(bead);
+            Assert.Equal($"nightweaver/{bead}", target.CurrentBranch(bead));
+            var status = target.RunTarget("git", ["status", "--porcelain"], worktree);
+            var diff = status.Length == 0 ? string.Empty
+                : target.RunTarget("git", ["diff", "--", ".gitignore", "README.md"], worktree);
+            Assert.True(status.Length == 0,
+                $"Entry {entry.Label ?? "(unlabeled)"} left worktree dirty:\n{status}{diff}");
+            if (entry.Roles.Contains(AgentRole.Implementer))
+            {
+                Assert.True(File.Exists(System.IO.Path.Combine(worktree, "delivery-slot.txt")));
+                Assert.True(File.Exists(System.IO.Path.Combine(worktree, ".nightweaver-ignored", "slot-sentinel.bin")));
+                Assert.Contains("slot fixture implementation", target.RunTarget("git", ["log", "-1", "--format=%s"], worktree), StringComparison.Ordinal);
+            }
         }
-        var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-limit-observations.jsonl");
-
-        var outcome = await target.RunDeliverySlotAsync(bead, actions, observations, maxRepairCycles,
-            verifyRepairContinuity: maxRepairCycles > 0);
-
-        Assert.True(outcome.Disposition == DeliverySlotDisposition.Escalated,
-            $"{outcome.Disposition}: {outcome.Diagnostic}; last role {outcome.LastRole}; retry {outcome.LastStage?.Status}; "
-            + $"failure {outcome.LastStage?.StageResult.Failure?.Kind}: {outcome.LastStage?.StageResult.Failure?.Reason}; "
-            + $"log {outcome.LastStage?.StageResult.LogFilePath}\n{ReadInvocationLog(outcome.LastStage?.StageResult.LogFilePath)}");
-        Assert.Equal(expectedInvocations, target.LastSlotRoles.Length);
-        Assert.Equal(rejectionCount, target.ReadState(bead).RepairCycles);
-        var observed = File.ReadAllLines(observations).Select(line => JsonSerializer.Deserialize<SlotObservation>(line)!).ToArray();
-        Assert.Equal(expectedRepairDispatchBudget, observed.Any(record => record.Role == AgentRole.Implementer && record.RepairCycles > 0)
-            ? observed.Last(record => record.Role == AgentRole.Implementer).RemainingRepairBudget : 0);
-        Assert.Equal(AgentRole.Reviewer, target.LastSlotRoles[^1]);
-        Assert.True(target.ReadState(bead).NeedsHuman);
     }
 
+
+}
+
+public sealed class AgentStageIntegrationTests : AgentStageIntegrationTestSupport
+{
     [Fact]
-    public async Task PersistedOverLimitEntryEscalatesBeforeProvisioningAndKeepsRemoteBranch()
+    public async Task OperationalRetryRunsRealAgentJobAfterResettingTheSameClaimedWorktree()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
-        var bead = target.CreateBead("Persisted repair budget", "task", "stage:review");
-        target.SetRepairCycles(bead, 4);
-        target.AddComment(bead, "Earlier reviewer finding: missing error handling.");
-        var remoteSha = target.SeedRemoteDeliveryBranch(bead);
-        var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-persisted-budget.jsonl");
+        var bead = target.CreateBead("Operational retry integration", "task", "stage:implement");
 
-        var outcome = await target.RunDeliverySlotAsync(bead, [], observations);
+        var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer, ["nonzero-dirty", "review"], verifyResetSentinels: true);
 
-        Assert.Equal(DeliverySlotDisposition.Escalated, outcome.Disposition);
-        Assert.Empty(target.LastSlotRoles);
-        Assert.False(Directory.Exists(target.WorktreePath(bead)));
-        Assert.Equal(remoteSha, target.RemoteBranchSha(bead));
-        Assert.Equal("open", target.ReadBead(bead).Status);
-        Assert.Null(target.ReadBead(bead).Assignee);
-        using var comments = JsonDocument.Parse(target.ReadComments(bead));
-        var diagnosticText = StringValues(comments.RootElement).Single(value => value.Contains("nightweaver-needs-human-v1", StringComparison.Ordinal));
-        using var diagnostic = JsonDocument.Parse(diagnosticText);
-        Assert.Equal("reviewer", diagnostic.RootElement.GetProperty("failed_role").GetString());
-        Assert.Contains("Persisted repair_cycles=4", diagnostic.RootElement.GetProperty("reason").GetString(), StringComparison.Ordinal);
-        Assert.Contains("Earlier reviewer finding", diagnostic.RootElement.GetProperty("latest_findings").GetString(), StringComparison.Ordinal);
-        Assert.Equal("unavailable", diagnostic.RootElement.GetProperty("invocation_id").GetString());
-        Assert.Equal("unavailable", diagnostic.RootElement.GetProperty("log_files")[0].GetString());
-        Assert.DoesNotContain(target.LastSlotRequests, request => request.FileName == "gh");
-    }
+        Assert.True(outcome.Succeeded, outcome.StageResult.Failure?.Reason);
+        Assert.Equal(2, outcome.AttemptCount);
+        var beadSnapshot = target.ReadBead(bead);
+        var state = BeadWorkflowState.Parse(beadSnapshot);
+        Assert.Equal("stage:review", state.Stage);
+        Assert.Equal(4, state.RepairCycles);
+        Assert.Equal("in_progress", beadSnapshot.Status);
+        Assert.Equal("nightweaver:demo", beadSnapshot.Assignee);
 
-    [Fact]
-    public async Task DistinctRetryFailuresExhaustDefaultBudgetAfterThreeNativeAttempts()
-    {
-        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
-        using var target = new AgentStageTargetFixture();
-        var bead = target.CreateBead("Retry exhaustion integration", "task", "stage:implement");
-
-        var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer,
-            ["failure", "failure", "failure"], classifierAction: "different");
-
-        Assert.Equal(OperationalRetryStatus.Escalated, outcome.Status);
-        Assert.Equal(3, outcome.AttemptCount);
-        Assert.Equal(NeedsHumanCause.OperationalRetriesExhausted, outcome.EscalationCause);
-        Assert.Equal(DuplicateFailureVerdict.Different, outcome.LastClassification!.Verdict);
-        Assert.Equal(3, target.LastRetryLifecycleCount);
-        var state = target.ReadState(bead);
-        Assert.Equal("stage:implement", state.Stage);
-        Assert.True(state.NeedsHuman);
-        Assert.Equal("open", target.ReadBead(bead).Status);
-        Assert.Null(target.ReadBead(bead).Assignee);
-        Assert.False(Directory.Exists(target.WorktreePath(bead)));
-        Assert.False(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
-        Assert.Equal(1, GitFixture.RunGit(target.Path, ["show-ref", "--verify", "--quiet", $"refs/heads/nightweaver/{bead}"], allowFailure: true));
-        var logs = Directory.GetFiles(System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead), "*.log");
-        Assert.Equal(4, logs.Length); // three lifecycle invocations and one comparison
+        var worktree = target.WorktreePath(bead);
+        Assert.Equal("fixture base\n", File.ReadAllText(System.IO.Path.Combine(worktree, "README.md")).Replace("\r\n", "\n", StringComparison.Ordinal));
+        Assert.False(File.Exists(System.IO.Path.Combine(worktree, "retry-untracked.txt")));
+        Assert.Equal("ignored sentinel\n", File.ReadAllText(System.IO.Path.Combine(worktree, ".nightweaver-ignored", "keep.bin")));
+        Assert.Equal(2, Directory.GetFiles(System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead), "*.log").Length);
+        Assert.True(File.Exists(outcome.StageResult.LogFilePath), outcome.StageResult.LogFilePath);
+        var retryCommands = target.LastRetryRequests.Where(request => request.FileName == "git"
+            && request.WorkingDirectory == worktree && request.Arguments.SequenceEqual(["reset", "--hard", "HEAD"])).ToArray();
+        Assert.Equal(2, retryCommands.Length); // initial provision plus one same-worktree pre-retry reset
+        Assert.Equal(2, target.LastRetryRequests.Count(request => request.FileName == "git"
+            && request.WorkingDirectory == worktree && request.Arguments.SequenceEqual(["clean", "-fd"])));
     }
 
     [Fact]
@@ -418,117 +334,152 @@ public sealed class AgentStageIntegrationTests
         target.SeedRootSentinels();
         var rootBefore = target.CaptureRootState();
 
-        var planner = target.CreateBead("Planning transition", "feature", "stage:plan");
+        var beads = target.CreateBeads(
+            ("Planning transition", "feature", ["stage:plan"]),
+            ("Plan challenge transition", "feature", ["stage:plan-challenge"]),
+            ("Materialized plan", "bug", ["stage:plan-approved"]),
+            ("Delivery transition", "task", ["stage:implement"]),
+            ("Reviewer transition", "task", ["stage:review"]),
+            ("QA transition", "task", ["stage:qa"]),
+            ("Merger closure", "task", ["stage:merge"]),
+            ("Correct repair increment", "task", ["stage:review"]),
+            ("Nonzero exit", "task", ["stage:implement"]),
+            ("Timeout", "task", ["stage:implement"]),
+            ("Dirty worktree", "task", ["stage:implement"]),
+            ("Forbidden read-only commit", "feature", ["stage:plan"]),
+            ("Forbidden challenger commit", "feature", ["stage:plan-challenge"]),
+            ("Forbidden reviewer commit", "task", ["stage:review"]),
+            ("Forbidden QA commit", "task", ["stage:qa"]),
+            ("Illegal no-op", "task", ["stage:implement"]),
+            ("Missing repair increment", "task", ["stage:review"]));
+
+        var planner = beads["Planning transition"];
         var planning = await target.RunAgentAsync(planner, AgentRole.Planner, "plan-challenge", AgentCli.Claude);
         AssertSuccess(planning, "plan-challenge");
-        Assert.Equal("stage:plan-challenge", target.ReadState(planner).Stage);
+        Assert.Equal("stage:plan-challenge", planning.VerifiedState?.Stage);
 
-        var challenger = target.CreateBead("Plan challenge transition", "feature", "stage:plan-challenge");
+        var challenger = beads["Plan challenge transition"];
         var challenged = await target.RunAgentAsync(challenger, AgentRole.PlanChallenger, "challenge", AgentCli.Codex);
         AssertSuccess(challenged, "challenge");
-        Assert.Equal("stage:plan-approved", target.ReadState(challenger).Stage);
+        Assert.Equal("stage:plan-approved", challenged.VerifiedState?.Stage);
 
-        var approved = target.CreateBead("Materialized plan", "bug", "stage:plan-approved");
+        var approved = beads["Materialized plan"];
         var materialized = await target.RunAgentAsync(approved, AgentRole.Planner, "planned-materialization", AgentCli.Claude);
         AssertSuccess(materialized, "planned-materialization");
-        Assert.True(target.ReadState(approved).Planned);
+        Assert.True(materialized.VerifiedState is { Planned: true });
         var links = await new BeadsReader(new SystemProcessRunner()).ReadUpDependenciesAsync(
             new(target.Path, "main"), approved, TestContext.Current.CancellationToken);
         Assert.Contains(links, link => link.DependsOnId == approved && link.Type == "discovered-from"
             && target.ReadBead(link.IssueId) is { IssueType: "task", Status: "open" });
 
-        var delivery = target.CreateBead("Delivery transition", "task", "stage:implement");
+        var delivery = beads["Delivery transition"];
         var delivered = await target.RunAgentAsync(delivery, AgentRole.Implementer, "review-commit", AgentCli.Codex);
         AssertSuccess(delivered, "review-commit");
-        Assert.Equal("stage:review", target.ReadState(delivery).Stage);
+        Assert.Equal("stage:review", delivered.VerifiedState?.Stage);
 
-        var reviewId = target.CreateBead("Reviewer transition", "task", "stage:review");
+        var reviewId = beads["Reviewer transition"];
         var reviewed = await target.RunAgentAsync(reviewId, AgentRole.Reviewer, "review-qa", AgentCli.Claude);
         AssertSuccess(reviewed, "review-qa");
-        Assert.Equal("stage:qa", target.ReadState(reviewId).Stage);
+        Assert.Equal("stage:qa", reviewed.VerifiedState?.Stage);
 
-        var qaId = target.CreateBead("QA transition", "task", "stage:qa");
+        var qaId = beads["QA transition"];
         var qa = await target.RunAgentAsync(qaId, AgentRole.Qa, "qa-merge", AgentCli.Codex);
         AssertSuccess(qa, "qa-merge");
-        Assert.Equal("stage:merge", target.ReadState(qaId).Stage);
+        Assert.Equal("stage:merge", qa.VerifiedState?.Stage);
 
-        var merger = target.CreateBead("Merger closure", "task", "stage:merge");
+        var merger = beads["Merger closure"];
         var merged = await target.RunAgentAsync(merger, AgentRole.Merger, "close-commit", AgentCli.Codex);
         AssertSuccess(merged, "close-commit");
-        Assert.Equal("closed", target.ReadState(merger).Status);
+        Assert.Equal("closed", merged.VerifiedState?.Status);
 
-        var rejectionId = target.CreateBead("Correct repair increment", "task", "stage:review");
+        var rejectionId = beads["Correct repair increment"];
         var rejection = await target.RunAgentAsync(rejectionId, AgentRole.Reviewer, "reject-with-increment", AgentCli.Claude);
         AssertSuccess(rejection, "reject-with-increment");
-        Assert.Equal(1, target.ReadState(rejectionId).RepairCycles);
+        Assert.Equal(1, rejection.VerifiedState?.RepairCycles);
 
-        var nonzeroId = target.CreateBead("Nonzero exit", "task", "stage:implement");
+        var nonzeroId = beads["Nonzero exit"];
         var nonzero = await target.RunAgentAsync(nonzeroId, AgentRole.Implementer, "review-nonzero", AgentCli.Codex);
         AssertFailure(nonzero, AgentOperationalFailureKind.NonZeroExit);
         Assert.Contains("19", nonzero.Failure!.Reason, StringComparison.Ordinal);
 
-        var timeoutId = target.CreateBead("Timeout", "task", "stage:implement");
+        var timeoutId = beads["Timeout"];
         var timedOut = await target.RunAgentAsync(timeoutId, AgentRole.Implementer, "timeout", AgentCli.Codex);
         AssertFailure(timedOut, AgentOperationalFailureKind.TimedOut);
         Assert.Contains(timedOut.Diagnostics, diagnostic => diagnostic.StartsWith("IllegalBeadTransition:", StringComparison.Ordinal));
 
-        var dirtyId = target.CreateBead("Dirty worktree", "task", "stage:implement");
+        var dirtyId = beads["Dirty worktree"];
         var dirty = await target.RunAgentAsync(dirtyId, AgentRole.Implementer, "review-dirty", AgentCli.Codex);
         AssertFailure(dirty, AgentOperationalFailureKind.DirtyWorktree);
         Assert.Contains("fixture-dirty.txt", dirty.Failure!.Reason, StringComparison.Ordinal);
         Assert.True(File.Exists(System.IO.Path.Combine(target.WorktreePath(dirtyId), "fixture-dirty.txt")),
             "Post-exit failure must retain the dirty worktree for diagnosis.");
 
-        var headId = target.CreateBead("Forbidden read-only commit", "feature", "stage:plan");
+        var headId = beads["Forbidden read-only commit"];
         var headChanged = await target.RunAgentAsync(headId, AgentRole.Planner, "plan-commit", AgentCli.Claude);
         AssertFailure(headChanged, AgentOperationalFailureKind.ForbiddenHeadMutation);
 
-        var challengerHeadId = target.CreateBead("Forbidden challenger commit", "feature", "stage:plan-challenge");
+        var challengerHeadId = beads["Forbidden challenger commit"];
         var challengerHeadChanged = await target.RunAgentAsync(challengerHeadId, AgentRole.PlanChallenger, "challenge-commit", AgentCli.Codex);
         AssertFailure(challengerHeadChanged, AgentOperationalFailureKind.ForbiddenHeadMutation);
 
-        var reviewerHeadId = target.CreateBead("Forbidden reviewer commit", "task", "stage:review");
+        var reviewerHeadId = beads["Forbidden reviewer commit"];
         var reviewerHeadChanged = await target.RunAgentAsync(reviewerHeadId, AgentRole.Reviewer, "review-qa-commit", AgentCli.Claude);
         AssertFailure(reviewerHeadChanged, AgentOperationalFailureKind.ForbiddenHeadMutation);
 
-        var qaHeadId = target.CreateBead("Forbidden QA commit", "task", "stage:qa");
+        var qaHeadId = beads["Forbidden QA commit"];
         var qaHeadChanged = await target.RunAgentAsync(qaHeadId, AgentRole.Qa, "qa-merge-commit", AgentCli.Codex);
         AssertFailure(qaHeadChanged, AgentOperationalFailureKind.ForbiddenHeadMutation);
 
-        var noOpId = target.CreateBead("Illegal no-op", "task", "stage:implement");
+        var noOpId = beads["Illegal no-op"];
         var noOp = await target.RunAgentAsync(noOpId, AgentRole.Implementer, "noop", AgentCli.Codex);
         AssertFailure(noOp, AgentOperationalFailureKind.IllegalBeadTransition);
 
-        var missingCounterId = target.CreateBead("Missing repair increment", "task", "stage:review");
+        var missingCounterId = beads["Missing repair increment"];
         var missingCounter = await target.RunAgentAsync(missingCounterId, AgentRole.Reviewer, "reject-without-increment", AgentCli.Claude);
         AssertFailure(missingCounter, AgentOperationalFailureKind.IllegalBeadTransition);
         Assert.Contains("repair_cycles", missingCounter.Failure!.Reason, StringComparison.Ordinal);
+
+        // Each scenario has a separate bead, so one final native inventory proves
+        // their persisted transitions together after all native processes have exited.
+        var persisted = target.ReadInventory().ById;
+        Assert.Equal("stage:plan-challenge", BeadWorkflowState.Parse(persisted[planner]).Stage);
+        Assert.Equal("stage:plan-approved", BeadWorkflowState.Parse(persisted[challenger]).Stage);
+        Assert.True(BeadWorkflowState.Parse(persisted[approved]).Planned);
+        Assert.Equal("stage:review", BeadWorkflowState.Parse(persisted[delivery]).Stage);
+        Assert.Equal("stage:qa", BeadWorkflowState.Parse(persisted[reviewId]).Stage);
+        Assert.Equal("stage:merge", BeadWorkflowState.Parse(persisted[qaId]).Stage);
+        Assert.Equal("closed", BeadWorkflowState.Parse(persisted[merger]).Status);
+        Assert.Equal(1, BeadWorkflowState.Parse(persisted[rejectionId]).RepairCycles);
 
         Assert.Equal(rootBefore, target.CaptureRootState());
         Assert.Equal(foreignBefore, Snapshot.FileTree(foreign.Path));
     }
 
-    private static void AssertSuccess(AgentStageResult result, string action)
+}
+
+public abstract class AgentStageIntegrationTestSupport
+{
+    private protected static void AssertSuccess(AgentStageResult result, string action)
     {
         Assert.True(result.Succeeded, result.Failure?.Reason);
         Assert.True(File.Exists(result.LogFilePath), result.LogFilePath);
         Assert.Contains($"fixture action completed: {action}", File.ReadAllText(result.LogFilePath), StringComparison.Ordinal);
     }
 
-    private static void AssertFailure(AgentStageResult result, AgentOperationalFailureKind expected)
+    private protected static void AssertFailure(AgentStageResult result, AgentOperationalFailureKind expected)
     {
         Assert.False(result.Succeeded);
         Assert.Equal(expected, result.Failure!.Kind);
         Assert.True(File.Exists(result.LogFilePath), result.LogFilePath);
     }
 
-    private static string ReadInvocationLog(string? path) =>
+    private protected static string ReadInvocationLog(string? path) =>
         path is not null && File.Exists(path) ? File.ReadAllText(path) : "(no invocation log)";
 
-    private sealed record SlotObservation(string BeadId, AgentRole Role, string? Stage, int RepairCycles,
+    private protected sealed record SlotObservation(string BeadId, AgentRole Role, string? Stage, int RepairCycles,
         int RemainingRepairBudget, string Status, string? Assignee, string Worktree, string Branch, string Head, string Action);
 
-    private static IEnumerable<string> StringValues(JsonElement element)
+    private protected static IEnumerable<string> StringValues(JsonElement element)
     {
         if (element.ValueKind == JsonValueKind.String)
         {
@@ -547,27 +498,48 @@ public sealed class AgentStageIntegrationTests
         }
     }
 
-    private sealed class AgentStageTargetFixture : IDisposable
+    private protected sealed class AgentStageTargetFixture : IDisposable
     {
         private readonly TempDirectory temp = new();
         private long nextRun;
+        private static readonly Lazy<AgentStageTargetFixture> Template = new(() =>
+        {
+            var template = new AgentStageTargetFixture(initializeTemplate: true);
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => template.Dispose();
+            return template;
+        });
 
-        internal AgentStageTargetFixture()
+        internal AgentStageTargetFixture() : this(initializeTemplate: false) { }
+
+        private AgentStageTargetFixture(bool initializeTemplate)
         {
             TargetPath = temp.CreateDirectory("target repository with spaces");
             OriginPath = System.IO.Path.Combine(temp.Path, "origin.git");
-            Directory.CreateDirectory(OriginPath);
-            Run("git", ["init", "--bare", OriginPath], temp.Path);
-            Run("git", ["init", "-b", "main"], TargetPath);
-            Run("git", ["config", "core.autocrlf", "false"], TargetPath);
-            Run("git", ["config", "user.name", "Nightweaver Fixture"], TargetPath);
-            Run("git", ["config", "user.email", "fixture@example.invalid"], TargetPath);
-            File.WriteAllText(System.IO.Path.Combine(TargetPath, "README.md"), "fixture base\n", new UTF8Encoding(false));
-            File.WriteAllText(System.IO.Path.Combine(TargetPath, ".gitignore"), ".nightweaver-ignored/\n", new UTF8Encoding(false));
-            Run("git", ["add", "README.md", ".gitignore"], TargetPath);
-            Run("git", ["commit", "-m", "fixture base"], TargetPath);
-            Run("git", ["remote", "add", "origin", OriginPath], TargetPath);
-            Run("git", ["push", "--set-upstream", "origin", "main"], TargetPath);
+            if (initializeTemplate)
+            {
+                Directory.CreateDirectory(OriginPath);
+                Run("git", ["init", "--bare", OriginPath], temp.Path);
+                Run("git", ["init", "-b", "main"], TargetPath);
+                Run("git", ["config", "core.autocrlf", "false"], TargetPath);
+                Run("git", ["config", "user.name", "Nightweaver Fixture"], TargetPath);
+                Run("git", ["config", "user.email", "fixture@example.invalid"], TargetPath);
+                File.WriteAllText(System.IO.Path.Combine(TargetPath, "README.md"), "fixture base\n", new UTF8Encoding(false));
+                File.WriteAllText(System.IO.Path.Combine(TargetPath, ".gitignore"), ".nightweaver-ignored/\n", new UTF8Encoding(false));
+                Run("git", ["add", "README.md", ".gitignore"], TargetPath);
+                Run("git", ["commit", "-m", "fixture base"], TargetPath);
+                Run("git", ["remote", "add", "origin", OriginPath], TargetPath);
+                Run("git", ["push", "--set-upstream", "origin", "main"], TargetPath);
+            }
+            else
+            {
+                var template = Template.Value;
+                TestDirectoryTemplate.Copy(template.RootPath, temp.Path);
+                var configPath = System.IO.Path.Combine(TargetPath, ".git", "config");
+                File.WriteAllText(configPath, File.ReadAllText(configPath)
+                    .Replace(template.OriginPath.Replace('\\', '/'), OriginPath.Replace('\\', '/'), StringComparison.Ordinal)
+                    .Replace(template.OriginPath.Replace("\\", "\\\\", StringComparison.Ordinal),
+                        OriginPath.Replace("\\", "\\\\", StringComparison.Ordinal), StringComparison.Ordinal));
+            }
 
             Host = new HostPaths(temp.CreateDirectory("nightweaver host"));
             Directory.CreateDirectory(System.IO.Path.Combine(Host.Root, "prompts"));
@@ -595,8 +567,11 @@ public sealed class AgentStageIntegrationTests
                 ["GIT_COMMITTER_NAME"] = "Nightweaver Fixture",
                 ["GIT_COMMITTER_EMAIL"] = "fixture@example.invalid"
             };
-            Run("bd", ["init", "--prefix", "stage", "--non-interactive", "--skip-agents", "--skip-hooks"], TargetPath, BeadsEnvironment);
-            _ = CreateBead("Control", "task");
+            if (initializeTemplate)
+            {
+                Run("bd", ["init", "--prefix", "stage", "--non-interactive", "--skip-agents", "--skip-hooks"], TargetPath, BeadsEnvironment);
+                _ = CreateBead("Control", "task");
+            }
         }
 
         private string TargetPath { get; }
@@ -626,16 +601,38 @@ public sealed class AgentStageIntegrationTests
 
         internal string CreateBead(string title, string type, params string[] labels)
         {
-            var created = Run("bd", ["create", "--title", title, "--type", type, "--json"], TargetPath, BeadsEnvironment);
+            var arguments = new List<string> { "create", "--title", title, "--type", type, "--json" };
+            if (labels.Length > 0) arguments.AddRange(["--labels", string.Join(',', labels)]);
+            var created = Run("bd", arguments, TargetPath, BeadsEnvironment);
             using var document = JsonDocument.Parse(created);
             var id = document.RootElement.GetProperty("id").GetString()!;
-            if (labels.Length > 0)
-            {
-                var update = new List<string> { "update", id };
-                foreach (var label in labels) { update.Add("--add-label"); update.Add(label); }
-                Run("bd", update, TargetPath, BeadsEnvironment);
-            }
             return id;
+        }
+
+        internal IReadOnlyDictionary<string, string> CreateBeads(
+            params (string Title, string Type, string[] Labels)[] specifications)
+        {
+            var seedPath = System.IO.Path.Combine(temp.Path, $"beads-seed-{Guid.NewGuid():N}.jsonl");
+            File.WriteAllText(seedPath, string.Join('\n', specifications.Select(specification => JsonSerializer.Serialize(new
+            {
+                title = specification.Title,
+                issue_type = specification.Type,
+                labels = specification.Labels,
+                status = "open",
+                priority = 2
+            }))));
+            try
+            {
+                Run("bd", ["import", seedPath, "--json"], TargetPath, BeadsEnvironment);
+                var titles = specifications.Select(specification => specification.Title).ToHashSet(StringComparer.Ordinal);
+                return BeadsReader.Parse(Run("bd", BeadsCommand.Create(TargetPath).Arguments, TargetPath, BeadsEnvironment))
+                    .ById.Values.Where(bead => titles.Contains(bead.Payload.GetProperty("title").GetString()!))
+                    .ToDictionary(bead => bead.Payload.GetProperty("title").GetString()!, bead => bead.Id, StringComparer.Ordinal);
+            }
+            finally
+            {
+                File.Delete(seedPath);
+            }
         }
 
         internal BeadWorkflowState ReadState(string beadId) => BeadWorkflowState.Parse(ReadBead(beadId));
@@ -658,11 +655,10 @@ public sealed class AgentStageIntegrationTests
         internal string RemoteBranchSha(string beadId) => Run("git",
             ["--git-dir", OriginPath, "rev-parse", $"refs/heads/nightweaver/{beadId}"], TargetPath, BeadsEnvironment).Trim();
 
-        internal BeadSnapshot ReadBead(string beadId)
-        {
-            var inventory = BeadsReader.Parse(Run("bd", BeadsCommand.Create(TargetPath).Arguments, TargetPath, BeadsEnvironment));
-            return inventory.ById[beadId];
-        }
+        internal BeadsInventory ReadInventory() =>
+            BeadsReader.Parse(Run("bd", BeadsCommand.Create(TargetPath).Arguments, TargetPath, BeadsEnvironment));
+
+        internal BeadSnapshot ReadBead(string beadId) => ReadInventory().ById[beadId];
 
         internal string ReadComments(string beadId) => Run("bd",
             ["--readonly", "--sandbox", "comments", beadId, "--json"], TargetPath, BeadsEnvironment);
@@ -728,8 +724,7 @@ public sealed class AgentStageIntegrationTests
             {
                 ["BD_ACTOR"] = actor
             };
-            Run("bd", ["update", beadId, "--claim"], TargetPath, claimEnvironment);
-            Run("bd", ["update", beadId, "--set-metadata", "repair_cycles=4"], TargetPath, claimEnvironment);
+            Run("bd", ["update", beadId, "--claim", "--set-metadata", "repair_cycles=4"], TargetPath, claimEnvironment);
 
             var project = CreateProject(AgentCli.Codex);
             var systemRunner = new SystemProcessRunner();
@@ -816,7 +811,7 @@ public sealed class AgentStageIntegrationTests
             var systemRunner = new SystemProcessRunner();
             var runner = new RecordingProcessRunner((request, token) => systemRunner.RunAsync(request, token));
             var preparer = new AgentInvocationPreparer();
-            var invocationRoles = new Dictionary<string, AgentRole>(StringComparer.Ordinal);
+            var invocations = new Dictionary<string, (AgentRole Role, string Branch)>(StringComparer.Ordinal);
             var pidFiles = new List<string>();
             var roles = new List<AgentRole>();
             long sequence = 0;
@@ -829,7 +824,8 @@ public sealed class AgentStageIntegrationTests
                 var canonical = System.IO.Path.GetFullPath(System.IO.Path.Combine(hostPaths.WorktreesRoot(projectConfig.Name), context.BeadId));
                 Assert.Equal(canonical, worktreePath);
                 Assert.Equal(canonical, invocation.WorkingDirectory);
-                Assert.Equal($"nightweaver/{context.BeadId}", Run("git", ["branch", "--show-current"], worktreePath).Trim());
+                var branch = Run("git", ["branch", "--show-current"], worktreePath).Trim();
+                Assert.Equal($"nightweaver/{context.BeadId}", branch);
                 if (verifyRepairContinuity && roles.Count > 0)
                 {
                     Assert.True(File.Exists(System.IO.Path.Combine(worktreePath, ".nightweaver-ignored", "slot-sentinel.bin")),
@@ -837,14 +833,16 @@ public sealed class AgentStageIntegrationTests
                     Assert.Contains("slot fixture implementation", Run("git", ["log", "--format=%s"], worktreePath),
                         StringComparison.Ordinal);
                 }
-                invocationRoles.Add(invocation.InvocationId, role);
+                // Execute follows preparation without a native action in between.
+                // Reuse this observed branch when recording the invocation input.
+                invocations.Add(invocation.InvocationId, (role, branch));
                 return invocation;
             }
 
             Task<AgentExecutionResult> Execute(HostPaths hostPaths, ProjectSlug projectSlug,
                 PreparedAgentInvocation invocation, CancellationToken token)
             {
-                var role = invocationRoles[invocation.InvocationId];
+                var (role, branch) = invocations[invocation.InvocationId];
                 var index = Volatile.Read(ref actionIndex);
                 var consumesNextAction = index < actions.Count && actions[index].Role == role;
                 if (consumesNextAction)
@@ -868,7 +866,7 @@ public sealed class AgentStageIntegrationTests
                 pidFiles.Add(pidFile);
                 var budgetLine = invocation.StandardInput.Split('\n').Single(line => line.StartsWith("Remaining repair budget: ", StringComparison.Ordinal));
                 var remainingRepairBudget = int.Parse(budgetLine["Remaining repair budget: ".Length..], System.Globalization.CultureInfo.InvariantCulture);
-                AppendSlotObservation(observationPath, beadId, role, invocation.WorkingDirectory, remainingRepairBudget, action);
+                AppendSlotObservation(observationPath, beadId, role, invocation.WorkingDirectory, remainingRepairBudget, action, branch);
                 return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
                     CreateProcessLauncher(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
                     {
@@ -927,12 +925,12 @@ public sealed class AgentStageIntegrationTests
         }
 
         private void AppendSlotObservation(string path, string beadId, AgentRole role, string worktreePath,
-            int remainingRepairBudget, string action)
+            int remainingRepairBudget, string action, string branch)
         {
             var bead = ReadBead(beadId);
             var state = BeadWorkflowState.Parse(bead);
             var observation = new SlotObservation(beadId, role, state.Stage, state.RepairCycles, remainingRepairBudget,
-                bead.Status, bead.Assignee, worktreePath, Run("git", ["branch", "--show-current"], worktreePath).Trim(),
+                bead.Status, bead.Assignee, worktreePath, branch,
                 Run("git", ["rev-parse", "HEAD"], worktreePath).Trim(), action);
             File.AppendAllText(path, JsonSerializer.Serialize(observation) + Environment.NewLine, new UTF8Encoding(false));
         }

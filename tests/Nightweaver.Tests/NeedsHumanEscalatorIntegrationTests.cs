@@ -42,19 +42,14 @@ public sealed class NeedsHumanEscalatorIntegrationTests
             ["BD_DISABLE_EVENT_FLUSH"] = null
         };
         var runner = new EnvironmentProcessRunner(environment);
-        var init = await runner.RunAsync(new ProcessRequest("bd",
-            ["init", "--prefix", "fixture", "--non-interactive", "--skip-agents", "--skip-hooks"],
-            fixture.Target, environment, TimeSpan.FromSeconds(60)), CancellationToken.None);
-        Assert.Equal(0, init.ExitCode);
-        using var control = await RunBdJsonAsync(runner, fixture.Target, ["create", "--title", "Tracker control", "--type", "task", "--json"], environment);
-        Assert.False(string.IsNullOrWhiteSpace(control.RootElement.GetProperty("id").GetString()));
+        var controlId = BeadsFixture.CopyTrackerTo(fixture.Target);
+        Assert.False(string.IsNullOrWhiteSpace(controlId));
 
         using var beadJson = await RunBdJsonAsync(runner, fixture.Target,
             ["create", "--title", "Pause cleanup integration", "--type", issueType, "--json"], environment);
         var beadId = beadJson.RootElement.GetProperty("id").GetString()!;
-        await RunBdAsync(runner, fixture.Target, ["update", beadId, "--claim"], environment);
         await RunBdAsync(runner, fixture.Target,
-            ["update", beadId, "--add-label", stage, "--add-label", "product-decision-required", "--add-label", "retain-label",
+            ["update", beadId, "--claim", "--add-label", stage, "--add-label", "product-decision-required", "--add-label", "retain-label",
                 "--set-metadata", "repair_cycles=2", "--set-metadata", "retain=metadata"], environment);
         if (alreadyPaused)
             await RunBdAsync(runner, fixture.Target,

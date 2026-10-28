@@ -119,7 +119,7 @@ public sealed class PublishedCliArtifactFixture : IDisposable
             throw new InvalidOperationException($"dotnet publish failed for '{projectPath}' (exit {result.ExitCode})\n{result.StandardOutputText}\n{result.StandardErrorText}");
     }
 
-    private static void CopyDirectory(string source, string destination)
+    internal static void CopyDirectory(string source, string destination)
     {
         foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
             Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
