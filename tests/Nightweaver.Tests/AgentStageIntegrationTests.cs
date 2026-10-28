@@ -120,13 +120,13 @@ public sealed class AgentStageIntegrationTests
                 ? target.CreateBead($"Delivery slot {Guid.NewGuid():N}", "task")
                 : target.CreateBead($"Delivery slot {Guid.NewGuid():N}", "task", entry.Label);
             var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-observations.jsonl");
-            var actions = entry.Roles.ToDictionary(role => role, role => role switch
+            var actions = entry.Roles.Select(role => (role, Action: role switch
             {
                 AgentRole.Implementer => entry.Label is null ? "slot-implement-unlabeled" : "slot-implement",
                 AgentRole.Reviewer => "slot-review",
                 AgentRole.Qa => "slot-qa",
                 _ => throw new InvalidOperationException($"Unexpected Delivery role {role}.")
-            });
+            })).ToArray();
 
             var outcome = await target.RunDeliverySlotAsync(bead, actions, observations);
 
@@ -156,6 +156,7 @@ public sealed class AgentStageIntegrationTests
                 Assert.Equal("in_progress", record.Status);
                 Assert.Equal("nightweaver:demo", record.Assignee);
                 Assert.Equal(target.WorktreePath(bead), record.Worktree);
+                Assert.Equal(3 - record.RepairCycles, record.RemainingRepairBudget);
             });
             Assert.Equal($"nightweaver/{bead}", records[^1].Branch);
             Assert.All(records, record => Assert.Equal(records[0].Worktree, record.Worktree));
@@ -180,6 +181,204 @@ public sealed class AgentStageIntegrationTests
                 Assert.Contains("slot fixture implementation", target.RunTarget("git", ["log", "-1", "--format=%s"], worktree), StringComparison.Ordinal);
             }
         }
+    }
+
+    [Fact]
+    public async Task ReviewerAndQaRepairsReuseTheClaimWorktreeBranchAndFreshBudgetHeaders()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead("Reviewer and QA repair loops", "task", "stage:implement");
+        (AgentRole Role, string Action)[] actions =
+        [
+            (AgentRole.Implementer, "slot-implement-push"),
+            (AgentRole.Reviewer, "slot-review-reject-1"),
+            (AgentRole.Implementer, "slot-implement-repair"),
+            (AgentRole.Reviewer, "slot-review"),
+            (AgentRole.Qa, "slot-qa-reject-2"),
+            (AgentRole.Implementer, "slot-implement-repair"),
+            (AgentRole.Reviewer, "slot-review"),
+            (AgentRole.Qa, "slot-qa")
+        ];
+        var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-repair-observations.jsonl");
+
+        var outcome = await target.RunDeliverySlotAsync(bead, actions, observations, verifyRepairContinuity: true);
+
+        Assert.True(outcome.MergeReady,
+            $"{outcome.Disposition}: {outcome.Diagnostic}; last role {outcome.LastRole}; retry {outcome.LastStage?.Status}; "
+            + $"failure {outcome.LastStage?.StageResult.Failure?.Kind}: {outcome.LastStage?.StageResult.Failure?.Reason}; "
+            + $"log {outcome.LastStage?.StageResult.LogFilePath}\n{ReadInvocationLog(outcome.LastStage?.StageResult.LogFilePath)}");
+        Assert.Equal(actions.Select(step => step.Role), target.LastSlotRoles);
+        var records = File.ReadAllLines(observations).Select(line => JsonSerializer.Deserialize<SlotObservation>(line)!).ToArray();
+        Assert.Equal([0, 0, 1, 1, 1, 2, 2, 2], records.Select(record => record.RepairCycles));
+        Assert.Equal([3, 3, 2, 2, 2, 1, 1, 1], records.Select(record => record.RemainingRepairBudget));
+        Assert.All(records, record =>
+        {
+            Assert.Equal(target.WorktreePath(bead), record.Worktree);
+            Assert.Equal($"nightweaver/{bead}", record.Branch);
+            Assert.Equal("in_progress", record.Status);
+            Assert.Equal("nightweaver:demo", record.Assignee);
+        });
+        Assert.NotEqual(records[0].Head, records[2].Head);
+        Assert.NotEqual(records[2].Head, records[5].Head);
+        Assert.True(File.Exists(System.IO.Path.Combine(target.WorktreePath(bead), ".nightweaver-ignored", "slot-sentinel.bin")));
+        Assert.Contains("slot fixture repair", target.RunTarget("git", ["log", "--format=%s"], target.WorktreePath(bead)), StringComparison.Ordinal);
+        Assert.Equal(2, target.ReadState(bead).RepairCycles);
+        using var comments = JsonDocument.Parse(target.ReadComments(bead));
+        var commentTexts = StringValues(comments.RootElement).ToArray();
+        Assert.Contains(commentTexts, value => value.Contains("Reviewer finding cycle 1", StringComparison.Ordinal));
+        Assert.Contains(commentTexts, value => value.Contains("QA reproduction cycle 2", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task PersistedPriorMergerCounterAtTheDefaultLimitCanContinueDelivery()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead("Prior Merger repair count", "task", "stage:review");
+        target.SetRepairCycles(bead, 3);
+        target.AddComment(bead, "Merger returned the Bead for a rebase conflict; repair_cycles is already at the default limit of 3.");
+        _ = target.SeedRemoteDeliveryBranch(bead);
+        (AgentRole Role, string Action)[] actions =
+        [
+            (AgentRole.Reviewer, "slot-review"),
+            (AgentRole.Qa, "slot-qa")
+        ];
+        var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-merger-count.jsonl");
+
+        var outcome = await target.RunDeliverySlotAsync(bead, actions, observations);
+
+        Assert.True(outcome.MergeReady, outcome.Diagnostic);
+        Assert.Equal(3, target.ReadState(bead).RepairCycles);
+        var records = File.ReadAllLines(observations).Select(line => JsonSerializer.Deserialize<SlotObservation>(line)!).ToArray();
+        Assert.Equal([3, 3], records.Select(record => record.RepairCycles));
+        Assert.Equal([0, 0], records.Select(record => record.RemainingRepairBudget));
+        Assert.Equal(actions.Select(step => step.Role), target.LastSlotRoles);
+    }
+
+    [Fact]
+    public async Task DefaultBudgetThreeAllowsThreeRepairsThenEscalatesFourthWithoutAnotherInvocation()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead("Default repair budget exhaustion", "task", "stage:implement");
+        var initialRemoteSha = target.SeedRemoteDeliveryBranch(bead);
+        (AgentRole Role, string Action)[] actions =
+        [
+            (AgentRole.Implementer, "slot-implement-push"),
+            (AgentRole.Reviewer, "slot-review-reject-1"),
+            (AgentRole.Implementer, "slot-implement-repair"),
+            (AgentRole.Reviewer, "slot-review"),
+            (AgentRole.Qa, "slot-qa-reject-2"),
+            (AgentRole.Implementer, "slot-implement-repair"),
+            (AgentRole.Reviewer, "slot-review-reject-3"),
+            (AgentRole.Implementer, "slot-implement-repair"),
+            (AgentRole.Reviewer, "slot-review"),
+            (AgentRole.Qa, "slot-qa-reject-4")
+        ];
+        var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-budget-observations.jsonl");
+
+        var outcome = await target.RunDeliverySlotAsync(bead, actions, observations, verifyRepairContinuity: true);
+
+        Assert.True(outcome.Disposition == DeliverySlotDisposition.Escalated,
+            $"{outcome.Disposition}: {outcome.Diagnostic}; last role {outcome.LastRole}; retry {outcome.LastStage?.Status}; "
+            + $"failure {outcome.LastStage?.StageResult.Failure?.Kind}: {outcome.LastStage?.StageResult.Failure?.Reason}; "
+            + $"log {outcome.LastStage?.StageResult.LogFilePath}\n{ReadInvocationLog(outcome.LastStage?.StageResult.LogFilePath)}");
+        Assert.True(outcome.ClaimReleased);
+        Assert.Equal(actions.Select(step => step.Role), target.LastSlotRoles);
+        Assert.Equal(4, target.ReadState(bead).RepairCycles);
+        Assert.Equal("stage:implement", target.ReadState(bead).Stage);
+        Assert.True(target.ReadState(bead).NeedsHuman);
+        Assert.Equal("open", target.ReadBead(bead).Status);
+        Assert.Null(target.ReadBead(bead).Assignee);
+        Assert.False(Directory.Exists(target.WorktreePath(bead)));
+        Assert.False(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
+        Assert.Equal(1, GitFixture.RunGit(target.Path, ["show-ref", "--verify", "--quiet", $"refs/heads/nightweaver/{bead}"], allowFailure: true));
+        Assert.NotEqual(initialRemoteSha, target.RemoteBranchSha(bead));
+        Assert.DoesNotContain(target.LastSlotRequests, request => request.FileName == "gh");
+        Assert.NotNull(outcome.LastStage?.StageResult.LogFilePath);
+        Assert.True(File.Exists(outcome.LastStage!.StageResult.LogFilePath));
+
+        var observed = File.ReadAllLines(observations).Select(line => JsonSerializer.Deserialize<SlotObservation>(line)!).ToArray();
+        Assert.Equal([3, 3, 2, 2, 2, 1, 1, 0, 0, 0], observed.Select(record => record.RemainingRepairBudget));
+        Assert.DoesNotContain(observed.Skip(9), record => record.Role == AgentRole.Implementer);
+        using var comments = JsonDocument.Parse(target.ReadComments(bead));
+        var diagnosticText = StringValues(comments.RootElement).Single(value => value.Contains("nightweaver-needs-human-v1", StringComparison.Ordinal));
+        using var diagnostic = JsonDocument.Parse(diagnosticText);
+        Assert.Equal("repair-budget-exhausted", diagnostic.RootElement.GetProperty("cause").GetString());
+        Assert.Equal("qa", diagnostic.RootElement.GetProperty("failed_role").GetString());
+        Assert.Contains("max_repair_cycles=3", diagnostic.RootElement.GetProperty("reason").GetString(), StringComparison.Ordinal);
+        Assert.Contains("QA reproduction cycle 4", diagnostic.RootElement.GetProperty("latest_findings").GetString(), StringComparison.Ordinal);
+        Assert.Equal(outcome.LastStage!.StageResult.InvocationId, diagnostic.RootElement.GetProperty("invocation_id").GetString());
+        Assert.Equal(outcome.LastStage.StageResult.LogFilePath, diagnostic.RootElement.GetProperty("log_files")[0].GetString());
+    }
+
+    [Theory]
+    [InlineData(0, 1, "slot-review-reject-1", 2, 0)]
+    [InlineData(1, 2, "slot-review-reject-2", 4, 0)]
+    public async Task ZeroAndCustomBudgetsAllowEarnedRepairThenEscalateBeforeAnotherImplementer(
+        int maxRepairCycles, int rejectionCount, string finalRejectionAction, int expectedInvocations, int expectedRepairDispatchBudget)
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead($"Repair limit {maxRepairCycles}", "task", "stage:implement");
+        _ = target.SeedRemoteDeliveryBranch(bead);
+        var actions = new List<(AgentRole Role, string Action)>
+        {
+            (AgentRole.Implementer, "slot-implement-push"),
+            (AgentRole.Reviewer, "slot-review-reject-1")
+        };
+        if (maxRepairCycles > 0)
+        {
+            actions.Add((AgentRole.Implementer, "slot-implement-repair"));
+            actions.Add((AgentRole.Reviewer, finalRejectionAction));
+        }
+        var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-limit-observations.jsonl");
+
+        var outcome = await target.RunDeliverySlotAsync(bead, actions, observations, maxRepairCycles,
+            verifyRepairContinuity: maxRepairCycles > 0);
+
+        Assert.True(outcome.Disposition == DeliverySlotDisposition.Escalated,
+            $"{outcome.Disposition}: {outcome.Diagnostic}; last role {outcome.LastRole}; retry {outcome.LastStage?.Status}; "
+            + $"failure {outcome.LastStage?.StageResult.Failure?.Kind}: {outcome.LastStage?.StageResult.Failure?.Reason}; "
+            + $"log {outcome.LastStage?.StageResult.LogFilePath}\n{ReadInvocationLog(outcome.LastStage?.StageResult.LogFilePath)}");
+        Assert.Equal(expectedInvocations, target.LastSlotRoles.Length);
+        Assert.Equal(rejectionCount, target.ReadState(bead).RepairCycles);
+        var observed = File.ReadAllLines(observations).Select(line => JsonSerializer.Deserialize<SlotObservation>(line)!).ToArray();
+        Assert.Equal(expectedRepairDispatchBudget, observed.Any(record => record.Role == AgentRole.Implementer && record.RepairCycles > 0)
+            ? observed.Last(record => record.Role == AgentRole.Implementer).RemainingRepairBudget : 0);
+        Assert.Equal(AgentRole.Reviewer, target.LastSlotRoles[^1]);
+        Assert.True(target.ReadState(bead).NeedsHuman);
+    }
+
+    [Fact]
+    public async Task PersistedOverLimitEntryEscalatesBeforeProvisioningAndKeepsRemoteBranch()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead("Persisted repair budget", "task", "stage:review");
+        target.SetRepairCycles(bead, 4);
+        target.AddComment(bead, "Earlier reviewer finding: missing error handling.");
+        var remoteSha = target.SeedRemoteDeliveryBranch(bead);
+        var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-persisted-budget.jsonl");
+
+        var outcome = await target.RunDeliverySlotAsync(bead, [], observations);
+
+        Assert.Equal(DeliverySlotDisposition.Escalated, outcome.Disposition);
+        Assert.Empty(target.LastSlotRoles);
+        Assert.False(Directory.Exists(target.WorktreePath(bead)));
+        Assert.Equal(remoteSha, target.RemoteBranchSha(bead));
+        Assert.Equal("open", target.ReadBead(bead).Status);
+        Assert.Null(target.ReadBead(bead).Assignee);
+        using var comments = JsonDocument.Parse(target.ReadComments(bead));
+        var diagnosticText = StringValues(comments.RootElement).Single(value => value.Contains("nightweaver-needs-human-v1", StringComparison.Ordinal));
+        using var diagnostic = JsonDocument.Parse(diagnosticText);
+        Assert.Equal("reviewer", diagnostic.RootElement.GetProperty("failed_role").GetString());
+        Assert.Contains("Persisted repair_cycles=4", diagnostic.RootElement.GetProperty("reason").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Earlier reviewer finding", diagnostic.RootElement.GetProperty("latest_findings").GetString(), StringComparison.Ordinal);
+        Assert.Equal("unavailable", diagnostic.RootElement.GetProperty("invocation_id").GetString());
+        Assert.Equal("unavailable", diagnostic.RootElement.GetProperty("log_files")[0].GetString());
+        Assert.DoesNotContain(target.LastSlotRequests, request => request.FileName == "gh");
     }
 
     [Fact]
@@ -323,8 +522,11 @@ public sealed class AgentStageIntegrationTests
         Assert.True(File.Exists(result.LogFilePath), result.LogFilePath);
     }
 
-    private sealed record SlotObservation(string BeadId, AgentRole Role, string? Stage, string Status, string? Assignee,
-        string Worktree, string Branch, string Head, string Action);
+    private static string ReadInvocationLog(string? path) =>
+        path is not null && File.Exists(path) ? File.ReadAllText(path) : "(no invocation log)";
+
+    private sealed record SlotObservation(string BeadId, AgentRole Role, string? Stage, int RepairCycles,
+        int RemainingRepairBudget, string Status, string? Assignee, string Worktree, string Branch, string Head, string Action);
 
     private static IEnumerable<string> StringValues(JsonElement element)
     {
@@ -408,7 +610,7 @@ public sealed class AgentStageIntegrationTests
         internal IReadOnlyList<ProcessRequest> LastRetryRequests { get; private set; } = [];
         internal int LastRetryLifecycleCount { get; private set; }
         internal IReadOnlyList<ProcessRequest> LastSlotRequests { get; private set; } = [];
-        internal IReadOnlyList<AgentRole> LastSlotRoles { get; private set; } = [];
+        internal AgentRole[] LastSlotRoles { get; private set; } = [];
 
         internal string Path => TargetPath;
         internal string RunTarget(string tool, IReadOnlyList<string> arguments, string? workingDirectory = null) =>
@@ -437,6 +639,24 @@ public sealed class AgentStageIntegrationTests
         }
 
         internal BeadWorkflowState ReadState(string beadId) => BeadWorkflowState.Parse(ReadBead(beadId));
+
+        internal void SetRepairCycles(string beadId, int count) =>
+            Run("bd", ["update", beadId, "--set-metadata", $"repair_cycles={count}"], TargetPath, BeadsEnvironment);
+
+        internal void AddComment(string beadId, string text) =>
+            Run("bd", ["comments", "add", beadId, text], TargetPath, BeadsEnvironment);
+
+        internal string SeedRemoteDeliveryBranch(string beadId)
+        {
+            var branch = $"nightweaver/{beadId}";
+            Run("git", ["branch", branch, "main"], TargetPath, BeadsEnvironment);
+            Run("git", ["push", "origin", branch], TargetPath, BeadsEnvironment);
+            Run("git", ["branch", "-D", branch], TargetPath, BeadsEnvironment);
+            return Run("git", ["--git-dir", OriginPath, "rev-parse", $"refs/heads/{branch}"], TargetPath, BeadsEnvironment).Trim();
+        }
+
+        internal string RemoteBranchSha(string beadId) => Run("git",
+            ["--git-dir", OriginPath, "rev-parse", $"refs/heads/nightweaver/{beadId}"], TargetPath, BeadsEnvironment).Trim();
 
         internal BeadSnapshot ReadBead(string beadId)
         {
@@ -475,7 +695,9 @@ public sealed class AgentStageIntegrationTests
             Task<AgentExecutionResult> Execute(HostPaths hostPaths, ProjectSlug projectSlug,
                 PreparedAgentInvocation invocation, CancellationToken token)
             {
-                var timeout = action == "timeout" ? TimeSpan.FromMilliseconds(350) : invocation.Timeout;
+                // Invocation time includes native process startup; allow the fixture to publish its PID
+                // before the timeout so the kill assertion stays reliable under full-suite load.
+                var timeout = action == "timeout" ? TimeSpan.FromSeconds(5) : invocation.Timeout;
                 var actual = new PreparedAgentInvocation(invocation.Executable, invocation.Arguments, invocation.WorkingDirectory,
                     invocation.StandardInput, invocation.EnvironmentOverrides, timeout, invocation.InvocationId,
                     invocation.TemporaryDirectory, invocation.LogFilePath);
@@ -584,11 +806,13 @@ public sealed class AgentStageIntegrationTests
 
         internal async Task<DeliverySlotOutcome> RunDeliverySlotAsync(
             string beadId,
-            Dictionary<AgentRole, string> actions,
-            string observationPath)
+            IReadOnlyList<(AgentRole Role, string Action)> actions,
+            string observationPath,
+            int maxRepairCycles = 3,
+            bool verifyRepairContinuity = false)
         {
             const string actor = "nightweaver:demo";
-            var project = CreateProject(AgentCli.Codex);
+            var project = CreateProject(AgentCli.Codex, maxRepairCycles);
             var systemRunner = new SystemProcessRunner();
             var runner = new RecordingProcessRunner((request, token) => systemRunner.RunAsync(request, token));
             var preparer = new AgentInvocationPreparer();
@@ -596,6 +820,7 @@ public sealed class AgentStageIntegrationTests
             var pidFiles = new List<string>();
             var roles = new List<AgentRole>();
             long sequence = 0;
+            var actionIndex = 0;
 
             async Task<PreparedAgentInvocation> Prepare(HostPaths hostPaths, ProjectConfig projectConfig,
                 AgentRole role, AgentDispatchContext context, string worktreePath, CancellationToken token)
@@ -605,6 +830,13 @@ public sealed class AgentStageIntegrationTests
                 Assert.Equal(canonical, worktreePath);
                 Assert.Equal(canonical, invocation.WorkingDirectory);
                 Assert.Equal($"nightweaver/{context.BeadId}", Run("git", ["branch", "--show-current"], worktreePath).Trim());
+                if (verifyRepairContinuity && roles.Count > 0)
+                {
+                    Assert.True(File.Exists(System.IO.Path.Combine(worktreePath, ".nightweaver-ignored", "slot-sentinel.bin")),
+                        "The ignored sentinel must survive role provisioning and repair cycles.");
+                    Assert.Contains("slot fixture implementation", Run("git", ["log", "--format=%s"], worktreePath),
+                        StringComparison.Ordinal);
+                }
                 invocationRoles.Add(invocation.InvocationId, role);
                 return invocation;
             }
@@ -613,13 +845,30 @@ public sealed class AgentStageIntegrationTests
                 PreparedAgentInvocation invocation, CancellationToken token)
             {
                 var role = invocationRoles[invocation.InvocationId];
-                if (!actions.TryGetValue(role, out var action))
-                    throw new InvalidOperationException($"No fixture action was provided for {role}.");
+                var index = Volatile.Read(ref actionIndex);
+                var consumesNextAction = index < actions.Count && actions[index].Role == role;
+                if (consumesNextAction)
+                {
+                    Interlocked.Increment(ref actionIndex);
+                }
+                else if (index == 0 || actions[index - 1].Role != role)
+                {
+                    throw new InvalidOperationException($"No fixture action matches invocation {index} ({role}); next action is "
+                        + (index < actions.Count ? actions[index].Role.ToString() : "(none)"));
+                }
+                else
+                {
+                    index--;
+                }
+                var step = actions[index];
+                var action = step.Action;
                 roles.Add(role);
                 var pidFile = System.IO.Path.Combine(temp.Path, "slot-pids", Interlocked.Increment(ref sequence).ToString(System.Globalization.CultureInfo.InvariantCulture) + ".txt");
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(pidFile)!);
                 pidFiles.Add(pidFile);
-                AppendSlotObservation(observationPath, beadId, role, invocation.WorkingDirectory, action);
+                var budgetLine = invocation.StandardInput.Split('\n').Single(line => line.StartsWith("Remaining repair budget: ", StringComparison.Ordinal));
+                var remainingRepairBudget = int.Parse(budgetLine["Remaining repair budget: ".Length..], System.Globalization.CultureInfo.InvariantCulture);
+                AppendSlotObservation(observationPath, beadId, role, invocation.WorkingDirectory, remainingRepairBudget, action);
                 return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
                     CreateProcessLauncher(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
                     {
@@ -677,12 +926,13 @@ public sealed class AgentStageIntegrationTests
             }
         }
 
-        private void AppendSlotObservation(string path, string beadId, AgentRole role, string worktreePath, string action)
+        private void AppendSlotObservation(string path, string beadId, AgentRole role, string worktreePath,
+            int remainingRepairBudget, string action)
         {
             var bead = ReadBead(beadId);
             var state = BeadWorkflowState.Parse(bead);
-            var observation = new SlotObservation(beadId, role, state.Stage, bead.Status, bead.Assignee,
-                worktreePath, Run("git", ["branch", "--show-current"], worktreePath).Trim(),
+            var observation = new SlotObservation(beadId, role, state.Stage, state.RepairCycles, remainingRepairBudget,
+                bead.Status, bead.Assignee, worktreePath, Run("git", ["branch", "--show-current"], worktreePath).Trim(),
                 Run("git", ["rev-parse", "HEAD"], worktreePath).Trim(), action);
             File.AppendAllText(path, JsonSerializer.Serialize(observation) + Environment.NewLine, new UTF8Encoding(false));
         }
@@ -713,10 +963,10 @@ public sealed class AgentStageIntegrationTests
                 File.ReadAllText(System.IO.Path.Combine(TargetPath, "root-untracked-sentinel.txt")));
         }
 
-        private ProjectConfig CreateProject(AgentCli cli)
+        private ProjectConfig CreateProject(AgentCli cli, int maxRepairCycles = 3)
         {
             var roles = AgentRoles.All.ToDictionary(role => role, _ => new AgentSettings(cli, null, "low", 1));
-            return new(ProjectSlug.Parse("demo"), "fixture.json", new(TargetPath, "main"), new(1, 1, 1), new(3, 2),
+            return new(ProjectSlug.Parse("demo"), "fixture.json", new(TargetPath, "main"), new(1, 1, 1), new(maxRepairCycles, 2),
                 new(cli, null, "low", 1), new RoleSettings(roles));
         }
 

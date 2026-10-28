@@ -26,6 +26,9 @@ internal static class BeadsCommand
     internal static ProcessRequest CreateUpDependencies(string workingDirectory, string beadId)
         => Create(workingDirectory, ["--readonly", "--sandbox", "dep", "list", beadId, "--direction", "up", "--json"]);
 
+    internal static ProcessRequest CreateComments(string workingDirectory, string beadId)
+        => Create(workingDirectory, ["--readonly", "--sandbox", "comments", beadId, "--json"]);
+
     internal static ProcessRequest CreateWrite(string workingDirectory, IReadOnlyList<string> arguments, string? actor = null)
     {
         var environment = CreateEnvironment(workingDirectory, readOnly: false);

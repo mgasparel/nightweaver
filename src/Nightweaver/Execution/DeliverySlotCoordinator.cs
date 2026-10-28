@@ -14,6 +14,13 @@ internal delegate Task<OperationalRetryOutcome> DeliveryRoleRunner(
     CancellationToken cancellationToken,
     Action<OperationalRetryProgress>? progress);
 
+internal delegate Task<NeedsHumanEscalationResult> DeliveryRepairBudgetEscalator(
+    HostPaths paths,
+    ProjectConfig project,
+    ValidatedTargetRepository repository,
+    NeedsHumanRequest request,
+    CancellationToken cancellationToken);
+
 internal enum DeliverySlotDisposition
 {
     MergeReady,
@@ -36,7 +43,7 @@ internal sealed record DeliverySlotOutcome(
     internal bool ClaimReleased => EscalationProgress?.ClaimReleased ?? ClaimHandoffCompleted;
 }
 
-/// <summary>Runs the successful Implementer -> Reviewer -> QA path under one guarded claim.</summary>
+/// <summary>Runs Delivery and verified Reviewer/QA repair cycles under one guarded claim.</summary>
 internal sealed class DeliverySlotCoordinator
 {
     private static readonly TimeSpan ClaimFinalizationTimeout = TimeSpan.FromSeconds(15);
@@ -44,12 +51,16 @@ internal sealed class DeliverySlotCoordinator
     private readonly BeadsReader reader;
     private readonly BeadsWriter writer;
     private readonly DeliveryRoleRunner runRole;
+    private readonly DeliveryRepairBudgetEscalator escalateRepairBudget;
 
-    internal DeliverySlotCoordinator(IProcessRunner processRunner, DeliveryRoleRunner? runRole = null)
+    internal DeliverySlotCoordinator(IProcessRunner processRunner, DeliveryRoleRunner? runRole = null,
+        DeliveryRepairBudgetEscalator? escalateRepairBudget = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         reader = new BeadsReader(processRunner);
         writer = new BeadsWriter(processRunner);
+        var escalator = new NeedsHumanEscalator(processRunner);
+        this.escalateRepairBudget = escalateRepairBudget ?? escalator.EscalateAsync;
         if (runRole is null)
         {
             var retries = new OperationalRetryCoordinator(processRunner);
@@ -140,6 +151,11 @@ internal sealed class DeliverySlotCoordinator
                     claimedState).ConfigureAwait(false);
 
             var currentState = claimedState;
+            if (currentState.RepairCycles > project.Limits.MaxRepairCycles)
+                return await EscalateRepairBudgetAsync(paths, project, repository, beadId, currentState,
+                    InferLifecycleRole(currentState), null, persistedAtAdmission: true, cancellationToken,
+                    rejectingStage: currentState.Stage).ConfigureAwait(false);
+
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -214,20 +230,29 @@ internal sealed class DeliverySlotCoordinator
                     return Result(DeliverySlotDisposition.Failed, after, role, lastStage, false,
                         "Bead workflow changed after stage verification; refusing follow-on dispatch or claim handoff.");
 
-                if (IsUnsupportedLegalOutcome(role, currentState, after))
+                var repairRejection = IsReviewQaRejection(role, currentState, after);
+                if (!repairRejection && IsUnsupportedLegalOutcome(role, currentState, after))
                     return Result(DeliverySlotDisposition.StoppedAtUnsupportedOutcome, after, role, lastStage, false,
                         $"The {AgentRoles.ToConfigKey(role)} stage produced a legal repair or product-decision outcome; the slot stopped with its claim and worktree retained.");
 
                 if (role == AgentRole.Qa && after.Stage == "stage:merge")
                 {
-                    if (after.RepairCycles != initial.RepairCycles)
-                        return Result(DeliverySlotDisposition.Failed, after, role, lastStage, false,
-                            "repair_cycles changed during the successful Delivery path; refusing merge handoff.");
                     return await ReleaseMergeReadyClaimAsync(repository, beadId, project.RecoveryActor, after,
                         role, lastStage, cancellationToken).ConfigureAwait(false);
                 }
 
-                var expectedNext = role switch
+                if (repairRejection)
+                {
+                    var findingContext = $"Verified {AgentRoles.ToConfigKey(role)} rejection: {currentState.Stage ?? "(none)"} -> {after.Stage ?? "(none)"}, repair_cycles={after.RepairCycles}";
+                    var latestFindings = await ReadLatestFindingsAsync(repository, beadId, lastStage.StageResult,
+                        findingContext, cancellationToken).ConfigureAwait(false);
+                    if (after.RepairCycles > project.Limits.MaxRepairCycles)
+                        return await EscalateRepairBudgetAsync(paths, project, repository, beadId, after, role,
+                            lastStage, persistedAtAdmission: false, cancellationToken, latestFindings,
+                            rejectingStage: currentState.Stage).ConfigureAwait(false);
+                }
+
+                var expectedNext = repairRejection ? AgentRole.Implementer : role switch
                 {
                     AgentRole.Implementer => AgentRole.Reviewer,
                     AgentRole.Reviewer => AgentRole.Qa,
@@ -335,6 +360,137 @@ internal sealed class DeliverySlotCoordinator
         }
     }
 
+    private async Task<DeliverySlotOutcome> EscalateRepairBudgetAsync(
+        HostPaths paths,
+        ProjectConfig project,
+        ValidatedTargetRepository repository,
+        string beadId,
+        BeadWorkflowState expectedState,
+        AgentRole role,
+        OperationalRetryOutcome? lastStage,
+        bool persistedAtAdmission,
+        CancellationToken cancellationToken,
+        IReadOnlyList<string>? latestFindings = null,
+        string? rejectingStage = null)
+    {
+        latestFindings ??= await ReadLatestFindingsAsync(repository, beadId, lastStage?.StageResult,
+            $"Persisted repair_cycles={expectedState.RepairCycles} at Delivery admission; max_repair_cycles={project.Limits.MaxRepairCycles}; current lifecycle role={AgentRoles.ToConfigKey(role)} at {expectedState.Stage ?? "(none)"}",
+            cancellationToken).ConfigureAwait(false);
+
+        BeadWorkflowState currentState;
+        try
+        {
+            var inventory = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
+            if (!inventory.ById.TryGetValue(beadId, out var bead))
+                return Result(DeliverySlotDisposition.Failed, expectedState, role, lastStage, false,
+                    "Repair-budget escalation was refused because the Bead disappeared before cleanup.");
+            currentState = BeadWorkflowState.Parse(bead);
+            if (bead.Status != "in_progress" || !string.Equals(bead.Assignee, project.RecoveryActor, StringComparison.Ordinal)
+                || currentState != expectedState)
+                return Result(DeliverySlotDisposition.Failed, currentState, role, lastStage, false,
+                    "Repair-budget escalation was refused because the live workflow state or claim changed before cleanup.");
+            var readiness = await reader.ReadReadinessAsync(repository, inventory, project.RecoveryActor, cancellationToken)
+                .ConfigureAwait(false);
+            if (!readiness.RecoverableOwnedReady.Contains(beadId))
+                return Result(DeliverySlotDisposition.Failed, currentState, role, lastStage, false,
+                    "Repair-budget escalation was refused because the owned Bead is no longer in the recoverable-ready set.");
+
+            // Readiness is a separate tracker query. Re-read the complete workflow afterwards so
+            // state changes during that query cannot be adopted as the escalation baseline.
+            var verifiedInventory = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
+            if (!verifiedInventory.ById.TryGetValue(beadId, out var verifiedBead))
+                return Result(DeliverySlotDisposition.Failed, currentState, role, lastStage, false,
+                    "Repair-budget escalation was refused because the Bead disappeared after the readiness check.");
+            currentState = BeadWorkflowState.Parse(verifiedBead);
+            if (verifiedBead.Status != "in_progress"
+                || !string.Equals(verifiedBead.Assignee, project.RecoveryActor, StringComparison.Ordinal)
+                || currentState != expectedState)
+                return Result(DeliverySlotDisposition.Failed, currentState, role, lastStage, false,
+                    "Repair-budget escalation was refused because the live workflow state or claim changed after the readiness check.");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
+        {
+            return Result(DeliverySlotDisposition.Failed, expectedState, role, lastStage, false,
+                $"Repair-budget escalation preflight failed; no cleanup was attempted: {exception.Message}");
+        }
+        var stage = (rejectingStage ?? expectedState.Stage) ?? "(none)";
+        var reason = persistedAtAdmission
+            ? $"Persisted repair_cycles={expectedState.RepairCycles} at Delivery admission exceeds max_repair_cycles={project.Limits.MaxRepairCycles}; no Agent invocation was started. Current lifecycle role: {AgentRoles.ToConfigKey(role)} at {stage}."
+            : $"Verified {AgentRoles.ToConfigKey(role)} rejection at {stage} raised repair_cycles to {expectedState.RepairCycles}, exceeding max_repair_cycles={project.Limits.MaxRepairCycles}.";
+        var stageResult = lastStage?.StageResult;
+        var request = new NeedsHumanRequest(beadId, project.RecoveryActor, NeedsHumanCause.RepairBudgetExhausted,
+            role, reason, latestFindings, string.IsNullOrWhiteSpace(stageResult?.InvocationId) ? null : stageResult.InvocationId,
+            string.IsNullOrWhiteSpace(stageResult?.LogFilePath) ? null : [stageResult.LogFilePath],
+            WorktreePurpose.Delivery, expectedState);
+
+        try
+        {
+            var escalation = await escalateRepairBudget(paths, project, repository, request, cancellationToken)
+                .ConfigureAwait(false);
+            return BuildBudgetEscalationOutcome(currentState, role, lastStage, escalation,
+                escalation.Succeeded ? null : "Repair-budget needs-human escalation did not complete.");
+        }
+        catch (NeedsHumanEscalationException exception)
+        {
+            return BuildBudgetEscalationOutcome(currentState, role, lastStage, exception.Progress, exception.Message);
+        }
+        catch (OperationCanceledException exception) when (TryGetEscalationProgress(exception, out var progress))
+        {
+            return Result(DeliverySlotDisposition.StoppedAtUnsupportedOutcome,
+                StateAfterEscalation(currentState, progress), role, lastStage, false, exception.Message, progress);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
+        {
+            return Result(DeliverySlotDisposition.Failed, currentState, role, lastStage, false,
+                $"Repair-budget needs-human escalation failed: {exception.Message}");
+        }
+    }
+
+    private static DeliverySlotOutcome BuildBudgetEscalationOutcome(BeadWorkflowState currentState,
+        AgentRole role, OperationalRetryOutcome? lastStage, NeedsHumanEscalationResult progress, string? failure)
+    {
+        var succeeded = progress.Succeeded;
+        return Result(succeeded ? DeliverySlotDisposition.Escalated : DeliverySlotDisposition.Failed,
+            StateAfterEscalation(currentState, progress), role, lastStage, succeeded,
+            succeeded ? null : $"{failure ?? "Repair-budget needs-human escalation did not complete."} {string.Join("; ", progress.Failures)}".Trim(),
+            progress);
+    }
+
+    private async Task<IReadOnlyList<string>> ReadLatestFindingsAsync(
+        ValidatedTargetRepository repository,
+        string beadId,
+        AgentStageResult? stageResult,
+        string evidenceContext,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var comments = await reader.ReadCommentsAsync(repository, beadId, cancellationToken).ConfigureAwait(false);
+            if (comments.Count == 0)
+                return [$"No Bead comments were available. {evidenceContext}."];
+            return [comments[^1].Text];
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            var invocation = string.IsNullOrWhiteSpace(stageResult?.InvocationId) ? "unavailable" : stageResult.InvocationId;
+            var log = string.IsNullOrWhiteSpace(stageResult?.LogFilePath) ? "unavailable" : stageResult.LogFilePath;
+            return [$"Latest Bead comments could not be read ({exception.Message}). {evidenceContext}, invocation={invocation}, log={log}."];
+        }
+    }
+
+    private static BeadWorkflowState StateAfterEscalation(BeadWorkflowState state, NeedsHumanEscalationResult progress) =>
+        state with
+        {
+            NeedsHuman = progress.PauseRecorded || state.NeedsHuman,
+            Status = progress.ClaimReleased && state.Status == "in_progress" ? "open" : state.Status
+        };
+
     private async Task<DeliverySlotOutcome> RefuseAfterClaimAsync(
         ProjectConfig project,
         ValidatedTargetRepository repository,
@@ -432,10 +588,31 @@ internal sealed class DeliverySlotCoordinator
     private static bool IsUnsupportedLegalOutcome(AgentRole role, BeadWorkflowState before, BeadWorkflowState after)
     {
         if (after.ProductDecisionRequired || after.NeedsHuman) return true;
-        return role is AgentRole.Reviewer or AgentRole.Qa
-            && after.Stage == "stage:implement"
-            && after.RepairCycles == before.RepairCycles + 1;
+        return IsReviewQaRejection(role, before, after);
     }
+
+    private static bool IsReviewQaRejection(AgentRole role, BeadWorkflowState before, BeadWorkflowState after)
+    {
+        var inputStage = role switch
+        {
+            AgentRole.Reviewer => "stage:review",
+            AgentRole.Qa => "stage:qa",
+            _ => null
+        };
+        if (inputStage is null || before.Stage != inputStage || after.Id != before.Id
+            || after.IssueType != before.IssueType || after.Status != before.Status || after.Stage != "stage:implement"
+            || after.Planned || after.ProductDecisionRequired || after.NeedsHuman) return false;
+        try { return after.RepairCycles == checked(before.RepairCycles + 1); }
+        catch (OverflowException) { return false; }
+    }
+
+    private static AgentRole InferLifecycleRole(BeadWorkflowState state) => state.Stage switch
+    {
+        "stage:review" => AgentRole.Reviewer,
+        "stage:qa" => AgentRole.Qa,
+        null or "stage:implement" => AgentRole.Implementer,
+        _ => AgentRole.Implementer
+    };
 
     private static DeliverySlotOutcome Result(DeliverySlotDisposition disposition, BeadWorkflowState? state,
         AgentRole? role, OperationalRetryOutcome? stage, bool handoff, string? diagnostic,

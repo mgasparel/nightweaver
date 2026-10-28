@@ -44,8 +44,18 @@ public sealed class WebBeadsIntegrationTests
         var relatedControl = target.Create("Nonblocking relation control");
         target.Run("bd", ["dep", "relate", relatedIssue, relatedControl]);
 
-        for (var index = 0; index < 53; index++)
-            target.Create($"Ordinary record {index:D2}", priority: index % 5);
+        using var temp = new TempDirectory();
+        var records = Enumerable.Range(0, 53).Select(index => new
+        {
+            title = $"Ordinary record {index:D2}",
+            issue_type = "task",
+            status = "open",
+            priority = index % 5,
+            created_at = "2025-01-01T00:00:00Z",
+            labels = Array.Empty<string>()
+        }).ToArray();
+        var recordsFile = temp.WriteFile("ordinary-records.jsonl", string.Join('\n', records.Select(r => JsonSerializer.Serialize(r))));
+        using (JsonDocument.Parse(target.Run("bd", ["import", recordsFile, "--json"]))) { }
         var beyondDefaultLimit = target.Create("Inventory beyond default limit", priority: 4);
         var foreignBead = foreign.Create("Must not appear in configured target");
 

@@ -149,7 +149,7 @@ Exit codes are `0` for a verified stage and completed claim handoff, `1` for an 
 
 ## Internal Delivery slot
 
-Nightweaver also has an internal `DeliverySlotCoordinator` seam for one Plan Bead. It claims a native-ready, unassigned task Bead, selects Implementer, Reviewer, or QA from its verified stage, and can carry one claim and the persistent `nightweaver/<bead-id>` worktree through the successful path to `stage:merge`. At merge readiness it verifies the stage and releases the claim to open/unassigned for the Merger Agent. Legal repair and product-decision outcomes stop the slot for their owning workflow. This coordinator is not exposed as a CLI command and does not provide a concurrent Delivery Pool or scheduler.
+Nightweaver also has an internal `DeliverySlotCoordinator` seam for one Plan Bead. It claims a native-ready, unassigned task Bead, selects Implementer, Reviewer, or QA from verified tracker state, and carries one claim and the persistent `nightweaver/<bead-id>` worktree through the Delivery path. A verified Reviewer or QA rejection returns immediately to Implementer in the same slot and worktree; both roles share the persisted `repair_cycles` budget, which is not reset by successful stages. A rejection beyond `max_repair_cycles` escalates through the needs-human cleanup path before another Agent starts, retaining the remote branch, open Pull Request, and invocation logs. At `stage:merge`, the slot verifies the handoff and releases the claim to open/unassigned for the Merger Agent. This coordinator is not exposed as a CLI command and does not provide a concurrent Delivery Pool or scheduler.
 
 Examples from an unrelated caller directory with spaces in the paths:
 
