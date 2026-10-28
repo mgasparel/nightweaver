@@ -258,8 +258,10 @@ internal static class AttentionDeskProjector
             var logs = new List<string>();
             foreach (var log in logFilesElement.EnumerateArray())
             {
-                if (log.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(log.GetString())) return null;
-                logs.Add(log.GetString()!);
+                if (log.ValueKind != JsonValueKind.String) return null;
+                var logFile = ReadJsonString(log);
+                if (string.IsNullOrWhiteSpace(logFile)) return null;
+                logs.Add(logFile);
             }
             return new(cause, failedRole, reason, latestFindings, cleanupPreflight, logs);
         }
@@ -296,7 +298,19 @@ internal static class AttentionDeskProjector
     {
         var fields = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var property in value.EnumerateObject())
-            if (!fields.TryAdd(property.Name, property.Value)) throw new JsonException("duplicate property");
+        {
+            string name;
+            try
+            {
+                name = property.Name;
+            }
+            catch (InvalidOperationException exception)
+            {
+                throw new JsonException("Comment property name contains invalid Unicode.", exception);
+            }
+
+            if (!fields.TryAdd(name, property.Value)) throw new JsonException("duplicate property");
+        }
         return fields;
     }
 
@@ -305,8 +319,20 @@ internal static class AttentionDeskProjector
     {
         value = string.Empty;
         if (!fields.TryGetValue(name, out var element) || element.ValueKind != JsonValueKind.String) return false;
-        value = element.GetString() ?? string.Empty;
+        value = ReadJsonString(element);
         return allowEmpty || !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static string ReadJsonString(JsonElement element)
+    {
+        try
+        {
+            return element.GetString() ?? string.Empty;
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new JsonException("Comment string contains invalid Unicode.", exception);
+        }
     }
 
     private static bool KnownCause(string cause) => cause is "operational-retries-exhausted" or "duplicate-failure"
@@ -325,8 +351,19 @@ internal static class AttentionDeskProjector
             using var document = JsonDocument.Parse(text);
             if (document.RootElement.ValueKind != JsonValueKind.Object) return true;
             if (document.RootElement.TryGetProperty("schema", out var schema)
-                && schema.ValueKind == JsonValueKind.String
-                && schema.GetString()!.StartsWith("nightweaver-", StringComparison.Ordinal)) return false;
+                && schema.ValueKind == JsonValueKind.String)
+            {
+                string? schemaValue;
+                try
+                {
+                    schemaValue = schema.GetString();
+                }
+                catch (InvalidOperationException)
+                {
+                    return false;
+                }
+                if (schemaValue?.StartsWith("nightweaver-", StringComparison.Ordinal) == true) return false;
+            }
             return true;
         }
         catch (JsonException)

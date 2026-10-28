@@ -46,7 +46,7 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         => ReadMembershipAsync(repository, BeadsCommand.CreateExplorerBlocked(repository.Path),
             "bd --readonly --sandbox blocked --json", requireBlockerMetadata: true, cancellationToken);
 
-    internal async Task<IReadOnlyList<BeadsCommentSnapshot>> ReadCommentsAsync(ValidatedTargetRepository repository,
+    internal async Task<IReadOnlyList<BeadsCommentSnapshot>> ReadAttentionCommentsAsync(ValidatedTargetRepository repository,
         string beadId, CancellationToken cancellationToken)
     {
         var context = $"bd --readonly --sandbox comments '{beadId}' --json in Target Repository '{repository.Path}'";
@@ -55,7 +55,7 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
             throw new ToolExecutionException($"{context}: comment output exceeded the 2 MiB read limit");
         try
         {
-            return ParseComments(json, beadId);
+            return ParseAttentionComments(json, beadId);
         }
         catch (JsonException exception)
         {
@@ -63,7 +63,7 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         }
     }
 
-    private static BeadsCommentSnapshot[] ParseComments(string json, string beadId)
+    private static BeadsCommentSnapshot[] ParseAttentionComments(string json, string beadId)
     {
         using var document = JsonDocument.Parse(json);
         if (document.RootElement.ValueKind != JsonValueKind.Array)

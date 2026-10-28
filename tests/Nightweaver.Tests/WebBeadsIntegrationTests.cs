@@ -1401,6 +1401,78 @@ public sealed class WebBeadsIntegrationTests
     }
 
     [Fact]
+    public async Task AttentionDeskSkipsCommentsWithInvalidEscapedUnicodeAndKeepsPausedBeadsVisible()
+    {
+        using var target = new BeadsFixture();
+        var needsHuman = target.Create("Malformed diagnostics retain fallback", type: "task");
+        target.Run("bd", ["update", needsHuman, "--add-label", "stage:review", "--add-label", "needs-human"]);
+        var validDiagnostic = JsonSerializer.Serialize(new
+        {
+            schema = "nightweaver-needs-human-v1",
+            bead_id = needsHuman,
+            bead_type = "task",
+            stage = "stage:review",
+            cause = "repair-budget-exhausted",
+            failed_role = "reviewer",
+            reason = "The valid earlier diagnostic remains visible.",
+            latest_findings = "The earlier findings remain available.",
+            invocation_id = "valid-fixture-invocation",
+            log_directory = "C:\\nightweaver\\logs\\fixture",
+            log_files = InitialEscalationLogFiles,
+            cleanup_preflight = "passed"
+        });
+        target.Run("bd", ["comments", "add", needsHuman, validDiagnostic]);
+        target.Run("bd", ["comments", "add", needsHuman,
+            $"{{\"schema\":\"nightweaver-needs-human-v1\",\"bead_id\":\"{needsHuman}\",\"bead_type\":\"task\",\"stage\":\"stage:review\",\"cause\":\"repair-budget-exhausted\",\"failed_role\":\"reviewer\",\"reason\":\"bad\\uD800reason\",\"latest_findings\":\"Findings\",\"invocation_id\":\"bad-reason\",\"log_directory\":\"logs\",\"log_files\":[\"unavailable\"],\"cleanup_preflight\":\"passed\"}}"]);
+        target.Run("bd", ["comments", "add", needsHuman,
+            $"{{\"schema\":\"nightweaver-needs-human-v1\",\"bead_id\":\"{needsHuman}\",\"bead_type\":\"task\",\"stage\":\"stage:review\",\"cause\":\"repair-budget-exhausted\",\"failed_role\":\"reviewer\",\"reason\":\"Reason\",\"latest_findings\":\"bad\\uDC00findings\",\"invocation_id\":\"bad-findings\",\"log_directory\":\"logs\",\"log_files\":[\"unavailable\"],\"cleanup_preflight\":\"passed\"}}"]);
+        target.Run("bd", ["comments", "add", needsHuman,
+            $"{{\"schema\":\"nightweaver-needs-human-v1\",\"bead_id\":\"{needsHuman}\",\"bead_type\":\"task\",\"stage\":\"stage:review\",\"cause\":\"repair-budget-exhausted\",\"failed_role\":\"reviewer\",\"reason\":\"Reason\",\"latest_findings\":\"Findings\",\"invocation_id\":\"bad-property\",\"log_directory\":\"logs\",\"log_files\":[\"unavailable\"],\"cleanup_preflight\":\"passed\",\"\\uD800\":\"invalid name\"}}"]);
+
+        await Task.Delay(TimeSpan.FromSeconds(1.1), TestContext.Current.CancellationToken);
+        var validCleanup = JsonSerializer.Serialize(new
+        {
+            schema = "nightweaver-needs-human-cleanup-failure-v1",
+            bead_id = needsHuman,
+            failure = "The earlier cleanup warning remains visible."
+        });
+        target.Run("bd", ["comments", "add", needsHuman, validCleanup]);
+        target.Run("bd", ["comments", "add", needsHuman,
+            $"{{\"schema\":\"nightweaver-needs-human-cleanup-failure-v1\",\"bead_id\":\"{needsHuman}\",\"failure\":\"bad\\uD800cleanup\"}}"]);
+
+        var decision = target.Create("Malformed schema keeps decision visible", type: "feature");
+        target.Run("bd", ["update", decision, "--add-label", "stage:plan", "--add-label", "product-decision-required"]);
+        target.Run("bd", ["--actor", "Planner Agent", "comments", "add", decision, "Should the planner keep the existing approach?"]);
+        target.Run("bd", ["comments", "add", decision,
+            "{\"schema\":\"nightweaver-\\uDC00\",\"action\":\"resume\"}"]);
+
+        var fallback = target.Create("Malformed-only escalation remains visible", type: "task");
+        target.Run("bd", ["update", fallback, "--add-label", "needs-human"]);
+        target.Run("bd", ["comments", "add", fallback,
+            $"{{\"schema\":\"nightweaver-needs-human-v1\",\"bead_id\":\"{fallback}\",\"bead_type\":\"task\",\"stage\":\"(none)\",\"cause\":\"operational-retries-exhausted\",\"failed_role\":\"implementer\",\"reason\":\"bad\\uD800reason\",\"latest_findings\":\"Findings\",\"invocation_id\":\"bad-only\",\"log_directory\":\"logs\",\"log_files\":[\"unavailable\"],\"cleanup_preflight\":\"passed\"}}"]);
+
+        using var factory = CreateFactory(target, CreateFixtureRunner(target));
+        using var client = factory.CreateClient();
+        var rows = await GetAttentionRowsAsync(client);
+
+        Assert.Equal(3, rows.Length);
+        var diagnosticRow = FindAttention(rows, needsHuman);
+        Assert.Contains("Reason: The valid earlier diagnostic remains visible.",
+            diagnosticRow.GetProperty("diagnostic").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Cleanup warning: The earlier cleanup warning remains visible.",
+            diagnosticRow.GetProperty("diagnostic").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("bad", diagnosticRow.GetProperty("diagnostic").GetString(), StringComparison.OrdinalIgnoreCase);
+
+        var decisionRow = FindAttention(rows, decision);
+        Assert.Equal("Should the planner keep the existing approach?", decisionRow.GetProperty("question").GetString());
+        Assert.Equal("Planner Agent", decisionRow.GetProperty("sourceAuthor").GetString());
+
+        var fallbackRow = FindAttention(rows, fallback);
+        Assert.Contains("no valid matching escalation diagnostic", fallbackRow.GetProperty("diagnostic").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task AttentionDeskAcceptsAuthenticInitialEscalationsWithoutAStageLabel()
     {
         using var target = new BeadsFixture();
@@ -1738,6 +1810,45 @@ public sealed class WebBeadsIntegrationTests
         using (var request = CreateAttentionRequest(client, "/api/beads/fixture-unsafe/abort?target=other", "{}"))
         using (var response = await client.SendAsync(request, TestContext.Current.CancellationToken))
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(runner.Requests);
+    }
+
+    [Fact]
+    public async Task AttentionActionsRejectInvalidEscapedUnicodeBeforeLaunchingTrackerCommands()
+    {
+        using var target = new BeadsFixture();
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        var requests = new[]
+        {
+            (Path: "/api/beads/fixture-unicode/decide", Body: "{\"instruction\":\"bad\\uD800text\",\"action\":\"resume\"}"),
+            (Path: "/api/beads/fixture-unicode/decide", Body: "{\"instruction\":\"bad\\uDC00text\",\"action\":\"resume\"}"),
+            (Path: "/api/beads/fixture-unicode/decide", Body: "{\"instruction\":\"valid\",\"action\":\"bad\\uD800text\"}"),
+            (Path: "/api/beads/fixture-unicode/decide", Body: "{\"instruction\":\"valid\",\"action\":\"bad\\uDC00text\"}"),
+            (Path: "/api/beads/fixture-unicode/decide", Body: "{\"\\uD800\":\"value\"}"),
+            (Path: "/api/beads/fixture-unicode/decide", Body: "{\"\\uDC00\":\"value\"}"),
+            (Path: "/api/beads/fixture-unicode/retry", Body: "{\"\\uD800\":\"value\"}"),
+            (Path: "/api/beads/fixture-unicode/retry", Body: "{\"\\uDC00\":\"value\"}"),
+            (Path: "/api/beads/fixture-unicode/abort", Body: "{\"\\uD800\":\"value\"}"),
+            (Path: "/api/beads/fixture-unicode/abort", Body: "{\"\\uDC00\":\"value\"}")
+        };
+
+        foreach (var (path, body) in requests)
+        {
+            using var request = CreateAttentionRequest(client, path, body);
+            using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+            var responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+            Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+            Assert.DoesNotContain("D800", responseBody, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("DC00", responseBody, StringComparison.OrdinalIgnoreCase);
+            using var problem = JsonDocument.Parse(responseBody);
+            Assert.Equal("Invalid Attention Desk request", problem.RootElement.GetProperty("title").GetString());
+        }
+
         Assert.Empty(runner.Requests);
     }
 

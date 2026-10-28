@@ -42,7 +42,7 @@ internal static class AttentionMutationRequest
         if (instructionValue.ValueKind != JsonValueKind.String || actionValue.ValueKind != JsonValueKind.String)
             throw new AttentionRequestValidationException("Instruction and action must be strings.");
 
-        var instruction = instructionValue.GetString()?.Trim();
+        var instruction = ReadString(instructionValue)?.Trim();
         if (string.IsNullOrWhiteSpace(instruction))
             throw new AttentionRequestValidationException("Instruction must not be blank.");
         if (instruction.Contains('\0'))
@@ -50,7 +50,7 @@ internal static class AttentionMutationRequest
         if (Encoding.UTF8.GetByteCount(instruction) > 16 * 1024)
             throw new AttentionRequestValidationException("Instruction cannot exceed 16 KiB of UTF-8 text.");
 
-        var action = actionValue.GetString();
+        var action = ReadString(actionValue);
         if (action is not ("resume" or "note_only"))
             throw new AttentionRequestValidationException("Action must be resume or note_only.");
         return new DecideAttentionRequest(instruction, action);
@@ -82,9 +82,33 @@ internal static class AttentionMutationRequest
     {
         var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var property in root.EnumerateObject())
-            if (!values.TryAdd(property.Name, property.Value))
+        {
+            string name;
+            try
+            {
+                name = property.Name;
+            }
+            catch (InvalidOperationException)
+            {
+                throw new AttentionRequestValidationException("Request property names must contain valid Unicode.");
+            }
+
+            if (!values.TryAdd(name, property.Value))
                 throw new AttentionRequestValidationException("Request properties may be supplied only once.");
+        }
         return values;
+    }
+
+    private static string? ReadString(JsonElement value)
+    {
+        try
+        {
+            return value.GetString();
+        }
+        catch (InvalidOperationException)
+        {
+            throw new AttentionRequestValidationException("String values must contain valid Unicode.");
+        }
     }
 }
 

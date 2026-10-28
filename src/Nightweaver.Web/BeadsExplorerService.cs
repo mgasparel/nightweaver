@@ -93,7 +93,7 @@ internal sealed class TrackerBridge(
                          .Where(AttentionDeskProjector.IsPaused)
                          .Where(bead => !AttentionDeskProjector.IsTerminal(bead)))
             {
-                var comments = await beadsReader.ReadCommentsAsync(target, bead.Id, cancellationToken);
+                var comments = await beadsReader.ReadAttentionCommentsAsync(target, bead.Id, cancellationToken);
                 items.Add(AttentionDeskProjector.Project(bead, comments, project.Limits.MaxRepairCycles));
             }
 
@@ -289,7 +289,7 @@ internal sealed class TrackerBridge(
         using var timeout = new CancellationTokenSource(VerificationTimeout);
         try
         {
-            var comments = await beadsReader.ReadCommentsAsync(target, beadId, timeout.Token);
+            var comments = await beadsReader.ReadAttentionCommentsAsync(target, beadId, timeout.Token);
             return comments.Any(comment => comment.Text == expectedComment && comment.Author == "local-console");
         }
         catch (Exception exception) when (IsExpectedTrackerFailure(exception) || exception is OperationCanceledException)
