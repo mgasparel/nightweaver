@@ -54,6 +54,7 @@ function makeAttentionButton(label, className, handler, disabled = false) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = className;
+  button.dataset.attentionFocus = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   button.textContent = label;
   button.disabled = disabled;
   button.addEventListener("click", handler);
@@ -91,8 +92,41 @@ function setAttentionError(message) {
   attentionError.hidden = false;
 }
 
+function captureAttentionFocus() {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return null;
+  const card = active.closest(".attention-card");
+  const focusKey = active.dataset.attentionFocus;
+  if (!card || !attentionCards?.contains(card) || !focusKey) return null;
+
+  const state = { beadId: card.dataset.beadId, focusKey };
+  if (active instanceof HTMLTextAreaElement) {
+    attentionDrafts.set(state.beadId, active.value);
+    state.selectionStart = active.selectionStart;
+    state.selectionEnd = active.selectionEnd;
+    state.selectionDirection = active.selectionDirection;
+  }
+  return state;
+}
+
+function restoreAttentionFocus(state) {
+  if (!state) return;
+  const card = cardById(state.beadId);
+  const target = Array.from(card?.querySelectorAll("[data-attention-focus]") ?? [])
+    .find(element => element.dataset.attentionFocus === state.focusKey);
+  if (!target || target.disabled) return;
+  target.focus();
+  if (target instanceof HTMLTextAreaElement && Number.isInteger(state.selectionStart)
+    && Number.isInteger(state.selectionEnd)) {
+    const start = Math.min(state.selectionStart, target.value.length);
+    const end = Math.min(state.selectionEnd, target.value.length);
+    target.setSelectionRange(start, end, state.selectionDirection ?? "none");
+  }
+}
+
 function renderAttention() {
   if (!attentionCards || !attentionEmpty) return;
+  const focus = captureAttentionFocus();
   const fragment = document.createDocumentFragment();
   for (const item of attentionItems) {
     const card = document.createElement("article");
@@ -163,6 +197,7 @@ function renderAttention() {
       label.htmlFor = inputId;
       label.textContent = "Human guidance";
       textarea.id = inputId;
+      textarea.dataset.attentionFocus = "guidance";
       textarea.rows = 4;
       textarea.maxLength = 16384;
       textarea.placeholder = "Write the decision or clarification for the agent…";
@@ -227,6 +262,7 @@ function renderAttention() {
   }
   attentionCards.replaceChildren(fragment);
   attentionEmpty.hidden = attentionItems.length !== 0 || !attentionHasLoaded;
+  restoreAttentionFocus(focus);
 }
 
 function cardById(beadId) {
@@ -289,10 +325,14 @@ function invalidateAttentionRead() {
   activeAttentionRequest?.abort();
   activeAttentionRequest = null;
   attentionRequestGeneration += 1;
+  setAttentionLoading(false);
 }
 
 async function submitAttentionAction(item, action, instruction = undefined) {
   if (attentionActions.has(item.beadId)) return;
+  const focusedCardId = document.activeElement instanceof HTMLElement
+    ? document.activeElement.closest(".attention-card")?.dataset.beadId : undefined;
+  const actionStartedOnCard = focusedCardId === item.beadId;
   let focusAfterRender = null;
   attentionActions.add(item.beadId);
   invalidateAttentionRead();
@@ -352,14 +392,21 @@ async function submitAttentionAction(item, action, instruction = undefined) {
     if (attentionStatus) attentionStatus.textContent = `Action for ${item.beadId} needs attention.`;
     focusAfterRender = "message";
   } finally {
+    const activeElement = document.activeElement;
+    const activeCardId = activeElement instanceof HTMLElement
+      ? activeElement.closest(".attention-card")?.dataset.beadId : undefined;
+    const focusStillWithAction = activeCardId === item.beadId
+      || (activeCardId === undefined && (activeElement === document.body || !activeElement?.isConnected));
     attentionActions.delete(item.beadId);
     renderAttention();
-    if (focusAfterRender === "guidance") cardById(item.beadId)?.querySelector("textarea")?.focus();
-    else if (focusAfterRender === "status") attentionStatus?.focus();
-    else if (focusAfterRender === "message") {
-      const message = cardById(item.beadId)?.querySelector(".attention-card-message");
-      if (message) message.focus();
-      else attentionStatus?.focus();
+    if (actionStartedOnCard && focusStillWithAction) {
+      if (focusAfterRender === "guidance") cardById(item.beadId)?.querySelector("textarea")?.focus();
+      else if (focusAfterRender === "status") attentionStatus?.focus();
+      else if (focusAfterRender === "message") {
+        const message = cardById(item.beadId)?.querySelector(".attention-card-message");
+        if (message) message.focus();
+        else attentionStatus?.focus();
+      }
     }
   }
 }

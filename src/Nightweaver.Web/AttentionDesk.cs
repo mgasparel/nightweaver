@@ -62,7 +62,16 @@ internal static class AttentionDeskProjector
             ? "invalid-workflow"
             : productDecision ? "product-decision-required"
             : "needs-human";
-        var role = latestDiagnostic.Diagnostic?.FailedRole ?? RoleForStage(workflow.Stage);
+        var role = productDecision && !needsHuman
+            ? RoleForStage(workflow.Stage)
+            : needsHuman && !productDecision
+                ? latestDiagnostic.Diagnostic?.FailedRole ?? RoleForStage(workflow.Stage)
+                : null;
+        var selectedPauseComment = productDecision && !needsHuman
+            ? selectedQuestion
+            : needsHuman && !productDecision
+                ? latestDiagnostic.Comment
+                : null;
         var diagnosticText = needsHuman
             ? FormatNeedsHumanDiagnostic(latestDiagnostic.Diagnostic, cleanupWarning)
             : workflow.InvalidReason;
@@ -90,8 +99,8 @@ internal static class AttentionDeskProjector
             projected.Labels,
             workflow.Stage,
             kind,
-            selectedQuestion?.CreatedAt.ToUniversalTime() ?? latestDiagnostic.Comment?.CreatedAt.ToUniversalTime(),
-            selectedQuestion is not null || latestDiagnostic.Comment is not null ? "comment" : "unknown",
+            selectedPauseComment?.CreatedAt.ToUniversalTime(),
+            selectedPauseComment is not null ? "comment" : "unknown",
             role,
             selectedQuestion?.Text,
             diagnosticText,
@@ -101,7 +110,7 @@ internal static class AttentionDeskProjector
             canRetry,
             canAbort,
             unavailableReason,
-            selectedQuestion?.Author ?? latestDiagnostic.Comment?.Author);
+            selectedPauseComment?.Author);
     }
 
     internal static bool IsPaused(BeadSnapshot bead)

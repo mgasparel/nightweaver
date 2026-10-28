@@ -272,16 +272,15 @@ public sealed class Program
     private static async Task<(byte[]? Bytes, IResult? Error)> ReadEmptyActionBodyAsync(HttpRequest request,
         CancellationToken cancellationToken)
     {
-        var bodyPresent = request.ContentLength is > 0 || request.Headers.TransferEncoding.Count > 0;
-        if (!bodyPresent) return (Array.Empty<byte>(), null);
+        var body = await BoundedRequestBody.ReadAsync(request, cancellationToken, 32 * 1024);
+        if (body is null)
+            return (null, Results.Problem(statusCode: StatusCodes.Status413PayloadTooLarge,
+                title: "Request body too large", detail: "The request body cannot exceed 32 KiB."));
+        if (body.Length == 0) return (body, null);
         if (!IsJsonContentType(request.ContentType))
             return (null, Results.Problem(statusCode: StatusCodes.Status415UnsupportedMediaType,
                 title: "Unsupported media type", detail: "Retry and abort bodies must use application/json."));
-        var body = await BoundedRequestBody.ReadAsync(request, cancellationToken, 32 * 1024);
-        return body is null
-            ? (null, Results.Problem(statusCode: StatusCodes.Status413PayloadTooLarge,
-                title: "Request body too large", detail: "The request body cannot exceed 32 KiB."))
-            : (body, null);
+        return (body, null);
     }
 
     private static async Task<IResult> ExecuteAttentionActionAsync(HttpContext context, string beadId,

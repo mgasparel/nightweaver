@@ -1590,6 +1590,87 @@ public sealed class WebBeadsIntegrationTests
         Assert.DoesNotContain(attention, row => row.GetProperty("beadId").GetString() == abort);
     }
 
+    [Theory]
+    [InlineData("retry")]
+    [InlineData("abort")]
+    public async Task AttentionActionsRejectBodiesWithoutContentLengthOrTransferEncoding(string action)
+    {
+        using var target = new BeadsFixture();
+        var beadId = target.Create("Reject unframed action body", type: "task");
+        target.Run("bd", ["update", beadId, "--add-label", "needs-human"]);
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/beads/{beadId}/{action}")
+        {
+            Version = HttpVersion.Version20,
+            VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+            Content = new UnknownLengthContent(Encoding.UTF8.GetBytes("{\"unsupported\":true}"))
+        };
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        request.Headers.TryAddWithoutValidation("X-Nightweaver-Request", "console-v1");
+        request.Headers.TryAddWithoutValidation("Origin", client.BaseAddress!.GetLeftPart(UriPartial.Authority));
+
+        Assert.Null(request.Content.Headers.ContentLength);
+        Assert.Empty(request.Headers.TransferEncoding);
+        using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.DoesNotContain(runner.Requests, process => process.Arguments.Contains("update", StringComparer.Ordinal)
+            || (process.Arguments.Contains("comments", StringComparer.Ordinal)
+                && process.Arguments.Contains("add", StringComparer.Ordinal)));
+    }
+
+    [Fact]
+    public async Task AttentionDecisionContextDoesNotReuseHistoricalNeedsHumanDiagnostic()
+    {
+        using var target = new BeadsFixture();
+        var withoutQuestion = target.Create("Decision with only historical diagnostic", type: "task");
+        var withQuestion = target.Create("Decision with current clarification", type: "task");
+        foreach (var id in new[] { withoutQuestion, withQuestion })
+        {
+            target.Run("bd", ["update", id, "--add-label", "stage:review", "--add-label", "product-decision-required"]);
+            target.Run("bd", ["comments", "add", id, JsonSerializer.Serialize(new
+            {
+                schema = "nightweaver-needs-human-v1",
+                bead_id = id,
+                bead_type = "task",
+                stage = "stage:implement",
+                cause = "operational-retries-exhausted",
+                failed_role = "implementer",
+                reason = "A prior implementation invocation failed.",
+                latest_findings = "Historical implementation context.",
+                invocation_id = $"historical-{id}",
+                log_directory = "C:\\nightweaver\\logs\\fixture",
+                log_files = InitialEscalationLogFiles,
+                cleanup_preflight = "passed"
+            })]);
+        }
+        target.Run("bd", ["--actor", "Reviewer Agent", "comments", "add", withQuestion,
+            "Should the reviewer retain this check?"]);
+
+        using var factory = CreateFactory(target, CreateFixtureRunner(target));
+        using var client = factory.CreateClient();
+        var rows = await GetAttentionRowsAsync(client);
+
+        var noQuestionRow = FindAttention(rows, withoutQuestion);
+        Assert.Equal("reviewer", noQuestionRow.GetProperty("fromRole").GetString());
+        Assert.Equal(JsonValueKind.Null, noQuestionRow.GetProperty("pausedAt").ValueKind);
+        Assert.Equal("unknown", noQuestionRow.GetProperty("pauseTimeSource").GetString());
+        Assert.Equal(JsonValueKind.Null, noQuestionRow.GetProperty("sourceAuthor").ValueKind);
+
+        var withQuestionRow = FindAttention(rows, withQuestion);
+        Assert.Equal("reviewer", withQuestionRow.GetProperty("fromRole").GetString());
+        Assert.Equal("comment", withQuestionRow.GetProperty("pauseTimeSource").GetString());
+        Assert.Equal("Should the reviewer retain this check?", withQuestionRow.GetProperty("question").GetString());
+        Assert.Equal("Reviewer Agent", withQuestionRow.GetProperty("sourceAuthor").GetString());
+        var currentQuestion = Assert.Single(ReadComments(target, withQuestion), comment =>
+            comment.GetProperty("text").GetString() == "Should the reviewer retain this check?");
+        Assert.Equal(currentQuestion.GetProperty("created_at").GetDateTimeOffset(),
+            withQuestionRow.GetProperty("pausedAt").GetDateTimeOffset());
+    }
+
     [Fact]
     public async Task AttentionRejectsUnsafeRequestsBeforeLaunchingTrackerCommands()
     {
