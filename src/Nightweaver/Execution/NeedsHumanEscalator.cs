@@ -23,7 +23,8 @@ internal sealed record NeedsHumanRequest(
     IReadOnlyList<string> LatestFindings,
     string? InvocationId = null,
     IReadOnlyList<string>? LogFilePaths = null,
-    WorktreePurpose? CleanupPurpose = null);
+    WorktreePurpose? CleanupPurpose = null,
+    BeadWorkflowState? ExpectedWorkflowState = null);
 
 internal sealed record NeedsHumanEscalationResult(
     bool PauseRecorded,
@@ -92,6 +93,8 @@ internal sealed class NeedsHumanEscalator
 
         var initialBead = await ReadBeadAsync(repository, request.BeadId, cancellationToken);
         var initialState = ParseState(initialBead);
+        if (request.ExpectedWorkflowState is { } expectedWorkflowState && initialState != expectedWorkflowState)
+            throw new ToolExecutionException($"Bead '{request.BeadId}' workflow state changed before needs-human escalation; refusing to adopt a new baseline.");
         var purpose = ResolvePurpose(initialBead, initialState, request);
         var initialClaimOwned = ValidateInitialClaim(initialBead, initialState, request);
         var initialUnclaimedPause = initialState.NeedsHuman && initialState.Status == "open" && initialBead.Assignee is null;
