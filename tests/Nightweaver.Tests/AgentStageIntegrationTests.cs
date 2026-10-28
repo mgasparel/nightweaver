@@ -695,7 +695,9 @@ public sealed class AgentStageIntegrationTests
             Task<AgentExecutionResult> Execute(HostPaths hostPaths, ProjectSlug projectSlug,
                 PreparedAgentInvocation invocation, CancellationToken token)
             {
-                var timeout = action == "timeout" ? TimeSpan.FromMilliseconds(350) : invocation.Timeout;
+                // Invocation time includes native process startup; allow the fixture to publish its PID
+                // before the timeout so the kill assertion stays reliable under full-suite load.
+                var timeout = action == "timeout" ? TimeSpan.FromSeconds(5) : invocation.Timeout;
                 var actual = new PreparedAgentInvocation(invocation.Executable, invocation.Arguments, invocation.WorkingDirectory,
                     invocation.StandardInput, invocation.EnvironmentOverrides, timeout, invocation.InvocationId,
                     invocation.TemporaryDirectory, invocation.LogFilePath);
