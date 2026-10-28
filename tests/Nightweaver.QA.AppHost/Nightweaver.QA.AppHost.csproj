@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Sdk Name="Aspire.AppHost.Sdk" Version="13.6.0" />
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AspireUseCliBundle>true</AspireUseCliBundle>
+    <NoWarn>$(NoWarn);ASPIREBROWSERLOGS001</NoWarn>
+  </PropertyGroup>
+  <ItemGroup><Compile Remove="apphost.cs" /></ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MessagePack" />
+    <PackageReference Include="Aspire.Hosting.AppHost" />
+    <PackageReference Include="Aspire.Hosting.Browsers" />
+    <ProjectReference Include="../../src/Nightweaver.Web/Nightweaver.Web.csproj" />
+  </ItemGroup>
+</Project>
+
+
+

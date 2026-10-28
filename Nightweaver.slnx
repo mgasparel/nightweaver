@@ -1,5 +1,9 @@
 <Solution>
   <Project Path="src/Nightweaver/Nightweaver.csproj" />
+  <Folder Name="/src/" />
+  <Folder Name="/tests/">
+    <Project Path="tests/Nightweaver.QA.AppHost/Nightweaver.QA.AppHost.csproj" />
+  </Folder>
   <Project Path="src/Nightweaver.Web/Nightweaver.Web.csproj" />
   <Project Path="tests/Nightweaver.Tests/Nightweaver.Tests.csproj" />
 </Solution>
