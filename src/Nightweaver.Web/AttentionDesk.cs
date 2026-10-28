@@ -53,7 +53,7 @@ internal static class AttentionDeskProjector
             .ToArray();
         var latestDiagnostic = diagnostics.LastOrDefault();
         var cleanupWarning = latestDiagnostic.Diagnostic is null ? null : comments
-            .Where(comment => comment.CreatedAt > latestDiagnostic.Comment.CreatedAt)
+            .Where(comment => IsAfter(comment, latestDiagnostic.Comment))
             .Select(TryReadCleanupFailure)
             .LastOrDefault(value => value is not null);
         var selectedQuestion = productDecision ? comments.LastOrDefault(comment => IsLegacyDecisionContext(comment.Text)) : null;
@@ -241,7 +241,7 @@ internal static class AttentionDeskProjector
                 || !ReadString(fields, "reason", out var reason) || string.IsNullOrWhiteSpace(reason)
                 || !ReadString(fields, "latest_findings", out var latestFindings, allowEmpty: true)
                 || !ReadString(fields, "cleanup_preflight", out var cleanupPreflight, allowEmpty: true)
-                || !ReadString(fields, "stage", out var stage) || !KnownStages.Contains(stage)
+                || !ReadString(fields, "stage", out var stage) || (stage != "(none)" && !KnownStages.Contains(stage))
                 || !ReadString(fields, "invocation_id", out _)
                 || !ReadString(fields, "log_directory", out _)
                 || !fields.TryGetValue("log_files", out var logFilesElement) || logFilesElement.ValueKind != JsonValueKind.Array)
@@ -277,6 +277,11 @@ internal static class AttentionDeskProjector
             return null;
         }
     }
+
+    private static bool IsAfter(BeadsCommentSnapshot comment, BeadsCommentSnapshot reference)
+        => comment.CreatedAt > reference.CreatedAt
+            || (comment.CreatedAt == reference.CreatedAt
+                && string.Compare(comment.Id, reference.Id, StringComparison.Ordinal) > 0);
 
     private static Dictionary<string, JsonElement> ReadUniqueProperties(JsonElement value)
     {

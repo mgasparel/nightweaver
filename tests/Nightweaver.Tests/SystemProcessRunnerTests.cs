@@ -58,6 +58,19 @@ public sealed class SystemProcessRunnerTests
     }
 
     [Fact]
+    public async Task WindowsCommandLineLaunchFailureUsesToolExecutionException()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var temp = new TempDirectory();
+        var oversizedArgument = new string('x', 40_000);
+        var exception = await Assert.ThrowsAsync<ToolExecutionException>(() => runner.RunAsync(
+            Request("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", oversizedArgument], temp.Path),
+            CancellationToken.None));
+
+        Assert.Contains("could not be started", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task NullEnvironmentOverrideRemovesAParentValue()
     {
         using var temp = new TempDirectory();

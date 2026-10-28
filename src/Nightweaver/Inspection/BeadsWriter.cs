@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text;
 using System.Text.Json;
 
 namespace Nightweaver.Inspection;
@@ -103,12 +104,27 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
         CancellationToken cancellationToken) => RunAsync(repository,
         ["comments", "add", beadId, comment], $"add needs-human diagnostic comment to Bead '{beadId}'", cancellationToken);
 
-    internal Task AddHumanGuidanceAsync(ValidatedTargetRepository repository, string beadId, string action,
+    internal async Task AddHumanGuidanceAsync(ValidatedTargetRepository repository, string beadId, string action,
         string instruction, CancellationToken cancellationToken)
     {
+        BeadsReader.EnsureMutationFreeBackend(repository);
+        cancellationToken.ThrowIfCancellationRequested();
         var comment = CreateHumanGuidanceComment(action, instruction);
-        return RunAsync(repository, ["comments", "add", beadId, comment],
-            $"record local human guidance for Bead '{beadId}'", cancellationToken, "local-console");
+        var commentPath = Path.Combine(Path.GetTempPath(), $"nightweaver-guidance-{Guid.NewGuid():N}.json");
+        try
+        {
+            await File.WriteAllTextAsync(commentPath, comment, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+            await RunAsync(repository, ["comments", "add", beadId, "-f", commentPath],
+                $"record local human guidance for Bead '{beadId}'", cancellationToken, "local-console");
+        }
+        finally
+        {
+            try { File.Delete(commentPath); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // A cleanup failure must not obscure whether bd recorded the comment.
+            }
+        }
     }
 
     internal Task AddHumanActionAsync(ValidatedTargetRepository repository, string beadId, string action,

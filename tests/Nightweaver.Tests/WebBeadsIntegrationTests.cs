@@ -14,6 +14,7 @@ public sealed class WebBeadsIntegrationTests
     private static readonly string[] ExpectedDtoFields = ["assignee", "id", "labels", "priority", "status", "title", "type"];
     private static readonly string[] ExpectedTaggedLabels = ["ready-for-agent", "stage:implement"];
     private static readonly string[] ExpectedDiagnosticLogs = ["C:\\not-read\\review.log"];
+    private static readonly string[] InitialEscalationLogFiles = ["unavailable"];
     private static readonly string[] ExpectedAttentionFields =
     [
         "beadId", "title", "type", "priority", "status", "labels", "stage", "kind", "pausedAt",
@@ -1342,6 +1343,128 @@ public sealed class WebBeadsIntegrationTests
         Assert.Contains("no valid matching escalation diagnostic", fallbackRow.GetProperty("diagnostic").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Equal(JsonValueKind.Null, fallbackRow.GetProperty("pausedAt").ValueKind);
         Assert.Equal("unknown", fallbackRow.GetProperty("pauseTimeSource").GetString());
+    }
+
+    [Fact]
+    public async Task AttentionDeskRetainsCleanupWarningWhenTimestampTiesAndIdSortsLater()
+    {
+        using var target = new BeadsFixture();
+        var beadId = target.Create("Tied cleanup diagnostic", type: "task");
+        target.Run("bd", ["update", beadId, "--add-label", "stage:review", "--add-label", "needs-human"]);
+        var diagnostic = JsonSerializer.Serialize(new
+        {
+            schema = "nightweaver-needs-human-v1",
+            bead_id = beadId,
+            bead_type = "task",
+            stage = "stage:review",
+            cause = "repair-budget-exhausted",
+            failed_role = "reviewer",
+            reason = "The reviewer findings remain unresolved.",
+            latest_findings = "A test still fails.",
+            invocation_id = "fixture-review-tie",
+            log_directory = "C:\\nightweaver\\logs\\fixture",
+            log_files = ExpectedDiagnosticLogs,
+            cleanup_preflight = "passed"
+        });
+        var cleanup = JsonSerializer.Serialize(new
+        {
+            schema = "nightweaver-needs-human-cleanup-failure-v1",
+            bead_id = beadId,
+            failure = "The owned worktree was retained for inspection."
+        });
+        target.Run("bd", ["comments", "add", beadId, diagnostic]);
+        target.Run("bd", ["comments", "add", beadId, cleanup]);
+
+        var actual = new SystemProcessRunner();
+        var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
+        {
+            var result = await actual.RunAsync(AddFixtureEnvironment(target, request), cancellationToken);
+            if (result.ExitCode != 0 || !request.Arguments.Contains("comments", StringComparer.Ordinal)
+                || !request.Arguments.Contains(beadId, StringComparer.Ordinal))
+                return result;
+
+            var rows = JsonNode.Parse(result.StandardOutput)!.AsArray();
+            var diagnosticRow = Assert.Single(rows, row => row?["text"]?.GetValue<string>() == diagnostic);
+            var cleanupRow = Assert.Single(rows, row => row?["text"]?.GetValue<string>() == cleanup);
+            diagnosticRow!["id"] = "a-diagnostic";
+            cleanupRow!["id"] = "b-cleanup";
+            diagnosticRow["created_at"] = "2026-10-27T00:00:00Z";
+            cleanupRow["created_at"] = "2026-10-27T00:00:00Z";
+            return result with { StandardOutput = rows.ToJsonString() };
+        });
+
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        var row = FindAttention(await GetAttentionRowsAsync(client), beadId);
+        Assert.Contains("Cleanup warning: The owned worktree was retained for inspection.",
+            row.GetProperty("diagnostic").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AttentionDeskAcceptsAuthenticInitialEscalationsWithoutAStageLabel()
+    {
+        using var target = new BeadsFixture();
+        var planner = target.Create("Unlabeled planner escalation", type: "feature");
+        var implementer = target.Create("Unlabeled implementer escalation", type: "task");
+        target.Run("bd", ["update", planner, "--add-label", "needs-human"]);
+        target.Run("bd", ["update", implementer, "--add-label", "needs-human"]);
+
+        string Diagnostic(string id, string type, string role) => JsonSerializer.Serialize(new
+        {
+            schema = "nightweaver-needs-human-v1",
+            bead_id = id,
+            bead_type = type,
+            stage = "(none)",
+            cause = "operational-retries-exhausted",
+            failed_role = role,
+            reason = $"The initial {role} invocation failed before a lifecycle stage was assigned.",
+            latest_findings = "The failure is available for human review.",
+            invocation_id = $"fixture-{role}-initial",
+            log_directory = "C:\\nightweaver\\logs\\fixture",
+            log_files = InitialEscalationLogFiles,
+            cleanup_preflight = "passed"
+        });
+
+        target.Run("bd", ["--actor", "Planner Agent", "comments", "add", planner, Diagnostic(planner, "feature", "planner")]);
+        target.Run("bd", ["--actor", "Implementer Agent", "comments", "add", implementer, Diagnostic(implementer, "task", "implementer")]);
+
+        using var factory = CreateFactory(target, CreateFixtureRunner(target));
+        using var client = factory.CreateClient();
+        var rows = await GetAttentionRowsAsync(client);
+
+        foreach (var (id, role) in new[] { (planner, "planner"), (implementer, "implementer") })
+        {
+            var row = FindAttention(rows, id);
+            Assert.Equal("needs-human", row.GetProperty("kind").GetString());
+            Assert.Equal(JsonValueKind.Null, row.GetProperty("stage").ValueKind);
+            Assert.Equal(role, row.GetProperty("fromRole").GetString());
+            Assert.Contains($"The initial {role} invocation failed", row.GetProperty("diagnostic").GetString(), StringComparison.Ordinal);
+            Assert.True(row.GetProperty("canRetry").GetBoolean());
+        }
+    }
+
+    [Fact]
+    public async Task AttentionGuidanceUsesFileTransportForAcceptedLargeLiteralText()
+    {
+        using var target = new BeadsFixture();
+        var beadId = target.Create("Large guidance", type: "feature");
+        target.Run("bd", ["update", beadId, "--add-label", "product-decision-required"]);
+        const int literalCount = 6000;
+        var instruction = new string('<', literalCount);
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        var rawBody = "{\"instruction\":\"" + instruction + "\",\"action\":\"resume\"}";
+
+        using var request = CreateAttentionRequest(client, $"/api/beads/{beadId}/decide", rawBody);
+        using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+        var responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.True(response.StatusCode == HttpStatusCode.OK, $"Guidance response: {responseBody}");
+        Assert.Contains(ReadComments(target, beadId), comment => comment.GetProperty("text").GetString() is { } text
+            && GuidanceMatches(text, "resume", instruction));
+        Assert.Contains(runner.Requests, process => process.Arguments.Contains("comments", StringComparer.Ordinal)
+            && process.Arguments.Contains("-f", StringComparer.Ordinal)
+            && process.Arguments.All(argument => !argument.Contains(instruction, StringComparison.Ordinal)));
     }
 
     [Fact]

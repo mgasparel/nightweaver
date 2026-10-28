@@ -293,6 +293,7 @@ function invalidateAttentionRead() {
 
 async function submitAttentionAction(item, action, instruction = undefined) {
   if (attentionActions.has(item.beadId)) return;
+  let focusAfterRender = null;
   attentionActions.add(item.beadId);
   invalidateAttentionRead();
   const card = cardById(item.beadId);
@@ -340,24 +341,26 @@ async function submitAttentionAction(item, action, instruction = undefined) {
       attentionMessages.delete(item.beadId);
       abortConfirmations.delete(item.beadId);
     }
-    const attentionRefreshed = await loadAttention();
+    await loadAttention();
     await loadBeads();
-    if (action === "note_only" && attentionRefreshed)
-      cardById(item.beadId)?.querySelector("textarea")?.focus();
+    if (action === "note_only")
+      focusAfterRender = "guidance";
     else if (expectedFocusAfterAction(action, result))
-      attentionStatus?.focus();
+      focusAfterRender = "status";
   } catch (error) {
     attentionMessages.set(item.beadId, error instanceof Error ? error.message : "The action could not be confirmed. Refresh before retrying.");
-    renderAttention();
     if (attentionStatus) attentionStatus.textContent = `Action for ${item.beadId} needs attention.`;
-    cardById(item.beadId)?.querySelector(".attention-card-message")?.focus();
+    focusAfterRender = "message";
   } finally {
     attentionActions.delete(item.beadId);
-    cardById(item.beadId)?.setAttribute("aria-busy", "false");
-    cardById(item.beadId)?.querySelectorAll("button, textarea").forEach(control => {
-      if (control.dataset.keepDisabled !== "true") control.disabled = false;
-    });
     renderAttention();
+    if (focusAfterRender === "guidance") cardById(item.beadId)?.querySelector("textarea")?.focus();
+    else if (focusAfterRender === "status") attentionStatus?.focus();
+    else if (focusAfterRender === "message") {
+      const message = cardById(item.beadId)?.querySelector(".attention-card-message");
+      if (message) message.focus();
+      else attentionStatus?.focus();
+    }
   }
 }
 
