@@ -21,11 +21,16 @@ internal sealed class PauseEnvironmentCleaner
     private readonly IProcessRunner processRunner;
     private readonly GitWorktreeReader worktreeReader;
     private readonly Action<string>? beforeDestructiveOperation;
+    private readonly Func<string, CancellationToken, Task>? beforeDestructiveOperationAsync;
 
-    internal PauseEnvironmentCleaner(IProcessRunner processRunner, Action<string>? beforeDestructiveOperation = null)
+    internal PauseEnvironmentCleaner(
+        IProcessRunner processRunner,
+        Action<string>? beforeDestructiveOperation = null,
+        Func<string, CancellationToken, Task>? beforeDestructiveOperationAsync = null)
     {
         this.processRunner = processRunner;
         this.beforeDestructiveOperation = beforeDestructiveOperation;
+        this.beforeDestructiveOperationAsync = beforeDestructiveOperationAsync;
         worktreeReader = new GitWorktreeReader(processRunner);
     }
 
@@ -69,14 +74,15 @@ internal sealed class PauseEnvironmentCleaner
         ValidatedTargetRepository repository,
         string beadId,
         PauseCleanupPlan initial,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<string, CancellationToken, Task>? operationGuardAsync = null)
     {
         if (!initial.Safe) throw new ToolExecutionException(initial.Refusal ?? "Pause cleanup was not preflighted safely.");
         cancellationToken.ThrowIfCancellationRequested();
 
         if (initial.WorktreePresent)
         {
-            beforeDestructiveOperation?.Invoke("git worktree remove");
+            await NotifyBeforeDestructiveAsync("git worktree remove", operationGuardAsync, cancellationToken).ConfigureAwait(false);
             var current = await ReinspectAsync(paths, project, repository, beadId, initial, cancellationToken);
             if (current.WorktreePresent)
             {
@@ -95,7 +101,7 @@ internal sealed class PauseEnvironmentCleaner
             var current = await ReinspectAsync(paths, project, repository, beadId, initial, cancellationToken);
             if (current.LocalBranchPresent == true)
             {
-                beforeDestructiveOperation?.Invoke("git branch -D");
+                await NotifyBeforeDestructiveAsync("git branch -D", operationGuardAsync, cancellationToken).ConfigureAwait(false);
                 current = await ReinspectAsync(paths, project, repository, beadId, initial, cancellationToken);
                 if (current.LocalBranchPresent == true)
                 {
@@ -114,7 +120,7 @@ internal sealed class PauseEnvironmentCleaner
         var needsPrune = initial.WorktreePresent || initial.RegistrationPresent || initial.LocalBranchPresent == true;
         if (needsPrune)
         {
-            beforeDestructiveOperation?.Invoke("git worktree prune");
+            await NotifyBeforeDestructiveAsync("git worktree prune", operationGuardAsync, cancellationToken).ConfigureAwait(false);
             _ = await ReinspectAsync(paths, project, repository, beadId, initial, cancellationToken);
             await RunGitRequiredAsync(repository, ["worktree", "prune"], "prune worktree registrations",
                 initial.WorktreePath, cancellationToken);
@@ -124,7 +130,7 @@ internal sealed class PauseEnvironmentCleaner
         var beforeTmpDelete = await ReinspectAsync(paths, project, repository, beadId, initial, cancellationToken);
         if (beforeTmpDelete.TemporaryPresent)
         {
-            beforeDestructiveOperation?.Invoke("delete Bead temporary directory");
+            await NotifyBeforeDestructiveAsync("delete Bead temporary directory", operationGuardAsync, cancellationToken).ConfigureAwait(false);
             beforeTmpDelete = await ReinspectAsync(paths, project, repository, beadId, initial, cancellationToken);
             if (beforeTmpDelete.TemporaryPresent)
                 TemporaryTreeDeleter.Delete(beforeTmpDelete.TemporaryPath,
@@ -139,6 +145,18 @@ internal sealed class PauseEnvironmentCleaner
         var final = await ReinspectAsync(paths, project, repository, beadId, initial, cancellationToken);
         if (final.WorktreePresent || final.RegistrationPresent || final.TemporaryPresent || final.LocalBranchPresent == true)
             throw Refusal("verify pause cleanup", initial.WorktreePath, "one or more owned runtime resources remain");
+    }
+
+    private async Task NotifyBeforeDestructiveAsync(
+        string operation,
+        Func<string, CancellationToken, Task>? operationGuardAsync,
+        CancellationToken cancellationToken)
+    {
+        beforeDestructiveOperation?.Invoke(operation);
+        if (beforeDestructiveOperationAsync is not null)
+            await beforeDestructiveOperationAsync(operation, cancellationToken).ConfigureAwait(false);
+        if (operationGuardAsync is not null)
+            await operationGuardAsync(operation, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<PauseCleanupPlan> ReinspectAsync(

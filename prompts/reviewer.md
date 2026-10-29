@@ -8,4 +8,12 @@ For the successful path, review the full committed branch diff against `origin/<
 
 Before any workflow transition, post the approval or findings comment. For a rejection, make the comment actionable: identify affected files/spec clauses, explain the impact, and give a concrete fix or verification step. Then read the persisted `repair_cycles` value (missing means zero), increment it exactly once, and replace only `stage:review` with `stage:implement`. Preserve unrelated labels and metadata, `in_progress` status, and the Orchestrator's assignee. Do this even when the new count exceeds `max_repair_cycles`; the Orchestrator enforces that limit after verifying your transition. Do not add `needs-human` for budget exhaustion.
 
-If the change is ready, comment with the review summary and transition to `stage:qa`. Do not make legal determinations or decide ambiguous product requirements; record the exact question and request `product-decision-required` when the SPEC permits. If a blocker has no transition permitted by your authority, explain it in a Bead comment and leave workflow labels and claim unchanged for the Orchestrator to handle. Leave the worktree unchanged.
+If the change is ready, comment with the review summary and transition to `stage:qa`.
+
+Do not make legal determinations or decide ambiguous product requirements. When a concrete ambiguous or contradictory requirement or product trade-off requires a human choice, pause Delivery for a product decision:
+1. Remain read-only: do not edit files, create commits, or push.
+2. First post a comment with `bd comments add <bead-id> "<comment>"` stating the precise ambiguity, relevant requirement and code context, available choices and their impact when known, and a direct question for the human.
+3. Then add only the pause label: `bd update <bead-id> --add-label product-decision-required`. Retain `stage:review`, preserve `repair_cycles` and unrelated labels and metadata, and keep status `in_progress` with the current assignee.
+4. Stop cleanly without transitioning to `stage:qa` or `stage:implement` and without incrementing `repair_cycles`. Confirm the worktree remains clean and unchanged, and exit cleanly with code zero. Do not delete worktrees, branches, or temporary directories, and do not release the claim; the Orchestrator safely disposes the owned local environment and releases the claim.
+
+If a blocker has no transition permitted by your authority, explain it in a Bead comment and leave workflow labels and claim unchanged for the Orchestrator to handle. Leave the worktree unchanged.

@@ -287,8 +287,78 @@ public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTe
             }
         }
     }
+}
 
+public sealed class AgentStageDeliveryPauseIntegrationTests : AgentStageIntegrationTestSupport
+{
+    [Fact]
+    public async Task DeliverySlotPausesForProductDecisionFromEveryDeliveryRoleAndDisposesEnvironmentCleanly()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var entries = new[]
+        {
+            (Label: (string?)null, Role: AgentRole.Implementer, Action: "slot-implement-pause-unlabeled"),
+            (Label: (string?)"stage:review", Role: AgentRole.Reviewer, Action: "slot-review-pause"),
+            (Label: (string?)"stage:qa", Role: AgentRole.Qa, Action: "slot-qa-pause")
+        };
 
+        var entryBeads = target.CreateBeads(entries.Select(entry =>
+            (Title: $"Delivery slot pause {entry.Label ?? "(unlabeled)"}", Type: "task",
+                Labels: entry.Label is { } label ? new[] { label } : Array.Empty<string>())).ToArray());
+
+        var unrelatedBead = target.CreateBead("Unrelated sentinel", "task", "stage:review");
+        var unrelatedWorktree = target.WorktreePath(unrelatedBead);
+        Directory.CreateDirectory(unrelatedWorktree);
+        File.WriteAllText(Path.Combine(unrelatedWorktree, "sentinel.txt"), "unrelated worktree sentinel");
+
+        foreach (var entry in entries)
+        {
+            var bead = entryBeads[$"Delivery slot pause {entry.Label ?? "(unlabeled)"}"];
+            var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-observations.jsonl");
+            var actions = new[] { (entry.Role, entry.Action) };
+
+            var outcome = await target.RunDeliverySlotAsync(bead, actions, observations);
+
+            Assert.Equal(DeliverySlotDisposition.PausedForProductDecision, outcome.Disposition);
+            Assert.True(outcome.ProductDecisionPaused, outcome.Diagnostic);
+            Assert.True(outcome.ClaimReleased, outcome.Diagnostic);
+            Assert.Equal([entry.Role], target.LastSlotRoles);
+
+            var final = target.ReadBead(bead);
+            Assert.Equal("open", final.Status);
+            Assert.Null(final.Assignee);
+            var finalState = BeadWorkflowState.Parse(final);
+            Assert.True(finalState.ProductDecisionRequired);
+            Assert.Equal(entry.Label, finalState.Stage);
+            Assert.Equal(0, finalState.RepairCycles);
+
+            using var comments = JsonDocument.Parse(target.ReadComments(bead));
+            var commentTexts = StringValues(comments.RootElement).ToArray();
+            Assert.Contains(commentTexts, text => text.Contains("product decision:", StringComparison.OrdinalIgnoreCase));
+
+            var worktree = target.WorktreePath(bead);
+            Assert.False(Directory.Exists(worktree), $"Worktree for {bead} should have been deleted.");
+
+            var localBranch = target.RunTarget("git", ["branch", "--list", $"nightweaver/{bead}"]);
+            Assert.DoesNotContain($"nightweaver/{bead}", localBranch);
+
+            var tmpPath = System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead);
+            Assert.False(Directory.Exists(tmpPath), $"Temporary path {tmpPath} should have been deleted.");
+
+            var logPath = System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead);
+            Assert.True(Directory.Exists(logPath), $"Logs at {logPath} should be preserved.");
+
+            if (entry.Role == AgentRole.Implementer)
+            {
+                var remoteBranch = target.RunTarget("git", ["ls-remote", "origin", $"refs/heads/nightweaver/{bead}"]);
+                Assert.Contains($"nightweaver/{bead}", remoteBranch);
+            }
+        }
+
+        Assert.True(Directory.Exists(unrelatedWorktree));
+        Assert.Equal("unrelated worktree sentinel", File.ReadAllText(Path.Combine(unrelatedWorktree, "sentinel.txt")));
+    }
 }
 
 public sealed class AgentStageIntegrationTests : AgentStageIntegrationTestSupport

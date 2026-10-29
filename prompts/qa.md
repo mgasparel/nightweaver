@@ -8,4 +8,12 @@ For the successful path, build and boot the software, exercise the acceptance ca
 
 Before any workflow transition, post the QA evidence or failure comment. For a failure, include reproducible commands or steps and the expected-versus-observed behavior. Then read the persisted `repair_cycles` value (missing means zero), increment it exactly once, and replace only `stage:qa` with `stage:implement`. Preserve unrelated labels and metadata, `in_progress` status, and the Orchestrator's assignee. Do this even when the new count exceeds `max_repair_cycles`; the Orchestrator enforces that limit after verifying your transition. Do not add `needs-human` for budget exhaustion.
 
-If QA passes, summarize the evidence and transition to `stage:merge`. Do not make legal determinations or resolve product ambiguity; record the exact question and request a human decision with `product-decision-required` when the SPEC permits. If a blocker has no transition permitted by your authority, explain it in a Bead comment and leave workflow labels and claim unchanged for the Orchestrator to handle.
+If QA passes, summarize the evidence and transition to `stage:merge`.
+
+Do not make legal determinations or resolve product ambiguity. When a concrete ambiguous or contradictory requirement or product trade-off requires a human choice, pause Delivery for a product decision:
+1. Stop any test services or processes you started and remove temporary files, generated artifacts, and untracked test data. Do not change tracked source, commit, or push. Confirm tracked files and `HEAD` are unchanged and `git status --porcelain` is empty.
+2. First post a comment with `bd comments add <bead-id> "<comment>"` stating the precise ambiguity, relevant requirement and code context, available choices and their impact when known, and a direct question for the human.
+3. Then add only the pause label: `bd update <bead-id> --add-label product-decision-required`. Retain `stage:qa`, preserve `repair_cycles` and unrelated labels and metadata, and keep status `in_progress` with the current assignee.
+4. Stop cleanly without transitioning to `stage:merge` or `stage:implement` and without incrementing `repair_cycles`, and exit cleanly with code zero. Do not delete worktrees, branches, or temporary directories, and do not release the claim; the Orchestrator safely disposes the owned local environment and releases the claim.
+
+If a blocker has no transition permitted by your authority, explain it in a Bead comment and leave workflow labels and claim unchanged for the Orchestrator to handle.

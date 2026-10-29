@@ -18,7 +18,8 @@ public sealed class IntegrationFirstCollectionOrderer : ITestCollectionOrderer
 
     private static int Priority(string name)
     {
-        if (name.Contains(nameof(AgentStageDeliveryIntegrationTests), StringComparison.Ordinal)) return 0;
+        if (name.Contains(nameof(AgentStageDeliveryIntegrationTests), StringComparison.Ordinal)
+            || name.Contains(nameof(AgentStageDeliveryPauseIntegrationTests), StringComparison.Ordinal)) return 0;
         if (name.Contains(nameof(AgentStageIntegrationTests), StringComparison.Ordinal)) return 1;
         if (name.Contains(nameof(AgentStageRepairIntegrationTests), StringComparison.Ordinal)) return 2;
         if (name.Contains(nameof(WebBeadsIntegrationTests), StringComparison.Ordinal)) return 3;
@@ -32,7 +33,8 @@ public sealed class IntegrationFirstCollectionOrderer : ITestCollectionOrderer
         if (name.Contains(nameof(BeadsIntegrationTests), StringComparison.Ordinal)) return 11;
         if (name.Contains(nameof(WorktreeIntegrationTests), StringComparison.Ordinal)) return 12;
         if (name.Contains(nameof(NightweaverAppTests), StringComparison.Ordinal)) return 13;
-        if (name.Contains(nameof(DeliverySlotCoordinatorTests), StringComparison.Ordinal)) return 14;
+        if (name.Contains(nameof(DeliverySlotCoordinatorTests), StringComparison.Ordinal)
+            || name.Contains(nameof(ProductDecisionPauseHandlerTests), StringComparison.Ordinal)) return 14;
         return 15;
     }
 }

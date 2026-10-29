@@ -200,6 +200,43 @@ internal static class Program
                 Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
                 UpdateLabels(beadId, "stage:implement", "stage:review");
                 break;
+            case "slot-implement-pause":
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-slot.txt"), "slot implementation\n");
+                Run("git", ["add", "delivery-slot.txt"]);
+                Run("git", ["commit", "-m", "slot fixture implementation before pause"]);
+                Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
+                Run("bd", ["comments", "add", beadId, "Implementer product decision: what database schema should be used?"]);
+                Run("bd", ["update", beadId, "--add-label", "product-decision-required"]);
+                break;
+            case "slot-implement-pause-unlabeled":
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-slot.txt"), "slot implementation\n");
+                Run("git", ["add", "delivery-slot.txt"]);
+                Run("git", ["commit", "-m", "slot fixture implementation before pause"]);
+                Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
+                Run("bd", ["comments", "add", beadId, "Implementer product decision: should this feature be enabled by default?"]);
+                Run("bd", ["update", beadId, "--add-label", "product-decision-required"]);
+                break;
+            case "slot-review-pause":
+                Run("bd", ["comments", "add", beadId, "Reviewer product decision: does this error handling match product requirements?"]);
+                Run("bd", ["update", beadId, "--add-label", "product-decision-required"]);
+                break;
+            case "slot-qa-pause":
+                Run("bd", ["comments", "add", beadId, "QA product decision: is this edge case behavior intended?"]);
+                Run("bd", ["update", beadId, "--add-label", "product-decision-required"]);
+                break;
+            case "pause-nonzero":
+                Run("bd", ["comments", "add", beadId, "question"]);
+                Run("bd", ["update", beadId, "--add-label", "product-decision-required"]);
+                return 19;
+            case "pause-dirty":
+                Run("bd", ["comments", "add", beadId, "question"]);
+                Run("bd", ["update", beadId, "--add-label", "product-decision-required"]);
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "dirty.txt"), "dirty\n");
+                break;
+            case "pause-stage-change":
+                Run("bd", ["comments", "add", beadId, "question"]);
+                Run("bd", ["update", beadId, "--remove-label", "stage:implement", "--add-label", "stage:review", "--add-label", "product-decision-required"]);
+                break;
             case "slot-implement-repair":
                 File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "delivery-repair.txt"), "repair committed\n");
                 Run("git", ["add", "delivery-repair.txt"]);

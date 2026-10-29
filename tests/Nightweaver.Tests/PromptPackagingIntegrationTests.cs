@@ -55,6 +55,38 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
     }
 
     [Fact]
+    public async Task DeliveryRolePromptsContainProductDecisionInstructions()
+    {
+        var root = FindRepositoryRoot();
+        var implementer = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "implementer.md"), TestContext.Current.CancellationToken);
+        var reviewer = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "reviewer.md"), TestContext.Current.CancellationToken);
+        var qa = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "qa.md"), TestContext.Current.CancellationToken);
+
+        var prompts = new[] { implementer, reviewer, qa };
+
+        foreach (var prompt in prompts)
+        {
+            Assert.Contains("product-decision-required", prompt, StringComparison.Ordinal);
+            Assert.Contains("bd comments add <bead-id>", prompt, StringComparison.Ordinal);
+            Assert.Contains("direct question for the human", prompt, StringComparison.Ordinal);
+            Assert.Contains("bd update <bead-id> --add-label product-decision-required", prompt, StringComparison.Ordinal);
+            Assert.Contains("preserve `repair_cycles`", prompt, StringComparison.Ordinal);
+            Assert.Contains("keep status `in_progress` with the current assignee", prompt, StringComparison.Ordinal);
+            Assert.Contains("exit cleanly with code zero", prompt, StringComparison.Ordinal);
+            Assert.Contains("the Orchestrator safely disposes the owned local environment and releases the claim", prompt, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("commit your changes on `nightweaver/<bead-id>` and push them", implementer, StringComparison.Ordinal);
+        Assert.Contains("Retain your current stage", implementer, StringComparison.Ordinal);
+
+        Assert.Contains("Remain read-only", reviewer, StringComparison.Ordinal);
+        Assert.Contains("Retain `stage:review`", reviewer, StringComparison.Ordinal);
+
+        Assert.Contains("Stop any test services", qa, StringComparison.Ordinal);
+        Assert.Contains("Retain `stage:qa`", qa, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DotnetBuildAndPublishCopyEditablePromptsAndPreparationReadsOutputCopies()
     {
         using var temp = new TempDirectory();

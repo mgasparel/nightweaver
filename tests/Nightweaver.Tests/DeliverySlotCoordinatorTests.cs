@@ -89,6 +89,191 @@ public sealed class DeliverySlotCoordinatorTests
     }
 
     [Fact]
+    public async Task ProductDecisionPauseFromImplementerStopsLoopAndReleasesClaimWithoutSubsequentRoles()
+    {
+        using var fixture = new FastSlotFixture();
+        var bead = fixture.CreateTask();
+        var roles = new List<AgentRole>();
+        ProductDecisionPauseRequest? observedRequest = null;
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            fixture.Pause(bead);
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, pauseHandler: (_, _, _, request, _) =>
+        {
+            observedRequest = request;
+            fixture.ReleaseClaim(request.BeadId);
+            return Task.FromResult(new ProductDecisionPauseResult(true, true, fixture.ReadState(request.BeadId), []));
+        });
+
+        Assert.Equal(DeliverySlotDisposition.PausedForProductDecision, outcome.Disposition);
+        Assert.True(outcome.ProductDecisionPaused);
+        Assert.True(outcome.ClaimReleased);
+        Assert.Equal([AgentRole.Implementer], roles);
+        Assert.NotNull(observedRequest);
+        Assert.Equal(bead, observedRequest.BeadId);
+        Assert.Equal(AgentRole.Implementer, observedRequest.Role);
+        Assert.True(observedRequest.VerifiedState.ProductDecisionRequired);
+        Assert.Null(outcome.FinalState!.Stage);
+        Assert.Equal("open", fixture.ReadBead(bead).Status);
+        Assert.Null(fixture.ReadBead(bead).Assignee);
+        Assert.True(fixture.ReadState(bead).ProductDecisionRequired);
+    }
+
+    [Fact]
+    public async Task ProductDecisionPauseFromReviewerAndQaPreservesStageAndStopsImmediately()
+    {
+        using var fixture = new FastSlotFixture();
+        var reviewBead = fixture.AddBead("task", "stage:review");
+        var reviewRoles = new List<AgentRole>();
+
+        var reviewOutcome = await fixture.RunAsync(reviewBead, (role, _) =>
+        {
+            reviewRoles.Add(role);
+            fixture.Pause(reviewBead);
+            return Task.FromResult(Success(role, reviewBead, fixture.ReadState(reviewBead)));
+        }, pauseHandler: (_, _, _, request, _) =>
+        {
+            fixture.ReleaseClaim(request.BeadId);
+            return Task.FromResult(new ProductDecisionPauseResult(true, true, fixture.ReadState(reviewBead), []));
+        });
+
+        Assert.Equal(DeliverySlotDisposition.PausedForProductDecision, reviewOutcome.Disposition);
+        Assert.True(reviewOutcome.ProductDecisionPaused);
+        Assert.Equal([AgentRole.Reviewer], reviewRoles);
+        Assert.Equal("stage:review", reviewOutcome.FinalState!.Stage);
+        Assert.Null(fixture.ReadBead(reviewBead).Assignee);
+
+        var qaBead = fixture.AddBead("task", "stage:qa");
+        var qaRoles = new List<AgentRole>();
+
+        var qaOutcome = await fixture.RunAsync(qaBead, (role, _) =>
+        {
+            qaRoles.Add(role);
+            fixture.Pause(qaBead);
+            return Task.FromResult(Success(role, qaBead, fixture.ReadState(qaBead)));
+        }, pauseHandler: (_, _, _, request, _) =>
+        {
+            fixture.ReleaseClaim(request.BeadId);
+            return Task.FromResult(new ProductDecisionPauseResult(true, true, fixture.ReadState(qaBead), []));
+        });
+
+        Assert.Equal(DeliverySlotDisposition.PausedForProductDecision, qaOutcome.Disposition);
+        Assert.True(qaOutcome.ProductDecisionPaused);
+        Assert.Equal([AgentRole.Qa], qaRoles);
+        Assert.Equal("stage:qa", qaOutcome.FinalState!.Stage);
+        Assert.Null(fixture.ReadBead(qaBead).Assignee);
+    }
+
+    [Fact]
+    public async Task ProductDecisionPauseAfterImplementerSuccessStopsAtReviewerPause()
+    {
+        using var fixture = new FastSlotFixture();
+        var bead = fixture.CreateTask();
+        var roles = new List<AgentRole>();
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            if (role == AgentRole.Implementer)
+            {
+                fixture.Advance(bead, role);
+            }
+            else if (role == AgentRole.Reviewer)
+            {
+                fixture.Pause(bead);
+            }
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, pauseHandler: (_, _, _, request, _) =>
+        {
+            fixture.ReleaseClaim(request.BeadId);
+            return Task.FromResult(new ProductDecisionPauseResult(true, true, fixture.ReadState(bead), []));
+        });
+
+        Assert.Equal(DeliverySlotDisposition.PausedForProductDecision, outcome.Disposition);
+        Assert.True(outcome.ProductDecisionPaused);
+        Assert.Equal([AgentRole.Implementer, AgentRole.Reviewer], roles);
+        Assert.Equal("stage:review", outcome.FinalState!.Stage);
+        Assert.True(outcome.FinalState.ProductDecisionRequired);
+        Assert.Equal("open", fixture.ReadBead(bead).Status);
+    }
+
+    [Fact]
+    public async Task ProductDecisionPausePreservesRepairCyclesValue()
+    {
+        using var fixture = new FastSlotFixture();
+        var bead = fixture.AddBead("task", "stage:review");
+        fixture.SetRepairCycles(bead, 2);
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            fixture.Pause(bead);
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, pauseHandler: (_, _, _, request, _) =>
+        {
+            fixture.ReleaseClaim(request.BeadId);
+            return Task.FromResult(new ProductDecisionPauseResult(true, true, fixture.ReadState(bead), []));
+        });
+
+        Assert.Equal(DeliverySlotDisposition.PausedForProductDecision, outcome.Disposition);
+        Assert.Equal(2, outcome.FinalState!.RepairCycles);
+        Assert.Equal(2, fixture.ReadState(bead).RepairCycles);
+    }
+
+    [Fact]
+    public async Task IncompletePauseDispositionSurfacesDiagnosticAndPreservesClaimStatus()
+    {
+        using var fixture = new FastSlotFixture();
+        var bead = fixture.CreateTask();
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            fixture.Pause(bead);
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, pauseHandler: (_, _, _, request, _) =>
+        {
+            fixture.ReleaseClaim(request.BeadId);
+            return Task.FromResult(new ProductDecisionPauseResult(false, true, fixture.ReadState(bead), ["worktree removal failed"]));
+        });
+
+        Assert.Equal(DeliverySlotDisposition.IncompletePauseDisposition, outcome.Disposition);
+        Assert.False(outcome.ProductDecisionPaused);
+        Assert.True(outcome.ClaimReleased);
+        Assert.NotNull(outcome.Diagnostic);
+        Assert.Contains("worktree removal failed", outcome.Diagnostic);
+        Assert.NotNull(outcome.PauseProgress);
+        Assert.False(outcome.PauseProgress.CleanupCompleted);
+        Assert.True(outcome.PauseProgress.ClaimReleased);
+    }
+
+    [Fact]
+    public async Task CancellationDuringPauseYieldsIncompletePauseDisposition()
+    {
+        using var fixture = new FastSlotFixture();
+        var bead = fixture.CreateTask();
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            fixture.Pause(bead);
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, pauseHandler: (_, _, _, request, _) =>
+        {
+            var exception = new OperationCanceledException("Pause cancelled by host");
+            exception.Data[nameof(ProductDecisionPauseResult)] = new ProductDecisionPauseResult(
+                false, true, fixture.ReadState(bead), ["Pause interrupted by cancellation"]);
+            throw exception;
+        });
+
+        Assert.Equal(DeliverySlotDisposition.IncompletePauseDisposition, outcome.Disposition);
+        Assert.False(outcome.ProductDecisionPaused);
+        Assert.True(outcome.ClaimReleased);
+        Assert.NotNull(outcome.Diagnostic);
+        Assert.Contains("Pause cancelled by host", outcome.Diagnostic);
+    }
+
+    [Fact]
     public async Task WorkflowChangeAfterClaimRefusesBeforeLaunchingAndSafelyReleasesOwnedClaim()
     {
         using var fixture = new FastSlotFixture();
@@ -1041,12 +1226,17 @@ public sealed class DeliverySlotCoordinatorTests
 
         internal void SetRepairCycles(string beadId, int count) => Runner.SetRepairCycles(beadId, count);
 
+        internal void Pause(string beadId) => Runner.Pause(beadId);
+
+        internal void ReleaseClaim(string beadId) => Runner.ReleaseClaim(beadId);
+
         internal ProcessRequest[] ClaimWrites(string beadId) => Runner.ClaimWrites(beadId);
 
         internal async Task<DeliverySlotOutcome> RunAsync(string beadId,
             Func<AgentRole, CancellationToken, Task<OperationalRetryOutcome>> roleRunner,
             IProcessRunner? processRunner = null,
-            Func<NeedsHumanRequest, Task<NeedsHumanEscalationResult>>? escalate = null)
+            Func<NeedsHumanRequest, Task<NeedsHumanEscalationResult>>? escalate = null,
+            DeliveryProductDecisionPauseHandler? pauseHandler = null)
         {
             var runner = processRunner ?? Runner;
             var stageRunner = new DeliveryRoleRunner((_, _, _, requestedBead, role, _, expectedState, token, _) =>
@@ -1057,7 +1247,7 @@ public sealed class DeliverySlotCoordinatorTests
                 return roleRunner(role, token);
             });
             DeliveryRepairBudgetEscalator? escalator = escalate is null ? null : (_, _, _, request, _) => escalate(request);
-            return await new DeliverySlotCoordinator(runner, stageRunner, escalator)
+            return await new DeliverySlotCoordinator(runner, stageRunner, escalator, pauseHandler)
                 .RunAsync(Host, project, Repository, beadId, CancellationTokenOverride ?? TestContext.Current.CancellationToken);
         }
 
@@ -1141,6 +1331,12 @@ public sealed class DeliverySlotCoordinatorTests
             bead.RepairCycles = count;
         }
 
+        internal void Pause(string beadId)
+        {
+            var bead = beads.Single(item => item.Id == beadId);
+            bead.Labels.Add("product-decision-required");
+        }
+
         internal void AddComment(string beadId, string text)
         {
             if (!comments.TryGetValue(beadId, out var list))
@@ -1158,6 +1354,13 @@ public sealed class DeliverySlotCoordinatorTests
             bead.Status = "open";
             bead.Assignee = null;
             AddComment(beadId, "fixture needs-human diagnostic");
+        }
+
+        internal void ReleaseClaim(string beadId)
+        {
+            var bead = beads.Single(b => b.Id == beadId);
+            bead.Status = "open";
+            bead.Assignee = null;
         }
 
         internal ProcessRequest[] ClaimWrites(string beadId) => requests
@@ -1228,7 +1431,9 @@ public sealed class DeliverySlotCoordinatorTests
 
             var release = new[] { "update", bead.Id, "--status", "open", "--assignee", "", "--if-assignee", recoveryActor,
                 "--if-status", "in_progress", "--json" };
-            if (updateArgs.SequenceEqual(release))
+            var releaseWithoutJson = new[] { "update", bead.Id, "--status", "open", "--assignee", "", "--if-assignee", recoveryActor,
+                "--if-status", "in_progress" };
+            if (updateArgs.SequenceEqual(release) || updateArgs.SequenceEqual(releaseWithoutJson))
             {
                 if (bead.Status != "in_progress" || bead.Assignee != recoveryActor)
                     return new ProcessResult(13, "", "guarded release state changed");

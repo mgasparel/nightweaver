@@ -21,13 +21,22 @@ internal delegate Task<NeedsHumanEscalationResult> DeliveryRepairBudgetEscalator
     NeedsHumanRequest request,
     CancellationToken cancellationToken);
 
+internal delegate Task<ProductDecisionPauseResult> DeliveryProductDecisionPauseHandler(
+    HostPaths paths,
+    ProjectSlug project,
+    ValidatedTargetRepository repository,
+    ProductDecisionPauseRequest request,
+    CancellationToken cancellationToken);
+
 internal enum DeliverySlotDisposition
 {
     MergeReady,
     Escalated,
     Refused,
     Failed,
-    StoppedAtUnsupportedOutcome
+    StoppedAtUnsupportedOutcome,
+    PausedForProductDecision,
+    IncompletePauseDisposition
 }
 
 internal sealed record DeliverySlotOutcome(
@@ -37,10 +46,12 @@ internal sealed record DeliverySlotOutcome(
     OperationalRetryOutcome? LastStage,
     bool ClaimHandoffCompleted,
     string? Diagnostic,
-    NeedsHumanEscalationResult? EscalationProgress = null)
+    NeedsHumanEscalationResult? EscalationProgress = null,
+    ProductDecisionPauseResult? PauseProgress = null)
 {
     internal bool MergeReady => Disposition == DeliverySlotDisposition.MergeReady && ClaimHandoffCompleted;
-    internal bool ClaimReleased => EscalationProgress?.ClaimReleased ?? ClaimHandoffCompleted;
+    internal bool ProductDecisionPaused => Disposition == DeliverySlotDisposition.PausedForProductDecision && ClaimHandoffCompleted;
+    internal bool ClaimReleased => EscalationProgress?.ClaimReleased ?? PauseProgress?.ClaimReleased ?? ClaimHandoffCompleted;
 }
 
 /// <summary>Runs Delivery and verified Reviewer/QA repair cycles under one guarded claim.</summary>
@@ -52,15 +63,21 @@ internal sealed class DeliverySlotCoordinator
     private readonly BeadsWriter writer;
     private readonly DeliveryRoleRunner runRole;
     private readonly DeliveryRepairBudgetEscalator escalateRepairBudget;
+    private readonly DeliveryProductDecisionPauseHandler handleProductDecisionPause;
 
-    internal DeliverySlotCoordinator(IProcessRunner processRunner, DeliveryRoleRunner? runRole = null,
-        DeliveryRepairBudgetEscalator? escalateRepairBudget = null)
+    internal DeliverySlotCoordinator(
+        IProcessRunner processRunner,
+        DeliveryRoleRunner? runRole = null,
+        DeliveryRepairBudgetEscalator? escalateRepairBudget = null,
+        DeliveryProductDecisionPauseHandler? handleProductDecisionPause = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         reader = new BeadsReader(processRunner);
         writer = new BeadsWriter(processRunner);
         var escalator = new NeedsHumanEscalator(processRunner);
         this.escalateRepairBudget = escalateRepairBudget ?? escalator.EscalateAsync;
+        var pauseHandler = new ProductDecisionPauseHandler(processRunner);
+        this.handleProductDecisionPause = handleProductDecisionPause ?? pauseHandler.PauseAsync;
         if (runRole is null)
         {
             var retries = new OperationalRetryCoordinator(processRunner);
@@ -229,6 +246,43 @@ internal sealed class DeliverySlotCoordinator
                 if (after != verified)
                     return Result(DeliverySlotDisposition.Failed, after, role, lastStage, false,
                         "Bead workflow changed after stage verification; refusing follow-on dispatch or claim handoff.");
+
+                if (after.ProductDecisionRequired)
+                {
+                    if (after.IssueType != "task" || after.Planned || after.NeedsHuman
+                        || after.Stage != currentState.Stage
+                        || after.RepairCycles != currentState.RepairCycles
+                        || role is not (AgentRole.Implementer or AgentRole.Reviewer or AgentRole.Qa))
+                    {
+                        return Result(DeliverySlotDisposition.Failed, after, role, lastStage, false,
+                            $"The {AgentRoles.ToConfigKey(role)} stage produced an invalid product-decision pause transition.");
+                    }
+
+                    ProductDecisionPauseResult pauseResult;
+                    try
+                    {
+                        var pauseRequest = new ProductDecisionPauseRequest(beadId, project.RecoveryActor, role, after, lastStage);
+                        pauseResult = await handleProductDecisionPause(paths, project.Name, repository, pauseRequest, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException exception) when (TryGetPauseProgress(exception, out var pauseProgress))
+                    {
+                        return Result(DeliverySlotDisposition.IncompletePauseDisposition, pauseProgress.FinalState ?? after, role,
+                            lastStage, pauseProgress.ClaimReleased, exception.Message, pauseProgress: pauseProgress);
+                    }
+
+                    if (pauseResult.Succeeded)
+                    {
+                        return Result(DeliverySlotDisposition.PausedForProductDecision, pauseResult.FinalState, role, lastStage,
+                            pauseResult.ClaimReleased, null, pauseProgress: pauseResult);
+                    }
+
+                    var failureDiagnostic = pauseResult.Failures.Count > 0
+                        ? string.Join("; ", pauseResult.Failures)
+                        : "Product decision pause disposition did not complete.";
+                    return Result(DeliverySlotDisposition.IncompletePauseDisposition, pauseResult.FinalState ?? after, role,
+                        lastStage, pauseResult.ClaimReleased, failureDiagnostic, pauseProgress: pauseResult);
+                }
 
                 var repairRejection = IsReviewQaRejection(role, currentState, after);
                 if (!repairRejection && IsUnsupportedLegalOutcome(role, currentState, after))
@@ -585,6 +639,18 @@ internal sealed class DeliverySlotCoordinator
         return false;
     }
 
+    private static bool TryGetPauseProgress(OperationCanceledException exception,
+        out ProductDecisionPauseResult progress)
+    {
+        if (exception.Data[nameof(ProductDecisionPauseResult)] is ProductDecisionPauseResult observed)
+        {
+            progress = observed;
+            return true;
+        }
+        progress = null!;
+        return false;
+    }
+
     private static bool IsUnsupportedLegalOutcome(AgentRole role, BeadWorkflowState before, BeadWorkflowState after)
     {
         if (after.ProductDecisionRequired || after.NeedsHuman) return true;
@@ -616,6 +682,7 @@ internal sealed class DeliverySlotCoordinator
 
     private static DeliverySlotOutcome Result(DeliverySlotDisposition disposition, BeadWorkflowState? state,
         AgentRole? role, OperationalRetryOutcome? stage, bool handoff, string? diagnostic,
-        NeedsHumanEscalationResult? escalationProgress = null) =>
-        new(disposition, state, role, stage, handoff, diagnostic, escalationProgress);
+        NeedsHumanEscalationResult? escalationProgress = null,
+        ProductDecisionPauseResult? pauseProgress = null) =>
+        new(disposition, state, role, stage, handoff, diagnostic, escalationProgress, pauseProgress);
 }

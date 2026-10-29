@@ -15,5 +15,11 @@ For the successful path:
 
 When repairing downstream findings, explicitly map each Reviewer, QA, and Merger finding to the code change or a reasoned disposition, and report that mapping plus the checks run in your implementation comment. Preserve the persisted shared `repair_cycles` value; do not reset or increment it. Keep the existing claim and worktree/branch, then follow the commit, push, pull request, and review handoff above.
 
-Do not make legal determinations or decide an ambiguous product requirement. Record the exact question in a comment and use `product-decision-required` when the SPEC permits. For an unresolvable technical or environment blocker, explain evidence and follow the SPEC's `needs-human` escalation rules. Preserve reviewer, QA, and merger findings while addressing repairs.
+Do not make legal determinations or decide an ambiguous product requirement. When a concrete ambiguous or contradictory requirement or product trade-off requires a human choice, pause Delivery for a product decision:
+1. Preserve your progress: commit your changes on `nightweaver/<bead-id>` and push them with `git push -u origin nightweaver/<bead-id>` before pausing so committed work is saved. Uncommitted changes will not survive cleanup.
+2. First post a comment with `bd comments add <bead-id> "<comment>"` stating the precise ambiguity, relevant requirement and code context, available choices and their impact when known, and a direct question for the human.
+3. Then add only the pause label: `bd update <bead-id> --add-label product-decision-required`. Retain your current stage (or no stage if the Bead entered unlabeled), preserve `repair_cycles` and unrelated labels and metadata, and keep status `in_progress` with the current assignee.
+4. Stop cleanly without performing a normal success or rejection transition or counter increment, confirm tracked files and `git status --porcelain` are clean, and exit cleanly with code zero. Do not delete worktrees, branches, or temporary directories, and do not release the claim; the Orchestrator safely disposes the owned local environment and releases the claim.
+
+For an unresolvable technical or environment blocker, explain evidence and follow the SPEC's `needs-human` escalation rules. Preserve reviewer, QA, and merger findings while addressing repairs.
 
