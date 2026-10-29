@@ -12,12 +12,14 @@ internal delegate Task<DeliveryPoolSnapshot> DeliveryPoolSnapshotReader(
     string recoveryActor,
     CancellationToken cancellationToken);
 
+// Signals after slot admission and worktree preparation, immediately before its first Agent attempt.
 internal delegate Task<DeliverySlotOutcome> DeliveryPoolSlotRunner(
     HostPaths paths,
     ProjectConfig project,
     ValidatedTargetRepository repository,
     string beadId,
-    CancellationToken cancellationToken);
+    CancellationToken cancellationToken,
+    Action agentAttemptStarted);
 
 internal enum DeliveryPoolDiagnosticCode
 {
@@ -25,7 +27,9 @@ internal enum DeliveryPoolDiagnosticCode
     NotEligible,
     InvalidWorkflowState,
     AlreadyReserved,
-    CapacityReached
+    CapacityReached,
+    SlotRefusedBeforeLaunch,
+    SlotEndedBeforeLaunch
 }
 
 internal sealed record DeliveryPoolDiagnostic(
@@ -59,7 +63,8 @@ internal sealed record DeliveryPoolEvaluation(
 /// tracker changes, and slot completions; this pool does not poll or own the runtime shutdown policy.
 /// </summary>
 /// <remarks>
-/// EvaluateAsync serializes only fresh-read/admission work and never waits for a slot to finish.
+/// EvaluateAsync serializes only fresh-read/admission work. At full capacity it may observe pending
+/// first-attempt decisions, but it never waits for a slot that has started an Agent attempt to finish.
 /// The evaluation token controls only that pass. Each admitted slot receives the separate lifetime
 /// token supplied at construction. CompletionReader is lossless and supports one consumer; callers
 /// can also await an individual admission or snapshot the currently active completions with
@@ -72,7 +77,17 @@ internal sealed class DeliveryPoolCoordinator
         internal string BeadId { get; } = beadId;
         internal TaskCompletionSource<DeliveryPoolCompletion> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<AdmissionResolution> AdmissionResolved { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
+
+    private abstract record AdmissionResolution
+    {
+        internal sealed record AgentAttemptStarted : AdmissionResolution;
+        internal sealed record CompletedBeforeAgentAttempt(DeliveryPoolCompletion Completion) : AdmissionResolution;
+    }
+
+    private sealed record PendingAdmissionWait(ReservationState[] Reservations, Task CapacityChanged);
 
     private sealed class AdmissionReleaser(TaskCompletionSource<bool> turn) : IDisposable
     {
@@ -92,6 +107,7 @@ internal sealed class DeliveryPoolCoordinator
     private Task admissionTail = Task.CompletedTask;
     private readonly object stateGate = new();
     private readonly Dictionary<string, ReservationState> reservations = new(StringComparer.Ordinal);
+    private TaskCompletionSource<bool> capacityChanged = NewSignal();
     private readonly Channel<DeliveryPoolCompletion> completions = Channel.CreateUnbounded<DeliveryPoolCompletion>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false, AllowSynchronousContinuations = false });
 
@@ -134,8 +150,9 @@ internal sealed class DeliveryPoolCoordinator
         if (runSlot is null)
         {
             var slot = new DeliverySlotCoordinator(processRunner);
-            this.runSlot = (host, config, target, beadId, cancellationToken) =>
-                slot.RunAsync(host, config, target, beadId, cancellationToken);
+            this.runSlot = (host, config, target, beadId, cancellationToken, agentAttemptStarted) =>
+                slot.RunAsync(host, config, target, beadId, cancellationToken,
+                    progress: ObserveFirstAgentAttempt(agentAttemptStarted));
         }
         else
         {
@@ -170,18 +187,28 @@ internal sealed class DeliveryPoolCoordinator
         var diagnostics = new List<DeliveryPoolDiagnostic>();
         var eligible = SelectEligible(snapshot, diagnostics);
         var admitted = new List<DeliveryPoolAdmission>();
+        var passReservations = new List<ReservationState>();
 
-        for (var index = 0; index < eligible.Count; index++)
+        for (var index = 0; index < eligible.Count;)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var bead = eligible[index];
             var reservation = TryReserve(bead.Id, out var reservationDiagnostic);
             if (reservation is null)
             {
-                diagnostics.Add(reservationDiagnostic!);
-                if (reservationDiagnostic!.Code == DeliveryPoolDiagnosticCode.CapacityReached)
+                if (reservationDiagnostic!.Code != DeliveryPoolDiagnosticCode.CapacityReached)
                 {
-                    for (var waiting = index + 1; waiting < eligible.Count; waiting++)
+                    diagnostics.Add(reservationDiagnostic);
+                    index++;
+                    continue;
+                }
+
+                var pendingAdmissionWait = GetPendingAdmissionsIfCapacityIsFull();
+                if (pendingAdmissionWait is null)
+                    continue;
+                if (pendingAdmissionWait.Reservations.Length == 0)
+                {
+                    for (var waiting = index; waiting < eligible.Count; waiting++)
                     {
                         diagnostics.Add(new DeliveryPoolDiagnostic(eligible[waiting].Id,
                             DeliveryPoolDiagnosticCode.CapacityReached,
@@ -189,13 +216,42 @@ internal sealed class DeliveryPoolCoordinator
                     }
                     break;
                 }
+
+                // Observe only the initial launch decision. A refusal/early end releases its
+                // reservation and lets this pass continue; a launched slot remains independent.
+                // Also wake if an already-launched sibling frees capacity while admission is slow.
+                var admissionAndCapacitySignals = pendingAdmissionWait.Reservations
+                    .Select(pending => (Task)pending.AdmissionResolved.Task)
+                    .Append(pendingAdmissionWait.CapacityChanged);
+                var signaled = await Task.WhenAny(admissionAndCapacitySignals)
+                    .WaitAsync(cancellationToken).ConfigureAwait(false);
+                if (signaled != pendingAdmissionWait.CapacityChanged)
+                {
+                    var resolution = await ((Task<AdmissionResolution>)signaled).ConfigureAwait(false);
+                    if (resolution is AdmissionResolution.CompletedBeforeAgentAttempt endedBeforeLaunch)
+                        diagnostics.Add(CreatePreLaunchDiagnostic(endedBeforeLaunch.Completion));
+                }
                 continue;
             }
 
             admitted.Add(new DeliveryPoolAdmission(bead.Id, reservation.Completion.Task));
+            passReservations.Add(reservation);
             // The reservation is visible before execution is queued, and the evaluation does not
             // inherit cancellation once a whole slot has been admitted.
             _ = Task.Run(() => RunReservedSlotAsync(reservation), CancellationToken.None);
+            index++;
+        }
+
+        foreach (var reservation in passReservations)
+        {
+            if (!reservation.AdmissionResolved.Task.IsCompletedSuccessfully
+                || reservation.AdmissionResolved.Task.Result is not AdmissionResolution.CompletedBeforeAgentAttempt endedBeforeLaunch
+                || diagnostics.Any(diagnostic => diagnostic.BeadId == endedBeforeLaunch.Completion.BeadId
+                    && (diagnostic.Code is DeliveryPoolDiagnosticCode.SlotRefusedBeforeLaunch
+                        or DeliveryPoolDiagnosticCode.SlotEndedBeforeLaunch)))
+                continue;
+
+            diagnostics.Add(CreatePreLaunchDiagnostic(endedBeforeLaunch.Completion));
         }
 
         return new DeliveryPoolEvaluation(capacityLimit, admitted, diagnostics.ToArray(), ActiveReservations);
@@ -276,6 +332,46 @@ internal sealed class DeliveryPoolCoordinator
         }
     }
 
+    // Returns null if capacity became available after the failed reservation attempt; an empty
+    // array means capacity is full and every active slot has crossed its Agent-attempt boundary.
+    private PendingAdmissionWait? GetPendingAdmissionsIfCapacityIsFull()
+    {
+        lock (stateGate)
+        {
+            if (reservations.Count < capacityLimit)
+                return null;
+
+            return new PendingAdmissionWait(reservations.Values
+                .Where(reservation => !reservation.AdmissionResolved.Task.IsCompleted)
+                .ToArray(), capacityChanged.Task);
+        }
+    }
+
+    private static TaskCompletionSource<bool> NewSignal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    internal static Action<OperationalRetryProgress> ObserveFirstAgentAttempt(Action agentAttemptStarted)
+    {
+        ArgumentNullException.ThrowIfNull(agentAttemptStarted);
+        return progress =>
+        {
+            if (progress.Kind == OperationalRetryProgressKind.AttemptStarted)
+                agentAttemptStarted();
+        };
+    }
+
+    private static DeliveryPoolDiagnostic CreatePreLaunchDiagnostic(DeliveryPoolCompletion completion)
+    {
+        var refused = completion.Outcome?.Disposition == DeliverySlotDisposition.Refused;
+        var message = completion.Diagnostic
+            ?? (completion.IsCanceled
+                ? "Delivery slot was canceled before an Agent attempt started."
+                : $"Delivery slot ended before an Agent attempt started{(completion.Outcome is null ? "." : $" with disposition '{completion.Outcome.Disposition}'.")}");
+        return new DeliveryPoolDiagnostic(completion.BeadId,
+            refused ? DeliveryPoolDiagnosticCode.SlotRefusedBeforeLaunch : DeliveryPoolDiagnosticCode.SlotEndedBeforeLaunch,
+            message);
+    }
+
     private async Task<IDisposable> EnterAdmissionAsync(CancellationToken cancellationToken)
     {
         var turn = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -311,7 +407,8 @@ internal sealed class DeliveryPoolCoordinator
         var canceled = false;
         try
         {
-            outcome = await runSlot(paths, project, repository, reservation.BeadId, slotLifetimeToken)
+            outcome = await runSlot(paths, project, repository, reservation.BeadId, slotLifetimeToken,
+                () => reservation.AdmissionResolved.TrySetResult(new AdmissionResolution.AgentAttemptStarted()))
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException exception)
@@ -324,11 +421,18 @@ internal sealed class DeliveryPoolCoordinator
             failure = exception;
         }
 
+        TaskCompletionSource<bool> capacityReleased;
         lock (stateGate)
+        {
             reservations.Remove(reservation.BeadId);
+            capacityReleased = capacityChanged;
+            capacityChanged = NewSignal();
+        }
 
         var completion = new DeliveryPoolCompletion(reservation.BeadId, outcome, failure, canceled, LocalCapacityReleased: true);
         reservation.Completion.TrySetResult(completion);
+        reservation.AdmissionResolved.TrySetResult(new AdmissionResolution.CompletedBeforeAgentAttempt(completion));
+        capacityReleased.TrySetResult(true);
         // The channel is intentionally unbounded and remains open for the pool lifetime. A failed
         // write would violate the single-runtime-consumer completion contract.
         if (!completions.Writer.TryWrite(completion))

@@ -84,8 +84,9 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         var retries = new OperationalRetryCoordinator(processRunner, stages: stages);
         DeliveryRoleRunner roleRunner = (hostPaths, config, repository, beadId, role, actor, expectedState, token, progress) =>
             retries.RunAsync(hostPaths, config, repository, beadId, role, actor, token, progress, expectedState);
-        DeliveryPoolSlotRunner slotRunner = (hostPaths, config, repository, beadId, token) =>
-            new DeliverySlotCoordinator(processRunner, roleRunner).RunAsync(hostPaths, config, repository, beadId, token);
+        DeliveryPoolSlotRunner slotRunner = (hostPaths, config, repository, beadId, token, agentAttemptStarted) =>
+            new DeliverySlotCoordinator(processRunner, roleRunner).RunAsync(hostPaths, config, repository, beadId, token,
+                progress: DeliveryPoolCoordinator.ObserveFirstAgentAttempt(agentAttemptStarted));
         var pool = new DeliveryPoolCoordinator(target.Host, project, new(target.Path, "main"), processRunner,
             runSlot: slotRunner, slotLifetimeToken: TestContext.Current.CancellationToken);
 
@@ -234,7 +235,7 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
                 }
                 return new DeliveryPoolSnapshot(inventory, readiness);
             },
-            async (hostPaths, config, repository, requestedBead, token) =>
+            async (hostPaths, config, repository, requestedBead, token, agentAttemptStarted) =>
             {
                 var slotInventory = await slotReader.ReadSnapshotAsync(repository, token);
                 slotObservedAssignee = slotInventory.ById[requestedBead].Assignee;
@@ -244,7 +245,8 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
                     throw new InvalidOperationException("A role launch must not occur after a competing claim.");
                 });
                 return await new DeliverySlotCoordinator(processRunner, roleRunner)
-                    .RunAsync(hostPaths, config, repository, requestedBead, token);
+                    .RunAsync(hostPaths, config, repository, requestedBead, token,
+                        progress: DeliveryPoolCoordinator.ObserveFirstAgentAttempt(agentAttemptStarted));
             },
             TestContext.Current.CancellationToken);
 
