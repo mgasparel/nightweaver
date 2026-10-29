@@ -18,10 +18,44 @@ public sealed class AgentInvocationExecutorTests
     private static readonly string[] ExpectedArguments = ["space argument", "quoted\"value", "C:\\trailing\\"];
 
     [Fact]
+    public async Task CleanupSettlementBoundsHungStepAndAttemptsFollowingStep()
+    {
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var laterRan = false;
+        try
+        {
+            var failure = await AgentInvocationExecutor.SettleCleanupAsync(
+                [("stdout drain", () => pending.Task),
+                 ("stderr drain", () => { laterRan = true; return Task.CompletedTask; })],
+                TimeSpan.FromMilliseconds(20));
+            Assert.True(laterRan);
+            Assert.NotNull(failure);
+            Assert.Contains("stdout drain", failure.ToString());
+            Assert.DoesNotContain("stderr drain", failure.ToString());
+        }
+        finally { pending.TrySetResult(); }
+    }
+
+    [Fact]
+    public async Task CleanupSettlementReportsEveryFailedPhaseAndStillRunsLaterSteps()
+    {
+        var laterRan = false;
+        var failure = await AgentInvocationExecutor.SettleCleanupAsync(
+            [("stdout drain", () => Task.FromException(new IOException("read failed"))),
+             ("stderr drain", () => Task.FromException(new IOException("second failure"))),
+             ("log flush", () => { laterRan = true; return Task.CompletedTask; })],
+            TimeSpan.FromSeconds(1));
+        Assert.True(laterRan);
+        Assert.NotNull(failure);
+        Assert.Contains("stdout drain", failure.ToString());
+        Assert.Contains("stderr drain", failure.ToString());
+    }
+
+    [Fact]
     public async Task DeliversExactUtf8ClosesStdinSetsCwdAndOverlaysOnlyRuntimeEnvironment()
     {
         using var fixture = new ExecutionFixture();
-        const string payload = "héllo 雪 🌃\nsecond line\n";
+        const string payload = "hÃ©llo é›ª ðŸŒƒ\nsecond line\n";
         const string ambientName = "NIGHTWEAVER_FIXTURE_AMBIENT";
         const string authName = "NIGHTWEAVER_FIXTURE_AUTH";
         const string slotName = "NIGHTWEAVER_SLOT_ID";

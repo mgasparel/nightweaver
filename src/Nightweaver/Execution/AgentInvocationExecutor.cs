@@ -131,52 +131,36 @@ internal sealed class AgentInvocationExecutor
 
         if (child is not null)
         {
-            var cleanupClock = Stopwatch.StartNew();
             try
             {
                 await child.TerminateAndConfirmEmptyAsync(CleanupBudget).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
-                cleanupFailure = exception;
+                cleanupFailure = new IOException("process containment: " + exception.Message, exception);
             }
             finally
             {
                 child.CloseJob();
             }
 
-            try
-            {
-                if (rootExit is not null)
-                    await rootExit.WaitAsync(GetCleanupTimeLeft(cleanupClock), CancellationToken.None).ConfigureAwait(false);
-                if (stdinWrite is not null)
-                {
-                    try { await stdinWrite.WaitAsync(GetCleanupTimeLeft(cleanupClock), CancellationToken.None).ConfigureAwait(false); }
-                    catch (IOException) when (stdinWrite.IsCompleted
-                        && (status == AgentExecutionStatus.TimedOut || cancelled || cancellationToken.IsCancellationRequested)) { }
-                    catch (Exception exception) when (ReferenceEquals(exception, primaryFailure) && stdinWrite.IsCompleted) { }
-                }
-                if (stdoutPump is not null)
-                {
-                    try { await stdoutPump.WaitAsync(GetCleanupTimeLeft(cleanupClock), CancellationToken.None).ConfigureAwait(false); }
-                    catch (Exception exception) when (ReferenceEquals(exception, primaryFailure) && stdoutPump.IsCompleted) { }
-                }
-                if (stderrPump is not null)
-                {
-                    try { await stderrPump.WaitAsync(GetCleanupTimeLeft(cleanupClock), CancellationToken.None).ConfigureAwait(false); }
-                    catch (Exception exception) when (ReferenceEquals(exception, primaryFailure) && stderrPump.IsCompleted) { }
-                }
-                if (runtimeFiles is not null)
-                {
-                    await runtimeFiles.FlushLogAsync(CancellationToken.None)
-                        .WaitAsync(GetCleanupTimeLeft(cleanupClock), CancellationToken.None).ConfigureAwait(false);
-                }
-            }
-            catch (Exception exception)
-            {
-                if (primaryFailure is null || !ReferenceEquals(exception, primaryFailure))
-                    cleanupFailure = Combine(cleanupFailure, exception);
-            }
+            // Termination has its own budget; slow process teardown must not starve pipe settlement.
+            cleanupFailure = CombineOptional(cleanupFailure, await SettleCleanupAsync(
+                [("root exit", () => rootExit ?? Task.CompletedTask),
+                 ("stdin delivery", async () =>
+                 {
+                     if (stdinWrite is null) return;
+                     try { await stdinWrite.ConfigureAwait(false); }
+                     catch (IOException) when (status == AgentExecutionStatus.TimedOut || cancelled || cancellationToken.IsCancellationRequested) { }
+                     catch (Exception exception) when (ReferenceEquals(exception, primaryFailure)) { }
+                 }),
+                 ("stdout drain", () => stdoutPump ?? Task.CompletedTask),
+                 ("stderr drain", () => stderrPump ?? Task.CompletedTask)], CleanupBudget).ConfigureAwait(false));
+            // Flush only after writers have settled; never race a pending pump with a log flush.
+            if ((stdoutPump?.IsCompleted ?? true) && (stderrPump?.IsCompleted ?? true) && runtimeFiles is not null)
+                cleanupFailure = CombineOptional(cleanupFailure, await SettleCleanupAsync(
+                    [("log flush", () => runtimeFiles.FlushLogAsync(CancellationToken.None))], CleanupBudget).ConfigureAwait(false));
+
         }
 
         try { child?.Dispose(); }
@@ -188,7 +172,9 @@ internal sealed class AgentInvocationExecutor
         if (cleanupFailure is not null)
         {
             var inner = primaryFailure is null ? cleanupFailure : new AggregateException(primaryFailure, cleanupFailure);
-            throw CreateDiagnostic(invocation, inner, "containment, pipe settlement or log cleanup did not complete successfully");
+            throw CreateDiagnostic(invocation, inner,
+                $"cleanup failed after outcome={((cancelled || cancellationToken.IsCancellationRequested) ? "Cancelled" : status?.ToString() ?? "Failed")}, " +
+                $"exit_code={exitCode?.ToString() ?? "unknown"}, timeout={invocation.Timeout}: {inner}");
         }
 
         if (primaryFailure is not null)
@@ -335,13 +321,36 @@ internal sealed class AgentInvocationExecutor
         _ => null
     };
 
-    private static Exception Combine(Exception? first, Exception second) => first is null ? second : new AggregateException(first, second);
-
-    private static TimeSpan GetCleanupTimeLeft(Stopwatch cleanupClock)
+    internal static async Task<Exception?> SettleCleanupAsync(
+        IReadOnlyList<(string Phase, Func<Task> Run)> steps, TimeSpan budget)
     {
-        var remaining = CleanupBudget - cleanupClock.Elapsed;
-        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+        var clock = Stopwatch.StartNew();
+        Exception? failure = null;
+        foreach (var (phase, run) in steps)
+        {
+            Task? task = null;
+            try
+            {
+                task = run();
+                var left = budget - clock.Elapsed;
+                await task.WaitAsync(left > TimeSpan.Zero ? left : TimeSpan.Zero).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failure = Combine(failure, new IOException($"{phase}: {exception.GetType().Name}: {exception.Message}", exception));
+                // A bounded wait does not cancel the underlying operation. Observe any eventual fault.
+                if (task is not null)
+                    _ = task.ContinueWith(t => { _ = t.Exception; }, CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }
+        }
+        return failure;
     }
+
+    private static Exception? CombineOptional(Exception? first, Exception? second) =>
+        second is null ? first : Combine(first, second);
+
+    private static Exception Combine(Exception? first, Exception second) => first is null ? second : new AggregateException(first, second);
 
     private sealed class BoundedStandardOutputCapture(int maximumBytes)
     {
