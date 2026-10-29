@@ -640,11 +640,16 @@ public abstract class AgentStageIntegrationTestSupport
             if (initializeTemplate)
             {
                 Run("bd", ["init", "--prefix", "stage", "--non-interactive", "--skip-agents", "--skip-hooks"], TargetPath, BeadsEnvironment);
-                _ = CreateBead("Control", "task");
+                ControlBeadId = CreateBead("Control", "task");
+            }
+            else
+            {
+                ControlBeadId = Template.Value.ControlBeadId;
             }
         }
 
         private string TargetPath { get; }
+        internal string ControlBeadId { get; }
         private string OriginPath { get; }
         internal string RootPath => temp.Path;
         internal HostPaths Host { get; }
@@ -961,7 +966,7 @@ public abstract class AgentStageIntegrationTestSupport
             return outcome;
         }
 
-        private FixtureEnvironmentOverlayProcessLauncher CreateProcessLauncher(
+        internal FixtureEnvironmentOverlayProcessLauncher CreateProcessLauncher(
             IReadOnlyDictionary<string, string?> environmentOverrides)
         {
             var overrides = new Dictionary<string, string?>(environmentOverrides, StringComparer.OrdinalIgnoreCase)
@@ -971,7 +976,7 @@ public abstract class AgentStageIntegrationTestSupport
             return new FixtureEnvironmentOverlayProcessLauncher(overrides);
         }
 
-        private sealed class FixtureEnvironmentOverlayProcessLauncher(
+        internal sealed class FixtureEnvironmentOverlayProcessLauncher(
             IReadOnlyDictionary<string, string?> overrides) : IAgentProcessLauncher
         {
             public string ResolveExecutable(string name, IReadOnlyDictionary<string, string> environment) =>
@@ -1031,11 +1036,11 @@ public abstract class AgentStageIntegrationTestSupport
                 File.ReadAllText(System.IO.Path.Combine(TargetPath, "root-untracked-sentinel.txt")));
         }
 
-        private ProjectConfig CreateProject(AgentCli cli, int maxRepairCycles = 3)
+        internal ProjectConfig CreateProject(AgentCli cli, int maxRepairCycles = 3, int maxConcurrentDelivery = 1, int timeoutMinutes = 1)
         {
-            var roles = AgentRoles.All.ToDictionary(role => role, _ => new AgentSettings(cli, null, "low", 1));
-            return new(ProjectSlug.Parse("demo"), "fixture.json", new(TargetPath, "main"), new(1, 1, 1), new(maxRepairCycles, 2),
-                new(cli, null, "low", 1), new RoleSettings(roles));
+            var roles = AgentRoles.All.ToDictionary(role => role, _ => new AgentSettings(cli, null, "low", timeoutMinutes));
+            return new(ProjectSlug.Parse("demo"), "fixture.json", new(TargetPath, "main"), new(1, maxConcurrentDelivery, 1), new(maxRepairCycles, 2),
+                new(cli, null, "low", timeoutMinutes), new RoleSettings(roles));
         }
 
         private void CopyFixtureCli(string name)

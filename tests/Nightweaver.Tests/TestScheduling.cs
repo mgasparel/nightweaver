@@ -19,7 +19,8 @@ public sealed class IntegrationFirstCollectionOrderer : ITestCollectionOrderer
     private static int Priority(string name)
     {
         if (name.Contains(nameof(AgentStageDeliveryIntegrationTests), StringComparison.Ordinal)
-            || name.Contains(nameof(AgentStageDeliveryPauseIntegrationTests), StringComparison.Ordinal)) return 0;
+            || name.Contains(nameof(AgentStageDeliveryPauseIntegrationTests), StringComparison.Ordinal)
+            || name.Contains(nameof(DeliveryPoolIntegrationTests), StringComparison.Ordinal)) return 0;
         if (name.Contains(nameof(AgentStageIntegrationTests), StringComparison.Ordinal)) return 1;
         if (name.Contains(nameof(AgentStageRepairIntegrationTests), StringComparison.Ordinal)) return 2;
         if (name.Contains(nameof(WebBeadsIntegrationTests), StringComparison.Ordinal)) return 3;

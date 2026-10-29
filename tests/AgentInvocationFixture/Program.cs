@@ -237,6 +237,23 @@ internal static class Program
                 Run("bd", ["comments", "add", beadId, "question"]);
                 Run("bd", ["update", beadId, "--remove-label", "stage:implement", "--add-label", "stage:review", "--add-label", "product-decision-required"]);
                 break;
+            case "pool-implement-gated":
+            {
+                var startedFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_STARTED_FILE")
+                    ?? throw new InvalidOperationException("Pool fixture started-file path is missing.");
+                var releaseFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_RELEASE_FILE")
+                    ?? throw new InvalidOperationException("Pool fixture release-file path is missing.");
+                File.WriteAllText(startedFile, beadId, new UTF8Encoding(false));
+                WaitForFile(releaseFile, TimeSpan.FromMinutes(2));
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-slot.txt"), "slot implementation\n");
+                Directory.CreateDirectory(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored"));
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored", "slot-sentinel.bin"), "keep across roles\n");
+                Run("git", ["add", "delivery-slot.txt"]);
+                Run("git", ["commit", "-m", "slot fixture implementation"]);
+                Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
+                UpdateLabels(beadId, "stage:implement", "stage:review");
+                break;
+            }
             case "slot-implement-repair":
                 File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "delivery-repair.txt"), "repair committed\n");
                 Run("git", ["add", "delivery-repair.txt"]);
@@ -429,11 +446,14 @@ internal static class Program
     }
 
     private static void WaitForFile(string path)
+        => WaitForFile(path, TimeSpan.FromSeconds(15));
+
+    private static void WaitForFile(string path, TimeSpan timeout)
     {
         var timer = System.Diagnostics.Stopwatch.StartNew();
         while (!File.Exists(path))
         {
-            if (timer.Elapsed > TimeSpan.FromSeconds(15)) throw new TimeoutException($"Fixture handshake timed out: {path}");
+            if (timer.Elapsed > timeout) throw new TimeoutException($"Fixture handshake timed out: {path}");
             Thread.Sleep(10);
         }
     }

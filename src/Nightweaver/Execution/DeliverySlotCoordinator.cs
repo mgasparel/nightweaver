@@ -598,7 +598,7 @@ internal sealed class DeliverySlotCoordinator
             releaseFailure is null ? reason : $"{reason} Claim release: {releaseFailure}.");
     }
 
-    private static string? ValidateAdmission(BeadSnapshot bead, BeadWorkflowState state, BeadsReadiness readiness)
+    internal static string? ValidateAdmission(BeadSnapshot bead, BeadWorkflowState state, BeadsReadiness readiness)
     {
         if (bead.Status != "open" || bead.Assignee is not null)
             return $"Bead '{bead.Id}' must be open and unassigned before Delivery; observed status '{bead.Status}' and assignee '{bead.Assignee ?? "(none)"}'.";
@@ -613,7 +613,7 @@ internal sealed class DeliverySlotCoordinator
         return null;
     }
 
-    private static bool TrySelectRole(BeadWorkflowState state, out AgentRole role)
+    internal static bool TrySelectRole(BeadWorkflowState state, out AgentRole role)
     {
         role = state.Stage switch
         {
