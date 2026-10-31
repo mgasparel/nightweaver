@@ -25,9 +25,8 @@ internal static class RuntimeDirectoryReader
             {
                 var normalized = RuntimePaths.Normalize(path);
                 var id = RuntimePaths.ChildId(root, normalized);
-                var state = Observe(path);
-                if (state == DirectoryState.Missing) throw new IOException($"child disappeared during inspection: '{path}'");
-                entries.Add(new(id ?? Path.GetFileName(path), normalized, state, id is null));
+                var state = ObserveEntry(path, out var failureReason);
+                entries.Add(new(id ?? Path.GetFileName(path), normalized, state, id is null, failureReason));
             }
             var collisions = entries.GroupBy(entry => entry.Id, RuntimePaths.Comparer).Where(group => group.Count() > 1)
                 .Select(group => group.Key).ToHashSet(RuntimePaths.Comparer);
@@ -36,6 +35,21 @@ internal static class RuntimeDirectoryReader
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         { throw new ToolExecutionException($"runtime directory inspection '{root}': {exception.Message}"); }
+    }
+
+    private static DirectoryState ObserveEntry(string path, out string? failureReason)
+    {
+        try
+        {
+            var state = Observe(path);
+            failureReason = state == DirectoryState.Missing ? "entry disappeared during inspection" : null;
+            return state == DirectoryState.Missing ? DirectoryState.Unusable : state;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            failureReason = exception.Message;
+            return DirectoryState.Unusable;
+        }
     }
 
     private static DirectoryState Observe(string path)

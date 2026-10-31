@@ -48,7 +48,14 @@ internal sealed class AgentPostExitVerificationException(string invocationId, st
     internal string LogFilePath { get; } = logFilePath;
 }
 
-internal sealed class ToolExecutionException(string message, string? standardError = null) : NightweaverException(message)
+internal class ToolExecutionException(string message, string? standardError = null) : NightweaverException(message)
 {
     internal string? StandardError { get; } = standardError;
+}
+
+internal sealed class BeadEnvironmentException(string path, string reason)
+    : ToolExecutionException($"Bead environment at '{path}' is unsafe or unusable: {reason}")
+{
+    internal string Path { get; } = path;
+    internal string Reason { get; } = reason;
 }

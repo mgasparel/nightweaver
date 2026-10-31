@@ -9,7 +9,7 @@ namespace Nightweaver.Tests;
 public sealed class WorktreeProvisionerIntegrationTests
 {
     [Fact]
-    public async Task PlanningFetchesDetachedDefaultAndWarmReuseAdvancesToFetchedCommit()
+    public async Task PlanningRetainsDirtyDetachedWorktreeWithoutFetchingOrAdvancingHead()
     {
         using var fixture = new ProvisioningGitFixture();
         var before = fixture.TargetCheckout();
@@ -27,8 +27,13 @@ public sealed class WorktreeProvisionerIntegrationTests
         File.WriteAllText(Path.Combine(first.Path, "ignored-cache", "cache.bin"), "keep me");
         var second = await provisioner.ProvisionAsync(fixture.Paths, fixture.Project, fixture.Repository, fixture.BeadId,
             WorktreePurpose.Planning, TestContext.Current.CancellationToken);
-        Assert.Equal(fixture.AdvancedSha, second.HeadSha);
-        Assert.False(File.Exists(Path.Combine(first.Path, "planning-untracked.txt")));
+        Assert.Equal(first.HeadSha, second.HeadSha);
+        Assert.NotEqual(fixture.AdvancedSha, second.HeadSha);
+        Assert.True(second.Reused);
+        Assert.True(second.WasDirty);
+        Assert.Equal("dirty planning tracked edit", File.ReadAllText(Path.Combine(first.Path, "README.md")));
+        Assert.Equal("remove me", File.ReadAllText(Path.Combine(first.Path, "planning-untracked.txt")));
+        Assert.NotEqual("", fixture.Git(first.Path, ["status", "--porcelain=v1", "--untracked-files=all"]).Output);
         Assert.Equal("keep me", File.ReadAllText(Path.Combine(first.Path, "ignored-cache", "cache.bin")));
         Assert.Equal(before, fixture.TargetCheckout());
     }
@@ -61,7 +66,7 @@ public sealed class WorktreeProvisionerIntegrationTests
     }
 
     [Fact]
-    public async Task WarmDeliveryCleansDirtyFilesPreservesIgnoredCacheAndKeepsLocalHead()
+    public async Task WarmDeliveryPreservesIndexTrackedUntrackedAndIgnoredStateAndKeepsLocalHead()
     {
         using var fixture = new ProvisioningGitFixture();
         var provisioner = fixture.Provisioner();
@@ -83,18 +88,26 @@ public sealed class WorktreeProvisionerIntegrationTests
         File.WriteAllText(Path.Combine(first.Path, "ignored-cache", "cache.bin"), "keep");
         var rootBefore = fixture.TargetCheckout();
 
+        var stagedDiff = fixture.Git(first.Path, ["diff", "--cached", "--", "README.md"]).Output;
+        var unstagedDiff = fixture.Git(first.Path, ["diff", "--", "README.md"]).Output;
         var second = await provisioner.ProvisionAsync(fixture.Paths, fixture.Project, fixture.Repository,
             fixture.BeadId, WorktreePurpose.Delivery, TestContext.Current.CancellationToken);
         Assert.Equal(committedHead, second.HeadSha);
+        Assert.True(second.Reused);
+        Assert.True(second.WasDirty);
         Assert.Equal("committed local progress", File.ReadAllText(Path.Combine(second.Path, "delivery-commit.txt")));
-        Assert.False(File.Exists(Path.Combine(second.Path, "untracked.txt")));
-        Assert.False(Directory.Exists(Path.Combine(second.Path, "untracked-directory")));
+        Assert.Contains("staged and unstaged dirt", File.ReadAllText(Path.Combine(second.Path, "README.md")), StringComparison.Ordinal);
+        Assert.Equal(stagedDiff, fixture.Git(second.Path, ["diff", "--cached", "--", "README.md"]).Output);
+        Assert.Equal(unstagedDiff, fixture.Git(second.Path, ["diff", "--", "README.md"]).Output);
+        Assert.Equal("remove", File.ReadAllText(Path.Combine(second.Path, "untracked.txt")));
+        Assert.Equal("remove", File.ReadAllText(Path.Combine(second.Path, "untracked-directory", "nested.txt")));
         Assert.Equal("keep", File.ReadAllText(Path.Combine(second.Path, "ignored-cache", "cache.bin")));
-        Assert.Equal("", fixture.Git(second.Path, ["status", "--porcelain=v1", "--untracked-files=all"]).Output);
+        Assert.NotEqual("", fixture.Git(second.Path, ["status", "--porcelain=v1", "--untracked-files=all"]).Output);
 
         var repeated = await provisioner.ProvisionAsync(fixture.Paths, fixture.Project, fixture.Repository,
             fixture.BeadId, WorktreePurpose.Delivery, TestContext.Current.CancellationToken);
         Assert.Equal(committedHead, repeated.HeadSha);
+        Assert.Equal("remove", File.ReadAllText(Path.Combine(repeated.Path, "untracked.txt")));
         Assert.Equal(rootBefore, fixture.TargetCheckout());
     }
 
@@ -119,7 +132,7 @@ public sealed class WorktreeProvisionerIntegrationTests
             return await systemRunner.RunAsync(request, token);
         });
 
-        var exception = await Assert.ThrowsAsync<ToolExecutionException>(() => new WorktreeRetryResetter(runner).ResetAsync(
+        var exception = await Assert.ThrowsAnyAsync<ToolExecutionException>(() => new WorktreeRetryResetter(runner).ResetAsync(
             fixture.Paths, fixture.Project, fixture.Repository, fixture.BeadId, WorktreePurpose.Delivery,
             TestContext.Current.CancellationToken));
 
@@ -142,7 +155,7 @@ public sealed class WorktreeProvisionerIntegrationTests
         using var fixture = new ProvisioningGitFixture();
         var before = fixture.TargetCheckout();
         var repository = new ValidatedTargetRepository(fixture.Target, "missing-default");
-        var exception = await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provisioner().ProvisionAsync(
+        var exception = await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provisioner().ProvisionAsync(
             fixture.Paths, fixture.Project, repository, fixture.BeadId, WorktreePurpose.Planning, TestContext.Current.CancellationToken));
         Assert.Contains("fetch origin", exception.Message, StringComparison.Ordinal);
         Assert.Equal(before, fixture.TargetCheckout());
@@ -156,7 +169,7 @@ public sealed class WorktreeProvisionerIntegrationTests
         var foreignPath = Path.Combine(fixture.TempRoot, "foreign branch checkout");
         fixture.Git(fixture.Target, ["worktree", "add", "-b", $"nightweaver/{fixture.BeadId}", foreignPath, "HEAD"]);
         var before = fixture.TargetCheckout();
-        var error = await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provisioner().ProvisionAsync(
+        var error = await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provisioner().ProvisionAsync(
             fixture.Paths, fixture.Project, fixture.Repository, fixture.BeadId, WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
         Assert.Contains("registered outside the canonical destination", error.Message, StringComparison.Ordinal);
         Assert.Equal(before, fixture.TargetCheckout());
@@ -219,7 +232,7 @@ public sealed class WorktreeProvisionerIntegrationTests
 
         var sentinelBefore = externalSentinel is null ? null : File.ReadAllText(externalSentinel);
         var rootBefore = fixture.TargetCheckout();
-        await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provisioner().ProvisionAsync(
+        await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provisioner().ProvisionAsync(
             fixture.Paths, fixture.Project, fixture.Repository, fixture.BeadId,
             WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
         Assert.Equal(rootBefore, fixture.TargetCheckout());

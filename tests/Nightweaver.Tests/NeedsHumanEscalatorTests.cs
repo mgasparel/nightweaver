@@ -14,7 +14,7 @@ public sealed class NeedsHumanEscalatorTests
     [InlineData("task", "Implementer", "RepairBudgetExhausted", "stage:implement")]
     [InlineData("feature", "Planner", "RepairBudgetExhausted", "")]
     [InlineData("task", "Implementer", "OperationalRetriesExhausted", "")]
-    public async Task EscalationWritesPauseBeforeDiagnosticAndCleansTheOwnedEnvironment(
+    public async Task EscalationWritesPauseBeforeDiagnosticAndRetainsTheOwnedEnvironment(
         string issueType, string roleName, string causeName, string stage)
     {
         var role = Enum.Parse<AgentRole>(roleName);
@@ -32,8 +32,10 @@ public sealed class NeedsHumanEscalatorTests
         Assert.DoesNotContain("product-decision-required", target.Labels);
         Assert.Equal("open", target.Status);
         Assert.Null(target.Assignee);
-        Assert.False(Directory.Exists(target.WorktreePath));
-        Assert.False(Directory.Exists(target.TemporaryPath));
+        Assert.True(result.EnvironmentRetained);
+        Assert.True(Directory.Exists(target.WorktreePath));
+        Assert.True(Directory.Exists(target.TemporaryPath));
+        Assert.Equal("tmp payload", File.ReadAllText(Path.Combine(target.TemporaryPath, "invocation", "tmp.txt")));
         Assert.Equal("settled log stays", File.ReadAllText(target.LogPath));
 
         var writes = target.Runner.Requests.Where(IsWrite).ToArray();
@@ -58,14 +60,12 @@ public sealed class NeedsHumanEscalatorTests
         var args = target.Runner.Requests.Select(request => request.Arguments).ToArray();
         var pause = Array.FindIndex(args, list => list.Contains("--add-label") && list.Contains("needs-human"));
         var diagnostic = Array.FindIndex(args, list => list.Contains("comments") && list.Contains("add"));
-        var remove = Array.FindIndex(args, list => list.Contains("worktree") && list.Contains("remove"));
-        var prune = Array.FindIndex(args, list => list.Count > 1 && list[0] == "worktree" && list[1] == "prune");
         var release = Array.FindIndex(args, list => list.Contains("--status") && list.Contains("open"));
-        Assert.True(pause < diagnostic && diagnostic < remove && remove < prune && prune < release);
-        if (role is AgentRole.Planner or AgentRole.PlanChallenger)
-            Assert.DoesNotContain(args, list => list.Contains("branch") && list.Contains("-D"));
-        else
-            Assert.True(Array.FindIndex(args, list => list.Contains("branch") && list.Contains("-D")) < prune);
+        Assert.True(pause < diagnostic && diagnostic < release);
+        Assert.DoesNotContain(target.Runner.Requests, request => request.FileName == "git");
+        using var diagnosticJson = JsonDocument.Parse(target.Comments.Single());
+        Assert.Contains(target.WorktreePath, diagnosticJson.RootElement.GetProperty("environment_retention").GetString(), StringComparison.Ordinal);
+        Assert.Contains(target.TemporaryPath, diagnosticJson.RootElement.GetProperty("environment_retention").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public sealed class NeedsHumanEscalatorTests
     }
 
     [Fact]
-    public async Task UnsafeNestedTemporaryLinkIsRecordedAndSkipsEveryDestructiveOperation()
+    public async Task UnsafeNestedTemporaryLinkIsLeftIntactWhenPauseIsRecorded()
     {
         using var target = new FakeEscalationTarget("task", ["stage:implement"]);
         using var external = new TempDirectory();
@@ -136,46 +136,31 @@ public sealed class NeedsHumanEscalatorTests
 
         Assert.True(result.PauseRecorded);
         Assert.True(result.DiagnosticRecorded);
-        Assert.False(result.CleanupCompleted);
+        Assert.True(result.EnvironmentRetained);
         Assert.True(result.ClaimReleased);
-        Assert.Contains(result.Failures, failure => failure.Contains("reparse point", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(result.Failures);
         Assert.Equal(before, Snapshot.FileTree(external.Path));
         Assert.Equal("must remain", File.ReadAllText(sentinel));
         Assert.True(Directory.Exists(target.WorktreePath));
         Assert.True(Directory.Exists(target.TemporaryPath));
         Assert.DoesNotContain(target.Runner.Requests, request => request.FileName == "git"
             && request.Arguments.Any(argument => argument is "remove" or "prune" or "-D"));
-        Assert.Contains("Pause cleanup preflight refused", target.Comments.Single(), StringComparison.Ordinal);
+        Assert.DoesNotContain(target.Runner.Requests, request => request.FileName == "git");
     }
 
     [Fact]
-    public async Task SubstitutionAfterPreflightIsDetectedBeforeWorktreeRemoval()
+    public async Task PauseDoesNotPreflightOrTouchWorktreeBeforeRetainingIt()
     {
         using var target = new FakeEscalationTarget("task", ["stage:implement"]);
-        using var external = new TempDirectory();
-        external.WriteFile("sentinel.txt", "must remain");
-        var before = Snapshot.FileTree(external.Path);
-        var backup = target.WorktreePath + "-held";
-        var substituted = false;
-        var cleaner = new PauseEnvironmentCleaner(target.Runner, operation =>
-        {
-            if (operation != "git worktree remove" || substituted) return;
-            Directory.Move(target.WorktreePath, backup);
-            WorktreeInspectionTests.CreateDirectoryLink(target.WorktreePath, external.Path);
-            substituted = true;
-        });
-
-        var error = await Assert.ThrowsAsync<NeedsHumanEscalationException>(() => target.Escalator(cleaner).EscalateAsync(
+        var result = await target.Escalator().EscalateAsync(
             target.Paths, target.Project, target.Repository,
-            target.Request(NeedsHumanCause.DuplicateFailure, AgentRole.Implementer), CancellationToken.None));
+            target.Request(NeedsHumanCause.DuplicateFailure, AgentRole.Implementer), CancellationToken.None);
 
-        Assert.True(substituted);
-        Assert.False(error.Progress.CleanupCompleted);
-        Assert.True(error.Progress.ClaimReleased);
-        Assert.Equal(before, Snapshot.FileTree(external.Path));
-        Assert.True(Directory.Exists(backup));
-        Assert.DoesNotContain(target.Runner.Requests, request => request.FileName == "git"
-            && request.Arguments.Any(argument => argument is "remove" or "prune" or "-D"));
+        Assert.True(result.Succeeded);
+        Assert.True(result.EnvironmentRetained);
+        Assert.True(Directory.Exists(target.WorktreePath));
+        Assert.True(Directory.Exists(target.TemporaryPath));
+        Assert.DoesNotContain(target.Runner.Requests, request => request.FileName == "git");
     }
 
     [Fact]
@@ -198,7 +183,7 @@ public sealed class NeedsHumanEscalatorTests
     }
 
     [Fact]
-    public async Task ExistingOpenPauseWithConflictingPauseLabelIsNormalizedAndCleaned()
+    public async Task ExistingOpenPauseWithConflictingPauseLabelIsNormalizedAndRetained()
     {
         using var target = new FakeEscalationTarget("feature",
             ["stage:plan", "needs-human", "product-decision-required", "retain-me"], assignee: null, status: "open");
@@ -211,6 +196,8 @@ public sealed class NeedsHumanEscalatorTests
         Assert.DoesNotContain("product-decision-required", target.Labels);
         Assert.Equal("open", target.Status);
         Assert.Null(target.Assignee);
+        Assert.True(Directory.Exists(target.WorktreePath));
+        Assert.True(Directory.Exists(target.TemporaryPath));
         var pauseWrite = Assert.Single(target.Runner.Requests, request => request.FileName == "bd"
             && request.Arguments.Contains("--add-label"));
         Assert.Equal(string.Empty, pauseWrite.Arguments[Array.IndexOf(pauseWrite.Arguments.ToArray(), "--if-assignee") + 1]);
@@ -232,13 +219,16 @@ public sealed class NeedsHumanEscalatorTests
             CancellationToken.None);
 
         Assert.True(repeated.Succeeded);
+        Assert.True(repeated.EnvironmentRetained);
         Assert.Equal(2, target.Comments.Count);
+        Assert.True(Directory.Exists(target.WorktreePath));
+        Assert.True(Directory.Exists(target.TemporaryPath));
         Assert.DoesNotContain(target.Runner.Requests.Skip(beforeRepeat), request => request.FileName == "git"
             && request.Arguments.Any(argument => argument is "remove" or "prune" or "-D"));
     }
 
     [Fact]
-    public async Task TemporaryOnlyRecoveryDeletesItsTreeWithoutRepositoryWidePrune()
+    public async Task TemporaryOnlyPausedRecoveryRetainsItsTree()
     {
         using var target = new FakeEscalationTarget("feature", ["stage:plan", "needs-human"], assignee: null, status: "open");
         target.RemoveOwnedWorktreeBeforeCall();
@@ -247,95 +237,71 @@ public sealed class NeedsHumanEscalatorTests
             target.Request(NeedsHumanCause.RepairBudgetExhausted, AgentRole.Planner), CancellationToken.None);
 
         Assert.True(result.Succeeded);
-        Assert.False(Directory.Exists(target.TemporaryPath));
-        Assert.DoesNotContain(target.Runner.Requests, request => request.FileName == "git"
-            && request.Arguments.SequenceEqual(["worktree", "prune"]));
+        Assert.True(result.EnvironmentRetained);
+        Assert.True(Directory.Exists(target.TemporaryPath));
+        Assert.DoesNotContain(target.Runner.Requests, request => request.FileName == "git");
     }
 
     [Fact]
-    public async Task BranchDeletionFailureStopsCleanupAddsSupplementAndReleasesClaim()
+    public async Task BranchDeletionFailureInjectionCannotDeletePausedEnvironment()
     {
         using var target = new FakeEscalationTarget("task", ["stage:implement"])
         {
             FailBranchDelete = true
         };
 
-        var error = await Assert.ThrowsAsync<NeedsHumanEscalationException>(() => target.Escalator().EscalateAsync(
+        var result = await target.Escalator().EscalateAsync(
             target.Paths, target.Project, target.Repository,
-            target.Request(NeedsHumanCause.DuplicateFailure, AgentRole.Implementer), CancellationToken.None));
+            target.Request(NeedsHumanCause.DuplicateFailure, AgentRole.Implementer), CancellationToken.None);
 
-        Assert.True(error.Progress.PauseRecorded);
-        Assert.True(error.Progress.DiagnosticRecorded);
-        Assert.False(error.Progress.CleanupCompleted);
-        Assert.True(error.Progress.ClaimReleased);
-        Assert.False(Directory.Exists(target.WorktreePath));
+        Assert.True(result.PauseRecorded);
+        Assert.True(result.DiagnosticRecorded);
+        Assert.True(result.EnvironmentRetained);
+        Assert.True(result.ClaimReleased);
+        Assert.True(Directory.Exists(target.WorktreePath));
         Assert.True(Directory.Exists(target.TemporaryPath));
         Assert.Equal("open", target.Status);
-        Assert.Contains(target.Runner.Requests, request => request.FileName == "git"
-            && request.Arguments.SequenceEqual(["branch", "-D", "nightweaver/fixture-bead"]));
-        Assert.DoesNotContain(target.Runner.Requests, request => request.FileName == "git"
-            && request.Arguments.SequenceEqual(["worktree", "prune"]));
-        Assert.Equal("nightweaver-needs-human-cleanup-failure-v1",
-            JsonDocument.Parse(target.Comments[^1]).RootElement.GetProperty("schema").GetString());
+        Assert.DoesNotContain(target.Runner.Requests, request => request.FileName == "git");
     }
 
     [Theory]
     [InlineData("remove")]
     [InlineData("prune")]
-    public async Task GitCleanupFailureStopsLaterOperationsAndReleasesClaim(string operation)
+    public async Task GitCleanupFailureInjectionDoesNotRunForPausedEnvironments(string operation)
     {
         using var target = new FakeEscalationTarget("task", ["stage:implement"]) { FailGitOperation = operation };
 
-        var error = await Assert.ThrowsAsync<NeedsHumanEscalationException>(() => target.Escalator().EscalateAsync(
+        var result = await target.Escalator().EscalateAsync(
             target.Paths, target.Project, target.Repository,
-            target.Request(NeedsHumanCause.DuplicateFailure, AgentRole.Implementer), CancellationToken.None));
+            target.Request(NeedsHumanCause.DuplicateFailure, AgentRole.Implementer), CancellationToken.None);
 
-        Assert.False(error.Progress.CleanupCompleted);
-        Assert.True(error.Progress.ClaimReleased);
+        Assert.True(result.EnvironmentRetained);
+        Assert.True(result.ClaimReleased);
         Assert.Equal("open", target.Status);
-        var gitArgs = target.Runner.Requests.Where(request => request.FileName == "git").Select(request => request.Arguments).ToArray();
-        if (operation == "remove")
-        {
-            Assert.True(Directory.Exists(target.WorktreePath));
-            Assert.True(Directory.Exists(target.TemporaryPath));
-            Assert.DoesNotContain(gitArgs, args => args.SequenceEqual(["branch", "-D", "nightweaver/fixture-bead"]));
-            Assert.DoesNotContain(gitArgs, args => args.SequenceEqual(["worktree", "prune"]));
-        }
-        else
-        {
-            Assert.False(Directory.Exists(target.WorktreePath));
-            Assert.True(Directory.Exists(target.TemporaryPath));
-            Assert.Contains(gitArgs, args => args.SequenceEqual(["branch", "-D", "nightweaver/fixture-bead"]));
-            Assert.Contains(gitArgs, args => args.SequenceEqual(["worktree", "prune"]));
-        }
-        Assert.Equal("nightweaver-needs-human-cleanup-failure-v1",
-            JsonDocument.Parse(target.Comments[^1]).RootElement.GetProperty("schema").GetString());
+        Assert.True(Directory.Exists(target.WorktreePath));
+        Assert.True(Directory.Exists(target.TemporaryPath));
+        Assert.DoesNotContain(target.Runner.Requests, request => request.FileName == "git");
     }
 
     [Fact]
-    public async Task PartialCleanupCanResumeFromFreshStateOnRepeat()
+    public async Task RepeatedPauseDoesNotRemoveWorktreeOrTemporaryFiles()
     {
         using var target = new FakeEscalationTarget("task", ["stage:implement"]) { FailBranchDelete = true };
         var request = target.Request(NeedsHumanCause.DuplicateFailure, AgentRole.Implementer);
-        await Assert.ThrowsAsync<NeedsHumanEscalationException>(() => target.Escalator().EscalateAsync(
-            target.Paths, target.Project, target.Repository, request, CancellationToken.None));
-        target.FailBranchDelete = false;
         var requestCount = target.Runner.Requests.Count;
 
         var result = await target.Escalator().EscalateAsync(target.Paths, target.Project, target.Repository,
             request, CancellationToken.None);
 
         Assert.True(result.Succeeded);
-        Assert.False(Directory.Exists(target.WorktreePath));
-        Assert.False(Directory.Exists(target.TemporaryPath));
-        Assert.DoesNotContain(target.Runner.Requests.Skip(requestCount), request => request.FileName == "git"
-            && request.Arguments.Count > 1 && request.Arguments[0] == "worktree" && request.Arguments[1] == "remove");
-        Assert.Contains(target.Runner.Requests.Skip(requestCount), request => request.FileName == "git"
-            && request.Arguments.SequenceEqual(["branch", "-D", "nightweaver/fixture-bead"]));
+        Assert.True(result.EnvironmentRetained);
+        Assert.True(Directory.Exists(target.WorktreePath));
+        Assert.True(Directory.Exists(target.TemporaryPath));
+        Assert.DoesNotContain(target.Runner.Requests.Skip(requestCount), request => request.FileName == "git");
     }
 
     [Fact]
-    public async Task FailedClaimReleaseReportsIncompleteProgressWithoutUndoingCleanup()
+    public async Task FailedClaimReleaseReportsIncompleteProgressAndRetainsEnvironment()
     {
         using var target = new FakeEscalationTarget("feature", ["stage:plan"]) { FailRelease = true };
 
@@ -345,11 +311,11 @@ public sealed class NeedsHumanEscalatorTests
 
         Assert.True(error.Progress.PauseRecorded);
         Assert.True(error.Progress.DiagnosticRecorded);
-        Assert.True(error.Progress.CleanupCompleted);
+        Assert.True(error.Progress.EnvironmentRetained);
         Assert.False(error.Progress.ClaimReleased);
         Assert.Equal("in_progress", target.Status);
-        Assert.False(Directory.Exists(target.WorktreePath));
-        Assert.False(Directory.Exists(target.TemporaryPath));
+        Assert.True(Directory.Exists(target.WorktreePath));
+        Assert.True(Directory.Exists(target.TemporaryPath));
     }
 
     [Fact]
@@ -363,7 +329,7 @@ public sealed class NeedsHumanEscalatorTests
 
         Assert.True(error.Progress.PauseRecorded);
         Assert.False(error.Progress.DiagnosticRecorded);
-        Assert.False(error.Progress.CleanupCompleted);
+        Assert.True(error.Progress.EnvironmentRetained);
         Assert.False(error.Progress.ClaimReleased);
         Assert.Equal("someone-else", target.Assignee);
         Assert.True(Directory.Exists(target.WorktreePath));
@@ -373,27 +339,19 @@ public sealed class NeedsHumanEscalatorTests
     }
 
     [Fact]
-    public async Task TemporaryDeleteFailureRetainsRemainingEntriesAndReleasesClaim()
+    public async Task TemporaryDeleteFailureInjectionCannotDeletePausedEnvironment()
     {
         using var target = new FakeEscalationTarget("feature", ["stage:plan"]);
-        var cleaner = new PauseEnvironmentCleaner(target.Runner, operation =>
-        {
-            if (operation == "delete temporary entry") throw new IOException("controlled tmp deletion failure");
-        });
-
-        var error = await Assert.ThrowsAsync<NeedsHumanEscalationException>(() => target.Escalator(cleaner).EscalateAsync(
+        var result = await target.Escalator().EscalateAsync(
             target.Paths, target.Project, target.Repository,
-            target.Request(NeedsHumanCause.OperationalRetriesExhausted, AgentRole.Planner), CancellationToken.None));
+            target.Request(NeedsHumanCause.OperationalRetriesExhausted, AgentRole.Planner), CancellationToken.None);
 
-        Assert.False(error.Progress.CleanupCompleted);
-        Assert.True(error.Progress.ClaimReleased);
-        Assert.False(Directory.Exists(target.WorktreePath));
+        Assert.True(result.EnvironmentRetained);
+        Assert.True(result.ClaimReleased);
+        Assert.True(Directory.Exists(target.WorktreePath));
         Assert.True(File.Exists(Path.Combine(target.TemporaryPath, "invocation", "tmp.txt")));
         Assert.Equal("open", target.Status);
-        var args = target.Runner.Requests.Where(request => request.FileName == "git").Select(request => request.Arguments).ToArray();
-        Assert.Contains(args, request => request.SequenceEqual(["worktree", "prune"]));
-        Assert.Equal("nightweaver-needs-human-cleanup-failure-v1",
-            JsonDocument.Parse(target.Comments[^1]).RootElement.GetProperty("schema").GetString());
+        Assert.DoesNotContain(target.Runner.Requests, request => request.FileName == "git");
     }
 
     [Fact]
@@ -410,7 +368,7 @@ public sealed class NeedsHumanEscalatorTests
         var progress = Assert.IsType<NeedsHumanEscalationResult>(error.Data[nameof(NeedsHumanEscalationResult)]);
         Assert.True(progress.PauseRecorded);
         Assert.False(progress.DiagnosticRecorded);
-        Assert.False(progress.CleanupCompleted);
+        Assert.True(progress.EnvironmentRetained);
         Assert.True(progress.ClaimReleased);
         Assert.Equal("open", target.Status);
         Assert.DoesNotContain(target.Runner.Requests, request => request.FileName == "git"
@@ -444,7 +402,7 @@ public sealed class NeedsHumanEscalatorTests
 
         Assert.False(error.Progress.PauseRecorded);
         Assert.False(error.Progress.DiagnosticRecorded);
-        Assert.False(error.Progress.CleanupCompleted);
+        Assert.True(error.Progress.EnvironmentRetained);
         Assert.False(error.Progress.ClaimReleased);
         Assert.Equal("in_progress", target.Status);
         Assert.Equal("nightweaver:demo", target.Assignee);
@@ -466,7 +424,7 @@ public sealed class NeedsHumanEscalatorTests
 
         Assert.True(error.Progress.PauseRecorded);
         Assert.False(error.Progress.DiagnosticRecorded);
-        Assert.False(error.Progress.CleanupCompleted);
+        Assert.True(error.Progress.EnvironmentRetained);
         Assert.True(error.Progress.ClaimReleased);
         Assert.Equal("open", target.Status);
         Assert.True(Directory.Exists(target.WorktreePath));
@@ -476,7 +434,7 @@ public sealed class NeedsHumanEscalatorTests
     }
 
     [Fact]
-    public async Task MalformedGitInventoryPausesAndDocumentsButRefusesCleanup()
+    public async Task MalformedGitInventoryDoesNotPreventPauseAndRetention()
     {
         using var target = new FakeEscalationTarget("feature", ["stage:plan"]) { MalformedWorktreeOutput = true };
 
@@ -485,11 +443,12 @@ public sealed class NeedsHumanEscalatorTests
 
         Assert.True(result.PauseRecorded);
         Assert.True(result.DiagnosticRecorded);
-        Assert.False(result.CleanupCompleted);
+        Assert.True(result.EnvironmentRetained);
         Assert.True(result.ClaimReleased);
-        Assert.Contains("invalid", result.Failures[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(result.Failures);
         Assert.True(Directory.Exists(target.WorktreePath));
-        Assert.Contains("invalid", target.Comments.Single(), StringComparison.OrdinalIgnoreCase);
+        Assert.True(Directory.Exists(target.TemporaryPath));
+        Assert.DoesNotContain(target.Runner.Requests, request => request.FileName == "git");
     }
 
     [Fact]
@@ -601,7 +560,7 @@ public sealed class NeedsHumanEscalatorTests
             new(BeadId, "nightweaver:demo", cause, role, "operational failure with detail", ["latest finding"],
                 "20261024T142233123456Z-implementer", [LogPath]);
 
-        internal NeedsHumanEscalator Escalator(PauseEnvironmentCleaner? cleaner = null) => new(Runner, cleaner);
+        internal NeedsHumanEscalator Escalator() => new(Runner);
 
         internal void RemoveOwnedWorktreeBeforeCall()
         {

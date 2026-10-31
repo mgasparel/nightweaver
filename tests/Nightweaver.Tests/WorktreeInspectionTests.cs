@@ -128,7 +128,12 @@ public sealed class WorktreeInspectionTests
         Assert.Equal("bead", Assert.Single(runtime.Tmp.Entries).Id);
         Assert.Equal(before, Snapshot.FileTree(temp.Path));
         temp.WriteFile("host/tmp/demo/file", "unexpected");
-        Assert.Throws<ToolExecutionException>(() => RuntimeDirectoryReader.Read(paths, new ProjectSlug("demo")));
+        var withUnusableChild = RuntimeDirectoryReader.Read(paths, new ProjectSlug("demo"));
+        var unusable = Assert.Single(withUnusableChild.Tmp.Entries, entry => entry.State == DirectoryState.Unusable);
+        Assert.Equal("file", unusable.Id);
+        Assert.Equal(DirectoryState.Unusable, unusable.State);
+        Assert.Contains("expected a directory", unusable.FailureReason, StringComparison.Ordinal);
+        Assert.Single(withUnusableChild.Tmp.Entries, entry => entry.Id == "bead" && entry.State == DirectoryState.Present);
     }
 
     [Fact]

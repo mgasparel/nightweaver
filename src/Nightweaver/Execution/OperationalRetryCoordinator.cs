@@ -127,8 +127,17 @@ internal sealed class OperationalRetryCoordinator
         var maximumAttempts = project.Limits.MaxAttemptsPerStage;
         cancellationToken.ThrowIfCancellationRequested();
 
-        var session = await stages.OpenSessionAsync(paths, project, repository, beadId, role,
-            expectedAssignee, cancellationToken, expectedState).ConfigureAwait(false);
+        AgentStageSession session;
+        try
+        {
+            session = await stages.OpenSessionAsync(paths, project, repository, beadId, role,
+                expectedAssignee, cancellationToken, expectedState).ConfigureAwait(false);
+        }
+        catch (BeadEnvironmentException exception)
+        {
+            return await EscalateProvisionFailureAsync(paths, project, repository, beadId, role, expectedAssignee,
+                expectedState, exception, cancellationToken).ConfigureAwait(false);
+        }
         var attemptCount = 1L;
         var beforeState = session.InitialState;
         var beforeHead = session.Worktree.HeadSha;
@@ -198,8 +207,11 @@ internal sealed class OperationalRetryCoordinator
                 progress?.Invoke(new(OperationalRetryProgressKind.RetryPreparing, attemptCount + 1, maximumAttempts,
                     latest.Failure!.Kind, latest.Failure.Reason, InvocationId: latest.InvocationId,
                     LogFilePath: latest.LogFilePath));
-                resetWorktree = await reset(paths, project.Name, repository, beadId, session.Purpose, cancellationToken)
-                    .ConfigureAwait(false);
+                resetWorktree = session.PreserveInheritedChanges
+                    ? await resetter.PreserveAsync(paths, project.Name, repository, beadId, session.Purpose, cancellationToken)
+                        .ConfigureAwait(false)
+                    : await reset(paths, project.Name, repository, beadId, session.Purpose, cancellationToken)
+                        .ConfigureAwait(false);
             }
             catch (OperationCanceledException) { throw; }
             catch (ToolExecutionException exception)
@@ -260,6 +272,57 @@ internal sealed class OperationalRetryCoordinator
             _ => throw new AgentStageInputException($"Cannot safely escalate Bead '{session.BeadId}' with unsupported type '{snapshot.State.IssueType}'.")
         };
         return new(snapshot, refusal, purpose);
+    }
+
+    private async Task<OperationalRetryOutcome> EscalateProvisionFailureAsync(
+        HostPaths paths,
+        ProjectConfig project,
+        ValidatedTargetRepository repository,
+        string beadId,
+        AgentRole role,
+        string expectedAssignee,
+        BeadWorkflowState? expectedState,
+        BeadEnvironmentException exception,
+        CancellationToken cancellationToken)
+    {
+        var current = await stages.ReadRequestedStateAsync(repository, beadId, cancellationToken,
+            allowConflictingPauseLabels: true).ConfigureAwait(false);
+        AgentStageCoordinator.EnsureExpectedClaim(current, expectedAssignee, requireInProgress: true);
+        if (expectedState is not null && current.State != expectedState)
+            throw new AgentStageInputException($"Bead '{beadId}' workflow state changed before its environment failure could be escalated.");
+
+        var purpose = role is AgentRole.Planner or AgentRole.PlanChallenger
+            ? WorktreePurpose.Planning : WorktreePurpose.Delivery;
+        var failure = new AgentOperationalFailure(AgentOperationalFailureKind.EnvironmentBlocked, exception.Message);
+        var synthetic = new AgentStageResult(role, beadId, "environment-preflight", string.Empty, failure,
+            [exception.Message], current.State);
+        var request = new NeedsHumanRequest(beadId, expectedAssignee, NeedsHumanCause.EnvironmentBlocked, role,
+            $"Could not safely prepare the Bead environment at '{exception.Path}': {exception.Reason}",
+            [$"Environment path: {exception.Path}", exception.Reason], CleanupPurpose: purpose,
+            ExpectedWorkflowState: current.State);
+
+        NeedsHumanEscalationResult progress;
+        try
+        {
+            progress = await escalate(paths, project, repository, request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (NeedsHumanEscalationException escalationException)
+        {
+            var incomplete = new OperationalRetryOutcome(OperationalRetryStatus.Escalated, synthetic, 0,
+                NeedsHumanCause.EnvironmentBlocked, escalationException.Progress, null);
+            throw new OperationalRetryEscalationIncompleteException(escalationException.Message, incomplete,
+                escalationException);
+        }
+        if (!progress.Succeeded)
+        {
+            var incomplete = new OperationalRetryOutcome(OperationalRetryStatus.Escalated, synthetic, 0,
+                NeedsHumanCause.EnvironmentBlocked, progress, null);
+            throw new OperationalRetryEscalationIncompleteException(
+                $"Needs-human escalation for unusable environment '{exception.Path}' was incomplete: {string.Join("; ", progress.Failures)}",
+                incomplete);
+        }
+        return new OperationalRetryOutcome(OperationalRetryStatus.Escalated, synthetic, 0,
+            NeedsHumanCause.EnvironmentBlocked, progress, null);
     }
 
     private async Task<OperationalRetryOutcome> EscalateEnvironmentBlockAsync(

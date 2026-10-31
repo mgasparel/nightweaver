@@ -10,7 +10,8 @@ internal enum AgentOperationalFailureKind
     TimedOut,
     DirtyWorktree,
     ForbiddenHeadMutation,
-    IllegalBeadTransition
+    IllegalBeadTransition,
+    EnvironmentBlocked
 }
 
 internal sealed record AgentOperationalFailure(AgentOperationalFailureKind Kind, string Reason);
@@ -186,6 +187,7 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
         AgentOperationalFailureKind.DirtyWorktree => 2,
         AgentOperationalFailureKind.ForbiddenHeadMutation => 3,
         AgentOperationalFailureKind.IllegalBeadTransition => 4,
+        AgentOperationalFailureKind.EnvironmentBlocked => 5,
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown operational failure")
     };
 }

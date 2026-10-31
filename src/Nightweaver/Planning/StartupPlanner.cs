@@ -48,11 +48,17 @@ internal static class StartupPlanner
             if (entry.Prunable) Diagnostic(id, StartupDiagnosticCode.PrunableRegistration, entry.RawPath, entry.PruneReason);
             if (presence == DirectoryState.Missing) Diagnostic(id, StartupDiagnosticCode.MissingRegisteredPath, entry.RawPath);
             if (presence == DirectoryState.UnsafeLink) Diagnostic(id, StartupDiagnosticCode.UnsafeRuntimePath, entry.RawPath);
+            if (presence == DirectoryState.Unusable) Diagnostic(id, StartupDiagnosticCode.UnusableRuntimePath, entry.RawPath,
+                disk?.FailureReason ?? "worktree child could not be inspected");
             if (ambiguous) Diagnostic(id, StartupDiagnosticCode.AmbiguousWorktreeIdentity, entry.RawPath);
 
             var reasons = new List<string>();
-            if (bead?.Status == "closed") reasons.Add("closed");
-            foreach (var label in new[] { "needs-human", "planned", "product-decision-required" })
+            var paused = bead?.Labels.Contains("needs-human", StringComparer.Ordinal) == true
+                || bead?.Labels.Contains("product-decision-required", StringComparer.Ordinal) == true;
+            if (paused) Diagnostic(id, StartupDiagnosticCode.PausedWorktreeRetained, entry.RawPath,
+                "human-paused environments remain available for inspection and resume");
+            if (!paused && bead?.Status == "closed") reasons.Add("closed");
+            foreach (var label in paused ? Array.Empty<string>() : new[] { "planned", "product-decision-required", "needs-human" })
                 if (bead?.Labels.Contains(label, StringComparer.Ordinal) == true) reasons.Add(label);
             var supported = bead?.Status is "open" or "in_progress" or "closed";
             if (bead is not null && !supported && reasons.Count == 0)
@@ -62,9 +68,9 @@ internal static class StartupPlanner
                 removals.Add(new(id, entry, presence, reasons.AsReadOnly()));
             else
             {
-                var reusable = certain && supported;
-                var protectsTmp = presence != DirectoryState.Missing || entry.Locked || ambiguous;
-                survivors.Add(new(id, entry, presence, reusable, protectsTmp));
+                var reusable = certain && supported && !paused;
+                var protectsTmp = presence != DirectoryState.Missing || entry.Locked || ambiguous || paused;
+                survivors.Add(new(id, entry, presence, reusable, protectsTmp, paused));
                 if (!reusable && protectsTmp) uncertainIds.Add(id);
             }
         }
@@ -92,6 +98,15 @@ internal static class StartupPlanner
                 Diagnostic(directory.Id, StartupDiagnosticCode.UnsafeRuntimePath, directory.Path);
                 Diagnostic(directory.Id, StartupDiagnosticCode.TmpCleanupDeferred, directory.Path, "unsafe tmp path");
             }
+            else if (directory.State == DirectoryState.Unusable)
+            {
+                Diagnostic(directory.Id, StartupDiagnosticCode.UnusableRuntimePath, directory.Path, directory.FailureReason);
+                Diagnostic(directory.Id, StartupDiagnosticCode.TmpCleanupDeferred, directory.Path, "unusable tmp path");
+            }
+            else if (inventory.ById.TryGetValue(directory.Id, out var pausedBead)
+                && (pausedBead.Labels.Contains("needs-human", StringComparer.Ordinal)
+                    || pausedBead.Labels.Contains("product-decision-required", StringComparer.Ordinal)))
+                Diagnostic(directory.Id, StartupDiagnosticCode.TmpCleanupDeferred, directory.Path, "human-paused environment");
             else if (worktrees.State == DirectoryState.UnsafeLink || uncertainIds.Contains(directory.Id))
                 Diagnostic(directory.Id, StartupDiagnosticCode.TmpCleanupDeferred, directory.Path, "unresolved worktree backing");
             else if (!survivors.Any(entry => entry.ProtectsTmp && RuntimePaths.Comparer.Equals(entry.BeadId, directory.Id)))

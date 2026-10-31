@@ -244,7 +244,7 @@ public sealed class DeliverySlotCoordinatorTests
         Assert.NotNull(outcome.Diagnostic);
         Assert.Contains("worktree removal failed", outcome.Diagnostic);
         Assert.NotNull(outcome.PauseProgress);
-        Assert.False(outcome.PauseProgress.CleanupCompleted);
+        Assert.False(outcome.PauseProgress.EnvironmentRetained);
         Assert.True(outcome.PauseProgress.ClaimReleased);
     }
 
@@ -396,7 +396,7 @@ public sealed class DeliverySlotCoordinatorTests
         using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
-        var progress = new NeedsHumanEscalationResult(true, true, false, true, ["worktree cleanup failed"]);
+        var progress = new NeedsHumanEscalationResult(true, true, true, true, ["tracker pause verification failed"]);
 
         var outcome = await fixture.RunAsync(bead, async (role, _) =>
         {
@@ -413,14 +413,14 @@ public sealed class DeliverySlotCoordinatorTests
             {
                 case "operational":
                     throw new OperationalRetryEscalationIncompleteException(
-                        "operational escalation cleanup failed", FailureOutcome(role, bead, knownState, progress));
+                        "operational pause escalation persistence failed", FailureOutcome(role, bead, knownState, progress));
                 case "operational-cancelled":
                     throw new OperationalRetryEscalationIncompleteException(
                         "operational escalation cancelled", FailureOutcome(role, bead, knownState, progress),
                         new OperationCanceledException("escalation cancelled"));
                 case "needs-human":
-                    throw new NeedsHumanEscalationException("needs-human escalation cleanup failed", progress,
-                        new InvalidOperationException("cleanup failed"));
+                    throw new NeedsHumanEscalationException("needs-human pause escalation persistence failed", progress,
+                        new InvalidOperationException("pause persistence failed"));
                 case "cancelled":
                     var cancellation = new OperationCanceledException("escalation cancelled");
                     cancellation.Data[nameof(NeedsHumanEscalationResult)] = progress;
@@ -637,7 +637,7 @@ public sealed class DeliverySlotCoordinatorTests
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
         var calls = 0;
-        var partial = new NeedsHumanEscalationResult(true, true, false, false, ["local worktree cleanup refused"]);
+        var partial = new NeedsHumanEscalationResult(true, true, true, false, ["tracker pause verification failed"]);
 
         var outcome = await fixture.RunAsync(bead, (role, _) =>
         {

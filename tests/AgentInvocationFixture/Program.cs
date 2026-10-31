@@ -317,6 +317,15 @@ internal static class Program
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored", "keep.bin"), "ignored sentinel\n");
                 Console.WriteLine("fixture returned nonzero after creating retry cleanup sentinels");
                 return 19;
+            case "nonzero-retain":
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "attempt-untracked.txt"), "retain failed attempt evidence\n");
+                Console.WriteLine("fixture returned nonzero while inherited work was present");
+                return 19;
+            case "resume-inherited":
+                Run("git", ["add", "-A"]);
+                Run("git", ["commit", "-m", "resume inherited retained work"]);
+                UpdateLabels(beadId, "stage:implement", "stage:review");
+                break;
             case "review-dirty":
                 UpdateLabels(beadId, "stage:implement", "stage:review");
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "fixture-dirty.txt"), "dirty\n");

@@ -29,11 +29,11 @@ internal sealed record NeedsHumanRequest(
 internal sealed record NeedsHumanEscalationResult(
     bool PauseRecorded,
     bool DiagnosticRecorded,
-    bool CleanupCompleted,
+    bool EnvironmentRetained,
     bool ClaimReleased,
     IReadOnlyList<string> Failures)
 {
-    internal bool Succeeded => PauseRecorded && DiagnosticRecorded && CleanupCompleted && ClaimReleased && Failures.Count == 0;
+    internal bool Succeeded => PauseRecorded && DiagnosticRecorded && EnvironmentRetained && ClaimReleased && Failures.Count == 0;
 }
 
 internal sealed class NeedsHumanEscalationException : NightweaverException
@@ -45,7 +45,7 @@ internal sealed class NeedsHumanEscalationException : NightweaverException
 }
 
 /// <summary>
-/// Records needs-human diagnostics, safely disposes one owned pause environment, and releases its claim.
+/// Records needs-human diagnostics, retains the paused environment, and releases its claim.
 /// Callers must serialize escalation per Bead and wait for all Agent/classifier processes and log writers to settle.
 /// </summary>
 internal sealed class NeedsHumanEscalator
@@ -61,13 +61,10 @@ internal sealed class NeedsHumanEscalator
 
     private readonly BeadsReader beadsReader;
     private readonly BeadsWriter beadsWriter;
-    private readonly PauseEnvironmentCleaner cleaner;
-
-    internal NeedsHumanEscalator(IProcessRunner processRunner, PauseEnvironmentCleaner? cleaner = null)
+    internal NeedsHumanEscalator(IProcessRunner processRunner)
     {
         beadsReader = new BeadsReader(processRunner);
         beadsWriter = new BeadsWriter(processRunner);
-        this.cleaner = cleaner ?? new PauseEnvironmentCleaner(processRunner);
     }
 
     internal Task<NeedsHumanEscalationResult> EscalateAsync(
@@ -101,15 +98,15 @@ internal sealed class NeedsHumanEscalator
         var expectedStage = initialState.Stage;
         var expectedRepairCycles = initialState.RepairCycles;
 
-        var preflight = await cleaner.InspectAsync(paths, project, repository, request.BeadId, purpose, cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
+        var worktreePath = RuntimePaths.Normalize(Path.Combine(paths.WorktreesRoot(project), request.BeadId));
+        var temporaryPath = RuntimePaths.Normalize(Path.Combine(paths.TmpRoot(project), request.BeadId));
         // Prove required fields fit before the first tracker mutation. Only findings may be truncated.
-        _ = CreateDiagnostic(request, initialBead.IssueType, expectedStage, paths, project, preflight);
+        _ = CreateDiagnostic(request, initialBead.IssueType, expectedStage, paths, project, worktreePath, temporaryPath);
 
         var pauseRecorded = initialState.NeedsHuman;
         var mayReleaseClaim = false;
         var diagnosticRecorded = false;
-        var cleanupCompleted = false;
+        var environmentRetained = true;
         var claimReleased = initialUnclaimedPause;
         var failures = new List<string>();
         Exception? primaryFailure = null;
@@ -131,7 +128,8 @@ internal sealed class NeedsHumanEscalator
             cancellationToken.ThrowIfCancellationRequested();
             var paused = await ReadPausedBeadAsync(repository, request, purpose, initialClaimOwned, initialUnclaimedPause,
                 expectedStage, expectedRepairCycles, cancellationToken);
-            var diagnostic = CreateDiagnostic(request, paused.Bead.IssueType, paused.State.Stage, paths, project, preflight);
+            var diagnostic = CreateDiagnostic(request, paused.Bead.IssueType, paused.State.Stage, paths, project,
+                worktreePath, temporaryPath);
             cancellationToken.ThrowIfCancellationRequested();
             await beadsWriter.AddCommentAsync(repository, request.BeadId, diagnostic, cancellationToken);
             diagnosticRecorded = true;
@@ -140,15 +138,6 @@ internal sealed class NeedsHumanEscalator
             cancellationToken.ThrowIfCancellationRequested();
             _ = await ReadPausedBeadAsync(repository, request, purpose, initialClaimOwned, initialUnclaimedPause,
                 expectedStage, expectedRepairCycles, cancellationToken);
-            if (preflight.Safe)
-            {
-                await cleaner.CleanAsync(paths, project, repository, request.BeadId, preflight, cancellationToken);
-                cleanupCompleted = true;
-            }
-            else
-            {
-                failures.Add(preflight.Refusal ?? "Pause cleanup was refused during preflight.");
-            }
         }
         catch (OperationCanceledException exception)
         {
@@ -196,7 +185,7 @@ internal sealed class NeedsHumanEscalator
 
         if (cancellationFailure is not null)
         {
-            var progress = new NeedsHumanEscalationResult(pauseRecorded, diagnosticRecorded, cleanupCompleted, claimReleased,
+            var progress = new NeedsHumanEscalationResult(pauseRecorded, diagnosticRecorded, environmentRetained, claimReleased,
                 failures.AsReadOnly());
             cancellationFailure.Data[nameof(NeedsHumanEscalationResult)] = progress;
             throw cancellationFailure;
@@ -219,13 +208,13 @@ internal sealed class NeedsHumanEscalator
 
             var failure = primaryFailure ?? releaseFailure!;
             failures.Insert(0, failure.Message);
-            var progress = new NeedsHumanEscalationResult(pauseRecorded, diagnosticRecorded, cleanupCompleted, claimReleased,
+            var progress = new NeedsHumanEscalationResult(pauseRecorded, diagnosticRecorded, environmentRetained, claimReleased,
                 failures.AsReadOnly());
             throw new NeedsHumanEscalationException($"Needs-human escalation for Bead '{request.BeadId}' did not complete: {failure.Message}",
                 progress, failure);
         }
 
-        return new NeedsHumanEscalationResult(pauseRecorded, diagnosticRecorded, cleanupCompleted, claimReleased,
+        return new NeedsHumanEscalationResult(pauseRecorded, diagnosticRecorded, environmentRetained, claimReleased,
             failures.AsReadOnly());
     }
 
@@ -257,15 +246,15 @@ internal sealed class NeedsHumanEscalator
             && !(purpose == WorktreePurpose.Planning && state.IssueType == "bug"))
             throw new ToolExecutionException($"Bead '{request.BeadId}' changed type during needs-human escalation.");
         if (!state.NeedsHuman || state.Planned || state.Stage != expectedStage || state.RepairCycles != expectedRepairCycles)
-            throw new ToolExecutionException($"Bead '{request.BeadId}' workflow state changed during needs-human escalation; refusing cleanup.");
+            throw new ToolExecutionException($"Bead '{request.BeadId}' workflow state changed during needs-human escalation; refusing further tracker changes.");
         if (initialClaimOwned)
         {
             if (state.Status != "in_progress" || !string.Equals(bead.Assignee, request.ExpectedAssignee, StringComparison.Ordinal))
-                throw new ToolExecutionException($"Bead '{request.BeadId}' claim changed during needs-human escalation; refusing cleanup.");
+                throw new ToolExecutionException($"Bead '{request.BeadId}' claim changed during needs-human escalation; refusing further tracker changes.");
         }
         else if (!initialUnclaimedPause || state.Status != "open" || bead.Assignee is not null)
         {
-            throw new ToolExecutionException($"Bead '{request.BeadId}' acquired a claim during needs-human cleanup recovery; refusing to touch its environment.");
+            throw new ToolExecutionException($"Bead '{request.BeadId}' acquired a claim during needs-human pause recovery; refusing to touch its environment.");
         }
         return (bead, state);
     }
@@ -311,9 +300,9 @@ internal sealed class NeedsHumanEscalator
         if (state.Status == "closed" || state.Status is not ("open" or "in_progress") || state.Planned)
             throw new AgentStageInputException($"Bead '{bead.Id}' is terminal or planned and cannot be escalated to needs-human.");
         if (purpose == WorktreePurpose.Planning && bead.IssueType is not ("feature" or "bug"))
-            throw new AgentStageInputException($"Planning cleanup requires a Product Bead; '{bead.Id}' is '{bead.IssueType}'.");
+            throw new AgentStageInputException($"Planning pause requires a Product Bead; '{bead.Id}' is '{bead.IssueType}'.");
         if (purpose == WorktreePurpose.Delivery && bead.IssueType != "task")
-            throw new AgentStageInputException($"Delivery cleanup requires a Plan Bead; '{bead.Id}' is '{bead.IssueType}'.");
+            throw new AgentStageInputException($"Delivery pause requires a Plan Bead; '{bead.Id}' is '{bead.IssueType}'.");
         return purpose;
     }
 
@@ -391,14 +380,14 @@ internal sealed class NeedsHumanEscalator
     }
 
     private static string CreateDiagnostic(NeedsHumanRequest request, string issueType, string? stage,
-        HostPaths paths, ProjectSlug project, PauseCleanupPlan preflight)
+        HostPaths paths, ProjectSlug project, string worktreePath, string temporaryPath)
     {
         var logDirectory = RuntimePaths.Normalize(Path.Combine(paths.LogsRoot(project), request.BeadId));
         var logs = request.LogFilePaths is { Count: > 0 } ? request.LogFilePaths.ToArray() : ["unavailable"];
         var body = new NeedsHumanDiagnostic("nightweaver-needs-human-v1", request.BeadId, issueType,
             stage ?? "(none)", CauseName(request.Cause), AgentRoles.ToConfigKey(request.Role), request.Reason,
             "", request.InvocationId ?? "unavailable", logDirectory, logs,
-            preflight.Safe ? "passed" : preflight.Refusal ?? "refused");
+            $"retained; worktree_path='{worktreePath}'; temporary_path='{temporaryPath}'");
         var emptyLength = SerializeDiagnostic(body).Length;
         if (emptyLength > MaxDiagnosticBytes)
             throw new AgentStageInputException("Required needs-human diagnostic fields exceed the 32 KiB comment limit.");
@@ -487,7 +476,7 @@ internal sealed class NeedsHumanEscalator
     };
 
     private static string CreateSupplementalComment(string beadId, string failure) =>
-        JsonSerializer.Serialize(new { schema = "nightweaver-needs-human-cleanup-failure-v1", bead_id = beadId, failure }, DiagnosticJsonOptions);
+        JsonSerializer.Serialize(new { schema = "nightweaver-needs-human-pause-failure-v1", bead_id = beadId, failure }, DiagnosticJsonOptions);
 
     private sealed record NeedsHumanDiagnostic(
         string Schema,
@@ -501,5 +490,5 @@ internal sealed class NeedsHumanEscalator
         string InvocationId,
         string LogDirectory,
         IReadOnlyList<string> LogFiles,
-        string CleanupPreflight);
+        string EnvironmentRetention);
 }

@@ -40,7 +40,7 @@ internal static class DryRunReportWriter
         if (report.StartupPlan.SurvivingWorktrees.Count == 0) builder.Append("  (none)\n");
         foreach (var retained in report.StartupPlan.SurvivingWorktrees)
             builder.Append("  ").Append(JsonSerializer.Serialize(retained.BeadId)).Append(": ").Append(JsonSerializer.Serialize(retained.Registration.Path))
-                .Append(retained.Reusable ? "; reusable" : "; retained conservatively").Append("; presence ").Append(retained.Presence)
+                .Append(retained.Paused ? "; retained for human pause" : retained.Reusable ? "; reusable" : "; retained conservatively").Append("; presence ").Append(retained.Presence)
                 .Append("; ").Append(Checkout(retained.Registration)).Append('\n');
         builder.Append("\nOrphan tmp deletions (hypothetical)\n");
         if (report.StartupPlan.OrphanTmp.Count == 0) builder.Append("  (none)\n");

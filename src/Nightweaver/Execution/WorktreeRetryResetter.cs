@@ -40,6 +40,25 @@ internal sealed class WorktreeRetryResetter
             .ConfigureAwait(false);
     }
 
+    internal async Task<ProvisionedWorktree> PreserveAsync(
+        HostPaths paths,
+        ProjectSlug project,
+        ValidatedTargetRepository repository,
+        string beadId,
+        WorktreePurpose purpose,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(repository);
+        if (!WorktreeProvisioner.IsSafeBeadId(beadId) || !char.IsAsciiLetterOrDigit(beadId[0]))
+            throw new AgentStageInputException("Bead ID is not a safe retained retry worktree identity.");
+        cancellationToken.ThrowIfCancellationRequested();
+        await provisioner.ValidateRetryWorktreeAsync(paths, project, repository, beadId, purpose, cancellationToken)
+            .ConfigureAwait(false);
+        return await provisioner.VerifyRetainedRetryWorktreeAsync(paths, project, repository, beadId, purpose,
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task RunDestructiveCommandAsync(
         HostPaths paths,
         ProjectSlug project,

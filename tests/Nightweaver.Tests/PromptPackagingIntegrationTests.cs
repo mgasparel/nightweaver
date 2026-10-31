@@ -46,7 +46,8 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
         Assert.Contains("build and boot the software", qa, StringComparison.Ordinal);
         Assert.Contains("exact commands plus observed behavior", qa, StringComparison.Ordinal);
         Assert.Contains("Stop any test services", qa, StringComparison.Ordinal);
-        Assert.Contains("git status --porcelain` is empty", qa, StringComparison.Ordinal);
+        Assert.Contains("remove temporary files, generated artifacts, and untracked test data created by this run", qa, StringComparison.Ordinal);
+        Assert.Contains("If inherited changes prevent required checks, report them without removing them", qa, StringComparison.Ordinal);
         Assert.Contains("stage:merge", qa, StringComparison.Ordinal);
         Assert.Contains("Keep status `in_progress`", qa, StringComparison.Ordinal);
         Assert.Contains("increment it exactly once", qa, StringComparison.Ordinal);
@@ -73,10 +74,10 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
             Assert.Contains("preserve `repair_cycles`", prompt, StringComparison.Ordinal);
             Assert.Contains("keep status `in_progress` with the current assignee", prompt, StringComparison.Ordinal);
             Assert.Contains("exit cleanly with code zero", prompt, StringComparison.Ordinal);
-            Assert.Contains("the Orchestrator safely disposes the owned local environment and releases the claim", prompt, StringComparison.Ordinal);
+            Assert.Contains("the Orchestrator retains the environment and releases only its still-owned claim", prompt, StringComparison.Ordinal);
         }
 
-        Assert.Contains("commit your changes on `nightweaver/<bead-id>` and push them", implementer, StringComparison.Ordinal);
+        Assert.Contains("Commit and push your changes only when that is appropriate", implementer, StringComparison.Ordinal);
         Assert.Contains("Retain your current stage", implementer, StringComparison.Ordinal);
 
         Assert.Contains("Remain read-only", reviewer, StringComparison.Ordinal);

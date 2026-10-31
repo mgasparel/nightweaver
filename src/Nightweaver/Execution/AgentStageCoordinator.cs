@@ -23,7 +23,8 @@ internal sealed record AgentStageSession(
     WorktreePurpose Purpose,
     ProvisionedWorktree Worktree,
     BeadWorkflowState InitialState,
-    AgentDispatchContext DispatchContext);
+    AgentDispatchContext DispatchContext,
+    bool PreserveInheritedChanges);
 
 /// <summary>Coordinates exactly one provision, preparation, execution, and post-exit verification for a Bead stage.</summary>
 internal sealed class AgentStageCoordinator
@@ -98,7 +99,8 @@ internal sealed class AgentStageCoordinator
 
         _ = ParseProvisionedHead(worktree.HeadSha);
         return new AgentStageSession(hostPaths, project, repository, beadId, role, purpose, worktree,
-            fresh.State, new AgentDispatchContext(fresh.State.Id, fresh.State.IssueType, fresh.State.Stage, fresh.State.RepairCycles));
+            fresh.State, new AgentDispatchContext(fresh.State.Id, fresh.State.IssueType, fresh.State.Stage, fresh.State.RepairCycles),
+            worktree.WasDirty);
     }
 
     internal async Task<AgentStageResult> RunAttemptAsync(

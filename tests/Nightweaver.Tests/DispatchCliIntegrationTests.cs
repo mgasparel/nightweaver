@@ -72,7 +72,9 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         Assert.Equal("open", bead.Status);
         Assert.Null(bead.Assignee);
         Assert.Contains("needs-human", bead.Labels);
-        Assert.False(Directory.Exists(fixture.WorktreePath(beadId)));
+        Assert.True(Directory.Exists(fixture.WorktreePath(beadId)));
+        Assert.Equal("nightweaver/" + beadId,
+            fixture.Target.Run("git", ["-C", fixture.WorktreePath(beadId), "branch", "--show-current"]).Trim());
         Assert.Single(Directory.EnumerateFiles(Path.Combine(fixture.Host, "logs", "demo", beadId), "*.log"));
     }
 

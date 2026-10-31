@@ -13,16 +13,16 @@ internal sealed record ProductDecisionPauseRequest(
     OperationalRetryOutcome LastStage);
 
 internal sealed record ProductDecisionPauseResult(
-    bool CleanupCompleted,
+    bool EnvironmentRetained,
     bool ClaimReleased,
     BeadWorkflowState? FinalState,
     IReadOnlyList<string> Failures)
 {
-    internal bool Succeeded => CleanupCompleted && ClaimReleased && Failures.Count == 0;
+    internal bool Succeeded => EnvironmentRetained && ClaimReleased && Failures.Count == 0;
 }
 
 /// <summary>
-/// Safely disposes the owned local execution environment for a product-decision pause and releases the claim.
+/// Retains the owned local execution environment for a product-decision pause and releases the claim.
 /// </summary>
 internal sealed class ProductDecisionPauseHandler
 {
@@ -36,18 +36,14 @@ internal sealed class ProductDecisionPauseHandler
 
     private readonly BeadsReader beadsReader;
     private readonly BeadsWriter beadsWriter;
-    private readonly PauseEnvironmentCleaner cleaner;
-
     internal ProductDecisionPauseHandler(
         IProcessRunner processRunner,
-        PauseEnvironmentCleaner? cleaner = null,
         BeadsReader? beadsReader = null,
         BeadsWriter? beadsWriter = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         this.beadsReader = beadsReader ?? new BeadsReader(processRunner);
         this.beadsWriter = beadsWriter ?? new BeadsWriter(processRunner);
-        this.cleaner = cleaner ?? new PauseEnvironmentCleaner(processRunner);
     }
 
     internal async Task<ProductDecisionPauseResult> PauseAsync(
@@ -76,17 +72,13 @@ internal sealed class ProductDecisionPauseHandler
             || !string.Equals(initialBead.Assignee, request.ExpectedAssignee, StringComparison.Ordinal))
         {
             return new ProductDecisionPauseResult(
-                false,
+                true,
                 false,
                 initialState,
                 ["Bead workflow state or claim ownership changed before pause disposition."]);
         }
 
-        var preflight = await cleaner.InspectAsync(
-            paths, project, repository, request.BeadId, WorktreePurpose.Delivery, cancellationToken).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var cleanupCompleted = false;
+        var environmentRetained = true;
         var claimReleased = false;
         var mayReleaseClaim = true;
         var failures = new List<string>();
@@ -98,30 +90,7 @@ internal sealed class ProductDecisionPauseHandler
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!preflight.Safe)
-            {
-                failures.Add(preflight.Refusal ?? "Pause cleanup preflight refused.");
-            }
-            else
-            {
-                await VerifyActiveClaimAsync(repository, request, cancellationToken).ConfigureAwait(false);
-
-                async Task GuardBetweenDestructiveOperationsAsync(string _, CancellationToken token)
-                {
-                    await VerifyActiveClaimAsync(repository, request, token).ConfigureAwait(false);
-                }
-
-                await cleaner.CleanAsync(
-                    paths,
-                    project,
-                    repository,
-                    request.BeadId,
-                    preflight,
-                    cancellationToken,
-                    GuardBetweenDestructiveOperationsAsync).ConfigureAwait(false);
-
-                cleanupCompleted = true;
-            }
+            await VerifyActiveClaimAsync(repository, request, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException exception)
         {
@@ -213,12 +182,12 @@ internal sealed class ProductDecisionPauseHandler
 
         if (cancellationFailure is not null)
         {
-            var progress = new ProductDecisionPauseResult(cleanupCompleted, claimReleased, finalState, failures.AsReadOnly());
+            var progress = new ProductDecisionPauseResult(environmentRetained, claimReleased, finalState, failures.AsReadOnly());
             cancellationFailure.Data[nameof(ProductDecisionPauseResult)] = progress;
             throw cancellationFailure;
         }
 
-        return new ProductDecisionPauseResult(cleanupCompleted, claimReleased, finalState, failures.AsReadOnly());
+        return new ProductDecisionPauseResult(environmentRetained, claimReleased, finalState, failures.AsReadOnly());
     }
 
     private async Task<BeadSnapshot> ReadBeadAsync(
@@ -263,6 +232,6 @@ internal sealed class ProductDecisionPauseHandler
 
     private static string CreateSupplementalComment(string beadId, string failure) =>
         JsonSerializer.Serialize(
-            new { schema = "nightweaver-product-decision-cleanup-failure-v1", bead_id = beadId, failure },
+            new { schema = "nightweaver-product-decision-pause-failure-v1", bead_id = beadId, failure },
             DiagnosticJsonOptions);
 }

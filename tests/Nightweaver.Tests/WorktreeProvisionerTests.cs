@@ -38,16 +38,14 @@ public sealed class WorktreeProvisionerTests
     }
 
     [Fact]
-    public async Task FreshDeliveryUsesExactBranchAndCleansOnlyTheIsolatedCheckout()
+    public async Task FreshDeliveryUsesExactBranchAndVerifiesTheNewCheckoutClean()
     {
         using var fixture = new ProvisionerScript(remoteBranchExists: false);
         await fixture.Provision(WorktreePurpose.Delivery, TestContext.Current.CancellationToken);
         Assert.Contains(fixture.Requests, request => request.Arguments.SequenceEqual(
             ["worktree", "add", "--no-track", "-b", $"nightweaver/{fixture.BeadId}", fixture.Destination, "refs/remotes/origin/main"]));
-        Assert.Contains(fixture.Requests, request => request.Arguments.SequenceEqual(["reset", "--hard", "HEAD"])
-            && request.WorkingDirectory == fixture.Destination);
-        Assert.Contains(fixture.Requests, request => request.Arguments.SequenceEqual(["clean", "-fd"])
-            && request.WorkingDirectory == fixture.Destination);
+        Assert.DoesNotContain(fixture.Requests, request => request.Arguments.SequenceEqual(["reset", "--hard", "HEAD"]));
+        Assert.DoesNotContain(fixture.Requests, request => request.Arguments.SequenceEqual(["clean", "-fd"]));
         Assert.DoesNotContain(fixture.Requests, IsWorktreeLocalMutationAtTargetRoot);
         Assert.All(fixture.Requests.Where(request => request.Arguments[0] is "reset" or "clean"), request =>
             Assert.Equal(fixture.Destination, request.WorkingDirectory));
@@ -68,8 +66,9 @@ public sealed class WorktreeProvisionerTests
     public async Task InvalidVerificationOutputFailsWithoutReturningAResult(string failure)
     {
         using var fixture = new ProvisionerScript(finalVerificationFailure: failure);
-        var exception = await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
-        Assert.Contains(failure == "bad-head" ? "invalid full commit SHA" : "contains tracked changes", exception.Message, StringComparison.Ordinal);
+        var exception = await Assert.ThrowsAsync<BeadEnvironmentException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
+        Assert.Equal(fixture.Destination, exception.Path);
+        Assert.Contains(failure == "bad-head" ? "invalid full commit SHA" : "new worktree is unexpectedly dirty", exception.Reason, StringComparison.Ordinal);
         Assert.DoesNotContain(fixture.Requests, request => request.Arguments[0] is "reset" or "clean");
     }
 
@@ -77,7 +76,7 @@ public sealed class WorktreeProvisionerTests
     public async Task FetchFailureStopsBeforeDirectoryCreationOrWorktreeAddAndRetainsStderr()
     {
         using var fixture = new ProvisionerScript(fetchFailure: true);
-        var exception = await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
+        var exception = await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
         Assert.Contains("fetch origin", exception.Message, StringComparison.Ordinal);
         Assert.Equal("fixture fetch error", exception.StandardError);
         Assert.DoesNotContain(fixture.Requests, request => request.Arguments[0] == "worktree" && request.Arguments[1] == "add");
@@ -114,7 +113,7 @@ public sealed class WorktreeProvisionerTests
     public async Task InvalidBeadIdFailsBeforeAnyGitRequestOrDirectoryCreation(string id)
     {
         using var fixture = new ProvisionerScript(beadId: id);
-        await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
         Assert.Empty(fixture.Requests);
         Assert.False(Directory.Exists(fixture.WorktreesRoot));
     }
@@ -124,7 +123,7 @@ public sealed class WorktreeProvisionerTests
     {
         using var fixture = new ProvisionerScript();
         var overlapping = new HostPaths(fixture.Target);
-        await Assert.ThrowsAsync<ToolExecutionException>(() => new WorktreeProvisioner(fixture.Runner).ProvisionAsync(
+        await Assert.ThrowsAnyAsync<ToolExecutionException>(() => new WorktreeProvisioner(fixture.Runner).ProvisionAsync(
             overlapping, new ProjectSlug("demo"), new(fixture.Target, "main"), fixture.BeadId,
             WorktreePurpose.Planning, TestContext.Current.CancellationToken));
         Assert.Empty(fixture.Requests);
@@ -134,7 +133,7 @@ public sealed class WorktreeProvisionerTests
     public async Task BranchRegisteredAtAnotherPathFailsBeforeFetch()
     {
         using var fixture = new ProvisionerScript(branchAtForeignPath: true);
-        var exception = await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
+        var exception = await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
         Assert.Contains("registered outside the canonical destination", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(fixture.Requests, request => request.Arguments[0] == "fetch");
         Assert.False(Directory.Exists(fixture.WorktreesRoot));
@@ -144,7 +143,7 @@ public sealed class WorktreeProvisionerTests
     public async Task OccupiedUnregisteredDestinationFailsBeforeFetch()
     {
         using var fixture = new ProvisionerScript(occupiedDestination: true);
-        await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
         Assert.DoesNotContain(fixture.Requests, request => request.Arguments[0] == "fetch");
         Assert.Equal("preserve", File.ReadAllText(Path.Combine(fixture.Destination, "sentinel")));
     }
@@ -153,7 +152,7 @@ public sealed class WorktreeProvisionerTests
     public async Task LockedRegistrationFailsBeforeFetch()
     {
         using var fixture = new ProvisionerScript(existingDestination: true, lockedDestination: true);
-        await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
         Assert.DoesNotContain(fixture.Requests, request => request.Arguments[0] == "fetch");
         Assert.Equal("preserve", File.ReadAllText(Path.Combine(fixture.Destination, "sentinel")));
     }
@@ -162,7 +161,7 @@ public sealed class WorktreeProvisionerTests
     public async Task WrongPurposeRegistrationFailsBeforeFetch()
     {
         using var fixture = new ProvisionerScript(existingDestination: true, existingBranch: "refs/heads/main");
-        await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
         Assert.DoesNotContain(fixture.Requests, request => request.Arguments[0] == "fetch");
     }
 
@@ -170,7 +169,7 @@ public sealed class WorktreeProvisionerTests
     public async Task PlanningRejectsAttachedRegistrationBeforeFetch()
     {
         using var fixture = new ProvisionerScript(existingDestination: true, existingBranch: "refs/heads/other");
-        await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
         Assert.DoesNotContain(fixture.Requests, request => request.Arguments[0] == "fetch");
     }
 
@@ -178,7 +177,7 @@ public sealed class WorktreeProvisionerTests
     public async Task OrphanLocalDeliveryBranchFailsBeforeFetch()
     {
         using var fixture = new ProvisionerScript(localBranchExists: true);
-        var error = await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
+        var error = await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Delivery, TestContext.Current.CancellationToken));
         Assert.Contains("already exists without its canonical registered worktree", error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(fixture.Requests, request => request.Arguments[0] == "fetch");
         Assert.False(Directory.Exists(fixture.WorktreesRoot));
@@ -188,7 +187,7 @@ public sealed class WorktreeProvisionerTests
     public async Task MissingRegisteredDirectoryFailsBeforeFetch()
     {
         using var fixture = new ProvisionerScript(existingDestination: true, missingRegisteredDestination: true);
-        await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
         Assert.DoesNotContain(fixture.Requests, request => request.Arguments[0] == "fetch");
     }
 
@@ -196,7 +195,7 @@ public sealed class WorktreeProvisionerTests
     public async Task PrunableRegistrationFailsBeforeFetch()
     {
         using var fixture = new ProvisionerScript(existingDestination: true, prunableDestination: true);
-        await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
         Assert.DoesNotContain(fixture.Requests, request => request.Arguments[0] == "fetch");
     }
 
@@ -208,7 +207,7 @@ public sealed class WorktreeProvisionerTests
         File.WriteAllText(Path.Combine(external.Path, "sentinel"), "preserve");
         Directory.CreateDirectory(fixture.Host);
         WorktreeInspectionTests.CreateDirectoryLink(Path.Combine(fixture.Host, "worktrees"), external.Path);
-        await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
         Assert.DoesNotContain(fixture.Requests, request => request.Arguments[0] == "fetch");
         Assert.Equal("preserve", File.ReadAllText(Path.Combine(external.Path, "sentinel")));
     }
@@ -221,7 +220,7 @@ public sealed class WorktreeProvisionerTests
         var alias = Path.Combine(fixture.WorktreesRoot, fixture.BeadId.ToUpperInvariant());
         Directory.CreateDirectory(alias);
         File.WriteAllText(Path.Combine(alias, "sentinel"), "preserve case alias");
-        await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
         Assert.DoesNotContain(fixture.Requests, request => request.Arguments[0] == "fetch");
         Assert.Equal("preserve case alias", File.ReadAllText(Path.Combine(alias, "sentinel")));
     }
@@ -235,7 +234,7 @@ public sealed class WorktreeProvisionerTests
         var link = Path.Combine(fixture.Destination, "nested-link");
         WorktreeInspectionTests.CreateDirectoryLink(link, external.Path);
         var before = File.ReadAllText(Path.Combine(external.Path, "sentinel"));
-        await Assert.ThrowsAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ToolExecutionException>(() => fixture.Provision(WorktreePurpose.Planning, TestContext.Current.CancellationToken));
         Assert.DoesNotContain(fixture.Requests, request => request.Arguments[0] == "fetch");
         Assert.Equal(before, File.ReadAllText(Path.Combine(external.Path, "sentinel")));
     }

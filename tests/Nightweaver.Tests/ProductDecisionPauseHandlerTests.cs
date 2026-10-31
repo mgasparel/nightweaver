@@ -12,7 +12,7 @@ public sealed class ProductDecisionPauseHandlerTests
     [InlineData("Implementer", "")]
     [InlineData("Reviewer", "stage:review")]
     [InlineData("Qa", "stage:qa")]
-    public async Task SuccessfulPauseRemovesDeliveryWorktreeBranchAndTmpAndReleasesClaim(
+    public async Task SuccessfulPauseRetainsDeliveryWorktreeBranchAndTmpAndReleasesClaim(
         string roleName, string stage)
     {
         var role = Enum.Parse<AgentRole>(roleName);
@@ -25,28 +25,27 @@ public sealed class ProductDecisionPauseHandlerTests
         var result = await handler.PauseAsync(target.Paths, target.Project, target.Repository, request, CancellationToken.None);
 
         Assert.True(result.Succeeded);
-        Assert.True(result.CleanupCompleted);
+        Assert.True(result.EnvironmentRetained);
         Assert.True(result.ClaimReleased);
         Assert.Empty(result.Failures);
         Assert.Contains("product-decision-required", target.Labels);
         if (stage.Length > 0) Assert.Contains(stage, target.Labels);
         Assert.Equal("open", target.Status);
         Assert.Null(target.Assignee);
-        Assert.False(Directory.Exists(target.WorktreePath));
-        Assert.False(Directory.Exists(target.TemporaryPath));
+        Assert.True(Directory.Exists(target.WorktreePath));
+        Assert.True(Directory.Exists(target.TemporaryPath));
+        Assert.Equal("tmp payload", File.ReadAllText(Path.Combine(target.TemporaryPath, "invocation", "tmp.txt")));
         Assert.Equal("settled log stays", File.ReadAllText(target.LogPath));
 
         var gitArgs = target.Runner.Requests.Where(r => r.FileName == "git").Select(r => r.Arguments).ToArray();
-        Assert.Contains(gitArgs, args => args.Contains("worktree") && args.Contains("remove"));
-        Assert.Contains(gitArgs, args => args.Contains("branch") && args.Contains("-D"));
-        Assert.Contains(gitArgs, args => args.Contains("worktree") && args.Contains("prune"));
+        Assert.Empty(gitArgs);
 
         var bdWrites = target.Runner.Requests.Where(IsWrite).ToArray();
         Assert.Contains(bdWrites, w => w.Arguments.Contains("--status") && w.Arguments.Contains("open") && w.Arguments.Contains("--assignee") && w.Arguments.Contains(""));
     }
 
     [Fact]
-    public async Task PreflightRefusalLeavesResourcesIntactAndReleasesConfirmedClaim()
+    public async Task UnsafeBackingInspectionIsNotRequiredForPauseRetention()
     {
         using var target = new FakePauseTarget("task", ["stage:review", "product-decision-required"])
         {
@@ -57,11 +56,10 @@ public sealed class ProductDecisionPauseHandlerTests
         var request = target.Request(AgentRole.Reviewer, "stage:review");
         var result = await handler.PauseAsync(target.Paths, target.Project, target.Repository, request, CancellationToken.None);
 
-        Assert.False(result.Succeeded);
-        Assert.False(result.CleanupCompleted);
+        Assert.True(result.Succeeded);
+        Assert.True(result.EnvironmentRetained);
         Assert.True(result.ClaimReleased);
-        Assert.NotEmpty(result.Failures);
-        Assert.Contains("refused", result.Failures[0], StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(result.Failures);
         Assert.True(Directory.Exists(target.WorktreePath));
         Assert.True(Directory.Exists(target.TemporaryPath));
         Assert.Equal("open", target.Status);
@@ -69,7 +67,7 @@ public sealed class ProductDecisionPauseHandlerTests
     }
 
     [Fact]
-    public async Task OwnershipChangeBeforeCleanupStopsDestructiveWorkAndPreventsReleasingForeignClaim()
+    public async Task OwnershipChangePreventsClaimReleaseAndPreservesEnvironment()
     {
         using var target = new FakePauseTarget("task", ["stage:implement", "product-decision-required"])
         {
@@ -81,7 +79,7 @@ public sealed class ProductDecisionPauseHandlerTests
         var result = await handler.PauseAsync(target.Paths, target.Project, target.Repository, request, CancellationToken.None);
 
         Assert.False(result.Succeeded);
-        Assert.False(result.CleanupCompleted);
+        Assert.True(result.EnvironmentRetained);
         Assert.False(result.ClaimReleased);
         Assert.Equal("someone-else", target.Assignee);
         Assert.True(Directory.Exists(target.WorktreePath));
@@ -91,30 +89,29 @@ public sealed class ProductDecisionPauseHandlerTests
     }
 
     [Fact]
-    public async Task CleanupFailureWritesSupplementalCommentWhenClaimOwned()
+    public async Task MalformedLocalGitInventoryDoesNotBlockPauseDisposition()
     {
         using var target = new FakePauseTarget("task", ["stage:review", "product-decision-required"])
         {
-            FailBranchDelete = true
+            MalformedWorktreeOutput = true
         };
 
         var handler = target.Handler();
         var request = target.Request(AgentRole.Reviewer, "stage:review");
         var result = await handler.PauseAsync(target.Paths, target.Project, target.Repository, request, CancellationToken.None);
 
-        Assert.False(result.Succeeded);
-        Assert.False(result.CleanupCompleted);
+        Assert.True(result.Succeeded);
+        Assert.True(result.EnvironmentRetained);
         Assert.True(result.ClaimReleased);
         Assert.Equal("open", target.Status);
         Assert.Null(target.Assignee);
-        Assert.Single(target.Comments);
-        using var doc = JsonDocument.Parse(target.Comments[0]);
-        Assert.Equal("nightweaver-product-decision-cleanup-failure-v1", doc.RootElement.GetProperty("schema").GetString());
-        Assert.Equal(target.BeadId, doc.RootElement.GetProperty("bead_id").GetString());
+        Assert.Empty(target.Comments);
+        Assert.True(Directory.Exists(target.WorktreePath));
+        Assert.True(Directory.Exists(target.TemporaryPath));
     }
 
     [Fact]
-    public async Task FailedClaimReleaseReportsIncompleteWithoutUndoingCleanup()
+    public async Task FailedClaimReleaseReportsIncompleteAndKeepsWorktreeAndTmp()
     {
         using var target = new FakePauseTarget("task", ["stage:qa", "product-decision-required"])
         {
@@ -126,30 +123,31 @@ public sealed class ProductDecisionPauseHandlerTests
         var result = await handler.PauseAsync(target.Paths, target.Project, target.Repository, request, CancellationToken.None);
 
         Assert.False(result.Succeeded);
-        Assert.True(result.CleanupCompleted);
+        Assert.True(result.EnvironmentRetained);
         Assert.False(result.ClaimReleased);
         Assert.Equal("in_progress", target.Status);
-        Assert.False(Directory.Exists(target.WorktreePath));
-        Assert.False(Directory.Exists(target.TemporaryPath));
+        Assert.True(Directory.Exists(target.WorktreePath));
+        Assert.True(Directory.Exists(target.TemporaryPath));
     }
 
     [Fact]
-    public async Task CancellationDuringCleanupStopsCleanupAndUsesBoundedGuardedRelease()
+    public async Task CancellationBeforeMutationPropagatesWithoutChangingClaimOrEnvironment()
     {
         using var target = new FakePauseTarget("task", ["stage:implement", "product-decision-required"]);
         using var cancellation = new CancellationTokenSource();
-        target.CancelDuringCleanup = cancellation;
+        cancellation.Cancel();
 
         var handler = target.Handler();
         var request = target.Request(AgentRole.Implementer, "stage:implement");
         var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             handler.PauseAsync(target.Paths, target.Project, target.Repository, request, cancellation.Token));
 
-        var progress = Assert.IsType<ProductDecisionPauseResult>(error.Data[nameof(ProductDecisionPauseResult)]);
-        Assert.False(progress.CleanupCompleted);
-        Assert.True(progress.ClaimReleased);
-        Assert.Equal("open", target.Status);
-        Assert.Null(target.Assignee);
+        Assert.Null(error.Data[nameof(ProductDecisionPauseResult)]);
+        Assert.DoesNotContain(target.Runner.Requests, IsWrite);
+        Assert.Equal("in_progress", target.Status);
+        Assert.Equal("nightweaver:demo", target.Assignee);
+        Assert.True(Directory.Exists(target.WorktreePath));
+        Assert.True(Directory.Exists(target.TemporaryPath));
     }
 
     private static bool IsWrite(ProcessRequest request) => request.FileName == "bd"

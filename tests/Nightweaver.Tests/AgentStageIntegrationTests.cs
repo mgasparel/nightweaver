@@ -32,7 +32,7 @@ public sealed class AgentStageRetryIntegrationTests : AgentStageIntegrationTestS
     }
 
     [Fact]
-    public async Task DuplicateRetryFailureUsesRealClassifierAndEscalatorThenCleansDeliveryEnvironment()
+    public async Task DuplicateRetryFailureUsesRealClassifierAndEscalatorThenRetainsDeliveryEnvironment()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
@@ -51,9 +51,9 @@ public sealed class AgentStageRetryIntegrationTests : AgentStageIntegrationTestS
         Assert.True(state.NeedsHuman);
         Assert.Equal("open", beadSnapshot.Status);
         Assert.Null(beadSnapshot.Assignee);
-        Assert.False(Directory.Exists(target.WorktreePath(bead)));
-        Assert.False(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
-        Assert.Equal(1, GitFixture.RunGit(target.Path, ["show-ref", "--verify", "--quiet", $"refs/heads/nightweaver/{bead}"], allowFailure: true));
+        Assert.True(Directory.Exists(target.WorktreePath(bead)));
+        Assert.True(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
+        Assert.Equal(0, GitFixture.RunGit(target.Path, ["show-ref", "--verify", "--quiet", $"refs/heads/nightweaver/{bead}"], allowFailure: true));
         var logs = Directory.GetFiles(System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead), "*.log");
         Assert.Equal(3, logs.Length);
         Assert.Contains(outcome.StageResult.LogFilePath, logs, StringComparer.Ordinal);
@@ -90,9 +90,9 @@ public sealed class AgentStageRetryIntegrationTests : AgentStageIntegrationTestS
         Assert.True(state.NeedsHuman);
         Assert.Equal("open", beadSnapshot.Status);
         Assert.Null(beadSnapshot.Assignee);
-        Assert.False(Directory.Exists(target.WorktreePath(bead)));
-        Assert.False(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
-        Assert.Equal(1, GitFixture.RunGit(target.Path, ["show-ref", "--verify", "--quiet", $"refs/heads/nightweaver/{bead}"], allowFailure: true));
+        Assert.True(Directory.Exists(target.WorktreePath(bead)));
+        Assert.True(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
+        Assert.Equal(0, GitFixture.RunGit(target.Path, ["show-ref", "--verify", "--quiet", $"refs/heads/nightweaver/{bead}"], allowFailure: true));
         var logs = Directory.GetFiles(System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead), "*.log");
         Assert.Equal(4, logs.Length); // three lifecycle invocations and one comparison
     }
@@ -151,7 +151,7 @@ public sealed class AgentStageRepairIntegrationTests : AgentStageIntegrationTest
 
 
     [Fact]
-    public async Task PersistedDefaultBudgetEscalatesTheNextRejectionWithoutAnotherInvocation()
+    public async Task PersistedDefaultBudgetEscalatesTheNextRejectionAndRetainsEnvironment()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
@@ -177,9 +177,9 @@ public sealed class AgentStageRepairIntegrationTests : AgentStageIntegrationTest
         Assert.True(state.NeedsHuman);
         Assert.Equal("open", beadSnapshot.Status);
         Assert.Null(beadSnapshot.Assignee);
-        Assert.False(Directory.Exists(target.WorktreePath(bead)));
-        Assert.False(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
-        Assert.Equal(1, GitFixture.RunGit(target.Path, ["show-ref", "--verify", "--quiet", $"refs/heads/nightweaver/{bead}"], allowFailure: true));
+        Assert.True(Directory.Exists(target.WorktreePath(bead)));
+        Assert.True(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
+        Assert.Equal(0, GitFixture.RunGit(target.Path, ["show-ref", "--verify", "--quiet", $"refs/heads/nightweaver/{bead}"], allowFailure: true));
         Assert.Equal(initialRemoteSha, target.RemoteBranchSha(bead));
         Assert.DoesNotContain(target.LastSlotRequests, request => request.FileName == "gh");
         Assert.NotNull(outcome.LastStage?.StageResult.LogFilePath);
@@ -292,7 +292,7 @@ public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTe
 public sealed class AgentStageDeliveryPauseIntegrationTests : AgentStageIntegrationTestSupport
 {
     [Fact]
-    public async Task DeliverySlotPausesForProductDecisionFromEveryDeliveryRoleAndDisposesEnvironmentCleanly()
+    public async Task DeliverySlotPausesForProductDecisionFromEveryDeliveryRoleAndRetainsEnvironment()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
@@ -315,6 +315,10 @@ public sealed class AgentStageDeliveryPauseIntegrationTests : AgentStageIntegrat
         foreach (var entry in entries)
         {
             var bead = entryBeads[$"Delivery slot pause {entry.Label ?? "(unlabeled)"}"];
+            var tmpPath = System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead);
+            Directory.CreateDirectory(tmpPath);
+            var tmpSentinel = System.IO.Path.Combine(tmpPath, "retained-product-decision.txt");
+            File.WriteAllText(tmpSentinel, "preserve while paused");
             var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-observations.jsonl");
             var actions = new[] { (entry.Role, entry.Action) };
 
@@ -338,13 +342,14 @@ public sealed class AgentStageDeliveryPauseIntegrationTests : AgentStageIntegrat
             Assert.Contains(commentTexts, text => text.Contains("product decision:", StringComparison.OrdinalIgnoreCase));
 
             var worktree = target.WorktreePath(bead);
-            Assert.False(Directory.Exists(worktree), $"Worktree for {bead} should have been deleted.");
+            Assert.True(Directory.Exists(worktree), $"Worktree for {bead} should be retained.");
+            Assert.Equal($"nightweaver/{bead}", target.CurrentBranch(bead));
 
             var localBranch = target.RunTarget("git", ["branch", "--list", $"nightweaver/{bead}"]);
-            Assert.DoesNotContain($"nightweaver/{bead}", localBranch);
+            Assert.Contains($"nightweaver/{bead}", localBranch, StringComparison.Ordinal);
 
-            var tmpPath = System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead);
-            Assert.False(Directory.Exists(tmpPath), $"Temporary path {tmpPath} should have been deleted.");
+            Assert.True(Directory.Exists(tmpPath), $"Temporary path {tmpPath} should be retained.");
+            Assert.Equal("preserve while paused", File.ReadAllText(tmpSentinel));
 
             var logPath = System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead);
             Assert.True(Directory.Exists(logPath), $"Logs at {logPath} should be preserved.");
@@ -364,6 +369,38 @@ public sealed class AgentStageDeliveryPauseIntegrationTests : AgentStageIntegrat
 public sealed class AgentStageIntegrationTests : AgentStageIntegrationTestSupport
 {
     [Fact]
+    public async Task LocalWorktreePreflightFailurePausesBeadWithoutLaunchingAgentOrDeletingContents()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead("Unsafe worktree preflight", "task", "stage:implement");
+        var worktreePath = target.WorktreePath(bead);
+        Directory.CreateDirectory(Path.GetDirectoryName(worktreePath)!);
+        File.WriteAllText(worktreePath, "local sentinel must remain");
+
+        var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer, ["review"]);
+
+        Assert.Equal(OperationalRetryStatus.Escalated, outcome.Status);
+        Assert.Equal(NeedsHumanCause.EnvironmentBlocked, outcome.EscalationCause);
+        Assert.Equal(AgentOperationalFailureKind.EnvironmentBlocked, outcome.StageResult.Failure!.Kind);
+        Assert.Equal(0, outcome.AttemptCount);
+        Assert.Equal(0, target.LastRetryLifecycleCount);
+        Assert.Equal("local sentinel must remain", File.ReadAllText(worktreePath));
+        var final = target.ReadBead(bead);
+        Assert.Equal("open", final.Status);
+        Assert.Null(final.Assignee);
+        Assert.Contains("needs-human", final.Labels);
+        using var comments = JsonDocument.Parse(target.ReadComments(bead));
+        var diagnosticText = StringValues(comments.RootElement)
+            .Single(value => value.Contains("nightweaver-needs-human-v1", StringComparison.Ordinal));
+        using var diagnostic = JsonDocument.Parse(diagnosticText);
+        Assert.Contains(worktreePath, diagnostic.RootElement.GetProperty("reason").GetString(), StringComparison.Ordinal);
+        Assert.Contains(worktreePath, diagnostic.RootElement.GetProperty("latest_findings").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(target.LastRetryRequests, request => request.FileName == "git"
+            && request.Arguments.Any(argument => argument is "remove" or "prune" or "-D" or "clean" or "reset"));
+    }
+
+    [Fact]
     public async Task OperationalRetryRunsRealAgentJobAfterResettingTheSameClaimedWorktree()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
@@ -373,7 +410,8 @@ public sealed class AgentStageIntegrationTests : AgentStageIntegrationTestSuppor
         var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer, ["nonzero-dirty", "review"], verifyResetSentinels: true);
 
         Assert.True(outcome.Succeeded, outcome.StageResult.Failure?.Reason);
-        Assert.Equal(2, outcome.AttemptCount);
+        Assert.True(outcome.AttemptCount == 2,
+            $"attempts={outcome.AttemptCount}; lifecycle={target.LastRetryLifecycleCount}; succeeded={outcome.Succeeded}; failure={outcome.StageResult.Failure?.Kind}: {outcome.StageResult.Failure?.Reason}; requests={string.Join(" | ", target.LastRetryRequests.Where(request => request.FileName == "git").Select(request => string.Join(" ", request.Arguments)))}");
         var beadSnapshot = target.ReadBead(bead);
         var state = BeadWorkflowState.Parse(beadSnapshot);
         Assert.Equal("stage:review", state.Stage);
@@ -389,9 +427,36 @@ public sealed class AgentStageIntegrationTests : AgentStageIntegrationTestSuppor
         Assert.True(File.Exists(outcome.StageResult.LogFilePath), outcome.StageResult.LogFilePath);
         var retryCommands = target.LastRetryRequests.Where(request => request.FileName == "git"
             && request.WorkingDirectory == worktree && request.Arguments.SequenceEqual(["reset", "--hard", "HEAD"])).ToArray();
-        Assert.Equal(2, retryCommands.Length); // initial provision plus one same-worktree pre-retry reset
-        Assert.Equal(2, target.LastRetryRequests.Count(request => request.FileName == "git"
+        Assert.Single(retryCommands); // the fresh worktree is already clean; reset occurs once before the retry
+        Assert.Equal(1, target.LastRetryRequests.Count(request => request.FileName == "git"
             && request.WorkingDirectory == worktree && request.Arguments.SequenceEqual(["clean", "-fd"])));
+    }
+
+    [Fact]
+    public async Task DirtyRetainedWorkIsVisibleToAgentAndSurvivesOperationalRetry()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead("Dirty retained retry integration", "task", "stage:implement");
+        await target.SeedDirtyDeliveryEnvironmentAsync(bead);
+
+        var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer,
+            ["nonzero-retain", "resume-inherited"], verifyRetainedSentinels: true);
+
+        Assert.True(outcome.Succeeded, outcome.StageResult.Failure?.Reason);
+        Assert.Equal(2, outcome.AttemptCount);
+        Assert.Equal("stage:review", target.ReadState(bead).Stage);
+        var worktree = target.WorktreePath(bead);
+        Assert.Equal("inherited tracked work\n", target.RunTarget("git", ["show", "HEAD:README.md"], worktree));
+        Assert.Equal("inherited untracked work\n", target.RunTarget("git", ["show", "HEAD:inherited-untracked.txt"], worktree));
+        Assert.Equal("retain failed attempt evidence\n", target.RunTarget("git", ["show", "HEAD:attempt-untracked.txt"], worktree));
+        Assert.Equal("old invocation", File.ReadAllText(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead,
+            "old", "sentinel.txt")));
+        Assert.Equal("", target.RunTarget("git", ["status", "--porcelain=v1", "--untracked-files=all"], worktree));
+        Assert.DoesNotContain(target.LastRetryRequests, request => request.FileName == "git"
+            && request.Arguments.SequenceEqual(["reset", "--hard", "HEAD"]));
+        Assert.DoesNotContain(target.LastRetryRequests, request => request.FileName == "git"
+            && request.Arguments.SequenceEqual(["clean", "-fd"]));
     }
 
     [Fact]
@@ -674,6 +739,19 @@ public abstract class AgentStageIntegrationTestSupport
             File.WriteAllText(System.IO.Path.Combine(TargetPath, "root-untracked-sentinel.txt"), "preserve me\n", new UTF8Encoding(false));
         }
 
+        internal async Task SeedDirtyDeliveryEnvironmentAsync(string beadId)
+        {
+            var project = CreateProject(AgentCli.Codex);
+            var worktree = await new WorktreeProvisioner(new SystemProcessRunner()).ProvisionAsync(Host, project.Name,
+                new ValidatedTargetRepository(TargetPath, "main"), beadId, WorktreePurpose.Delivery,
+                TestContext.Current.CancellationToken);
+            File.WriteAllText(System.IO.Path.Combine(worktree.Path, "README.md"), "inherited tracked work\n", new UTF8Encoding(false));
+            File.WriteAllText(System.IO.Path.Combine(worktree.Path, "inherited-untracked.txt"), "inherited untracked work\n", new UTF8Encoding(false));
+            var temporary = System.IO.Path.Combine(Host.TmpRoot(project.Name), beadId, "old");
+            Directory.CreateDirectory(temporary);
+            File.WriteAllText(System.IO.Path.Combine(temporary, "sentinel.txt"), "old invocation", new UTF8Encoding(false));
+        }
+
         internal string CreateBead(string title, string type, params string[] labels)
         {
             var arguments = new List<string> { "create", "--title", title, "--type", type, "--json" };
@@ -792,7 +870,8 @@ public abstract class AgentStageIntegrationTestSupport
             AgentRole role,
             IReadOnlyList<string> actions,
             bool verifyResetSentinels = false,
-            string? classifierAction = null)
+            string? classifierAction = null,
+            bool verifyRetainedSentinels = false)
         {
             const string actor = "nightweaver:demo";
             var claimEnvironment = new Dictionary<string, string?>(BeadsEnvironment, StringComparer.OrdinalIgnoreCase)
@@ -835,6 +914,17 @@ public abstract class AgentStageIntegrationTestSupport
                         .Replace("\r\n", "\n", StringComparison.Ordinal));
                     Assert.False(File.Exists(System.IO.Path.Combine(invocation.WorkingDirectory, "retry-untracked.txt")));
                     Assert.True(File.Exists(System.IO.Path.Combine(invocation.WorkingDirectory, ".nightweaver-ignored", "keep.bin")));
+                }
+                if (index == 1 && verifyRetainedSentinels)
+                {
+                    Assert.Equal("inherited tracked work\n", File.ReadAllText(System.IO.Path.Combine(invocation.WorkingDirectory, "README.md"))
+                        .Replace("\r\n", "\n", StringComparison.Ordinal));
+                    Assert.Equal("inherited untracked work\n", File.ReadAllText(System.IO.Path.Combine(invocation.WorkingDirectory, "inherited-untracked.txt"))
+                        .Replace("\r\n", "\n", StringComparison.Ordinal));
+                    Assert.Equal("retain failed attempt evidence\n", File.ReadAllText(System.IO.Path.Combine(invocation.WorkingDirectory, "attempt-untracked.txt"))
+                        .Replace("\r\n", "\n", StringComparison.Ordinal));
+                    Assert.Equal("old invocation", File.ReadAllText(System.IO.Path.Combine(hostPaths.TmpRoot(ProjectSlug.Parse("demo")), beadId,
+                        "old", "sentinel.txt")));
                 }
                 return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
                     CreateProcessLauncher(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)

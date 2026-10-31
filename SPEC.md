@@ -143,9 +143,9 @@ stateDiagram-v2
 | :--- | :--- | :--- | :--- |
 | **Planner Agent** | **Product Bead**: Unlabeled, `stage:plan`, or `stage:plan-approved` | `bd comments add`, `bd update` labels on **Product Bead**; in `stage:plan-approved`, `bd create -t task` and `bd dep add` for child **Plan Beads**. **No worktree file mutations.** | From `stage:plan`: `stage:plan-challenge` or `product-decision-required`<br>From `stage:plan-approved`: `planned` |
 | **Plan Challenger Agent** | **Product Bead**: `stage:plan-challenge` | `bd comments add`, `bd update` label and `repair_cycles` metadata on **Product Bead**. **No worktree file mutations.** | `stage:plan-approved` or `stage:plan` (with `repair_cycles=<N>`) |
-| **Implementer Agent** | **Plan Bead**: Unlabeled or `stage:implement` | Edit/commit files on `nightweaver/<bead-id>`, `git push`, `gh pr create`/`edit`, `bd comments add`, `bd update` label on **Plan Bead**. **Must leave `git status --porcelain` clean on exit.** | `stage:review` or `product-decision-required` |
+| **Implementer Agent** | **Plan Bead**: Unlabeled or `stage:implement` | Edit/commit files on `nightweaver/<bead-id>`, `git push`, `gh pr create`/`edit`, `bd comments add`, `bd update` label on **Plan Bead**. Must leave no new uncommitted changes; inherited dirty contents are preserved and block success if they prevent verification. | `stage:review` or `product-decision-required` |
 | **Reviewer Agent** | **Plan Bead**: `stage:review` | Read-only review of worktree/diff, `bd comments add`, `bd update` label and `repair_cycles` metadata on **Plan Bead**. **No worktree file or commit mutations.** | `stage:qa`, `stage:implement` (with `repair_cycles=<N>`), or `product-decision-required` |
-| **QA Agent** | **Plan Bead**: `stage:qa` | Build/boot/exercise software, `bd comments add`, `bd update` label and `repair_cycles` metadata on **Plan Bead**. **Must leave `git status --porcelain` clean and no untracked artifacts on exit.** | `stage:merge`, `stage:implement` (with `repair_cycles=<N>`), or `product-decision-required` |
+| **QA Agent** | **Plan Bead**: `stage:qa` | Build/boot/exercise software, `bd comments add`, `bd update` label and `repair_cycles` metadata on **Plan Bead**. Must remove its own test artifacts; inherited dirty contents are preserved and block success if they prevent verification. | `stage:merge`, `stage:implement` (with `repair_cycles=<N>`), or `product-decision-required` |
 | **Merger Agent** | **Plan Bead**: `stage:merge` (Singleton) | `git fetch`, `git rebase`, resolve rebase conflicts & run tests, `git push --force-with-lease`, `gh pr checks`, `gh pr merge`, `bd comments add`, `bd update` / `bd close`. **Must leave `git status --porcelain` clean on exit.** | `closed` or `stage:implement` (with `repair_cycles=<N>`) |
 
 ---
@@ -173,7 +173,7 @@ stateDiagram-v2
      - Process exits `0` without performing a legal `bd` state transition out of its pre-dispatch state (per Section 3).
 2. **In-Memory Retry Tracking (`max_operational_retries`, default `2`)**:
    - Operational retries are tracked in-memory inside the **Orchestrator** for the active stage without mutating `repair_cycles` metadata in `bd`.
-   - Before each operational retry, the **Orchestrator** resets the worktree to a clean state (`git reset --hard HEAD && git clean -fd`).
+   - Before retrying an initially clean session, the **Orchestrator** may reset the isolated worktree to its recorded `HEAD` and remove untracked, non-ignored files. If a retained session was already dirty when opened, retries preserve its tracked, staged, untracked, ignored, and temporary contents; when those contents prevent a verified success, the **Orchestrator** preserves them and escalates instead of resetting them.
 3. **Duplicate-Failure Short-Circuit (`classifier` role)**:
    - Up to `max_operational_retries` (default `2` retries = `3` total attempts within a stage), when a retry also fails operationally, the **Orchestrator** invokes a lightweight headless **Agent CLI** call (`classifier` role config) comparing the latest failed invocation's error/log tail against the previous failed invocation's error/log tail.
    - If the classifier determines both failures share the **same underlying error**, the **Orchestrator** short-circuits remaining retries and immediately escalates the Bead with `needs-human`.
@@ -185,13 +185,13 @@ stateDiagram-v2
    - `product-decision-required`: Applied by an **Agent** when a product requirement ambiguity, contradiction, or design trade-off requires a human product decision.
    - `needs-human`: Applied by the **Orchestrator** (or an **Agent**) when a Bead exhausts `max_repair_cycles`, exhausts `max_operational_retries` (or triggers the duplicate-failure short-circuit), or hits an unresolvable environment/technical blocker. The **Orchestrator** posts a structured diagnostic comment containing the failure reason, latest findings, and the log file path under `<nightweaver-root>/logs/<project-slug>/<bead-id>/`.
 2. **Worktree, Branch, and PR Disposition on Pause**:
-   - When a **Plan Bead** pauses with `product-decision-required` or `needs-human`, the **Orchestrator** keeps the remote branch `origin/nightweaver/<bead-id>` and any open Pull Request intact for human inspection or manual commits, deletes the local worktree (`git worktree remove --force`) and local branch (`git branch -D nightweaver/<bead-id>`), deletes `<nightweaver-root>/tmp/<project-slug>/<bead-id>/`, and releases the `bd` claim (`bd update <id> --status open --assignee ""`).
+   - When a Product Bead or Plan Bead pauses with `product-decision-required` or `needs-human`, the Orchestrator retains its local worktree, current HEAD, staged and unstaged changes, untracked and ignored files, branch refs, Pull Request, logs, and all Bead temporary files. It records a diagnostic and releases only its still-owned claim. Pause labels override planned or closed cleanup candidates; closed Beads are never reopened to record a pause.
    - Its parent `planned` **Product Bead** remains `planned`, unrelated sibling **Plan Beads** continue executing normally, and `blocks`-dependent sibling **Plan Beads** remain naturally blocked by `bd ready`.
 3. **Automatic Resumption**:
    - The **Orchestrator** skips any Bead carrying `product-decision-required` or `needs-human` until it detects either:
      - New human comment or description update activity timestamped after the escalation comment/event, or
      - Manual removal of the `product-decision-required` / `needs-human` label.
-   - Upon detection, the **Orchestrator** removes the escalation label (if still present), resets the repair budget (`bd update <id> --unset-metadata repair_cycles`), and schedules the Bead to resume at its current `stage:*` label (recreating the worktree from `origin/nightweaver/<bead-id>` if a remote branch exists, automatically incorporating any human-pushed commits).
+   - Upon detection, the Orchestrator removes the escalation label (if present), resets the repair budget, and schedules the Bead at its current stage. A validated retained worktree resumes at its current HEAD; fetching or incorporating remote changes requires an explicit operation.
 
 ---
 
@@ -214,7 +214,7 @@ stateDiagram-v2
 ### 5.2 Three Concurrency Pools & Planning Backpressure
 
 1. **Planning Pool (`max_concurrent_planning`, default `2`)**:
-   - Claims eligible **Product Beads** (`bd update <id> --claim`) and holds the claim continuously across the `stage:plan` <-> `stage:plan-challenge` -> `stage:plan-approved` loop in a single slot until the **Product Bead** transitions to `planned`, `product-decision-required`, or `needs-human`, at which point the slot cleans up the detached worktree and releases the claim (`bd update <id> --status open --assignee ""`).
+   - Claims eligible Product Beads and holds the claim across the Planning stages. On planned, completed-environment cleanup may remove the detached worktree; on either pause label, the worktree and temporary files are retained and the still-owned claim is released.
 2. **Planning Backpressure (`max_active_plan_beads`, default `5`)**:
    - To prevent **Planning** from building a large queue of pre-planned **Plan Beads** that go stale as `<default_branch>` evolves, the **Orchestrator** counts all active (non-closed, non-paused) **Plan Beads** (`--type task` with status `open` or `in_progress` that do not carry `product-decision-required` or `needs-human`).
    - When `active_plan_beads >= max_active_plan_beads`, the **Orchestrator** pauses claiming *new* **Product Beads** for **Planning** until `active_plan_beads < max_active_plan_beads`. Any **Product Bead** already mid-Planning in an active slot finishes its current Planning loop cleanly.
@@ -256,15 +256,15 @@ stateDiagram-v2
    - The **Orchestrator** never checks out branches, mutates files, or executes **Agents** in the **Target Repository** root checkout. The root checkout is used solely for `git fetch origin`, `git worktree` management, and `bd` queries.
    - Because `bd` natively discovers the shared `.beads` database via the Git common directory, **Agents** execute standard `bd` commands directly inside their worktrees with zero path redirection.
 3. **Planning Worktrees (Detached `HEAD`)**:
-   - Created at `<nightweaver-root>/worktrees/<project-slug>/<bead-id>` via:
+   - Fresh worktrees are created at `<nightweaver-root>/worktrees/<project-slug>/<bead-id>` via:
      `git fetch origin <default_branch> && git worktree add --detach <path> origin/<default_branch>`
-   - Verified clean (`git status --porcelain`) after every **Planner Agent** and **Plan Challenger Agent** run.
+   - A validated retained Planning worktree resumes at its current detached HEAD without fetch, reset, or clean. Fresh worktrees are verified clean after creation. Existing dirty contents are preserved; if a run cannot meet current success checks with inherited changes, they remain available for diagnosis and escalation.
 4. **Delivery Worktrees (Persistent Branch `nightweaver/<bead-id>`)**:
    - Created at `<nightweaver-root>/worktrees/<project-slug>/<bead-id>` on branch `nightweaver/<bead-id>`:
      - If `origin/nightweaver/<bead-id>` exists on remote (resuming after pause or restart), created tracking `origin/nightweaver/<bead-id>`.
      - Otherwise created from `origin/<default_branch>` (`git worktree add -B nightweaver/<bead-id> <path> origin/<default_branch>`).
    - Persists on disk across `stage:implement` -> `stage:review` -> `stage:qa` -> `stage:merge` and across repair loops so build artifacts and package caches stay warm.
-   - Reset/verified clean (`git reset --hard HEAD && git clean -fd`) before each **Agent** dispatch.
+   - A validated retained Delivery worktree is reused on its exact branch without fetch, checkout, reset, or clean. Fresh worktrees are verified clean after creation. A retry may reset an initially clean session to its recorded HEAD; it preserves all contents inherited from a dirty session.
 5. **Environment Isolation**:
    - Every spawned **Agent CLI** receives:
      - `NIGHTWEAVER_BEAD_ID=<bead-id>`
@@ -276,10 +276,10 @@ stateDiagram-v2
 | Lifecycle Event | Cleanup Actions |
 | :--- | :--- |
 | **Every Agent CLI Exit** | Close the **Win32 Job Object** (terminating the **Agent CLI** and any child processes, test servers, or browsers). Retain `<nightweaver-root>/logs/<project-slug>/<bead-id>/<timestamp>-<role>.log`. |
-| **Planning Completion (`planned`) or Pause (`product-decision-required` / `needs-human`)** | Remove the detached worktree (`git worktree remove --force <path>`), run `git worktree prune`, delete `<nightweaver-root>/tmp/<project-slug>/<bead-id>/`, and release the `bd` claim (`--status open --assignee ""`). |
-| **Delivery Pause (`product-decision-required` / `needs-human`)** | Remove the local worktree (`git worktree remove --force <path>`), delete the local branch (`git branch -D nightweaver/<bead-id>`), run `git worktree prune`, delete `<nightweaver-root>/tmp/<project-slug>/<bead-id>/`, **keep `origin/nightweaver/<bead-id>` and the open PR intact**, and release the `bd` claim (`--status open --assignee ""`). |
+| **Planning Completion (`planned`)** | Remove the detached worktree, prune its completed registration, delete the Bead temporary tree, and release the claim. |
+| **Planning or Delivery Pause (`product-decision-required` / `needs-human`)** | Retain the worktree, current HEAD, branch refs, tracked and untracked files, ignored caches, logs, and all Bead temporary files; record the diagnostic and release only the still-owned claim. |
 | **Delivery Completion (`closed`)** | Remove the local worktree (`git worktree remove --force <path>`), delete the local branch (`git branch -D nightweaver/<bead-id>`), ensure remote branch `origin/nightweaver/<bead-id>` is deleted, run `git worktree prune`, delete `<nightweaver-root>/tmp/<project-slug>/<bead-id>/`, and auto-close the parent `planned` **Product Bead** if all its `discovered-from` **Plan Beads** are now `closed`. |
-| **Orchestrator Startup (Crash Sweep)** | Release or reclaim stranded `in_progress` Beads assigned to the **Orchestrator**, remove worktrees (`git worktree remove --force` + `git worktree prune`) for any Beads that are already `closed`, `planned`, `product-decision-required`, or `needs-human`, and delete orphaned `<nightweaver-root>/tmp/<project-slug>/<bead-id>/` directories that have no active worktree. |
+| **Orchestrator Startup (Crash Sweep)** | Release or reclaim stranded Orchestrator claims. Completed `closed` or `planned` environments may be removed according to their lifecycle. Pause-labeled environments and their temporary files are retained even when a completion label or status also applies. Uncertain or locally unusable environments are reported and excluded from projected eligibility; unrelated valid Beads remain eligible. |
 
 ---
 

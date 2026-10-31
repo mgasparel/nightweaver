@@ -11,7 +11,7 @@ public sealed class NeedsHumanEscalatorIntegrationTests
     [InlineData("feature", "Planner", "stage:plan", "false", "false")]
     [InlineData("task", "Implementer", "stage:implement", "true", "false")]
     [InlineData("feature", "Planner", "stage:plan", "false", "true")]
-    public async Task RealBdAndGitEscalationPreservesEvidenceAndOnlyRemovesOwnedResources(
+    public async Task RealBdAndGitEscalationPreservesPausedEnvironmentAndOnlyReleasesOwnedClaim(
         string issueType, string roleName, string stage, string deliveryValue, string alreadyPausedValue)
     {
         using var fixture = new ProvisioningGitFixture();
@@ -69,9 +69,11 @@ public sealed class NeedsHumanEscalatorIntegrationTests
         var provisioned = await fixture.Provisioner().ProvisionAsync(fixture.Paths, project, fixture.Repository,
             beadId, isDelivery ? WorktreePurpose.Delivery : WorktreePurpose.Planning, CancellationToken.None);
         File.AppendAllText(Path.Combine(provisioned.Path, "README.md"), "dirty worktree data\n");
-        File.WriteAllText(Path.Combine(provisioned.Path, "untracked-pause-sentinel.txt"), "remove me");
+        File.WriteAllText(Path.Combine(provisioned.Path, "untracked-pause-sentinel.txt"), "preserve me");
         Directory.CreateDirectory(Path.Combine(provisioned.Path, "ignored-cache"));
-        File.WriteAllText(Path.Combine(provisioned.Path, "ignored-cache", "pause-cache.bin"), "remove ignored cache too");
+        File.WriteAllText(Path.Combine(provisioned.Path, "ignored-cache", "pause-cache.bin"), "preserve ignored cache too");
+        File.WriteAllText(Path.Combine(provisioned.Path, "staged-pause-sentinel.txt"), "preserve staged index entry");
+        fixture.Git(provisioned.Path, ["add", "staged-pause-sentinel.txt"]);
 
         var worktreeSibling = Path.Combine(fixture.Paths.WorktreesRoot(project), "sibling-environment");
         var tmpSibling = Path.Combine(fixture.Paths.TmpRoot(project), "sibling-environment");
@@ -82,12 +84,17 @@ public sealed class NeedsHumanEscalatorIntegrationTests
 
         var temporaryPath = Path.Combine(fixture.Paths.TmpRoot(project), beadId, "20261024T142233123456Z-" + (isDelivery ? "implementer" : "planner"));
         Directory.CreateDirectory(temporaryPath);
-        File.WriteAllText(Path.Combine(temporaryPath, "temp-data.txt"), "remove tmp data");
+        File.WriteAllText(Path.Combine(temporaryPath, "temp-data.txt"), "preserve tmp data");
         var logDirectory = Path.Combine(fixture.Paths.LogsRoot(project), beadId);
         Directory.CreateDirectory(logDirectory);
         var logPath = Path.Combine(logDirectory, "20261024T142233123456Z-" + (isDelivery ? "implementer" : "planner") + ".log");
         File.WriteAllText(logPath, "settled invocation log contents");
         var logSnapshot = Snapshot.FileTree(logDirectory);
+        var worktreeSnapshot = Snapshot.FileTree(provisioned.Path);
+        var temporarySnapshot = Snapshot.FileTree(Path.Combine(fixture.Paths.TmpRoot(project), beadId));
+        var stagedDiffBefore = fixture.Git(provisioned.Path, ["diff", "--cached", "--binary"]).Output;
+        var unstagedDiffBefore = fixture.Git(provisioned.Path, ["diff", "--binary"]).Output;
+        var statusBefore = fixture.Git(provisioned.Path, ["status", "--porcelain=v1", "--untracked-files=all"]).Output;
         var siblingWorktreeSnapshot = Snapshot.FileTree(worktreeSibling);
         var siblingTmpSnapshot = Snapshot.FileTree(tmpSibling);
         var rootBefore = CaptureTargetCheckout(fixture);
@@ -114,8 +121,12 @@ public sealed class NeedsHumanEscalatorIntegrationTests
             request, CancellationToken.None);
 
         Assert.True(result.Succeeded, string.Join(Environment.NewLine, result.Failures));
-        Assert.False(Directory.Exists(provisioned.Path));
-        Assert.False(Directory.Exists(Path.Combine(fixture.Paths.TmpRoot(project), beadId)));
+        Assert.True(result.EnvironmentRetained);
+        Assert.Equal(worktreeSnapshot, Snapshot.FileTree(provisioned.Path));
+        Assert.Equal(stagedDiffBefore, fixture.Git(provisioned.Path, ["diff", "--cached", "--binary"]).Output);
+        Assert.Equal(unstagedDiffBefore, fixture.Git(provisioned.Path, ["diff", "--binary"]).Output);
+        Assert.Equal(statusBefore, fixture.Git(provisioned.Path, ["status", "--porcelain=v1", "--untracked-files=all"]).Output);
+        Assert.Equal(temporarySnapshot, Snapshot.FileTree(Path.Combine(fixture.Paths.TmpRoot(project), beadId)));
         Assert.Equal(logSnapshot, Snapshot.FileTree(logDirectory));
         Assert.Equal(siblingWorktreeSnapshot, Snapshot.FileTree(worktreeSibling));
         Assert.Equal(siblingTmpSnapshot, Snapshot.FileTree(tmpSibling));
@@ -148,7 +159,7 @@ public sealed class NeedsHumanEscalatorIntegrationTests
         var localRef = fixture.Git(fixture.Target, ["show-ref", "--verify", "--quiet", $"refs/heads/{localBranch}"], allowFailure: true);
         if (isDelivery)
         {
-            Assert.Equal(1, localRef.ExitCode);
+            Assert.Equal(0, localRef.ExitCode);
             Assert.Equal(remoteBranchSha, fixture.Git(fixture.Target, ["rev-parse", $"refs/remotes/origin/{localBranch}"]).Output.Trim());
             Assert.Equal(bareRemoteSha, fixture.Git(fixture.BareOrigin, ["rev-parse", $"refs/heads/{localBranch}"]).Output.Trim());
         }
@@ -159,15 +170,10 @@ public sealed class NeedsHumanEscalatorIntegrationTests
 
         Assert.DoesNotContain(runner.Requests, process => process.FileName == "gh");
         Assert.DoesNotContain(runner.Requests, process => process.FileName == "git"
-            && process.Arguments.Any(argument => argument is "push" or "fetch"));
+            && process.Arguments.Any(argument => argument is "push" or "fetch" or "remove" or "prune" or "-D"));
         var gitArgs = runner.Requests.Where(process => process.FileName == "git").Select(process => process.Arguments).ToArray();
-        Assert.True(Array.FindIndex(gitArgs, args => args.Count > 1 && args[0] == "worktree" && args[1] == "remove")
-            < Array.FindIndex(gitArgs, args => args.Count > 1 && args[0] == "worktree" && args[1] == "prune"));
-        if (isDelivery)
-            Assert.True(Array.FindIndex(gitArgs, args => args.Count > 1 && args[0] == "branch" && args[1] == "-D")
-                < Array.FindIndex(gitArgs, args => args.Count > 1 && args[0] == "worktree" && args[1] == "prune"));
-        else
-            Assert.DoesNotContain(gitArgs, args => args.Count > 1 && args[0] == "branch" && args[1] == "-D");
+        Assert.DoesNotContain(gitArgs, args => args.Count > 1 && args[0] == "worktree" && args[1] is "remove" or "prune");
+        Assert.DoesNotContain(gitArgs, args => args.Count > 1 && args[0] == "branch" && args[1] == "-D");
         Assert.Equal(foreignTrackerBefore, Snapshot.FileTree(foreignTracker.Path));
         Assert.Equal(foreignInventoryBefore, foreignTracker.Run("bd", BeadsCommand.Create(foreignTracker.Path).Arguments));
         Assert.Contains(foreignBead, foreignTracker.Run("bd", BeadsCommand.Create(foreignTracker.Path).Arguments), StringComparison.Ordinal);

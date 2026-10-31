@@ -93,7 +93,16 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         try
         {
         var first = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(2, first.Admitted.Count);
+        var completedBeforeAttempt = first.Admitted.Where(admission => admission.Completion.IsCompletedSuccessfully)
+            .Select(admission =>
+            {
+                var completion = admission.Completion.Result;
+                return $"{admission.BeadId}: disposition={completion.Outcome?.Disposition}; exception={completion.Exception}; diagnostic={completion.Diagnostic}";
+            });
+        Assert.True(first.Admitted.Count == 2,
+            $"Expected exactly two gated slot admissions. Actual={first.Admitted.Count}; diagnostics="
+            + string.Join(" | ", first.Diagnostics.Select(diagnostic => $"{diagnostic.BeadId}:{diagnostic.Code}:{diagnostic.Message}"))
+            + "; completed-before-attempt=" + string.Join(" | ", completedBeforeAttempt));
         Assert.Equal(beads.Take(2).Order(StringComparer.Ordinal), first.Admitted.Select(admission => admission.BeadId).Order(StringComparer.Ordinal));
         var startSignals = first.Admitted.ToDictionary(admission => admission.BeadId,
             admission => WaitForFileAsync(gates[admission.BeadId].Started), StringComparer.Ordinal);

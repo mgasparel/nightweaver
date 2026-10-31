@@ -58,12 +58,18 @@ public sealed class WorktreeIntegrationTests
         Assert.Equal(fixture.StaleIds.Order(StringComparer.Ordinal), plan.Removals.Select(entry => entry.BeadId));
         Assert.Equal(fixture.OrphanIds.Order(StringComparer.Ordinal), plan.OrphanTmp.Select(entry => entry.BeadId));
         Assert.All(fixture.ActiveIds, id => Assert.Contains(plan.SurvivingWorktrees, entry => entry.BeadId == id && entry.Reusable));
+        Assert.All(fixture.PausedIds, id => Assert.Contains(plan.SurvivingWorktrees, entry => entry.BeadId == id && entry.Paused && entry.ProtectsTmp));
         Assert.Contains(plan.Diagnostics, diagnostic => diagnostic.Code == StartupDiagnosticCode.MissingBead);
         Assert.Contains(plan.Diagnostics, diagnostic => diagnostic.Code == StartupDiagnosticCode.UnregisteredWorktreeDirectory);
         Assert.Contains(plan.Diagnostics, diagnostic => diagnostic.Code == StartupDiagnosticCode.MissingRegisteredPath);
         Assert.Contains(plan.Diagnostics, diagnostic => diagnostic.Code == StartupDiagnosticCode.LockedWorktree);
         Assert.Contains(plan.Diagnostics, diagnostic => diagnostic.Code == StartupDiagnosticCode.TmpCleanupDeferred);
         foreach (var action in plan.Removals) Assert.Contains($"{JsonSerializer.Serialize(action.BeadId)}: {JsonSerializer.Serialize(action.Path)}; reasons", first, StringComparison.Ordinal);
+        foreach (var id in fixture.PausedIds)
+        {
+            Assert.Contains($"{JsonSerializer.Serialize(id)}:", Section(first, "Retained worktrees\n", "\nOrphan tmp deletions (hypothetical)"), StringComparison.Ordinal);
+            Assert.DoesNotContain($"{JsonSerializer.Serialize(id)}:", Section(first, "Orphan tmp deletions (hypothetical)\n", "\nStartup diagnostics"), StringComparison.Ordinal);
+        }
         Assert.Contains("detached HEAD", first, StringComparison.Ordinal);
         Assert.Contains("branch \"refs/heads/nightweaver/", first, StringComparison.Ordinal);
         Assert.Contains("human inspection\\nkeep this worktree", first, StringComparison.Ordinal);
@@ -89,13 +95,23 @@ public sealed class WorktreeIntegrationTests
         var failureOut = new StringWriter();
         var failureError = new StringWriter();
         var failure = await NightweaverApp.RunAsync(["--project", "demo", "--dry-run"], new(fixture.Host, fixture.Caller, failureOut, failureError), runner, CancellationToken.None);
-        Assert.Equal(1, failure);
-        Assert.Equal("", failureOut.ToString());
-        Assert.Contains("runtime directory inspection", failureError.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, failure);
+        Assert.Equal("", failureError.ToString());
+        Assert.Contains("unexpected-file", failureOut.ToString(), StringComparison.Ordinal);
+        Assert.Contains("unusable_runtime_path", failureOut.ToString(), StringComparison.Ordinal);
+        Assert.Contains("tmp_cleanup_deferred", failureOut.ToString(), StringComparison.Ordinal);
         Assert.Equal(failureBefore, Snapshot.FileTree(fixture.Host));
         Assert.Equal(targetBefore, Snapshot.FileTree(target.Path));
         Assert.Equal(externalBefore, Snapshot.FileTree(fixture.External));
         Assert.Equal(logicalBefore, target.Run("bd", inventoryArgs));
+    }
+
+    private static string Section(string value, string startMarker, string endMarker)
+    {
+        var start = value.IndexOf(startMarker, StringComparison.Ordinal);
+        var end = start < 0 ? -1 : value.IndexOf(endMarker, start + startMarker.Length, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end >= 0, $"Could not find report section '{startMarker}'.");
+        return value[start..end];
     }
 }
 
@@ -112,6 +128,7 @@ internal sealed class StartupSweepFixture : IDisposable
     internal string External { get; }
     internal IReadOnlyList<string> StaleIds { get; }
     internal IReadOnlyList<string> ActiveIds { get; }
+    internal IReadOnlyList<string> PausedIds { get; }
     internal IReadOnlyList<string> OrphanIds { get; }
 
     internal StartupSweepFixture(string? publishedArtifactDirectory = null)
@@ -177,9 +194,10 @@ internal sealed class StartupSweepFixture : IDisposable
         WorktreeInspectionTests.CreateDirectoryLink(WorktreePath("linked-worktree"), External);
         temp.CreateDirectory("nightweaver host/tmp/demo");
         WorktreeInspectionTests.CreateDirectoryLink(Path.Combine(Host, "tmp", "demo", "linked-tmp"), External);
-        StaleIds = Array.AsReadOnly(new[] { closed, planned, paused, needsHuman });
+        StaleIds = Array.AsReadOnly(new[] { closed, planned });
         ActiveIds = Array.AsReadOnly(new[] { active, merge });
-        OrphanIds = Array.AsReadOnly(new[] { closed, planned, paused, needsHuman, missing, "orphan" });
+        PausedIds = Array.AsReadOnly(new[] { paused, needsHuman });
+        OrphanIds = Array.AsReadOnly(new[] { closed, planned, missing, "orphan" });
         foreach (var id in new[] { closed, planned, paused, needsHuman, active, merge, locked, missing, "fixture.absent", "unregistered", "linked-worktree", "orphan" })
             temp.WriteFile($"nightweaver host/tmp/demo/{id}/invocation/output", "preserve invocation data");
     }

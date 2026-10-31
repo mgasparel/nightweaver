@@ -86,6 +86,11 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
         AssertCandidatePool(report, "Merger selected (capacity=1)\n", "\nMerger waiting\n", "Merger waiting\n", "\nDelivery and Merger excluded task-stage diagnostics\n", [CandidateExpectation.From(inventory.ById[ids.MergerCandidate], "merger")], 1);
         foreach (var beadId in fixture.StaleIds)
             Assert.Contains($"{JsonSerializer.Serialize(beadId)}:", Section(report, "Worktree removals (hypothetical)\n", "\nRetained worktrees\n"), StringComparison.Ordinal);
+        foreach (var beadId in fixture.PausedIds)
+        {
+            Assert.Contains($"{JsonSerializer.Serialize(beadId)}:", Section(report, "Retained worktrees\n", "\nOrphan tmp deletions (hypothetical)\n"), StringComparison.Ordinal);
+            Assert.DoesNotContain($"{JsonSerializer.Serialize(beadId)}:", Section(report, "Orphan tmp deletions (hypothetical)\n", "\nStartup diagnostics\n"), StringComparison.Ordinal);
+        }
         foreach (var beadId in fixture.OrphanIds)
             Assert.Contains($"{JsonSerializer.Serialize(beadId)}:", Section(report, "Orphan tmp deletions (hypothetical)\n", "\nStartup diagnostics\n"), StringComparison.Ordinal);
 
@@ -93,11 +98,13 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
         // Only the host sentinel changed since the complete state comparison above.
         // Keep the proven tracker baseline and refresh the physical snapshot.
         var failureBaseline = new StateSnapshot(baseline.Logical, CapturePhysicalState(fixture, published));
-        var lateFailure = await RunApphostAsync(fixture, published, launchEnvironment,
-            ["--project", "demo", "--dry-run"], expectedExitCode: 1, expectedError: "runtime directory inspection");
+        var lateUnusableChild = await RunApphostAsync(fixture, published, launchEnvironment,
+            ["--project", "demo", "--dry-run"]);
         AssertStateUnchanged(failureBaseline, CaptureState(fixture, published, ids.CommentedBeads));
-        Assert.Empty(lateFailure.StandardOutput);
-        Assert.Contains("runtime directory inspection", lateFailure.StandardErrorText, StringComparison.Ordinal);
+        Assert.Empty(lateUnusableChild.StandardError);
+        Assert.Contains("unexpected-file", lateUnusableChild.StandardOutputText, StringComparison.Ordinal);
+        Assert.Contains("unusable_runtime_path", lateUnusableChild.StandardOutputText, StringComparison.Ordinal);
+        Assert.Contains("tmp_cleanup_deferred", lateUnusableChild.StandardOutputText, StringComparison.Ordinal);
     }
 
     [Fact]

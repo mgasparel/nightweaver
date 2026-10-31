@@ -9,7 +9,7 @@ internal enum WorktreePurpose
     Delivery
 }
 
-internal sealed record ProvisionedWorktree(string Path, string HeadSha);
+internal sealed record ProvisionedWorktree(string Path, string HeadSha, bool Reused = false, bool WasDirty = false);
 
 /// <summary>Creates or safely reuses the per-Bead isolated checkout.</summary>
 internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
@@ -26,7 +26,7 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
         var branch = $"nightweaver/{beadId}";
         var branchRef = $"refs/heads/{branch}";
 
-        // Complete all filesystem and registration checks before the first fetch.
+        // Complete all filesystem and registration checks before any Target Repository mutation.
         var state = await ValidateWorkspaceAsync(hostPaths, project, repository, destination, beadId, branchRef, purpose, cancellationToken);
         if (purpose == WorktreePurpose.Delivery)
         {
@@ -36,8 +36,16 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
                 throw Failure("validate generated Delivery branch", destination, "Git rejected the generated branch name", format.StandardError);
             if (state.Registration is null && await RefExistsAsync(repository.Path, branchRef,
                     "check for an existing local Delivery branch", destination, cancellationToken))
-                throw Failure("validate Delivery branch ownership", destination,
+                throw new BeadEnvironmentException(destination,
                     $"local branch '{branchRef}' already exists without its canonical registered worktree");
+        }
+
+        if (state.Registration is not null)
+        {
+            // A retained checkout is the work being resumed. It is validated in place and never
+            // fetched, checked out, reset, or cleaned during dispatch preparation.
+            return await VerifyAndReturnAsync(hostPaths, project, repository, destination, beadId, branchRef,
+                purpose, expectedPlanningHead: null, allowDirty: true, reused: true, cancellationToken);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -82,7 +90,7 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
-                throw Failure("create worktree parent directory", destination, exception.Message);
+                throw new BeadEnvironmentException(destination, $"could not create the worktree parent: {exception.Message}");
             }
 
             // Directory creation can race with unrelated filesystem changes; revalidate before worktree add.
@@ -105,35 +113,7 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
             }
             await RunRequiredGitAsync(addArgs, repository.Path, "add isolated worktree", destination, cancellationToken);
         }
-        else if (purpose == WorktreePurpose.Planning)
-        {
-            await RevalidateBeforeDestructiveAsync(hostPaths, project, repository, destination, beadId, branchRef,
-                purpose, detached: true, cancellationToken);
-            await RunRequiredGitAsync(["checkout", "--detach", "--force", defaultRef], destination,
-                "reset Planning worktree checkout", destination, cancellationToken);
-            await RevalidateBeforeDestructiveAsync(hostPaths, project, repository, destination, beadId, branchRef,
-                purpose, detached: true, cancellationToken);
-            await RunRequiredGitAsync(["reset", "--hard", defaultRef], destination,
-                "reset Planning worktree files", destination, cancellationToken);
-            await RevalidateBeforeDestructiveAsync(hostPaths, project, repository, destination, beadId, branchRef,
-                purpose, detached: true, cancellationToken);
-            await RunRequiredGitAsync(["clean", "-fd"], destination,
-                "clean Planning worktree files", destination, cancellationToken);
-        }
-
-        if (purpose == WorktreePurpose.Delivery)
-        {
-            // New and warm Delivery worktrees follow the same clean-before-dispatch contract.
-            await RevalidateBeforeDestructiveAsync(hostPaths, project, repository, destination, beadId, branchRef,
-                purpose, detached: false, cancellationToken);
-            await RunRequiredGitAsync(["reset", "--hard", "HEAD"], destination,
-                "reset Delivery worktree files", destination, cancellationToken);
-            await RevalidateBeforeDestructiveAsync(hostPaths, project, repository, destination, beadId, branchRef,
-                purpose, detached: false, cancellationToken);
-            await RunRequiredGitAsync(["clean", "-fd"], destination,
-                "clean Delivery worktree files", destination, cancellationToken);
-        }
-        else if (state.Registration is null)
+        if (purpose == WorktreePurpose.Planning)
         {
             // A fresh Planning worktree was added at the fetched ref and is already clean.
             await RevalidateBeforeDestructiveAsync(hostPaths, project, repository, destination, beadId, branchRef,
@@ -141,7 +121,7 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
         }
 
         return await VerifyAndReturnAsync(hostPaths, project, repository, destination, beadId, branchRef,
-            purpose, planningHead, cancellationToken);
+            purpose, planningHead, allowDirty: false, reused: false, cancellationToken);
     }
 
     private async Task<WorkspaceState> ValidateWorkspaceAsync(
@@ -167,14 +147,15 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
         var destinationEntries = new List<RuntimeDirectoryEntry>();
         foreach (var entry in runtime.Entries)
         {
-            if (entry.State == DirectoryState.UnsafeLink)
-                throw Failure("inspect managed worktree root", entry.Path, "a worktree child is a reparse point, junction, or symbolic link");
-            if (entry.AmbiguousIdentity)
-                throw Failure("inspect managed worktree root", entry.Path, "case-insensitive child identities are ambiguous");
             if (RuntimePaths.Comparer.Equals(entry.Path, destination))
             {
                 if (!string.Equals(entry.Id, beadId, StringComparison.Ordinal) || !string.Equals(entry.Path, destination, StringComparison.Ordinal))
-                    throw Failure("validate worktree destination identity", entry.Path, "destination aliases the requested Bead ID");
+                    throw new BeadEnvironmentException(entry.Path, "destination aliases the requested Bead ID");
+                if (entry.State != DirectoryState.Present)
+                    throw new BeadEnvironmentException(entry.Path, entry.FailureReason
+                        ?? (entry.State == DirectoryState.UnsafeLink ? "destination is a reparse point, junction, or symbolic link" : "destination is not a usable directory"));
+                if (entry.AmbiguousIdentity)
+                    throw new BeadEnvironmentException(entry.Path, "case-insensitive destination identity is ambiguous");
                 destinationEntries.Add(entry);
             }
         }
@@ -192,40 +173,40 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
             if (sameDestination)
             {
                 if (!string.Equals(registration.Path, destination, StringComparison.Ordinal))
-                    throw Failure("validate worktree registration identity", registration.RawPath, "registration aliases the canonical destination path");
+                    throw new BeadEnvironmentException(registration.RawPath, "registration aliases the canonical destination path");
                 if (canonical is not null)
-                    throw Failure("validate worktree registration identity", destination, "multiple registrations resolve to the canonical destination");
+                    throw new BeadEnvironmentException(destination, "multiple registrations resolve to the canonical destination");
                 canonical = registration;
                 continue;
             }
 
             if (PathsOverlap(registration.Path, destination))
-                throw Failure("validate worktree registration identity", registration.RawPath,
-                    "another registered worktree overlaps the canonical destination");
+                throw new BeadEnvironmentException(registration.RawPath, "another registered worktree overlaps the canonical destination");
             if (string.Equals(registration.Branch, branchRef, StringComparison.Ordinal))
-                throw Failure("validate Delivery branch ownership", registration.RawPath,
+                throw new BeadEnvironmentException(registration.RawPath,
                     $"branch '{branchRef}' is registered outside the canonical destination '{destination}'");
         }
 
         if (canonical is null && destinationEntries.Count != 0)
-            throw Failure("validate worktree destination", destination, "an unregistered directory or file already occupies the destination");
+            throw new BeadEnvironmentException(destination, "an unregistered directory or file already occupies the destination");
 
         if (canonical is not null)
         {
             if (canonical.Main || canonical.Bare)
-                throw Failure("validate worktree registration", destination, "destination is registered as a main or bare worktree");
+                throw new BeadEnvironmentException(destination, "destination is registered as a main or bare worktree");
             if (canonical.Locked || canonical.Prunable)
-                throw Failure("validate worktree registration", destination,
+                throw new BeadEnvironmentException(destination,
                     canonical.Locked ? $"worktree is locked{Reason(canonical.LockReason)}" : $"registration is prunable{Reason(canonical.PruneReason)}");
             if (destinationEntries.Count != 1 || destinationEntries[0].State != DirectoryState.Present)
-                throw Failure("validate worktree registration", destination, "registered worktree directory is missing or ambiguous");
-            ValidateNestedTree(destination);
+                throw new BeadEnvironmentException(destination, "registered worktree directory is missing or ambiguous");
+            try { ValidateNestedTree(destination); }
+            catch (ToolExecutionException exception) { throw new BeadEnvironmentException(destination, exception.Message); }
             if (purpose == WorktreePurpose.Planning && !canonical.Detached)
-                throw Failure("validate Planning worktree ownership", destination,
-                    $"existing worktree is attached to '{canonical.Branch ?? "an unknown branch"}' instead of detached HEAD");
+                throw new BeadEnvironmentException(destination,
+                    $"Planning worktree is attached to '{canonical.Branch ?? "an unknown branch"}' instead of detached HEAD");
             if (purpose == WorktreePurpose.Delivery && !string.Equals(canonical.Branch, branchRef, StringComparison.Ordinal))
-                throw Failure("validate Delivery worktree ownership", destination,
-                    $"existing worktree is on '{canonical.Branch ?? "detached HEAD"}', expected '{branchRef}'");
+                throw new BeadEnvironmentException(destination,
+                    $"Delivery worktree is on '{canonical.Branch ?? "detached HEAD"}', expected '{branchRef}'");
         }
 
         return new WorkspaceState(canonical);
@@ -299,7 +280,21 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
         var destination = GetDestination(hostPaths, project, repository, beadId);
         var branchRef = $"refs/heads/nightweaver/{beadId}";
         return VerifyAndReturnAsync(hostPaths, project, repository, destination, beadId, branchRef,
-            purpose, expectedPlanningHead: null, cancellationToken);
+            purpose, expectedPlanningHead: null, allowDirty: false, reused: true, cancellationToken);
+    }
+
+    internal Task<ProvisionedWorktree> VerifyRetainedRetryWorktreeAsync(
+        HostPaths hostPaths,
+        ProjectSlug project,
+        ValidatedTargetRepository repository,
+        string beadId,
+        WorktreePurpose purpose,
+        CancellationToken cancellationToken)
+    {
+        var destination = GetDestination(hostPaths, project, repository, beadId);
+        var branchRef = $"refs/heads/nightweaver/{beadId}";
+        return VerifyAndReturnAsync(hostPaths, project, repository, destination, beadId, branchRef,
+            purpose, expectedPlanningHead: null, allowDirty: true, reused: true, cancellationToken);
     }
 
     private async Task<ProvisionedWorktree> VerifyAndReturnAsync(
@@ -311,35 +306,47 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
         string branchRef,
         WorktreePurpose purpose,
         string? expectedPlanningHead,
+        bool allowDirty,
+        bool reused,
         CancellationToken cancellationToken)
     {
         var state = await ValidateWorkspaceAsync(hostPaths, project, repository, destination, beadId, branchRef, purpose, cancellationToken);
         if (state.Registration is null)
             throw Failure("verify isolated worktree", destination, "worktree registration is missing after provisioning");
 
-        var symbolic = await RunGitAsync(["symbolic-ref", "--quiet", "HEAD"], destination,
-            "verify worktree HEAD state", destination, cancellationToken);
-        if (purpose == WorktreePurpose.Planning)
+        try
         {
-            if (symbolic.ExitCode != 1 || symbolic.StandardOutput.Length != 0 || !string.IsNullOrWhiteSpace(symbolic.StandardError))
-                throw Failure("verify Planning detached HEAD", destination, "worktree is not detached", symbolic.StandardError);
+            var symbolic = await RunGitAsync(["symbolic-ref", "--quiet", "HEAD"], destination,
+                "verify worktree HEAD state", destination, cancellationToken);
+            if (purpose == WorktreePurpose.Planning)
+            {
+                if (symbolic.ExitCode != 1 || symbolic.StandardOutput.Length != 0 || !string.IsNullOrWhiteSpace(symbolic.StandardError))
+                    throw new BeadEnvironmentException(destination, $"Planning worktree is not detached: {symbolic.StandardError}");
+            }
+            else if (symbolic.ExitCode != 0 || !string.Equals(TrimOneLine(symbolic.StandardOutput), branchRef, StringComparison.Ordinal))
+            {
+                throw new BeadEnvironmentException(destination, $"expected symbolic HEAD '{branchRef}': {symbolic.StandardError}");
+            }
+
+            var head = await ResolveCommitAsync(destination, "HEAD", "record pre-dispatch HEAD", destination, cancellationToken);
+            if (expectedPlanningHead is not null && !string.Equals(head, expectedPlanningHead, StringComparison.OrdinalIgnoreCase))
+                throw new BeadEnvironmentException(destination,
+                    $"HEAD '{head}' does not match fetched origin default commit '{expectedPlanningHead}'");
+
+            var status = await RunRequiredGitAsync(["status", "--porcelain=v1", "--untracked-files=all"], destination,
+                "verify usable worktree", destination, cancellationToken);
+            var dirty = status.StandardOutput.Length != 0;
+            if (!allowDirty && dirty)
+                throw new BeadEnvironmentException(destination, "new worktree is unexpectedly dirty after creation");
+            ValidateNestedTree(destination);
+            return new ProvisionedWorktree(destination, head, reused, dirty);
         }
-        else if (symbolic.ExitCode != 0 || !string.Equals(TrimOneLine(symbolic.StandardOutput), branchRef, StringComparison.Ordinal))
+        catch (OperationCanceledException) { throw; }
+        catch (BeadEnvironmentException) { throw; }
+        catch (ToolExecutionException exception)
         {
-            throw Failure("verify Delivery branch", destination, $"expected symbolic HEAD '{branchRef}'", symbolic.StandardError);
+            throw new BeadEnvironmentException(destination, exception.Message);
         }
-
-        var head = await ResolveCommitAsync(destination, "HEAD", "record pre-dispatch HEAD", destination, cancellationToken);
-        if (expectedPlanningHead is not null && !string.Equals(head, expectedPlanningHead, StringComparison.OrdinalIgnoreCase))
-            throw Failure("verify Planning base commit", destination,
-                $"HEAD '{head}' does not match fetched origin default commit '{expectedPlanningHead}'");
-
-        var status = await RunRequiredGitAsync(["status", "--porcelain=v1", "--untracked-files=all"], destination,
-            "verify clean worktree", destination, cancellationToken);
-        if (status.StandardOutput.Length != 0)
-            throw Failure("verify clean worktree", destination, "worktree contains tracked changes or untracked files", status.StandardError);
-        ValidateNestedTree(destination);
-        return new ProvisionedWorktree(destination, head);
     }
 
     private async Task<string> ResolveCommitAsync(string cwd, string revision, string operation, string path, CancellationToken cancellationToken)
@@ -428,10 +435,12 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
             throw Failure("create worktree parent directory", worktreesRoot, "an ancestor is a reparse point, junction, or symbolic link");
         foreach (var entry in snapshot.Entries)
         {
-            if (entry.State == DirectoryState.UnsafeLink || entry.AmbiguousIdentity)
-                throw Failure("create worktree parent directory", entry.Path, "unsafe or ambiguous worktree child identity");
             if (RuntimePaths.Comparer.Equals(entry.Path, destination))
-                throw Failure("create worktree parent directory", destination, "destination is no longer missing");
+            {
+                if (entry.State != DirectoryState.Present || entry.AmbiguousIdentity)
+                    throw new BeadEnvironmentException(destination, entry.FailureReason ?? "destination has an unsafe or ambiguous identity");
+                throw new BeadEnvironmentException(destination, "destination is no longer missing");
+            }
         }
     }
 

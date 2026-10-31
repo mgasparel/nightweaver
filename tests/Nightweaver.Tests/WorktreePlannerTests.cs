@@ -12,7 +12,7 @@ public sealed class WorktreePlannerTests
     [InlineData("in_progress", "product-decision-required")]
     [InlineData("open", "needs-human")]
     [InlineData("custom", "planned")]
-    public void StalePresentUnlockedWorktreesAreRemovedThenTheirTmpIsOrphaned(string status, string label)
+    public void ClosedAndPlannedWorktreesAreRemovedWhilePausedWorktreesAreRetained(string status, string label)
     {
         using var temp = new TempDirectory();
         foreach (var detached in new[] { true, false })
@@ -20,13 +20,26 @@ public sealed class WorktreePlannerTests
             var registry = Entry(temp.Path, "bead") with { Detached = detached, Branch = detached ? null : "refs/heads/nightweaver/bead" };
             var inventory = Inventory("bead", status, label.Length == 0 ? [] : [label], "foreign");
             var plan = StartupPlanner.Plan("actor", inventory, [registry], Root(temp.Path, "bead"), Root(temp.Path + "-tmp", "bead"));
-            var removal = Assert.Single(plan.Removals);
-            Assert.Equal("bead", removal.BeadId);
-            Assert.False(removal.ExpectedLocked);
-            Assert.Equal(DirectoryState.Present, removal.Presence);
-            Assert.Equal(label.Length == 0 ? "closed" : label, Assert.Single(removal.Reasons));
-            Assert.Empty(plan.SurvivingWorktrees);
-            Assert.Equal("bead", Assert.Single(plan.OrphanTmp).BeadId);
+            if (label is "needs-human" or "product-decision-required")
+            {
+                Assert.Empty(plan.Removals);
+                var retained = Assert.Single(plan.SurvivingWorktrees);
+                Assert.True(retained.Paused);
+                Assert.False(retained.Reusable);
+                Assert.True(retained.ProtectsTmp);
+                Assert.Empty(plan.OrphanTmp);
+                Assert.Contains(plan.Diagnostics, diagnostic => diagnostic.Code == StartupDiagnosticCode.PausedWorktreeRetained);
+            }
+            else
+            {
+                var removal = Assert.Single(plan.Removals);
+                Assert.Equal("bead", removal.BeadId);
+                Assert.False(removal.ExpectedLocked);
+                Assert.Equal(DirectoryState.Present, removal.Presence);
+                Assert.Equal(label.Length == 0 ? "closed" : label, Assert.Single(removal.Reasons));
+                Assert.Empty(plan.SurvivingWorktrees);
+                Assert.Equal("bead", Assert.Single(plan.OrphanTmp).BeadId);
+            }
             Assert.Equal(status, inventory.ById["bead"].Status);
             Assert.Same(inventory, plan.Inventory);
         }
@@ -119,17 +132,35 @@ public sealed class WorktreePlannerTests
     public void ReasonsAndOrderAreStableAndInputsRemainUnchanged()
     {
         using var temp = new TempDirectory();
-        var inventory = Inventory("bead", "closed", ["planned", "needs-human", "product-decision-required", "planned"]);
+        var inventory = Inventory("bead", "closed", ["planned", "planned"]);
         var entry = Entry(temp.Path, "bead");
         var root = Root(temp.Path, "z", "bead", "a");
         var tmp = Root(temp.Path + "-tmp", "z", "bead", "a", "orphan");
         var first = StartupPlanner.Plan("actor", inventory, [entry], root, tmp);
         var second = StartupPlanner.Plan("actor", inventory, [entry], root with { Entries = root.Entries.Reverse().ToArray() }, tmp with { Entries = tmp.Entries.Reverse().ToArray() });
-        Assert.Equal((string[])["closed", "needs-human", "planned", "product-decision-required"], Assert.Single(first.Removals).Reasons);
+        Assert.Equal((string[])["closed", "planned"], Assert.Single(first.Removals).Reasons);
         Assert.Equal(first.Diagnostics, second.Diagnostics);
         Assert.Equal(first.OrphanTmp, second.OrphanTmp);
         Assert.Equal(3, root.Entries.Count);
         Assert.Equal("closed", inventory.ById["bead"].Status);
+    }
+
+    [Theory]
+    [InlineData("needs-human")]
+    [InlineData("product-decision-required")]
+    public void PauseOverridesClosedAndPlannedCleanupAndProtectsTmpEvenWithoutWorktree(string pauseLabel)
+    {
+        using var temp = new TempDirectory();
+        var inventory = Inventory("bead", "closed", [pauseLabel, "planned"]);
+        var plan = StartupPlanner.Plan("actor", inventory, [Entry(temp.Path, "bead")],
+            Root(temp.Path, "bead"), Root(temp.Path + "-tmp", "bead"));
+        Assert.Empty(plan.Removals);
+        Assert.Empty(plan.OrphanTmp);
+        Assert.True(Assert.Single(plan.SurvivingWorktrees).Paused);
+
+        var missingBacking = StartupPlanner.Plan("actor", inventory, [], Root(temp.Path), Root(temp.Path + "-tmp", "bead"));
+        Assert.Empty(missingBacking.OrphanTmp);
+        Assert.Contains(missingBacking.Diagnostics, diagnostic => diagnostic.Code == StartupDiagnosticCode.TmpCleanupDeferred);
     }
 
     [Fact]

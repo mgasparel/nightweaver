@@ -170,12 +170,12 @@ public sealed class OperationalRetryCoordinatorTests
     public async Task IncompleteEscalationRetainsProgressAndLatestFailedStage(string failureKind)
     {
         var fixture = new RetryFixture(0, new Attempt(19, null));
-        var progress = new NeedsHumanEscalationResult(true, true, false, true, ["worktree cleanup failed"]);
+        var progress = new NeedsHumanEscalationResult(true, true, true, true, ["tracker pause verification failed"]);
         fixture.EscalationBehavior = (_, _) => failureKind switch
         {
             "returned" => Task.FromResult(progress),
             "needs-human-exception" => Task.FromException<NeedsHumanEscalationResult>(
-                new NeedsHumanEscalationException("cleanup failed", progress, new InvalidOperationException("cleanup failed"))),
+                new NeedsHumanEscalationException("pause persistence failed", progress, new InvalidOperationException("pause persistence failed"))),
             "cancellation" => Task.FromException<NeedsHumanEscalationResult>(CancellationWith(progress)),
             _ => throw new InvalidOperationException($"Unknown fixture failure kind '{failureKind}'.")
         };
@@ -188,7 +188,7 @@ public sealed class OperationalRetryCoordinatorTests
         Assert.Equal(AgentRole.Implementer, exception.Outcome.StageResult.Role);
         Assert.Equal("invocation-1", exception.Outcome.StageResult.InvocationId);
         Assert.Equal("C:\\logs\\1.log", exception.Outcome.StageResult.LogFilePath);
-        Assert.False(exception.Progress.CleanupCompleted);
+        Assert.True(exception.Progress.EnvironmentRetained);
         Assert.True(exception.Progress.ClaimReleased);
     }
 
