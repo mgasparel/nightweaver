@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text;
 using System.Text.Json;
 
 namespace Nightweaver.Inspection;
@@ -102,6 +103,69 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
     internal Task AddCommentAsync(ValidatedTargetRepository repository, string beadId, string comment,
         CancellationToken cancellationToken) => RunAsync(repository,
         ["comments", "add", beadId, comment], $"add needs-human diagnostic comment to Bead '{beadId}'", cancellationToken);
+
+    internal async Task AddHumanGuidanceAsync(ValidatedTargetRepository repository, string beadId, string action,
+        string instruction, CancellationToken cancellationToken)
+    {
+        BeadsReader.EnsureMutationFreeBackend(repository);
+        cancellationToken.ThrowIfCancellationRequested();
+        var comment = CreateHumanGuidanceComment(action, instruction);
+        var commentPath = Path.Combine(Path.GetTempPath(), $"nightweaver-guidance-{Guid.NewGuid():N}.json");
+        try
+        {
+            await File.WriteAllTextAsync(commentPath, comment, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+            await RunAsync(repository, ["comments", "add", beadId, "-f", commentPath],
+                $"record local human guidance for Bead '{beadId}'", cancellationToken, "local-console");
+        }
+        finally
+        {
+            try { File.Delete(commentPath); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // A cleanup failure must not obscure whether bd recorded the comment.
+            }
+        }
+    }
+
+    internal Task AddHumanActionAsync(ValidatedTargetRepository repository, string beadId, string action,
+        CancellationToken cancellationToken)
+    {
+        var comment = CreateHumanActionComment(action);
+        return RunAsync(repository, ["comments", "add", beadId, comment],
+            $"record local human '{action}' action for Bead '{beadId}'", cancellationToken, "local-console");
+    }
+
+    internal static string CreateHumanGuidanceComment(string action, string instruction) => JsonSerializer.Serialize(new
+    {
+        schema = "nightweaver-human-guidance-v1",
+        action,
+        instruction,
+        actor = "local-console"
+    });
+
+    internal static string CreateHumanActionComment(string action) => JsonSerializer.Serialize(new
+    {
+        schema = "nightweaver-human-action-v1",
+        action,
+        actor = "local-console"
+    });
+
+    internal Task ResolveProductDecisionAsync(ValidatedTargetRepository repository, string beadId,
+        CancellationToken cancellationToken) => RunGuardedAsync(repository,
+        ["update", beadId, "--if-status", "open", "--if-assignee", "", "--remove-label", "product-decision-required",
+            "--unset-metadata", "repair_cycles", "--json"],
+        $"resolve product decision for Bead '{beadId}'", cancellationToken);
+
+    internal Task RetryNeedsHumanAsync(ValidatedTargetRepository repository, string beadId,
+        CancellationToken cancellationToken) => RunGuardedAsync(repository,
+        ["update", beadId, "--if-status", "open", "--if-assignee", "", "--remove-label", "needs-human",
+            "--unset-metadata", "repair_cycles", "--json"],
+        $"reset the repair budget and retry Bead '{beadId}'", cancellationToken);
+
+    internal Task AbortNeedsHumanAsync(ValidatedTargetRepository repository, string beadId,
+        CancellationToken cancellationToken) => RunGuardedAsync(repository,
+        ["update", beadId, "--status", "closed", "--if-status", "open", "--if-assignee", "", "--json"],
+        $"abort and close Bead '{beadId}'", cancellationToken);
 
     internal Task ReleaseClaimAsync(ValidatedTargetRepository repository, string beadId, string assignee,
         CancellationToken cancellationToken) => RunAsync(repository,
@@ -249,6 +313,26 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
                     + (string.IsNullOrWhiteSpace(result.StandardError) ? string.Empty : $": {result.StandardError.TrimEnd()}"), result.StandardError);
         }
         catch (OperationCanceledException) { throw; }
+        catch (ToolExecutionException exception)
+        {
+            throw new ToolExecutionException($"{operation} in Target Repository '{repository.Path}' failed: {exception.Message}", exception.StandardError);
+        }
+    }
+
+    private async Task RunGuardedAsync(ValidatedTargetRepository repository, IReadOnlyList<string> arguments,
+        string operation, CancellationToken cancellationToken)
+    {
+        try
+        {
+            BeadsReader.EnsureMutationFreeBackend(repository);
+            var result = await processRunner.RunAsync(BeadsCommand.CreateWrite(repository.Path, arguments, "local-console"), cancellationToken);
+            if (result.ExitCode == 13)
+                throw new BeadsGuardConflictException($"{operation} was refused by bd because the observed status or assignee guard no longer matched.");
+            if (result.ExitCode != 0)
+                throw new ToolExecutionException($"{operation}: bd exited {result.ExitCode}", result.StandardError);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (BeadsGuardConflictException) { throw; }
         catch (ToolExecutionException exception)
         {
             throw new ToolExecutionException($"{operation} in Target Repository '{repository.Path}' failed: {exception.Message}", exception.StandardError);

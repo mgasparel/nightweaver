@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Nightweaver UI — Unified Factory Console &amp; Bead Workspace</title>
+  <title>Nightweaver | Factory Console</title>
   <link rel="stylesheet" href="/css/site.css">
   <script src="/js/app.js" defer></script>
 </head>
@@ -30,7 +30,6 @@
           <li><a href="#attention">Attention</a></li>
           <li><a href="#factory">Factory</a></li>
           <li><a href="#beads">Beads</a></li>
-          <li><a href="#workspace">Workspace</a></li>
         </ul>
       </nav>
     </div>
@@ -100,6 +99,24 @@
       <p class="intro-copy">A single place to catch up, review work that needs attention, and follow factory activity.</p>
     </div>
 
+    <section class="console-section attention-section" id="attention" aria-labelledby="attention-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Pinned human triage</p>
+          <h2 id="attention-title">Human Attention Desk</h2>
+        </div>
+        <button class="secondary-action" id="attention-refresh" type="button">Refresh</button>
+      </div>
+      <p class="attention-status" id="attention-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1">Loading paused Beads…</p>
+      <div class="attention-error" id="attention-error" role="alert" aria-live="assertive" hidden>
+        <span id="attention-error-text">The Attention Desk is unavailable. Refresh to try again.</span>
+        <button class="retry-button" id="attention-retry" type="button">Retry</button>
+      </div>
+      <div class="attention-empty" id="attention-empty" hidden>No Beads are waiting for human guidance.</div>
+      <div class="attention-cards" id="attention-cards" aria-label="Beads paused for human attention"></div>
+      <noscript><p class="attention-empty">Enable JavaScript to load paused Beads from the configured tracker.</p></noscript>
+    </section>
+
     <section class="console-section digest-section" id="catch-up" aria-labelledby="catch-up-title">
       <div class="section-heading">
         <div>
@@ -113,19 +130,6 @@
           <h3>See what changed since your last visit</h3>
           <p>Milestone summaries will appear here when catch-up data is connected.</p>
         </div>
-      </div>
-    </section>
-
-    <section class="console-section" id="attention" aria-labelledby="attention-title">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Human triage</p>
-          <h2 id="attention-title">Human Attention Desk</h2>
-        </div>
-      </div>
-      <div class="surface placeholder-card">
-        <h3>Items needing a decision</h3>
-        <p>Items that need human input will appear here when tracker reads are connected.</p>
       </div>
     </section>
 
@@ -209,18 +213,6 @@
       </div>
     </section>
 
-    <section class="console-section" id="workspace" aria-labelledby="workspace-title">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Deep reading</p>
-          <h2 id="workspace-title">Full Bead Workspace</h2>
-        </div>
-      </div>
-      <div class="surface placeholder-card workspace-card">
-        <h3>Room for the full story</h3>
-        <p>A bead’s specification and history will have a dedicated workspace in a later release.</p>
-      </div>
-    </section>
   </main>
 
   <footer class="site-footer">

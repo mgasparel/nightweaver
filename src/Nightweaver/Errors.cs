@@ -52,3 +52,5 @@ internal sealed class ToolExecutionException(string message, string? standardErr
 {
     internal string? StandardError { get; } = standardError;
 }
+
+internal sealed class BeadsGuardConflictException(string message) : NightweaverException(message);

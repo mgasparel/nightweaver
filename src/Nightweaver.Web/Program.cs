@@ -12,6 +12,13 @@ public sealed class Program
         LogLevel.Error, new EventId(1, "BeadsExplorerFailure"), "Beads Explorer query failed.");
     private static readonly Action<ILogger, Exception?> LogProductBeadCreationFailure = LoggerMessage.Define(
         LogLevel.Error, new EventId(2, "ProductBeadCreationFailure"), "Product Bead creation failed.");
+    private static readonly Action<ILogger, Exception?> LogAttentionDeskFailure = LoggerMessage.Define(
+        LogLevel.Error, new EventId(3, "AttentionDeskFailure"), "Human Attention Desk query failed.");
+    private static readonly Action<ILogger, string, string, Exception?> LogAttentionActionFailure = LoggerMessage.Define<string, string>(
+        LogLevel.Error, new EventId(4, "AttentionActionFailure"),
+        "Attention Desk action {Action} failed for Bead {BeadId}.");
+    private static readonly Action<ILogger, string, Exception?> LogAttentionActionError = LoggerMessage.Define<string>(
+        LogLevel.Error, new EventId(5, "AttentionActionError"), "Attention Desk action failed for Bead {BeadId}.");
 
     private Program() { }
 
@@ -62,6 +69,7 @@ public sealed class Program
         builder.Services.AddSingleton<BeadsReader>();
         builder.Services.AddSingleton<BeadsWriter>();
         builder.Services.AddSingleton<TrackerBridge>();
+        builder.Services.AddSingleton<LocalMutationRequestPolicy>();
 
         var app = builder.Build();
         // Resolve before listening, after all host configuration providers have been applied.
@@ -103,6 +111,105 @@ public sealed class Program
                 var (title, detail) = GetSafeFailure(exception);
                 return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: title, detail: detail);
             }
+        });
+        app.MapGet("/api/attention", async (HttpContext context, TrackerBridge tracker, ILogger<Program> logger) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (context.Request.Query.Count != 0)
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Attention Desk query", detail: "Query parameters are not supported.");
+            try
+            {
+                return Results.Ok(await tracker.ReadAttentionAsync(context.RequestAborted));
+            }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (IsExpectedTrackerFailure(exception))
+            {
+                LogAttentionDeskFailure(logger, exception);
+                var (title, detail) = GetSafeFailure(exception);
+                return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: title, detail: detail);
+            }
+        });
+        app.MapPost("/api/beads/{id}/decide", async (HttpContext context, string id, TrackerBridge tracker,
+            LocalMutationRequestPolicy policy, ILogger<Program> logger) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (context.Request.Query.Count != 0)
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Attention Desk request", detail: "Query parameters are not supported.");
+            if (!policy.Allows(context.Request))
+                return Results.Problem(statusCode: StatusCodes.Status403Forbidden,
+                    title: "Request origin rejected", detail: "Use the local Nightweaver console to submit this action.");
+            if (!IsJsonContentType(context.Request.ContentType))
+                return Results.Problem(statusCode: StatusCodes.Status415UnsupportedMediaType,
+                    title: "Unsupported media type", detail: "Submit the decision as application/json.");
+            var body = await BoundedRequestBody.ReadAsync(context.Request, context.RequestAborted, 32 * 1024);
+            if (body is null)
+                return Results.Problem(statusCode: StatusCodes.Status413PayloadTooLarge,
+                    title: "Request body too large", detail: "The request body cannot exceed 32 KiB.");
+            DecideAttentionRequest request;
+            try
+            {
+                request = AttentionMutationRequest.ParseDecide(body);
+            }
+            catch (AttentionRequestValidationException exception)
+            {
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Attention Desk request", detail: exception.Message);
+            }
+            return await ExecuteAttentionActionAsync(context, id,
+                () => tracker.DecideAsync(id, request.Instruction, request.Action, context.RequestAborted), logger);
+        });
+        app.MapPost("/api/beads/{id}/retry", async (HttpContext context, string id, TrackerBridge tracker,
+            LocalMutationRequestPolicy policy, ILogger<Program> logger) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (context.Request.Query.Count != 0)
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Attention Desk request", detail: "Query parameters are not supported.");
+            if (!policy.Allows(context.Request))
+                return Results.Problem(statusCode: StatusCodes.Status403Forbidden,
+                    title: "Request origin rejected", detail: "Use the local Nightweaver console to submit this action.");
+            var body = await ReadEmptyActionBodyAsync(context.Request, context.RequestAborted);
+            if (body.Error is not null) return body.Error;
+            try
+            {
+                AttentionMutationRequest.ParseEmptyAction(body.Bytes!);
+            }
+            catch (AttentionRequestValidationException exception)
+            {
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Attention Desk request", detail: exception.Message);
+            }
+            return await ExecuteAttentionActionAsync(context, id,
+                () => tracker.RetryAsync(id, context.RequestAborted), logger);
+        });
+        app.MapPost("/api/beads/{id}/abort", async (HttpContext context, string id, TrackerBridge tracker,
+            LocalMutationRequestPolicy policy, ILogger<Program> logger) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (context.Request.Query.Count != 0)
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Attention Desk request", detail: "Query parameters are not supported.");
+            if (!policy.Allows(context.Request))
+                return Results.Problem(statusCode: StatusCodes.Status403Forbidden,
+                    title: "Request origin rejected", detail: "Use the local Nightweaver console to submit this action.");
+            var body = await ReadEmptyActionBodyAsync(context.Request, context.RequestAborted);
+            if (body.Error is not null) return body.Error;
+            try
+            {
+                AttentionMutationRequest.ParseEmptyAction(body.Bytes!);
+            }
+            catch (AttentionRequestValidationException exception)
+            {
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Attention Desk request", detail: exception.Message);
+            }
+            return await ExecuteAttentionActionAsync(context, id,
+                () => tracker.AbortAsync(id, context.RequestAborted), logger);
         });
         app.MapPost("/api/beads", async (HttpContext context, TrackerBridge tracker, ILogger<Program> logger) =>
         {
@@ -161,6 +268,62 @@ public sealed class Program
     private static bool IsJsonContentType(string? contentType)
         => MediaTypeHeaderValue.TryParse(contentType, out var parsed)
             && string.Equals(parsed.MediaType, "application/json", StringComparison.OrdinalIgnoreCase);
+
+    private static async Task<(byte[]? Bytes, IResult? Error)> ReadEmptyActionBodyAsync(HttpRequest request,
+        CancellationToken cancellationToken)
+    {
+        var body = await BoundedRequestBody.ReadAsync(request, cancellationToken, 32 * 1024);
+        if (body is null)
+            return (null, Results.Problem(statusCode: StatusCodes.Status413PayloadTooLarge,
+                title: "Request body too large", detail: "The request body cannot exceed 32 KiB."));
+        if (body.Length == 0) return (body, null);
+        if (!IsJsonContentType(request.ContentType))
+            return (null, Results.Problem(statusCode: StatusCodes.Status415UnsupportedMediaType,
+                title: "Unsupported media type", detail: "Retry and abort bodies must use application/json."));
+        return (body, null);
+    }
+
+    private static async Task<IResult> ExecuteAttentionActionAsync(HttpContext context, string beadId,
+        Func<Task<AttentionMutationResult>> execute, ILogger<Program> logger)
+    {
+        try
+        {
+            return Results.Ok(await execute());
+        }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (AttentionActionException exception)
+        {
+            if (exception.InnerException is not null)
+                LogAttentionActionFailure(logger, context.Request.Method, beadId, exception.InnerException);
+            var extensions = new Dictionary<string, object?>();
+            if (exception.IncludeProgress)
+            {
+                extensions["commentRecorded"] = exception.CommentRecorded;
+                extensions["stateChanged"] = exception.StateChanged;
+            }
+            return Results.Problem(statusCode: exception.StatusCode, title: exception.Title,
+                detail: exception.Detail, extensions: extensions);
+        }
+        catch (BeadsGuardConflictException exception)
+        {
+            LogAttentionActionFailure(logger, context.Request.Method, beadId, exception);
+            return Results.Problem(statusCode: StatusCodes.Status409Conflict,
+                title: "Bead changed", detail: "The workflow changed before the action could be confirmed. Refresh the Attention Desk before retrying.");
+        }
+        catch (Exception exception) when (IsExpectedTrackerFailure(exception))
+        {
+            LogAttentionActionError(logger, beadId, exception);
+            var (title, detail) = GetSafeFailure(exception);
+            return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: title, detail: detail);
+        }
+    }
+
+    private static bool IsExpectedTrackerFailure(Exception exception)
+        => exception is ToolExecutionException or TargetRepositoryException or ProjectConfigurationException
+            or BeadsGuardConflictException or JsonException or IOException or UnauthorizedAccessException;
 
     private static bool IsAllowedMutationOrigin(HttpRequest request)
     {

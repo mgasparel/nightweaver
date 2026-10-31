@@ -1,10 +1,15 @@
 using System.Collections.Frozen;
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 
 namespace Nightweaver.Inspection;
 
 internal sealed class BeadsReader(IProcessRunner processRunner)
 {
+    private const int MaxCommentsJsonBytes = 2 * 1024 * 1024;
+    private const int MaxCommentsPerBead = 2048;
+
     internal async Task<BeadsInventory> ReadSnapshotAsync(ValidatedTargetRepository repository, CancellationToken cancellationToken)
     {
         var context = $"bd --readonly --sandbox list inventory in Target Repository '{repository.Path}'";
@@ -40,6 +45,78 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
     internal Task<FrozenSet<string>> ReadExplorerBlockedAsync(ValidatedTargetRepository repository, CancellationToken cancellationToken)
         => ReadMembershipAsync(repository, BeadsCommand.CreateExplorerBlocked(repository.Path),
             "bd --readonly --sandbox blocked --json", requireBlockerMetadata: true, cancellationToken);
+
+    internal async Task<IReadOnlyList<BeadsCommentSnapshot>> ReadAttentionCommentsAsync(ValidatedTargetRepository repository,
+        string beadId, CancellationToken cancellationToken)
+    {
+        var context = $"bd --readonly --sandbox comments '{beadId}' --json in Target Repository '{repository.Path}'";
+        var json = await RunQueryAsync(repository, BeadsCommand.CreateComments(repository.Path, beadId), context, cancellationToken);
+        if (Encoding.UTF8.GetByteCount(json) > MaxCommentsJsonBytes)
+            throw new ToolExecutionException($"{context}: comment output exceeded the 2 MiB read limit");
+        try
+        {
+            return ParseAttentionComments(json, beadId);
+        }
+        catch (JsonException exception)
+        {
+            throw new ToolExecutionException($"{context}: incompatible or malformed bd comment JSON: {exception.Message}");
+        }
+    }
+
+    private static BeadsCommentSnapshot[] ParseAttentionComments(string json, string beadId)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+            throw new JsonException("$: expected an array");
+        if (document.RootElement.GetArrayLength() > MaxCommentsPerBead)
+            throw new JsonException($"$: comment count exceeded the {MaxCommentsPerBead} item read limit");
+
+        var comments = new List<BeadsCommentSnapshot>();
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var row = 0;
+        foreach (var item in document.RootElement.EnumerateArray())
+        {
+            var path = $"$[{row++}]";
+            if (item.ValueKind != JsonValueKind.Object) throw new JsonException($"{path}: expected an object");
+            var properties = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            foreach (var property in item.EnumerateObject())
+            {
+                if (!properties.TryAdd(property.Name, property.Value))
+                    throw new JsonException($"{path}.{property.Name}: duplicate property");
+            }
+
+            string ReadRequiredString(string name, bool allowEmpty = false)
+            {
+                if (!properties.TryGetValue(name, out var value))
+                    throw new JsonException($"{path}.{name}: required property is missing");
+                if (value.ValueKind != JsonValueKind.String)
+                    throw new JsonException($"{path}.{name}: expected a string");
+                var result = value.GetString();
+                if (result is null || (!allowEmpty && string.IsNullOrWhiteSpace(result)))
+                    throw new JsonException($"{path}.{name}: expected a nonblank string");
+                if (result.Length > 1024 * 1024 || result.Any(char.IsControl) && name != "text")
+                    throw new JsonException($"{path}.{name}: value exceeded its supported shape");
+                return result;
+            }
+
+            var id = ReadRequiredString("id");
+            var issueId = ReadRequiredString("issue_id");
+            var author = ReadRequiredString("author");
+            var text = ReadRequiredString("text", allowEmpty: true);
+            var createdAtText = ReadRequiredString("created_at");
+            if (!DateTimeOffset.TryParse(createdAtText, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var createdAt))
+                throw new JsonException($"{path}.created_at: expected an ISO timestamp");
+            if (!ids.Add(id)) throw new JsonException($"{path}.id: duplicate comment ID");
+
+            // bd is authoritative for this query. Ignore any cross-bead row rather than
+            // allowing it to supply a pause timestamp or guidance for this Bead.
+            if (string.Equals(issueId, beadId, StringComparison.Ordinal))
+                comments.Add(new BeadsCommentSnapshot(id, issueId, author, text, createdAt.ToUniversalTime()));
+        }
+
+        return comments.OrderBy(comment => comment.CreatedAt).ThenBy(comment => comment.Id, StringComparer.Ordinal).ToArray();
+    }
 
     private async Task<FrozenSet<string>> ReadMembershipAsync(ValidatedTargetRepository repository, ProcessRequest request,
         string commandDescription, bool requireBlockerMetadata, CancellationToken cancellationToken)
