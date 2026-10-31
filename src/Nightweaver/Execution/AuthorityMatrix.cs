@@ -96,13 +96,27 @@ internal static class AuthorityMatrix
         {
             AgentRole.Planner => ValidatePlanner(before, after, postBeads, dependencies),
             AgentRole.PlanChallenger => ValidatePlanChallenger(before, after),
-            AgentRole.Implementer => ValidateImplementer(before, after),
+            AgentRole.Implementer => ValidateWorkerObservation(before, after, null, null),
             AgentRole.Reviewer => ValidateReviewOrQa(before, after, "stage:review", "stage:qa", role),
             AgentRole.Qa => ValidateReviewOrQa(before, after, "stage:qa", "stage:merge", role),
             AgentRole.Merger => ValidateMerger(before, after),
             _ => AuthorityMatrixResult.Illegal($"Role '{role}' is not supported by the Authority Matrix.")
         };
         return result;
+    }
+
+    internal static AuthorityMatrixResult ValidateWorkerObservation(
+        BeadWorkflowState before,
+        BeadWorkflowState after,
+        string? beforeAssignee,
+        string? afterAssignee)
+    {
+        if (before != after)
+            return AuthorityMatrixResult.Illegal(
+                "Implementer may report evidence but cannot mutate Bead status, type, stage, pause labels, planned state, or repair_cycles.");
+        if (!string.Equals(beforeAssignee, afterAssignee, StringComparison.Ordinal))
+            return AuthorityMatrixResult.Illegal("Implementer cannot change Bead claim ownership.");
+        return AuthorityMatrixResult.Legal;
     }
 
     private static AuthorityMatrixResult ValidatePlanner(BeadWorkflowState before, BeadWorkflowState after,
@@ -142,15 +156,6 @@ internal static class AuthorityMatrix
         if (after.Stage == "stage:plan" && !after.Planned && !after.ProductDecisionRequired)
             return IncrementCounter(before, after);
         return AuthorityMatrixResult.Illegal("Plan Challenger must transition to stage:plan-approved or reject to stage:plan.");
-    }
-
-    private static AuthorityMatrixResult ValidateImplementer(BeadWorkflowState before, BeadWorkflowState after)
-    {
-        if (after.Stage == "stage:review" && !after.Planned && !after.ProductDecisionRequired)
-            return UnchangedCounter(before, after);
-        if (after.ProductDecisionRequired && !after.Planned && after.Stage == before.Stage)
-            return UnchangedCounter(before, after);
-        return AuthorityMatrixResult.Illegal("Implementer must transition to stage:review or product-decision-required.");
     }
 
     private static AuthorityMatrixResult ValidateReviewOrQa(BeadWorkflowState before, BeadWorkflowState after,

@@ -23,6 +23,7 @@ internal sealed record AgentStageSession(
     WorktreePurpose Purpose,
     ProvisionedWorktree Worktree,
     BeadWorkflowState InitialState,
+    string? InitialAssignee,
     AgentDispatchContext DispatchContext,
     bool PreserveInheritedChanges);
 
@@ -99,7 +100,8 @@ internal sealed class AgentStageCoordinator
 
         _ = ParseProvisionedHead(worktree.HeadSha);
         return new AgentStageSession(hostPaths, project, repository, beadId, role, purpose, worktree,
-            fresh.State, new AgentDispatchContext(fresh.State.Id, fresh.State.IssueType, fresh.State.Stage, fresh.State.RepairCycles),
+            fresh.State, fresh.Bead.Assignee,
+            new AgentDispatchContext(fresh.State.Id, fresh.State.IssueType, fresh.State.Stage, fresh.State.RepairCycles),
             worktree.WasDirty);
     }
 
@@ -122,7 +124,7 @@ internal sealed class AgentStageCoordinator
         cancellationToken.ThrowIfCancellationRequested();
         var execution = await execute(session.HostPaths, session.Project.Name, invocation, cancellationToken);
         return await verifier.VerifyAsync(session.Repository, session.Worktree.Path, session.Role, before,
-            validHead, execution, cancellationToken);
+            session.InitialAssignee, validHead, execution, cancellationToken);
     }
 
     internal async Task<(BeadSnapshot Bead, BeadWorkflowState State)> ReadRequestedStateAsync(

@@ -19,7 +19,8 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         var implementer = target.Create("Dispatch implementer", type: "task");
 
         var inferred = await fixture.RunAsync(["dispatch", implementer, "--project=demo"], "review");
-        Assert.Equal(0, inferred.ExitCode);
+        Assert.True(inferred.ExitCode == 0,
+            $"Dispatch failed (exit {inferred.ExitCode}).\\nstdout:\\n{inferred.StandardOutputText}\\nstderr:\\n{inferred.StandardErrorText}");
         Assert.True(inferred.StandardError.Length == 0,
             $"Unexpected startup diagnostic: {inferred.StandardErrorText}\nstdout:\n{inferred.StandardOutputText}");
         Assert.Contains("role 'implementer' (inferred)", inferred.StandardOutputText, StringComparison.Ordinal);
@@ -31,7 +32,8 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         var explicitDispatch = await fixture.RunAsync(
             ["dispatch", implementer, "--role=reviewer", "--config=" + Path.GetRelativePath(fixture.Caller, fixture.Config)],
             "review-qa");
-        Assert.Equal(0, explicitDispatch.ExitCode);
+        Assert.True(explicitDispatch.ExitCode == 0,
+            $"Explicit Reviewer dispatch failed (exit {explicitDispatch.ExitCode}).\\nstdout:\\n{explicitDispatch.StandardOutputText}\\nstderr:\\n{explicitDispatch.StandardErrorText}");
         Assert.Empty(explicitDispatch.StandardError);
         Assert.Contains("role 'reviewer' (explicit)", explicitDispatch.StandardOutputText, StringComparison.Ordinal);
         AssertSuccessfulHandoff(target, implementer, "stage:qa");
@@ -39,7 +41,8 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         var product = target.Create("Dispatch planner", type: "feature");
         target.Run("bd", ["update", product, "--add-label", "stage:plan"]);
         var planning = await fixture.RunAsync(["dispatch", product, "--project", "demo"], "plan-challenge");
-        Assert.Equal(0, planning.ExitCode);
+        Assert.True(planning.ExitCode == 0,
+            $"Planner dispatch failed (exit {planning.ExitCode}).\nstdout:\n{planning.StandardOutputText}\nstderr:\n{planning.StandardErrorText}");
         Assert.Empty(planning.StandardError);
         Assert.Contains("role 'planner' (inferred)", planning.StandardOutputText, StringComparison.Ordinal);
         AssertSuccessfulHandoff(target, product, "stage:plan-challenge");
@@ -77,7 +80,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         Assert.True(Directory.Exists(fixture.WorktreePath(beadId)));
         Assert.Equal("nightweaver/" + beadId,
             fixture.Target.Run("git", ["-C", fixture.WorktreePath(beadId), "branch", "--show-current"]).Trim());
-        Assert.Single(Directory.EnumerateFiles(Path.Combine(fixture.Host, "logs", "demo", beadId), "*.log"));
+        Assert.Equal(2, Directory.EnumerateFiles(Path.Combine(fixture.Host, "logs", "demo", beadId), "*.log").Count());
     }
 
     [Fact]
@@ -704,6 +707,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
             var environment = new Dictionary<string, string?>(Target.Environment, StringComparer.OrdinalIgnoreCase)
             {
                 ["BD_ACTOR"] = "nightweaver:" + project,
+                ["OPENAI_API_KEY"] = null,
                 ["NIGHTWEAVER_FIXTURE_ACTION"] = action,
                 ["PATH"] = fakeCliDirectory + Path.PathSeparator + inheritedPath
             };
@@ -738,6 +742,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
             {
                 File.Copy(source, Path.Combine(fakeCliDirectory, "claude.exe"), overwrite: true);
                 File.Copy(source, Path.Combine(fakeCliDirectory, "codex.exe"), overwrite: true);
+                File.Copy(source, Path.Combine(fakeCliDirectory, "gh.exe"), overwrite: true);
             }
         }
 

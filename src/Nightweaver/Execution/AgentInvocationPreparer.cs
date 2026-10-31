@@ -77,6 +77,30 @@ internal sealed class AgentInvocationPreparer
             project.Roles[AgentRole.Classifier], comparisonPayload, "classifier"));
     }
 
+    /// <summary>Prepares the bounded standard-model fallback for Implementer outcome classification.</summary>
+    internal Task<PreparedAgentInvocation> PrepareOutcomeClassifierAsync(
+        HostPaths hostPaths,
+        ProjectConfig project,
+        AgentDispatchContext context,
+        string worktreePath,
+        string evidencePayload,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(hostPaths);
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(worktreePath);
+        ArgumentNullException.ThrowIfNull(evidencePayload);
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateContext(context, project);
+        var workingDirectory = ValidateWorktreePath(hostPaths, project, context.BeadId, worktreePath);
+        if (Encoding.UTF8.GetByteCount(evidencePayload) > AgentOutcomeClassifier.MaximumEvidenceBytes)
+            throw new AgentInvocationPreparationException("The Implementer outcome payload exceeds the configured serialized size limit.");
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(BuildInvocation(hostPaths, project, context, workingDirectory,
+            project.Roles[AgentRole.Classifier], evidencePayload, "outcome-classifier"));
+    }
+
     private PreparedAgentInvocation BuildInvocation(
         HostPaths hostPaths,
         ProjectConfig project,
@@ -95,13 +119,15 @@ internal sealed class AgentInvocationPreparer
         EnsureDirectChild(beadTmpRoot, temporaryDirectory, "temporary directory");
         EnsureDirectChild(beadLogsRoot, logFilePath, "log file");
 
-        IReadOnlyDictionary<string, string> environmentOverrides = new Dictionary<string, string>(StringComparer.Ordinal)
+        var environmentOverrides = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["NIGHTWEAVER_BEAD_ID"] = context.BeadId,
             ["TMP"] = temporaryDirectory,
             ["TEMP"] = temporaryDirectory,
             ["TMPDIR"] = temporaryDirectory
         };
+        if (string.Equals(roleSuffix, "outcome-classifier", StringComparison.Ordinal))
+            environmentOverrides["NIGHTWEAVER_INVOCATION_PURPOSE"] = "outcome-classifier";
 
         return new PreparedAgentInvocation(
             AgentCliNames.ToConfigValue(settings.Cli),

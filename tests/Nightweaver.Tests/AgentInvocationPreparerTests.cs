@@ -133,6 +133,26 @@ public sealed class AgentInvocationPreparerTests
     }
 
     [Fact]
+    public async Task PreparesOutcomeClassifierWithDistinctPurposeAndInvocationScopedRuntimePaths()
+    {
+        using var temp = new TempDirectory();
+        var host = CreateHost(temp.Path);
+        var project = CreateProject();
+        var context = new AgentDispatchContext("ns-xci.2", "task", "stage:implement", 1);
+        var worktree = CanonicalWorktree(host, project, context.BeadId);
+
+        var prepared = await new AgentInvocationPreparer().PrepareOutcomeClassifierAsync(
+            host, project, context, worktree, "bounded evidence", TestContext.Current.CancellationToken);
+
+        Assert.Matches("^\\d{8}T\\d{13}Z-outcome-classifier$", prepared.InvocationId);
+        Assert.Equal("bounded evidence", prepared.StandardInput);
+        Assert.Equal("outcome-classifier", prepared.EnvironmentOverrides["NIGHTWEAVER_INVOCATION_PURPOSE"]);
+        Assert.Equal(5, prepared.EnvironmentOverrides.Count);
+        Assert.False(Directory.Exists(Path.Combine(host.Root, "tmp")));
+        Assert.False(Directory.Exists(Path.Combine(host.Root, "logs")));
+    }
+
+    [Fact]
     public async Task ResolvesCanonicalPathsAndFourEnvironmentOverridesWithoutCreatingFiles()
     {
         using var temp = new TempDirectory();

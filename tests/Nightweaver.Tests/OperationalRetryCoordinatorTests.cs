@@ -21,6 +21,22 @@ public sealed class OperationalRetryCoordinatorTests
     }
 
     [Fact]
+    public async Task OutcomeClassificationFailureEscalatesWithoutRerunningCompletedImplementer()
+    {
+        var fixture = new RetryFixture(null, 2, new Attempt(0, "stage:review"));
+
+        var outcome = await fixture.RunAsync();
+
+        Assert.Equal(OperationalRetryStatus.Escalated, outcome.Status);
+        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, outcome.EscalationCause);
+        Assert.Equal(1, outcome.AttemptCount);
+        Assert.Equal(1, fixture.AttemptCount);
+        Assert.Equal(0, fixture.ResetCount);
+        Assert.Equal("stage:implement", fixture.Stage);
+        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, fixture.LastEscalation!.Cause);
+    }
+
+    [Fact]
     public async Task OperationalFailureResetsOneRetainedWorktreeAndCanSucceedWithoutRepairCycleMutation()
     {
         var fixture = new RetryFixture(2,
@@ -200,7 +216,7 @@ public sealed class OperationalRetryCoordinatorTests
     }
 
     [Fact]
-    public async Task RetryRefusalForAdvancedStageUsesEnvironmentBlockWithoutClassifierOrReset()
+    public async Task NonZeroImplementerExitWithWorkflowMutationEscalatesWithoutRetry()
     {
         var fixture = new RetryFixture(2, new Attempt(19, "stage:review"));
 
@@ -208,23 +224,42 @@ public sealed class OperationalRetryCoordinatorTests
 
         Assert.Equal(OperationalRetryStatus.Escalated, outcome.Status);
         Assert.Equal(1, outcome.AttemptCount);
-        Assert.Equal(NeedsHumanCause.EnvironmentBlocked, outcome.EscalationCause);
+        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, outcome.EscalationCause);
+        Assert.Equal(AgentOperationalFailureKind.NonZeroExit, outcome.StageResult.Failure!.Kind);
         Assert.Equal(0, fixture.ResetCount);
         Assert.Equal(0, fixture.CompareCount);
-        Assert.Contains("workflow identity changed", string.Join(" ", fixture.LastEscalation!.LatestFindings), StringComparison.Ordinal);
+        Assert.Equal("stage:review", fixture.LastEscalation!.ExpectedWorkflowState!.Stage);
+        Assert.Contains("automatic retry is unsafe", string.Join(" ", fixture.LastEscalation.LatestFindings), StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task RepairCounterMutationStopsRetryAndEscalatesAsEnvironmentBlock()
+    public async Task UnreadablePostExitSnapshotEscalatesWithoutOperationalRetry()
+    {
+        var fixture = new RetryFixture(null, 2, true, new Attempt(19, null));
+
+        var outcome = await fixture.RunAsync();
+
+        Assert.Equal(OperationalRetryStatus.Escalated, outcome.Status);
+        Assert.Equal(1, outcome.AttemptCount);
+        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, outcome.EscalationCause);
+        Assert.Equal(AgentOperationalFailureKind.NonZeroExit, outcome.StageResult.Failure!.Kind);
+        Assert.Null(outcome.StageResult.Observations);
+        Assert.Equal(0, fixture.ResetCount);
+        Assert.Equal(0, fixture.CompareCount);
+    }
+
+    [Fact]
+    public async Task RepairCounterMutationStopsRetryAndEscalatesAsImplementerOutcomeFailure()
     {
         var fixture = new RetryFixture(2, new Attempt(19, null, RepairCyclesAfter: 5));
 
         var outcome = await fixture.RunAsync();
 
-        Assert.Equal(NeedsHumanCause.EnvironmentBlocked, outcome.EscalationCause);
+        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, outcome.EscalationCause);
         Assert.Equal(5, fixture.RepairCycles);
         Assert.Equal(0, fixture.ResetCount);
         Assert.Equal(0, fixture.CompareCount);
+        Assert.Equal(5, fixture.LastEscalation!.ExpectedWorkflowState!.RepairCycles);
         Assert.Equal(WorktreePurpose.Delivery, fixture.LastEscalation!.CleanupPurpose);
     }
 
@@ -235,7 +270,7 @@ public sealed class OperationalRetryCoordinatorTests
 
         var outcome = await fixture.RunAsync();
 
-        Assert.Equal(NeedsHumanCause.EnvironmentBlocked, outcome.EscalationCause);
+        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, outcome.EscalationCause);
         Assert.Equal(WorktreePurpose.Planning, fixture.LastEscalation!.CleanupPurpose);
         Assert.Equal(AgentRole.Implementer, fixture.LastEscalation.Role);
         Assert.Equal(0, fixture.ResetCount);
@@ -249,7 +284,7 @@ public sealed class OperationalRetryCoordinatorTests
 
         var outcome = await fixture.RunAsync();
 
-        Assert.Equal(NeedsHumanCause.EnvironmentBlocked, outcome.EscalationCause);
+        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, outcome.EscalationCause);
         Assert.Equal(1, fixture.EscalateCount);
         Assert.Equal(0, fixture.ResetCount);
     }
@@ -314,17 +349,29 @@ public sealed class OperationalRetryCoordinatorTests
         private readonly ProjectConfig project;
         private readonly ValidatedTargetRepository repository = new("C:\\target", "main");
         private readonly Queue<Attempt> attempts;
+        private readonly bool failPostExitInventoryRead;
         private string currentStage = "stage:implement";
         private string currentIssueType = "task";
         private int currentRepairCycles = 4;
         private string currentStatus = "in_progress";
         private readonly List<string> additionalLabels = [];
-        private string currentAssignee = Owner;
+        private string? currentAssignee = Owner;
         private int invocation;
+        private bool hasExecuted;
+        private bool postExitInventoryReadFailed;
         private string head = new('a', 40);
 
         internal RetryFixture(int retries, params Attempt[] attempts)
+            : this(AgentOutcomeChoice.ReadyForReview, retries, false, attempts) { }
+
+        internal RetryFixture(AgentOutcomeChoice? outcome, int retries, params Attempt[] attempts)
+            : this(outcome, retries, false, attempts) { }
+
+        internal RetryFixture(AgentOutcomeChoice? outcome, int retries, bool failPostExitInventoryRead,
+            params Attempt[] attempts)
         {
+            Outcome = outcome;
+            this.failPostExitInventoryRead = failPostExitInventoryRead;
             this.attempts = new(attempts);
             var roles = AgentRoles.All.ToDictionary(role => role,
                 _ => new AgentSettings(AgentCli.Claude, null, "low", 1));
@@ -333,9 +380,20 @@ public sealed class OperationalRetryCoordinatorTests
             var runner = new RecordingProcessRunner((request, _) =>
             {
                 if (request.FileName == "bd")
-                    return Task.FromResult(new ProcessResult(0, Inventory(), ""));
+                {
+                    if (this.failPostExitInventoryRead && hasExecuted && !postExitInventoryReadFailed
+                        && !request.Arguments.Contains("comments", StringComparer.Ordinal))
+                    {
+                        postExitInventoryReadFailed = true;
+                        return Task.FromResult(new ProcessResult(1, "", "simulated unreadable post-exit inventory"));
+                    }
+                    return Task.FromResult(new ProcessResult(0,
+                        request.Arguments.Contains("comments", StringComparer.Ordinal) ? "[]" : Inventory(), ""));
+                }
                 if (request.FileName == "git" && request.Arguments.SequenceEqual(["status", "--porcelain"]))
                     return Task.FromResult(new ProcessResult(0, "", ""));
+                if (request.FileName == "git" && request.Arguments.SequenceEqual(["branch", "--show-current"]))
+                    return Task.FromResult(new ProcessResult(0, $"nightweaver/{Bead}\n", ""));
                 if (request.FileName == "git" && request.Arguments.SequenceEqual(["rev-parse", "HEAD"]))
                     return Task.FromResult(new ProcessResult(0, head + "\n", ""));
                 throw new InvalidOperationException($"Unexpected fake process: {request.FileName} {string.Join(' ', request.Arguments)}");
@@ -358,13 +416,13 @@ public sealed class OperationalRetryCoordinatorTests
                     AttemptCount++;
                     OnAttempt?.Invoke($"attempt-{invocation}");
                     var action = this.attempts.Dequeue();
-                    if (action.StageAfter is not null) currentStage = action.StageAfter;
+                    if (action.StageAfter is not null && action.ExitCode != 0) currentStage = action.StageAfter;
                     if (action.AssigneeAfter is not null) currentAssignee = action.AssigneeAfter;
                     if (action.IssueTypeAfter is not null) currentIssueType = action.IssueTypeAfter;
                     if (action.RepairCyclesAfter is not null) currentRepairCycles = action.RepairCyclesAfter.Value;
                     if (action.StatusAfter is not null) currentStatus = action.StatusAfter;
                     if (action.AdditionalLabels is not null) additionalLabels.AddRange(action.AdditionalLabels);
-                    if (action.ExitCode == 0) currentStage = "stage:review";
+                    hasExecuted = true;
                     return Task.FromResult(new AgentExecutionResult(AgentExecutionStatus.Exited, action.ExitCode,
                         prepared.InvocationId, prepared.LogFilePath));
                 });
@@ -394,7 +452,28 @@ public sealed class OperationalRetryCoordinatorTests
                     LastEscalation = request;
                     if (EscalationBehavior is { } behavior) return behavior(request, token);
                     return Task.FromResult(new NeedsHumanEscalationResult(true, true, true, true, []));
-                });
+                },
+                outcomeClassifier: new FixedAgentOutcomeClassifier(Outcome),
+                outcomePublisher: new DelegateImplementerOutcomePublisher((session, invocation, classification, releaseClaim, token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    currentStage = classification.Outcome == AgentOutcomeChoice.ReadyForReview
+                        ? "stage:review" : currentStage;
+                    if (classification.Outcome == AgentOutcomeChoice.ProductDecisionRequired)
+                        additionalLabels.Add("product-decision-required");
+                    if (releaseClaim)
+                    {
+                        currentStatus = "open";
+                        currentAssignee = null;
+                    }
+                    var state = BeadWorkflowState.Parse(BeadsReader.Parse(Inventory()).ById[Bead]);
+                    return Task.FromResult(invocation with
+                    {
+                        VerifiedState = state,
+                        OutcomeClassification = classification
+                    });
+                }),
+                outcomeVerifier: new FixedImplementerOutcomeVerifier(readyFailure: ReadyVerificationFailure));
         }
 
         internal OperationalRetryCoordinator Coordinator { get; }
@@ -407,6 +486,8 @@ public sealed class OperationalRetryCoordinatorTests
         internal int RepairCycles => currentRepairCycles;
         internal List<(string Previous, string Latest)> ComparisonPairs { get; } = [];
         internal DuplicateFailureVerdict Verdict { get; init; } = DuplicateFailureVerdict.Inconclusive;
+        internal AgentOutcomeChoice? Outcome { get; }
+        internal string? ReadyVerificationFailure { get; init; }
         internal NeedsHumanRequest? LastEscalation { get; private set; }
         internal AgentDispatchContext? LastComparisonContext { get; private set; }
         internal AgentStageResult? LastComparisonPrevious { get; private set; }
