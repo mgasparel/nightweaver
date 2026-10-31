@@ -1449,6 +1449,10 @@ h3 {
   font-weight: 650;
 }
 
+.workspace-guidance [hidden] {
+  display: none !important;
+}
+
 #workspace-guidance-input {
   display: block;
   box-sizing: border-box;

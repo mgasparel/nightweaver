@@ -173,6 +173,198 @@ public sealed class WebBeadWorkspaceBoundaryIntegrationTests
     }
 
     [Fact]
+    public async Task WorkspaceReturnsRefreshableConflictWhenBeadChangesBetweenInventoryAndShow()
+    {
+        using var target = new BeadsFixture("workspace show conflict target");
+        var beadId = target.Create("Workflow changes before show");
+        var changed = 0;
+        using var factory = CreateFactory(target, out var runner, intercept: (request, _) =>
+        {
+            if (request.FileName == "bd" && request.Arguments.Contains("show", StringComparer.Ordinal)
+                && Interlocked.CompareExchange(ref changed, 1, 0) == 0)
+                target.Run("bd", ["update", beadId, "--status", "in_progress"]);
+            return Task.FromResult<ProcessResult?>(null);
+        });
+        using var client = factory.CreateClient();
+        var targetProjectionBefore = TrackerProjection(target.Run("bd", ["--readonly", "--sandbox", "list", "--all", "--limit", "0", "--include-ephemeral", "--include-gates", "--include-infra", "--include-templates", "--json"]));
+
+        using var response = await client.GetAsync($"/api/beads/{beadId}", TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        using var problem = JsonDocument.Parse(body);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("Bead changed", problem.RootElement.GetProperty("title").GetString());
+        Assert.Contains("Refresh", problem.RootElement.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(target.Path, body, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, Volatile.Read(ref changed));
+        Assert.Single(runner.Requests, request => request.FileName == "bd" && request.Arguments.Contains("show", StringComparer.Ordinal));
+        Assert.DoesNotContain(runner.Requests, request => IsGit(request, "status"));
+        Assert.NotEqual(targetProjectionBefore,
+            TrackerProjection(target.Run("bd", ["--readonly", "--sandbox", "list", "--all", "--limit", "0", "--include-ephemeral", "--include-gates", "--include-infra", "--include-templates", "--json"])));
+    }
+
+    [Fact]
+    public async Task WorkspaceReturnsRefreshableConflictWhenBeadDisappearsFromFinalInventory()
+    {
+        using var target = new BeadsFixture("workspace final inventory conflict target");
+        var beadId = target.Create("Disappears from final inventory");
+        var listArguments = new[]
+        {
+            "--readonly", "--sandbox", "list", "--all", "--limit", "0", "--include-ephemeral", "--include-gates", "--include-infra", "--include-templates", "--json"
+        };
+        var inventoryCalls = 0;
+        using var factory = CreateFactory(target, out var runner, intercept: (request, _) =>
+        {
+            if (request.FileName == "bd" && request.Arguments.Count > 2 && request.Arguments[2] == "list"
+                && Interlocked.Increment(ref inventoryCalls) == 2)
+            {
+                using var currentInventory = JsonDocument.Parse(target.Run("bd", listArguments));
+                var remaining = currentInventory.RootElement.EnumerateArray()
+                    .Where(issue => issue.GetProperty("id").GetString() != beadId)
+                    .Select(issue => issue.Clone())
+                    .ToArray();
+                return Task.FromResult<ProcessResult?>(new(0, JsonSerializer.Serialize(remaining), string.Empty));
+            }
+            return Task.FromResult<ProcessResult?>(null);
+        });
+        using var client = factory.CreateClient();
+        var targetProjectionBefore = TrackerProjection(target.Run("bd", listArguments));
+
+        using var response = await client.GetAsync($"/api/beads/{beadId}", TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        using var problem = JsonDocument.Parse(body);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("Bead changed", problem.RootElement.GetProperty("title").GetString());
+        Assert.Contains("disappeared", problem.RootElement.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(target.Path, body, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, Volatile.Read(ref inventoryCalls));
+        Assert.Single(runner.Requests, request => request.FileName == "bd" && request.Arguments.Contains("show", StringComparer.Ordinal));
+        Assert.Single(runner.Requests, request => request.FileName == "bd" && request.Arguments.Contains("comments", StringComparer.Ordinal));
+        Assert.DoesNotContain(runner.Requests, request => IsGit(request, "status"));
+        Assert.Equal(targetProjectionBefore, TrackerProjection(target.Run("bd", listArguments)));
+        using var actualDetail = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "show", beadId, "--json"]));
+        Assert.Equal(beadId, actualDetail.RootElement[0].GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task WorkspaceRejectsForeignAndReparseGitAdminPointersBeforeStatusAndRechecksBeforeStatus()
+    {
+        using var target = new BeadsFixture("workspace admin pointer target");
+        using var foreign = new GitFixture("workspace foreign admin repository");
+        var markerId = target.Create("Reparse marker");
+        var adminDirectoryId = target.Create("Reparse admin directory");
+        var foreignBacklinkId = target.Create("Foreign backlink");
+        var backlinkId = target.Create("Reparse backlink");
+        var replacementId = target.Create("Admin marker replaced at status boundary");
+        string worktreeList = string.Empty;
+        string? replacementMarker = null;
+        string? replacementAdminDirectory = null;
+        var replacementEnabled = 0;
+        var replacementListCalls = 0;
+        var statusRequests = new ConcurrentQueue<string?>();
+        using var factory = CreateFactory(target, out var runner, intercept: (request, _) =>
+        {
+            if (IsGit(request, "worktree") && request.Arguments.Skip(1).FirstOrDefault() == "list"
+                && worktreeList.Length > 0)
+            {
+                if (Volatile.Read(ref replacementEnabled) == 1
+                    && Interlocked.Increment(ref replacementListCalls) == 2)
+                {
+                    Assert.NotNull(replacementMarker);
+                    Assert.NotNull(replacementAdminDirectory);
+                    File.Delete(replacementMarker!);
+                    CreateDirectoryJunction(replacementMarker!, replacementAdminDirectory!);
+                }
+                return Task.FromResult<ProcessResult?>(new(0, worktreeList, string.Empty));
+            }
+            if (IsGit(request, "status"))
+            {
+                statusRequests.Enqueue(request.WorkingDirectory);
+                return Task.FromResult<ProcessResult?>(new(0, string.Empty, string.Empty));
+            }
+            return Task.FromResult<ProcessResult?>(null);
+        });
+        using var client = factory.CreateClient();
+        var markerWorktree = AddManagedWorktree(target, factory, markerId, detached: true);
+        var adminDirectoryWorktree = AddManagedWorktree(target, factory, adminDirectoryId, detached: true);
+        var foreignBacklinkWorktree = AddManagedWorktree(target, factory, foreignBacklinkId, detached: true);
+        var backlinkWorktree = AddManagedWorktree(target, factory, backlinkId, detached: true);
+        var replacementWorktree = AddManagedWorktree(target, factory, replacementId, detached: true);
+        GitFixture.RunGit(foreign.Path, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "workspace foreign base"]);
+        var foreignSentinel = Path.Combine(foreign.Path, "foreign-admin-sentinel.txt");
+        File.WriteAllText(foreignSentinel, "foreign repository must remain unchanged");
+        worktreeList = target.Run("git", ["worktree", "list", "--porcelain", "-z"]);
+
+        var markerFile = Path.Combine(markerWorktree, ".git");
+        var markerAdmin = ReadAdminDirectory(markerWorktree);
+        File.Delete(markerFile);
+        CreateDirectoryJunction(markerFile, markerAdmin);
+
+        var adminDirectory = ReadAdminDirectory(adminDirectoryWorktree);
+        var backupAdminDirectory = Path.Combine(target.Path, ".git", "workspace-admin-backup-" + adminDirectoryId);
+        Directory.Move(adminDirectory, backupAdminDirectory);
+        CreateDirectoryJunction(adminDirectory, backupAdminDirectory);
+
+        var foreignBacklinkAdmin = ReadAdminDirectory(foreignBacklinkWorktree);
+        File.WriteAllText(Path.Combine(foreignBacklinkAdmin, "gitdir"), Path.Combine(foreign.Path, ".git"));
+
+        var backlinkAdmin = ReadAdminDirectory(backlinkWorktree);
+        var backlinkFile = Path.Combine(backlinkAdmin, "gitdir");
+        File.Delete(backlinkFile);
+        CreateDirectoryJunction(backlinkFile, foreign.Path);
+
+        replacementMarker = Path.Combine(replacementWorktree, ".git");
+        replacementAdminDirectory = ReadAdminDirectory(replacementWorktree);
+        var foreignTreeBefore = Snapshot.FileTree(foreign.Path);
+        var foreignGitBefore = Snapshot.GitStatus(foreign.Path);
+        var initialTargetSentinel = Path.Combine(target.Path, "target-admin-sentinel.txt");
+        File.WriteAllText(initialTargetSentinel, "target source sentinel remains unchanged");
+        var targetTreeBefore = Snapshot.FileTree(target.Path, allowReadOnlyBdLastTouchedTimestamp: true);
+
+        foreach (var (beadId, title) in new[]
+        {
+            (markerId, "Reparse marker"),
+            (adminDirectoryId, "Reparse admin directory"),
+            (foreignBacklinkId, "Foreign backlink"),
+            (backlinkId, "Reparse backlink")
+        })
+        {
+            using var response = await client.GetAsync($"/api/beads/{beadId}", TestContext.Current.CancellationToken);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(beadId, document.RootElement.GetProperty("bead").GetProperty("id").GetString());
+            Assert.Equal(title, document.RootElement.GetProperty("bead").GetProperty("title").GetString());
+            var environment = document.RootElement.GetProperty("environment");
+            Assert.Equal("unsafe", environment.GetProperty("state").GetString());
+            Assert.Equal("unknown", environment.GetProperty("gitStatus").GetString());
+            Assert.Equal(JsonValueKind.Null, environment.GetProperty("worktreePath").ValueKind);
+        }
+        Assert.Empty(statusRequests);
+
+        Volatile.Write(ref replacementListCalls, 0);
+        Volatile.Write(ref replacementEnabled, 1);
+        using (var response = await client.GetAsync($"/api/beads/{replacementId}", TestContext.Current.CancellationToken))
+        using (var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(replacementId, document.RootElement.GetProperty("bead").GetProperty("id").GetString());
+            Assert.Equal("unsafe", document.RootElement.GetProperty("environment").GetProperty("state").GetString());
+            Assert.Equal("unknown", document.RootElement.GetProperty("environment").GetProperty("gitStatus").GetString());
+            Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("environment").GetProperty("worktreePath").ValueKind);
+        }
+        Assert.Equal(2, Volatile.Read(ref replacementListCalls));
+        Assert.True((File.GetAttributes(replacementMarker!) & FileAttributes.ReparsePoint) != 0);
+        Assert.Empty(statusRequests);
+        Assert.Contains("target source sentinel remains unchanged", File.ReadAllText(initialTargetSentinel), StringComparison.Ordinal);
+        Assert.Contains("foreign repository must remain unchanged", File.ReadAllText(foreignSentinel), StringComparison.Ordinal);
+        Assert.Equal(foreignTreeBefore, Snapshot.FileTree(foreign.Path));
+        Assert.Equal(foreignGitBefore, Snapshot.GitStatus(foreign.Path));
+        Assert.Equal(targetTreeBefore, Snapshot.FileTree(target.Path, allowReadOnlyBdLastTouchedTimestamp: true));
+        Assert.DoesNotContain(runner.Requests, request => IsGit(request, "status"));
+    }
+
+    [Fact]
     public async Task WorkspaceReportsReparsePointAncestryWithoutFollowingIt()
     {
         using var target = new BeadsFixture("workspace reparse target");
@@ -609,6 +801,13 @@ public sealed class WebBeadWorkspaceBoundaryIntegrationTests
 
     private static bool IsGit(ProcessRequest request, string subcommand)
         => request.FileName == "git" && request.Arguments.Count > 0 && request.Arguments[0] == subcommand;
+
+    private static string ReadAdminDirectory(string worktreePath)
+    {
+        var marker = File.ReadAllText(Path.Combine(worktreePath, ".git")).Trim();
+        Assert.StartsWith("gitdir: ", marker, StringComparison.Ordinal);
+        return Path.GetFullPath(marker["gitdir: ".Length..], worktreePath);
+    }
 
     private static object Comment(string id, string issueId, string author, string text, string createdAt)
         => new { id, issue_id = issueId, author, text, created_at = createdAt };

@@ -50,6 +50,7 @@ internal sealed class BeadWorkspaceEnvironmentObserver(
             var before = await worktreeReader.ReadAsync(target, cancellationToken);
             if (!SameRegistration(registration, before.SingleOrDefault(item => RuntimePaths.Comparer.Equals(item.Path, expectedPath))))
                 return Make("unsafe", null, null, null, null, "unknown", "The worktree registration changed during observation.");
+            VerifyLinkedWorktree(expectedPath, commonDirectory);
 
             ProcessResult status;
             try

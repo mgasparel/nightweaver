@@ -84,6 +84,33 @@ const readId = async title => {
   check(typeof href === 'string' && href.startsWith('#bead/'), `Explorer has no workspace link for ${title}.`);
   return decodeURIComponent(href.slice('#bead/'.length));
 };
+const assertGuidanceStudio = async mode => {
+  const selectors = [
+    '#workspace-guidance-input',
+    'label[for="workspace-guidance-input"]',
+    '#workspace-guidance-help',
+    '.workspace-template-chips'
+  ];
+  const states = await Promise.all(selectors.map(async selector => {
+    const element = page.locator(selector);
+    return {
+      selector,
+      hidden: await element.evaluate(node => node.hidden),
+      display: await element.evaluate(node => getComputedStyle(node).display),
+      visible: await element.isVisible()
+    };
+  }));
+  const shouldBeVisible = mode === 'decision';
+  check(states.every(state => shouldBeVisible
+    ? !state.hidden && state.display !== 'none' && state.visible
+    : state.hidden && state.display === 'none' && !state.visible),
+  `The ${mode} guidance controls do not match their expected rendered visibility: ${JSON.stringify(states)}.`);
+
+  const actionNames = shouldBeVisible ? ['Save Note', 'Send & Resume'] : ['Reset Budget & Retry', 'Abort & Close'];
+  for (const name of actionNames)
+    check(await page.getByRole('button', { name, exact: true }).isVisible(), `The ${mode} action ${name} is not visible.`);
+  console.log(`PASS: ${mode} workspace guidance presentation ${JSON.stringify(states)}; actions ${actionNames.join(', ')} remain visible.`);
+};
 const routeTo = async id => {
   await page.evaluate(value => { window.location.hash = `#bead/${encodeURIComponent(value)}`; }, id);
 };
@@ -110,6 +137,7 @@ try {
   const originLink = decisionRow.locator('td.bead-title a');
   await originLink.click();
   await waitForTitle('QA product decision');
+  await assertGuidanceStudio('decision');
   check(new URL(page.url()).hash === `#bead/${encodeURIComponent(decisionId)}`, 'Explorer link did not produce the direct workspace route.');
   const desktopLayout = await page.locator('.workspace-layout').evaluate(element => {
     const style = getComputedStyle(element);
@@ -289,6 +317,7 @@ try {
 
   await routeTo(needsHumanId);
   await waitForTitle('QA needs human');
+  await assertGuidanceStudio('needs-human');
   await page.getByRole('button', { name: 'Reset Budget & Retry' }).click();
   await page.locator('#workspace-guidance-context').getByText('No active human pause is available for this Bead.', { exact: true }).waitFor();
   const retryDetail = await getDetail(needsHumanId);
@@ -300,6 +329,7 @@ try {
 
   await routeTo(abortId);
   await waitForTitle('QA abort action');
+  await assertGuidanceStudio('needs-human');
   await page.getByRole('button', { name: 'Abort & Close' }).click();
   await page.locator('.workspace-abort-confirmation').waitFor();
   check(await page.getByRole('button', { name: 'Confirm Abort & Close' }).isVisible(), 'Abort did not require explicit confirmation.');
