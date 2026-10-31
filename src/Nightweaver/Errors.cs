@@ -59,3 +59,5 @@ internal sealed class BeadEnvironmentException(string path, string reason)
     internal string Path { get; } = path;
     internal string Reason { get; } = reason;
 }
+
+internal sealed class BeadsGuardConflictException(string message) : NightweaverException(message);

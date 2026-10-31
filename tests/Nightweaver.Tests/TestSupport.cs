@@ -143,7 +143,7 @@ internal static class Snapshot
         }
     }
 
-    internal static string FileTree(string root)
+    internal static string FileTree(string root, bool allowReadOnlyBdLastTouchedTimestamp = false)
     {
         var rootAttributes = File.GetAttributes(root);
         var rootTimestamp = File.GetLastWriteTimeUtc(root).ToString("O", System.Globalization.CultureInfo.InvariantCulture);
@@ -153,14 +153,16 @@ internal static class Snapshot
                 var relative = System.IO.Path.GetRelativePath(root, path);
                 var attributes = File.GetAttributes(path);
                 if ((attributes & FileAttributes.ReparsePoint) != 0) return $"L {relative} {new DirectoryInfo(path).LinkTarget}";
-                // bd 1.3.1 --readonly closes its chunk journal by rewriting
-                // identical bytes. The user explicitly accepts these backend
-                // timestamps; still compare paths, attributes, length and hashes.
+                // bd 1.3.1 --readonly may refresh timestamps while preserving
+                // bytes. The workspace read-only snapshot opts in only to the
+                // exact .beads/last-touched timestamp; all paths, attributes,
+                // lengths, hashes and every other timestamp remain strict.
                 var portable = "/" + relative.Replace('\\', '/');
-                var backendTimestamp = portable.Contains("/.beads/embeddeddolt/", StringComparison.Ordinal)
+                var backendTimestamp = (allowReadOnlyBdLastTouchedTimestamp && portable.Equals("/.beads/last-touched", StringComparison.Ordinal))
+                    || (portable.Contains("/.beads/embeddeddolt/", StringComparison.Ordinal)
                     && (portable.EndsWith("/.dolt/noms", StringComparison.Ordinal)
                         || (portable.Contains("/.dolt/noms/", StringComparison.Ordinal)
-                            && System.IO.Path.GetFileName(path) is "manifest" or "journal.idx" or "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"));
+                            && System.IO.Path.GetFileName(path) is "manifest" or "journal.idx" or "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv")));
                 var timestamp = backendTimestamp ? "(accepted bd backend timestamp)" : File.GetLastWriteTimeUtc(path).ToString("O", System.Globalization.CultureInfo.InvariantCulture);
                 if (Directory.Exists(path))
                 {

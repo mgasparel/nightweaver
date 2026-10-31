@@ -51,6 +51,14 @@ internal sealed class SystemProcessRunner : IProcessRunner
         {
             throw new ToolExecutionException($"required executable '{request.FileName}' was not found on PATH");
         }
+        catch (Win32Exception exception)
+        {
+            throw new ToolExecutionException($"required executable '{request.FileName}' could not be started: {exception.Message}", exception.Message);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+        {
+            throw new ToolExecutionException($"required executable '{request.FileName}' could not be started: {exception.Message}", exception.Message);
+        }
 
         process.StandardInput.Close();
         var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);

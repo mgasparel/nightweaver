@@ -56,6 +56,14 @@ _Avoid_: Plan reviewer, spec validator
 The Delivery Agent that writes code, tests, and domain documentation in an isolated worktree to satisfy a Plan Bead's specification, commits and pushes its branch, opens or updates the Pull Request, and resolves findings from downstream verification or merge roles.
 _Avoid_: Coder, developer agent, builder
 
+**Human Attention Desk**:
+A pinned local console view of Beads paused for `product-decision-required` or `needs-human`, with guarded human guidance, retry, and abort actions.
+_Avoid_: Agent monitor, live telemetry
+
+**Human Guidance Comment**:
+A structured, human-authored Bead comment recorded by the Attention Desk; `note_only` preserves the pause, while `resume` accompanies an explicit guarded pause-label removal.
+_Avoid_: Agent finding, automatic retry
+
 **Reviewer Agent**:
 The Delivery Agent that performs static code, architectural, and test-quality review of an Implementer Agent's changes against codebase standards and the Plan Bead's specification.
 _Avoid_: Code reviewer, static analyzer

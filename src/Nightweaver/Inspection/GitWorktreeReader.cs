@@ -12,6 +12,7 @@ internal sealed class GitWorktreeReader(IProcessRunner processRunner)
             return Parse(result.StandardOutput);
         }
         catch (ToolExecutionException exception) { throw new ToolExecutionException($"{context}: {exception.Message}", exception.StandardError); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (OperationCanceledException) { throw new ToolExecutionException($"{context}: cancelled"); }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or FormatException or PathTooLongException)
         { throw new ToolExecutionException($"{context}: invalid porcelain-z output: {exception.Message}"); }

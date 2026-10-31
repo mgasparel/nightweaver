@@ -4,8 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Nightweaver UI — Unified Factory Console &amp; Bead Workspace</title>
+  <title>Nightweaver | Factory Console</title>
   <link rel="stylesheet" href="/css/site.css">
+  <script src="/vendor/markdown-it.min.js" defer></script>
+  <script src="/vendor/purify.min.js" defer></script>
   <script src="/js/app.js" defer></script>
 </head>
 <body>
@@ -30,7 +32,6 @@
           <li><a href="#attention">Attention</a></li>
           <li><a href="#factory">Factory</a></li>
           <li><a href="#beads">Beads</a></li>
-          <li><a href="#workspace">Workspace</a></li>
         </ul>
       </nav>
     </div>
@@ -94,11 +95,30 @@
   </dialog>
 
   <main class="page-shell" id="main-content" tabindex="-1">
+    <div id="console-deck">
     <div class="page-intro">
       <p class="eyebrow">Factory console</p>
       <h1>Nightweaver console</h1>
       <p class="intro-copy">A single place to catch up, review work that needs attention, and follow factory activity.</p>
     </div>
+
+    <section class="console-section attention-section" id="attention" aria-labelledby="attention-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Pinned human triage</p>
+          <h2 id="attention-title">Human Attention Desk</h2>
+        </div>
+        <button class="secondary-action" id="attention-refresh" type="button">Refresh</button>
+      </div>
+      <p class="attention-status" id="attention-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1">Loading paused Beads…</p>
+      <div class="attention-error" id="attention-error" role="alert" aria-live="assertive" hidden>
+        <span id="attention-error-text">The Attention Desk is unavailable. Refresh to try again.</span>
+        <button class="retry-button" id="attention-retry" type="button">Retry</button>
+      </div>
+      <div class="attention-empty" id="attention-empty" hidden>No Beads are waiting for human guidance.</div>
+      <div class="attention-cards" id="attention-cards" aria-label="Beads paused for human attention"></div>
+      <noscript><p class="attention-empty">Enable JavaScript to load paused Beads from the configured tracker.</p></noscript>
+    </section>
 
     <section class="console-section digest-section" id="catch-up" aria-labelledby="catch-up-title">
       <div class="section-heading">
@@ -113,19 +133,6 @@
           <h3>See what changed since your last visit</h3>
           <p>Milestone summaries will appear here when catch-up data is connected.</p>
         </div>
-      </div>
-    </section>
-
-    <section class="console-section" id="attention" aria-labelledby="attention-title">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Human triage</p>
-          <h2 id="attention-title">Human Attention Desk</h2>
-        </div>
-      </div>
-      <div class="surface placeholder-card">
-        <h3>Items needing a decision</h3>
-        <p>Items that need human input will appear here when tracker reads are connected.</p>
       </div>
     </section>
 
@@ -209,16 +216,64 @@
       </div>
     </section>
 
-    <section class="console-section" id="workspace" aria-labelledby="workspace-title">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Deep reading</p>
-          <h2 id="workspace-title">Full Bead Workspace</h2>
-        </div>
+    </div>
+    <section id="bead-workspace" class="bead-workspace" aria-labelledby="workspace-title" hidden>
+      <div class="workspace-toolbar">
+        <a class="workspace-back" href="#main-content">Back to Console</a>
+        <button class="secondary-action" id="workspace-refresh" type="button">Refresh</button>
       </div>
-      <div class="surface placeholder-card workspace-card">
-        <h3>Room for the full story</h3>
-        <p>A bead’s specification and history will have a dedicated workspace in a later release.</p>
+      <p id="workspace-status" class="workspace-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p>
+      <div id="workspace-error" class="workspace-error" role="alert" hidden></div>
+      <p id="workspace-stale" class="workspace-stale" role="status" hidden>This is the last confirmed snapshot. Refresh before taking an action.</p>
+      <header class="workspace-heading">
+        <div>
+          <p id="workspace-id" class="eyebrow"></p>
+          <h1 id="workspace-title" tabindex="-1"></h1>
+          <div id="workspace-meta" class="workspace-meta"></div>
+        </div>
+      </header>
+      <div class="workspace-layout">
+        <div class="workspace-reading-column">
+          <section class="workspace-section" aria-labelledby="workspace-specification-title">
+            <h2 id="workspace-specification-title">Specification</h2>
+            <div id="workspace-specs" class="workspace-specs"></div>
+          </section>
+          <section class="workspace-section" aria-labelledby="workspace-history-title">
+            <div class="workspace-section-heading">
+              <div><p class="eyebrow">Chronological comments</p><h2 id="workspace-history-title">History</h2></div>
+              <div class="history-controls">
+                <button id="workspace-expand-history" class="secondary-action" type="button">Expand All</button>
+                <button id="workspace-collapse-history" class="secondary-action" type="button">Collapse Older</button>
+              </div>
+            </div>
+            <div id="workspace-history" class="workspace-history"></div>
+          </section>
+          <section id="workspace-guidance" class="workspace-section workspace-guidance" aria-labelledby="workspace-guidance-title">
+            <p class="eyebrow">Human decision</p>
+            <h2 id="workspace-guidance-title">Guidance Studio</h2>
+            <div id="workspace-guidance-context" class="workspace-guidance-context"></div>
+            <label for="workspace-guidance-input">Guidance</label>
+            <textarea id="workspace-guidance-input" rows="9" maxlength="16384" placeholder="Write a decision, constraint, or acceptance detail…" aria-describedby="workspace-guidance-help"></textarea>
+            <span id="workspace-guidance-help" class="field-help">Outer whitespace is trimmed; maximum 16 KiB of UTF-8 text.</span>
+            <div class="workspace-template-chips" aria-label="Insert a guidance template">
+              <button class="secondary-action" type="button" data-guidance-template="Decision: ">Decision</button>
+              <button class="secondary-action" type="button" data-guidance-template="Constraints: ">Constraints</button>
+              <button class="secondary-action" type="button" data-guidance-template="Acceptance: ">Acceptance</button>
+            </div>
+            <div id="workspace-guidance-actions" class="workspace-guidance-actions"></div>
+            <p id="workspace-action-message" class="workspace-action-message" role="status" aria-live="polite" tabindex="-1" hidden></p>
+          </section>
+        </div>
+        <aside class="workspace-sidebar" aria-label="Bead context">
+          <section class="workspace-sidebar-card" aria-labelledby="workspace-environment-title">
+            <p class="eyebrow">Execution context</p><h2 id="workspace-environment-title">Environment</h2>
+            <dl id="workspace-environment" class="workspace-environment"></dl>
+          </section>
+          <section class="workspace-sidebar-card" aria-labelledby="workspace-relations-title">
+            <p class="eyebrow">Tracker links</p><h2 id="workspace-relations-title">Relations</h2>
+            <div id="workspace-relations" class="workspace-relations"></div>
+          </section>
+        </aside>
       </div>
     </section>
   </main>

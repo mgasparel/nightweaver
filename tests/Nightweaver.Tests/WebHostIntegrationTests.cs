@@ -357,13 +357,15 @@ public sealed class WebHostIntegrationTests
         var html = await response.Content.ReadAsStringAsync(cancellationToken);
         var title = Regex.Match(html, "<title>(.*?)</title>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
         Assert.True(title.Success, "The dashboard document must contain a title element.");
-        Assert.Equal("Nightweaver UI — Unified Factory Console & Bead Workspace", WebUtility.HtmlDecode(title.Groups[1].Value));
+        Assert.Equal("Nightweaver | Factory Console", WebUtility.HtmlDecode(title.Groups[1].Value));
         Assert.Contains("Nightweaver", html, StringComparison.Ordinal);
-        foreach (var section in new[] { "catch-up", "attention", "factory", "beads", "workspace" })
+        foreach (var section in new[] { "catch-up", "attention", "factory", "beads" })
         {
             Assert.Contains($"id=\"{section}\"", html, StringComparison.Ordinal);
             Assert.Contains($"href=\"#{section}\"", html, StringComparison.Ordinal);
         }
+        Assert.DoesNotContain("href=\"#workspace\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("Bead Workspace", html, StringComparison.Ordinal);
         Assert.Contains("id=\"new-bead-trigger\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"bead-intake-dialog\"", html, StringComparison.Ordinal);
         Assert.Contains("aria-labelledby=\"intake-title\"", html, StringComparison.Ordinal);
