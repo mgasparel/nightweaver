@@ -61,26 +61,11 @@ internal sealed class InvocationRuntimeFiles : IDisposable
             files.PinDirectoryChain(projectTemporaryDirectory, createMissing: true, exclusiveLeaf: false);
             files.PinBeadTemporaryDirectory(beadTemporaryDirectory, exclusiveLeaf: false);
             files.PinBeadTemporaryDirectory(invocation.TemporaryDirectory, exclusiveLeaf: true);
-            files.PinDirectoryChain(Path.GetDirectoryName(invocation.LogFilePath)!, createMissing: true, exclusiveLeaf: false);
-
-            var logHandle = CreateFileW(
-                invocation.LogFilePath,
-                GenericWrite,
-                FileShareRead,
-                IntPtr.Zero,
-                CreateNew,
-                FileFlagOverlapped | FileFlagOpenReparsePoint,
-                IntPtr.Zero);
-            if (logHandle.IsInvalid)
-            {
-                var error = Marshal.GetLastWin32Error();
-                logHandle.Dispose();
-                throw NativeError("Could not exclusively reserve the invocation log", error);
-            }
-
-            // FileStream takes ownership of this CREATE_NEW handle; parent directory pins remain owned here.
-            var logStream = new FileStream(logHandle, FileAccess.Write, 64 * 1024, isAsync: true);
-            files.LogStream = logStream;
+            var projectLogsDirectory = hostPaths.LogsRoot(project);
+            files.PinDirectoryChain(projectLogsDirectory, createMissing: true, exclusiveLeaf: false);
+            var beadLogsDirectory = Path.GetDirectoryName(invocation.LogFilePath)!;
+            files.PinBeadLogDirectory(beadLogsDirectory);
+            files.LogStream = ReserveBeadLogFile(invocation.LogFilePath);
             return files;
         }
         catch
@@ -319,6 +304,51 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         }
         catch (Exception exception) when (exception is InvalidDataException || exception is IOException || exception is UnauthorizedAccessException)
         {
+            throw new BeadEnvironmentException(path, exception.Message);
+        }
+    }
+
+    private void PinBeadLogDirectory(string path)
+    {
+        try
+        {
+            PinDirectoryChain(path, createMissing: true, exclusiveLeaf: false);
+        }
+        catch (Exception exception) when (exception is InvalidDataException || exception is IOException || exception is UnauthorizedAccessException)
+        {
+            throw new BeadEnvironmentException(path, exception.Message);
+        }
+    }
+
+    private static FileStream ReserveBeadLogFile(string path)
+    {
+        SafeFileHandle? logHandle = null;
+        try
+        {
+            logHandle = CreateFileW(
+                path,
+                GenericWrite,
+                FileShareRead,
+                IntPtr.Zero,
+                CreateNew,
+                FileFlagOverlapped | FileFlagOpenReparsePoint,
+                IntPtr.Zero);
+            if (logHandle.IsInvalid)
+            {
+                var error = Marshal.GetLastWin32Error();
+                logHandle.Dispose();
+                logHandle = null;
+                throw NativeError("Could not exclusively reserve the invocation log", error);
+            }
+
+            // FileStream takes ownership of this CREATE_NEW handle; parent directory pins remain owned here.
+            var logStream = new FileStream(logHandle, FileAccess.Write, 64 * 1024, isAsync: true);
+            logHandle = null;
+            return logStream;
+        }
+        catch (Exception exception) when (exception is InvalidDataException || exception is IOException || exception is UnauthorizedAccessException)
+        {
+            logHandle?.Dispose();
             throw new BeadEnvironmentException(path, exception.Message);
         }
     }

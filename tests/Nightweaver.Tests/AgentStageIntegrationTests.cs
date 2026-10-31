@@ -450,6 +450,79 @@ public sealed class AgentStageIntegrationTests : AgentStageIntegrationTestSuppor
     }
 
     [Fact]
+    public async Task PerBeadLogReservationFailurePausesClaimAndAllowsUnrelatedBeadToProgress()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var blockedBead = target.CreateBead("Blocked log reservation", "task", "stage:implement");
+        var unrelatedBead = target.CreateBead("Unrelated after log obstruction", "task", "stage:implement");
+        var projectLogsDirectory = target.Host.LogsRoot(ProjectSlug.Parse("demo"));
+        Directory.CreateDirectory(projectLogsDirectory);
+        var obstructionPath = Path.Combine(projectLogsDirectory, blockedBead);
+        File.WriteAllText(obstructionPath, "preserve log obstruction");
+
+        var blocked = await target.RunRetryAgentAsync(blockedBead, AgentRole.Implementer, ["review"]);
+
+        Assert.Equal(OperationalRetryStatus.Escalated, blocked.Status);
+        Assert.Equal(NeedsHumanCause.EnvironmentBlocked, blocked.EscalationCause);
+        Assert.Equal(AgentOperationalFailureKind.EnvironmentBlocked, blocked.StageResult.Failure!.Kind);
+        Assert.Equal(0, blocked.AttemptCount);
+        Assert.Equal(0, target.LastRetryLifecycleCount);
+        Assert.Equal("preserve log obstruction", File.ReadAllText(obstructionPath));
+        Assert.Empty(Directory.GetFiles(Path.Combine(target.RootPath, "retry-pids"), "*.txt"));
+        var paused = target.ReadBead(blockedBead);
+        Assert.Equal("open", paused.Status);
+        Assert.Null(paused.Assignee);
+        Assert.Contains("needs-human", paused.Labels);
+        Assert.Equal("stage:implement", target.ReadState(blockedBead).Stage);
+        using (var comments = JsonDocument.Parse(target.ReadComments(blockedBead)))
+        {
+            var diagnosticText = StringValues(comments.RootElement)
+                .Single(value => value.Contains("nightweaver-needs-human-v1", StringComparison.Ordinal));
+            using var diagnostic = JsonDocument.Parse(diagnosticText);
+            var reason = diagnostic.RootElement.GetProperty("reason").GetString();
+            var findings = diagnostic.RootElement.GetProperty("latest_findings").GetString();
+            Assert.Contains(obstructionPath, reason, StringComparison.Ordinal);
+            Assert.Contains(obstructionPath, findings, StringComparison.Ordinal);
+            Assert.Contains("directory", reason, StringComparison.OrdinalIgnoreCase);
+        }
+        Assert.DoesNotContain(target.LastRetryRequests, request => request.FileName == "git"
+            && request.Arguments.Any(argument => argument is "remove" or "prune" or "-D" or "clean" or "reset"));
+
+        var unrelated = await target.RunRetryAgentAsync(unrelatedBead, AgentRole.Implementer, ["review"]);
+
+        Assert.True(unrelated.Succeeded, unrelated.StageResult.Failure?.Reason);
+        Assert.Equal(1, unrelated.AttemptCount);
+        Assert.Equal(1, target.LastRetryLifecycleCount);
+        Assert.Equal("stage:review", target.ReadState(unrelatedBead).Stage);
+        Assert.Equal("in_progress", target.ReadBead(unrelatedBead).Status);
+        Assert.Equal("preserve log obstruction", File.ReadAllText(obstructionPath));
+    }
+
+    [Fact]
+    public async Task SharedProjectLogRootReservationFailureRemainsFatal()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead("Shared log root obstruction", "task", "stage:implement");
+        var logsParent = Path.GetDirectoryName(target.Host.LogsRoot(ProjectSlug.Parse("demo")))!;
+        Directory.CreateDirectory(logsParent);
+        var sharedRootPath = target.Host.LogsRoot(ProjectSlug.Parse("demo"));
+        File.WriteAllText(sharedRootPath, "preserve shared log root obstruction");
+
+        var exception = await Assert.ThrowsAsync<AgentInvocationExecutionException>(
+            () => target.RunRetryAgentAsync(bead, AgentRole.Implementer, ["review"]));
+
+        Assert.Contains(sharedRootPath, exception.ToString(), StringComparison.Ordinal);
+        Assert.Equal("preserve shared log root obstruction", File.ReadAllText(sharedRootPath));
+        Assert.Empty(Directory.GetFiles(Path.Combine(target.RootPath, "retry-pids"), "*.txt"));
+        var claimed = target.ReadBead(bead);
+        Assert.Equal("in_progress", claimed.Status);
+        Assert.Equal("nightweaver:demo", claimed.Assignee);
+        Assert.DoesNotContain("needs-human", claimed.Labels);
+    }
+
+    [Fact]
     public async Task OperationalRetryRunsRealAgentJobAfterResettingTheSameClaimedWorktree()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
