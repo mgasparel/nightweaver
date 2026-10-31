@@ -8,6 +8,44 @@ namespace Nightweaver.Tests;
 public sealed class WorktreeIntegrationTests
 {
     [Fact]
+    public async Task DryRunRetainsCompletedWorktreeWithNestedJunctionAndProtectsItsTmp()
+    {
+        using var fixture = new StartupSweepFixture();
+        var id = fixture.PlannedBeadId;
+        var worktree = fixture.WorktreePath(id);
+        WorktreeInspectionTests.CreateDirectoryLink(Path.Combine(worktree, "nested-link"), fixture.External);
+        var hostBefore = Snapshot.FileTree(fixture.Host);
+        var targetBefore = Snapshot.FileTree(fixture.Target.Path);
+        var externalBefore = Snapshot.FileTree(fixture.External);
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            var environment = new Dictionary<string, string?>(fixture.Target.Environment, StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in request.Environment) environment[pair.Key] = pair.Value;
+            return new SystemProcessRunner().RunAsync(request with { Environment = environment }, token);
+        });
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await NightweaverApp.RunAsync(["--project", "demo", "--dry-run"],
+            new(fixture.Host, fixture.Caller, output, error), runner, CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(error.ToString());
+        var report = output.ToString();
+        var retained = Section(report, "Retained worktrees\n", "\nOrphan tmp deletions (hypothetical)");
+        var orphanTmp = Section(report, "Orphan tmp deletions (hypothetical)\n", "\nStartup diagnostics");
+        Assert.Contains($"{JsonSerializer.Serialize(id)}:", retained, StringComparison.Ordinal);
+        Assert.DoesNotContain($"{JsonSerializer.Serialize(id)}:", orphanTmp, StringComparison.Ordinal);
+        Assert.Contains("unsafe_runtime_path", report, StringComparison.Ordinal);
+        Assert.Contains("tmp_cleanup_deferred", report, StringComparison.Ordinal);
+        Assert.Contains("nested reparse point", report, StringComparison.Ordinal);
+        Assert.Contains("nested-link", report, StringComparison.Ordinal);
+        Assert.Equal(hostBefore, Snapshot.FileTree(fixture.Host));
+        Assert.Equal(targetBefore, Snapshot.FileTree(fixture.Target.Path));
+        Assert.Equal(externalBefore, Snapshot.FileTree(fixture.External));
+    }
+
+    [Fact]
     public async Task RealGitAndBeadsSweepIsDeterministicAndPreservesDiskAndTracker()
     {
         using var fixture = new StartupSweepFixture();
@@ -20,17 +58,26 @@ public sealed class WorktreeIntegrationTests
         var externalBefore = Snapshot.FileTree(fixture.External);
         var runner = new RecordingProcessRunner((request, token) =>
         {
-            Assert.Equal(request.Arguments[0] == "check-ref-format" ? Path.GetTempPath() : target.Path, request.WorkingDirectory);
             if (request.FileName == "bd")
+            {
+                Assert.Equal(target.Path, request.WorkingDirectory);
                 Assert.True(request.Arguments.SequenceEqual(inventoryArgs)
                     || request.Arguments.SequenceEqual(BeadsCommand.CreateUnassignedReadiness(target.Path).Arguments)
                     || request.Arguments.SequenceEqual(BeadsCommand.CreateRecoverableReadiness(target.Path, "nightweaver:demo").Arguments));
+            }
             else
             {
                 Assert.Equal("git", request.FileName);
-                Assert.True(request.Arguments.SequenceEqual(["check-ref-format", "--branch", "main"])
+                var branchCheck = request.Arguments.SequenceEqual(["check-ref-format", "--branch", "main"]);
+                var checkoutIdentityRead = IsCheckoutIdentityRead(request.Arguments);
+                if (branchCheck) Assert.Equal(Path.GetTempPath(), request.WorkingDirectory);
+                else if (checkoutIdentityRead)
+                    Assert.Contains(fixture.StaleIds, id => RuntimePaths.Comparer.Equals(request.WorkingDirectory, fixture.WorktreePath(id)));
+                else Assert.Equal(target.Path, request.WorkingDirectory);
+                Assert.True(branchCheck
                     || request.Arguments.SequenceEqual(["rev-parse", "--is-inside-work-tree", "--show-prefix", "--path-format=absolute", "--git-dir", "--git-common-dir"])
-                    || request.Arguments.SequenceEqual(["worktree", "list", "--porcelain", "-z"]));
+                    || request.Arguments.SequenceEqual(["worktree", "list", "--porcelain", "-z"])
+                    || checkoutIdentityRead);
             }
             var environment = new Dictionary<string, string?>(target.Environment);
             foreach (var pair in request.Environment) environment[pair.Key] = pair.Value;
@@ -48,7 +95,7 @@ public sealed class WorktreeIntegrationTests
         var first = await DryRun(["--project", "demo", "--dry-run"]);
         var second = await DryRun(["--config", Path.GetRelativePath(fixture.Caller, fixture.Config), "--dry-run"]);
         Assert.Equal(first, second);
-        Assert.Equal(12, runner.Requests.Count);
+        Assert.Equal(32, runner.Requests.Count);
         var runtime = RuntimeDirectoryReader.Read(new(fixture.Host), new("demo"));
         var registry = GitWorktreeReader.Parse(registryBefore);
         Assert.Contains(registry, entry => entry.Main && entry.Branch == "refs/heads/main");
@@ -113,6 +160,13 @@ public sealed class WorktreeIntegrationTests
         Assert.True(start >= 0 && end >= 0, $"Could not find report section '{startMarker}'.");
         return value[start..end];
     }
+
+    private static bool IsCheckoutIdentityRead(IReadOnlyList<string> arguments) =>
+        arguments.SequenceEqual(["rev-parse", "--show-toplevel"])
+        || arguments.SequenceEqual(["rev-parse", "--path-format=absolute", "--git-dir"])
+        || arguments.SequenceEqual(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        || arguments.SequenceEqual(["rev-parse", "--abbrev-ref", "HEAD"])
+        || arguments.SequenceEqual(["rev-parse", "HEAD"]);
 }
 
 // Reusable real-tool fixture for downstream dry-run/readiness integration gates.
@@ -127,6 +181,7 @@ internal sealed class StartupSweepFixture : IDisposable
     internal string Config { get; }
     internal string External { get; }
     internal IReadOnlyList<string> StaleIds { get; }
+    internal string PlannedBeadId => seededIds["planned"];
     internal IReadOnlyList<string> ActiveIds { get; }
     internal IReadOnlyList<string> PausedIds { get; }
     internal IReadOnlyList<string> OrphanIds { get; }
@@ -159,25 +214,29 @@ internal sealed class StartupSweepFixture : IDisposable
         var seeds = new[]
         {
             new { title = "closed", status = "closed", labels = Array.Empty<string>() },
-            new { title = "planned", status = "open", labels = new[] { "planned" } },
-            new { title = "paused", status = "open", labels = new[] { "product-decision-required" } },
-            new { title = "needs human", status = "open", labels = new[] { "needs-human" } },
+            new { title = "planned", status = "in_progress", labels = new[] { "planned" } },
+            new { title = "paused", status = "in_progress", labels = new[] { "product-decision-required" } },
+            new { title = "needs human", status = "in_progress", labels = new[] { "needs-human" } },
             new { title = "active", status = "in_progress", labels = Array.Empty<string>() },
             new { title = "merge", status = "open", labels = new[] { "stage:merge" } },
             new { title = "locked closed", status = "closed", labels = Array.Empty<string>() },
-            new { title = "missing path", status = "closed", labels = Array.Empty<string>() }
+            new { title = "missing path", status = "closed", labels = Array.Empty<string>() },
+            new { title = "orphan tmp", status = "closed", labels = Array.Empty<string>() }
         };
         var seedFile = Path.Combine(temp.Path, "startup-seed.jsonl");
         File.WriteAllText(seedFile, string.Join('\n', seeds.Select(seed => JsonSerializer.Serialize(new
         {
-            seed.title, seed.status, seed.labels, issue_type = "task", priority = 2, assignee = "nightweaver:demo"
+            seed.title, seed.status, seed.labels,
+            issue_type = seed.title == "planned" ? "feature" : "task",
+            priority = 2,
+            assignee = seed.status == "closed" ? null : "nightweaver:demo"
         }))));
         Target.Run("bd", ["import", seedFile, "--json"]);
         seededIds = BeadsReader.Parse(Target.Run("bd", BeadsCommand.Create(Target.Path).Arguments)).ById.Values
             .ToDictionary(bead => bead.Payload.GetProperty("title").GetString()!, bead => bead.Id, StringComparer.Ordinal);
         File.Delete(seedFile);
-        var closed = Worktree("closed");
-        var planned = Worktree("planned", named: true);
+        var closed = Worktree("closed", named: true);
+        var planned = Worktree("planned");
         var paused = Worktree("paused");
         var needsHuman = Worktree("needs human");
         var active = Worktree("active");
@@ -197,12 +256,12 @@ internal sealed class StartupSweepFixture : IDisposable
         StaleIds = Array.AsReadOnly(new[] { closed, planned });
         ActiveIds = Array.AsReadOnly(new[] { active, merge });
         PausedIds = Array.AsReadOnly(new[] { paused, needsHuman });
-        OrphanIds = Array.AsReadOnly(new[] { closed, planned, missing, "orphan" });
-        foreach (var id in new[] { closed, planned, paused, needsHuman, active, merge, locked, missing, "fixture.absent", "unregistered", "linked-worktree", "orphan" })
+        OrphanIds = Array.AsReadOnly(new[] { closed, planned, seededIds["orphan tmp"] });
+        foreach (var id in new[] { closed, planned, paused, needsHuman, active, merge, locked, missing, seededIds["orphan tmp"], "fixture.absent", "unregistered", "linked-worktree" })
             temp.WriteFile($"nightweaver host/tmp/demo/{id}/invocation/output", "preserve invocation data");
     }
 
-    private string WorktreePath(string id) => Path.Combine(Host, "worktrees", "demo", id);
+    internal string WorktreePath(string id) => Path.Combine(Host, "worktrees", "demo", id);
     private string Worktree(string title, bool named = false)
     {
         var id = seededIds[title];

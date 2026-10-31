@@ -60,6 +60,10 @@ internal static class DispatchApplication
         var beadsWriter = new BeadsWriter(processRunner);
         await new StartupRecoveryCoordinator(beadsReader, beadsWriter)
             .RecoverAsync(repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
+        var cleanupDiagnostics = await new StartupEnvironmentCleaner(beadsReader, beadsWriter, processRunner)
+            .CleanAsync(hostPaths, project.Name, repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
+        foreach (var diagnostic in cleanupDiagnostics)
+            environment.Err.WriteLine($"nightweaver: startup cleanup retained '{diagnostic.BeadId}' at '{diagnostic.Path}': {diagnostic.Reason}");
         var (inventory, readiness) = await beadsReader
             .ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
 

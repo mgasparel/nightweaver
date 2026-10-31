@@ -37,6 +37,66 @@ internal static class RuntimeDirectoryReader
         { throw new ToolExecutionException($"runtime directory inspection '{root}': {exception.Message}"); }
     }
 
+    internal static RuntimeDirectorySnapshot InspectNestedWorktrees(RuntimeDirectorySnapshot snapshot,
+        IEnumerable<string> candidatePaths)
+    {
+        if (snapshot.State != DirectoryState.Present) return snapshot;
+        var candidates = candidatePaths.Select(RuntimePaths.Normalize).ToHashSet(RuntimePaths.Comparer);
+        if (candidates.Count == 0) return snapshot;
+        var entries = snapshot.Entries.Select(entry => candidates.Contains(entry.Path) ? InspectNestedTree(entry) : entry)
+            .ToList().AsReadOnly();
+        return snapshot with { Entries = entries };
+    }
+
+    internal static RuntimeDirectorySnapshot MarkInvalidCheckoutIdentities(RuntimeDirectorySnapshot snapshot,
+        IReadOnlyDictionary<string, string> failuresByPath)
+    {
+        if (snapshot.State != DirectoryState.Present || failuresByPath.Count == 0) return snapshot;
+        var entries = snapshot.Entries.Select(entry => failuresByPath.TryGetValue(entry.Path, out var reason)
+            ? entry with { State = DirectoryState.Unusable, FailureReason = reason }
+            : entry).ToList().AsReadOnly();
+        return snapshot with { Entries = entries };
+    }
+
+    internal static RuntimeDirectoryEntry InspectNestedTree(string path) =>
+        InspectNestedTree(new RuntimeDirectoryEntry(Path.GetFileName(RuntimePaths.Normalize(path)),
+            RuntimePaths.Normalize(path), DirectoryState.Present));
+
+    internal static RuntimeDirectoryEntry InspectNestedTree(RuntimeDirectoryEntry entry)
+    {
+        if (entry.State != DirectoryState.Present) return entry;
+        try
+        {
+            var rootAttributes = File.GetAttributes(entry.Path);
+            if ((rootAttributes & FileAttributes.ReparsePoint) != 0)
+                return entry with { State = DirectoryState.UnsafeLink, FailureReason = "worktree root is a reparse point, junction, or symbolic link" };
+            if ((rootAttributes & FileAttributes.Directory) == 0)
+                return entry with { State = DirectoryState.Unusable, FailureReason = "expected a directory" };
+
+            var pending = new Stack<string>();
+            pending.Push(entry.Path);
+            while (pending.TryPop(out var directory))
+            {
+                foreach (var child in Directory.EnumerateFileSystemEntries(directory))
+                {
+                    var attributes = File.GetAttributes(child);
+                    if ((attributes & FileAttributes.ReparsePoint) != 0)
+                        return entry with
+                        {
+                            State = DirectoryState.UnsafeLink,
+                            FailureReason = $"nested reparse point, junction, or symbolic link is unsafe: '{RuntimePaths.Normalize(child)}'"
+                        };
+                    if ((attributes & FileAttributes.Directory) != 0) pending.Push(child);
+                }
+            }
+            return entry;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return entry with { State = DirectoryState.Unusable, FailureReason = exception.Message };
+        }
+    }
+
     private static DirectoryState ObserveEntry(string path, out string? failureReason)
     {
         try

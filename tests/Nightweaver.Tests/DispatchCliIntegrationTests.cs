@@ -20,7 +20,8 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
 
         var inferred = await fixture.RunAsync(["dispatch", implementer, "--project=demo"], "review");
         Assert.Equal(0, inferred.ExitCode);
-        Assert.Empty(inferred.StandardError);
+        Assert.True(inferred.StandardError.Length == 0,
+            $"Unexpected startup diagnostic: {inferred.StandardErrorText}\nstdout:\n{inferred.StandardOutputText}");
         Assert.Contains("role 'implementer' (inferred)", inferred.StandardOutputText, StringComparison.Ordinal);
         Assert.Contains("Attempt 1/1 started", inferred.StandardOutputText, StringComparison.Ordinal);
         Assert.Contains("Succeeded:", inferred.StandardOutputText, StringComparison.Ordinal);
@@ -77,6 +78,181 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         Assert.Equal("nightweaver/" + beadId,
             fixture.Target.Run("git", ["-C", fixture.WorktreePath(beadId), "branch", "--show-current"]).Trim());
         Assert.Single(Directory.EnumerateFiles(Path.Combine(fixture.Host, "logs", "demo", beadId), "*.log"));
+    }
+
+    [Fact]
+    public async Task PublishedStartupRemovesOnlyCompletedManagedWorktreesAndKeepsBranchesAndSurvivors()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
+        using var fixture = new LiveDispatchFixture(published);
+        var target = fixture.Target;
+        var planning = target.Create("Completed Product planning", type: "feature", labels: ["planned"]);
+        var delivery = target.Create("Closed Delivery plan", type: "task");
+        target.Run("bd", ["close", delivery]);
+        var paused = target.Create("Paused completed Delivery plan", type: "task");
+        target.Run("bd", ["close", paused]);
+        target.Run("bd", ["update", paused, "--add-label", "needs-human"]);
+        var active = target.Create("Unfinished Delivery plan", type: "task", labels: ["stage:review"]);
+        var unrelated = target.Create("Unrelated dispatch after cleanup");
+
+        AddDetachedWorktree(target, fixture.WorktreePath(planning));
+        AddBranchWorktree(target, fixture.WorktreePath(delivery), delivery);
+        AddBranchWorktree(target, fixture.WorktreePath(paused), paused);
+        AddBranchWorktree(target, fixture.WorktreePath(active), active);
+        var tmpPaths = new[] { planning, delivery, paused, active, "deleted-bead" }
+            .ToDictionary(id => id, id => Path.Combine(fixture.Host, "tmp", "demo", id), StringComparer.Ordinal);
+        foreach (var (id, path) in tmpPaths)
+        {
+            Directory.CreateDirectory(Path.Combine(path, "invocation"));
+            File.WriteAllText(Path.Combine(path, "invocation", "sentinel.txt"), "preserve unless completed and owned");
+        }
+        var deletedPath = Path.Combine(fixture.Host, "worktrees", "demo", "deleted-bead");
+        Directory.CreateDirectory(deletedPath);
+        File.WriteAllText(Path.Combine(deletedPath, "sentinel.txt"), "deleted Bead leftover");
+
+        var dispatch = await fixture.RunAsync(["dispatch", unrelated, "--project", "demo"], "review");
+
+        Assert.True(dispatch.ExitCode == 0,
+            $"Startup cleanup dispatch failed (exit {dispatch.ExitCode}).\nstdout:\n{dispatch.StandardOutputText}\nstderr:\n{dispatch.StandardErrorText}");
+        Assert.Contains("Succeeded:", dispatch.StandardOutputText, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(fixture.WorktreePath(planning)));
+        Assert.False(Directory.Exists(fixture.WorktreePath(delivery)));
+        Assert.False(Directory.Exists(tmpPaths[planning]));
+        Assert.False(Directory.Exists(tmpPaths[delivery]));
+        Assert.True(target.Run("git", ["show-ref", "--verify", "refs/heads/nightweaver/" + delivery]).Contains(delivery, StringComparison.Ordinal));
+        Assert.True(Directory.Exists(fixture.WorktreePath(paused)));
+        Assert.True(Directory.Exists(tmpPaths[paused]));
+        Assert.True(Directory.Exists(fixture.WorktreePath(active)));
+        Assert.True(Directory.Exists(tmpPaths[active]));
+        Assert.True(Directory.Exists(deletedPath));
+        Assert.True(Directory.Exists(tmpPaths["deleted-bead"]));
+        Assert.Equal("closed", ReadBead(target, delivery).Status);
+        Assert.Equal("closed", ReadBead(target, paused).Status);
+        Assert.Contains("needs-human", ReadBead(target, paused).Labels);
+        Assert.Equal("open", ReadBead(target, unrelated).Status);
+        Assert.Contains("stage:review", ReadBead(target, unrelated).Labels);
+        Assert.Contains(deletedPath, dispatch.StandardErrorText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PublishedStartupRechecksPauseBeforeRemovingAPlannedWorktree()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
+        using var fixture = new LiveDispatchFixture(published);
+        var target = fixture.Target;
+        var planning = target.Create("Pause races completed Planning cleanup", type: "feature", labels: ["planned"]);
+        var unrelated = target.Create("Dispatch after cleanup pause race");
+        AddDetachedWorktree(target, fixture.WorktreePath(planning));
+        var tmp = Path.Combine(fixture.Host, "tmp", "demo", planning);
+        Directory.CreateDirectory(tmp);
+        File.WriteAllText(Path.Combine(tmp, "sentinel.txt"), "keep after new pause");
+        var shimLog = fixture.GateFile("startup cleanup pause race bd calls.jsonl");
+
+        var dispatch = await fixture.RunAtAsync(fixture.Host, "demo", ["dispatch", unrelated, "--project", "demo"],
+            "review", "startup-cleanup-pause-race", planning, shimLog);
+
+        Assert.True(dispatch.ExitCode == 0,
+            $"Pause-race dispatch failed (exit {dispatch.ExitCode}).\nstdout:\n{dispatch.StandardOutputText}\nstderr:\n{dispatch.StandardErrorText}");
+        Assert.Contains("Succeeded:", dispatch.StandardOutputText, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(fixture.WorktreePath(planning)));
+        Assert.True(Directory.Exists(tmp));
+        var bead = ReadBead(target, planning);
+        Assert.Equal("open", bead.Status);
+        Assert.Contains("planned", bead.Labels);
+        Assert.Contains("needs-human", bead.Labels);
+        Assert.Equal("open", ReadBead(target, unrelated).Status);
+        Assert.Contains(fixture.WorktreePath(planning), dispatch.StandardErrorText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PublishedStartupRetainsAndEscalatesOnlyFailedRemovalThenContinuesDispatch()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
+        using var fixture = new LiveDispatchFixture(published);
+        var target = fixture.Target;
+        var deliveries = new[]
+        {
+            target.Create("First closed Delivery worktree", type: "task"),
+            target.Create("Second closed Delivery worktree", type: "task")
+        };
+        foreach (var id in deliveries) target.Run("bd", ["close", id]);
+        foreach (var id in deliveries) AddBranchWorktree(target, fixture.WorktreePath(id), id);
+        var tmpPaths = deliveries.ToDictionary(id => id, id => Path.Combine(fixture.Host, "tmp", "demo", id), StringComparer.Ordinal);
+        foreach (var path in tmpPaths.Values)
+        {
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "sentinel.txt"), "retain failed cleanup tmp");
+        }
+        var successfulId = deliveries.Order(StringComparer.Ordinal).First();
+        var failedId = deliveries.Order(StringComparer.Ordinal).Last();
+        var lockedFile = Path.Combine(fixture.WorktreePath(failedId), "held-open.txt");
+        File.WriteAllText(lockedFile, "Git cannot remove an open file");
+        using var openHandle = new FileStream(lockedFile, FileMode.Open, FileAccess.Read, FileShare.None);
+        var unrelated = target.Create("Unrelated dispatch after local cleanup failure");
+
+        var dispatch = await fixture.RunAsync(["dispatch", unrelated, "--project", "demo"], "review");
+
+        Assert.True(dispatch.ExitCode == 0,
+            $"Local-cleanup-failure dispatch failed (exit {dispatch.ExitCode}).\nstdout:\n{dispatch.StandardOutputText}\nstderr:\n{dispatch.StandardErrorText}");
+        Assert.Contains("Succeeded:", dispatch.StandardOutputText, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(fixture.WorktreePath(successfulId)));
+        Assert.False(Directory.Exists(tmpPaths[successfulId]));
+        Assert.True(Directory.Exists(fixture.WorktreePath(failedId)));
+        Assert.True(Directory.Exists(tmpPaths[failedId]));
+        var failedBead = ReadBead(target, failedId);
+        Assert.Equal("closed", failedBead.Status);
+        Assert.Null(failedBead.Assignee);
+        Assert.Contains("needs-human", failedBead.Labels);
+        using var commentDocument = JsonDocument.Parse(target.Run("bd", ["comments", failedId, "--json"]));
+        var comments = BeadsReader.ParseComments(commentDocument.RootElement, failedId);
+        Assert.Contains(comments, comment => comment.Text.Contains(fixture.WorktreePath(failedId), StringComparison.Ordinal));
+        Assert.Contains(comments, comment => comment.Text.Contains("Reason:", StringComparison.Ordinal));
+        Assert.Contains(fixture.WorktreePath(failedId), dispatch.StandardErrorText, StringComparison.Ordinal);
+        Assert.Equal("open", ReadBead(target, unrelated).Status);
+        Assert.Contains("stage:review", ReadBead(target, unrelated).Labels);
+    }
+
+    [Fact]
+    public async Task PublishedStartupStopsWhenRequiredCleanupEscalationCannotBePersisted()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
+        using var fixture = new LiveDispatchFixture(published);
+        var target = fixture.Target;
+        var delivery = target.Create("Closed Delivery worktree with escalation write failure", type: "task");
+        target.Run("bd", ["close", delivery]);
+        AddBranchWorktree(target, fixture.WorktreePath(delivery), delivery);
+        var tmp = Path.Combine(fixture.Host, "tmp", "demo", delivery);
+        Directory.CreateDirectory(tmp);
+        var heldFile = Path.Combine(fixture.WorktreePath(delivery), "held-open.txt");
+        File.WriteAllText(heldFile, "hold removal open");
+        using var openHandle = new FileStream(heldFile, FileMode.Open, FileAccess.Read, FileShare.None);
+        var unrelated = target.Create("Must not dispatch after required escalation write fails");
+
+        var dispatch = await fixture.RunAtAsync(fixture.Host, "demo", ["dispatch", unrelated, "--project", "demo"],
+            "review", "startup-cleanup-label-write-failure", delivery);
+
+        Assert.Equal(1, dispatch.ExitCode);
+        Assert.Contains("fixture startup cleanup label write failure", dispatch.StandardErrorText, StringComparison.Ordinal);
+        Assert.Contains("could not persist needs-human", dispatch.StandardErrorText, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(fixture.WorktreePath(delivery)));
+        Assert.True(Directory.Exists(tmp));
+        Assert.Equal("closed", ReadBead(target, delivery).Status);
+        Assert.DoesNotContain("needs-human", ReadBead(target, delivery).Labels);
+        Assert.Equal("open", ReadBead(target, unrelated).Status);
+        Assert.Null(ReadBead(target, unrelated).Assignee);
+        Assert.False(Directory.Exists(fixture.WorktreePath(unrelated)));
+    }
+
+    private static void AddDetachedWorktree(BeadsFixture target, string path)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        target.Run("git", ["worktree", "add", "--detach", path, "HEAD"]);
+    }
+
+    private static void AddBranchWorktree(BeadsFixture target, string path, string beadId)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        target.Run("git", ["worktree", "add", "-b", "nightweaver/" + beadId, path, "HEAD"]);
     }
 
     [Fact]

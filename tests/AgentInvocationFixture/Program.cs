@@ -116,6 +116,36 @@ internal static class Program
             && (targetId is null || args[updateIndex + 1] == targetId)
             && HasOptionValue(args, "--if-status", "in_progress")
             && HasOptionValue(args, "--status", "open");
+        var isStartupPauseWrite = updateIndex >= 0 && updateIndex + 1 < args.Length
+            && (targetId is null || args[updateIndex + 1] == targetId)
+            && HasOptionValue(args, "--add-label", "needs-human");
+        var isStartupDiagnosticComment = Array.FindIndex(args, argument => argument == "comments") is var commentIndex
+            && commentIndex >= 0 && commentIndex + 2 < args.Length
+            && args[commentIndex + 1] == "add"
+            && (targetId is null || args[commentIndex + 2] == targetId);
+
+        if (mode == "startup-cleanup-pause-race" && targetId is not null && logPath is not null
+            && args.Contains("--include-ephemeral", StringComparer.Ordinal)
+            && File.ReadAllLines(logPath).Count(line => line.Contains("--include-ephemeral", StringComparison.Ordinal)
+                ) == 3)
+        {
+            var mutation = RunRealBd(realBd, ["--sandbox", "update", targetId, "--add-label", "needs-human"]);
+            if (mutation.ExitCode != 0)
+            {
+                WriteResult(mutation);
+                return mutation.ExitCode;
+            }
+        }
+        if (mode == "startup-cleanup-label-write-failure" && isStartupPauseWrite)
+        {
+            Console.Error.WriteLine("fixture startup cleanup label write failure");
+            return 75;
+        }
+        if (mode == "startup-cleanup-comment-write-failure" && isStartupDiagnosticComment)
+        {
+            Console.Error.WriteLine("fixture startup cleanup comment write failure");
+            return 76;
+        }
 
         if (mode == "read-failure" && args.Contains("list", StringComparer.Ordinal))
         {

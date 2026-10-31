@@ -446,30 +446,10 @@ internal sealed class WorktreeProvisioner(IProcessRunner processRunner)
 
     internal static void ValidateNestedTree(string root)
     {
-        try
-        {
-            var attributes = File.GetAttributes(root);
-            if ((attributes & FileAttributes.ReparsePoint) != 0 || (attributes & FileAttributes.Directory) == 0)
-                throw Failure("inspect isolated worktree", root, "destination is not a normal directory");
-
-            var pending = new Stack<string>();
-            pending.Push(root);
-            while (pending.TryPop(out var directory))
-            {
-                foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
-                {
-                    var entryAttributes = File.GetAttributes(entry);
-                    if ((entryAttributes & FileAttributes.ReparsePoint) != 0)
-                        throw Failure("inspect isolated worktree", entry, "nested reparse point, junction, or symbolic link is unsafe");
-                    if ((entryAttributes & FileAttributes.Directory) != 0) pending.Push(entry);
-                }
-            }
-        }
-        catch (ToolExecutionException) { throw; }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            throw Failure("inspect isolated worktree", root, exception.Message);
-        }
+        var inspected = RuntimeDirectoryReader.InspectNestedTree(root);
+        if (inspected.State != DirectoryState.Present)
+            throw Failure("inspect isolated worktree", inspected.Path,
+                inspected.FailureReason ?? "destination is not a normal directory");
     }
 
     private static string? TrimOneLine(string output)
