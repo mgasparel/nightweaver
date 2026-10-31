@@ -25,8 +25,12 @@ internal sealed class LocalMutationRequestPolicy(IConfiguration configuration, I
                 && !fetchMode[0]!.Equals("same-origin", StringComparison.OrdinalIgnoreCase)))
             return false;
 
+        // Aspire's proxy can expose a random browser port that differs from Kestrel's listener port.
+        // Keep a local listener requirement, then validate the request against its browser-visible authority.
         var bindings = GetLocalBindings();
-        if (bindings.Length == 0 || !bindings.Any(binding => MatchesRequest(binding, request)))
+        if (bindings.Length == 0 || !bindings.Any(binding =>
+                string.Equals(binding.Scheme, request.Scheme, StringComparison.OrdinalIgnoreCase))
+            || !IsLocalHost(request.Host.Host))
             return false;
 
         if (!request.Headers.TryGetValue("Origin", out var origins))
@@ -39,8 +43,7 @@ internal sealed class LocalMutationRequestPolicy(IConfiguration configuration, I
 
         return string.Equals(origin.Scheme, request.Scheme, StringComparison.OrdinalIgnoreCase)
             && string.Equals(origin.Host, request.Host.Host, StringComparison.OrdinalIgnoreCase)
-            && origin.Port == EffectivePort(request.Scheme, request.Host.Port)
-            && bindings.Any(binding => MatchesOrigin(binding, origin));
+            && origin.Port == EffectivePort(request.Scheme, request.Host.Port);
     }
 
     private Uri[] GetLocalBindings()
@@ -63,16 +66,6 @@ internal sealed class LocalMutationRequestPolicy(IConfiguration configuration, I
             .Select(uri => uri!)
             .ToArray();
     }
-
-    private static bool MatchesRequest(Uri binding, HttpRequest request)
-        => string.Equals(binding.Scheme, request.Scheme, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(binding.Host, request.Host.Host, StringComparison.OrdinalIgnoreCase)
-            && binding.Port == EffectivePort(request.Scheme, request.Host.Port);
-
-    private static bool MatchesOrigin(Uri binding, Uri origin)
-        => string.Equals(binding.Scheme, origin.Scheme, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(binding.Host, origin.Host, StringComparison.OrdinalIgnoreCase)
-            && binding.Port == origin.Port;
 
     private static int EffectivePort(string scheme, int? port)
         => port ?? (scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? 443 : 80);

@@ -9,4 +9,7 @@
     <Content Update="wwwroot/css/site.css" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Update="wwwroot/js/app.js" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Nightweaver.Tests" />
+  </ItemGroup>
 </Project>
