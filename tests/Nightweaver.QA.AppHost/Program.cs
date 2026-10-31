@@ -20,10 +20,12 @@ try
         await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "Active QA task", "--type", "task", "--status", "in_progress");
         await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "QA product decision", "--type", "feature", "--labels", "product-decision-required");
         await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "QA needs human", "--type", "task", "--labels", "needs-human");
+        await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "QA needs human abort", "--type", "task", "--labels", "needs-human");
         await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "Blocked QA task", "--type", "task", "--status", "blocked");
     });
     builder.AddProject<Projects.Nightweaver_Web>("web")
-        .WithHttpEndpoint(name: "http")
+        // Publish the direct local binding checked by the mutation-origin policy.
+        .WithHttpEndpoint(name: "http", isProxied: false)
         .WithEnvironment("Nightweaver__Root", fixture)
         .WithEnvironment("Nightweaver__ConfigPath", config)
         // The app's bd subprocesses must resolve configuration and credentials only
