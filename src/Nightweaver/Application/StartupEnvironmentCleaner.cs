@@ -23,7 +23,7 @@ internal sealed class StartupEnvironmentCleaner(BeadsReader reader, BeadsWriter 
         var registry = await new GitWorktreeReader(processRunner).ReadAsync(repository, cancellationToken).ConfigureAwait(false);
         var worktrees = RuntimeDirectoryReader.ReadRoot(paths.WorktreesRoot(project));
         var tmp = RuntimeDirectoryReader.ReadRoot(paths.TmpRoot(project));
-        var plan = StartupPlanner.Plan(actor, inventory, registry, worktrees, tmp);
+        var plan = StartupPlanner.PlanForStartup(actor, inventory, registry, worktrees, tmp);
         AddInspectionDiagnostics(plan, diagnostics);
 
         foreach (var candidate in plan.Removals)
@@ -48,6 +48,18 @@ internal sealed class StartupEnvironmentCleaner(BeadsReader reader, BeadsWriter 
                 protectedIds.Add(currentCandidate.BeadId);
                 continue;
             }
+
+            // Git identity checks are external operations. Re-read the current Bead after they
+            // finish so a pause or ownership change during validation invalidates this plan.
+            var afterIdentity = await ReadCurrentPlanAsync(paths, project, repository, actor, cancellationToken).ConfigureAwait(false);
+            var confirmedCandidate = afterIdentity.Plan.Removals.FirstOrDefault(removal => removal.BeadId == candidate.BeadId);
+            if (confirmedCandidate is null || !SameRegistration(currentCandidate.Registration, confirmedCandidate.Registration))
+            {
+                diagnostics.Add(new(candidate.BeadId, candidate.Path,
+                    "cleanup was skipped because the Bead or registered worktree changed during final Git identity validation"));
+                continue;
+            }
+            currentCandidate = confirmedCandidate;
 
             EnsureSharedRoots(paths, project);
             ProcessResult removal;
@@ -123,40 +135,51 @@ internal sealed class StartupEnvironmentCleaner(BeadsReader reader, BeadsWriter 
                 continue;
             }
 
+            // Required tracker and shared-root observations are fatal startup dependencies.
+            // Keep them outside the local tmp-removal catch so an unavailable snapshot cannot
+            // be downgraded to a per-Bead cleanup failure.
+            EnsureSharedRoots(paths, project);
+            var finalState = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
+            if (!finalState.ById.TryGetValue(candidate.BeadId, out var bead)
+                || !StartupEnvironmentClassifier.IsCompletedTmpOwner(bead, actor))
+            {
+                diagnostics.Add(new(candidate.BeadId, candidate.Path,
+                    "temporary files were retained because the Bead is missing, paused, or no longer completed"));
+                continue;
+            }
+            var finalRegistry = await new GitWorktreeReader(processRunner).ReadAsync(repository, cancellationToken).ConfigureAwait(false);
+            var finalWorktrees = RuntimeDirectoryReader.ReadRoot(paths.WorktreesRoot(project));
+            if (finalWorktrees.State != DirectoryState.Present)
+                throw new ToolExecutionException($"shared worktree root '{finalWorktrees.Path}' became unavailable or unsafe during temporary cleanup");
+            var stillProtected = finalRegistry.Any(entry => !entry.Main && !entry.Bare
+                    && RuntimePaths.Comparer.Equals(RuntimePaths.ChildId(finalWorktrees.Path, entry.Path), candidate.BeadId))
+                || finalWorktrees.Entries.Any(entry => RuntimePaths.Comparer.Equals(entry.Id, candidate.BeadId));
+            if (stillProtected)
+            {
+                diagnostics.Add(new(candidate.BeadId, candidate.Path,
+                    "temporary files were retained because a worktree registration or directory survives cleanup"));
+                continue;
+            }
+
+            var finalTmp = RuntimeDirectoryReader.ReadRoot(paths.TmpRoot(project));
+            if (finalTmp.State != DirectoryState.Present)
+                throw new ToolExecutionException($"shared temporary root '{finalTmp.Path}' became unavailable or unsafe during cleanup");
+            var finalTmpEntry = finalTmp.Entries.SingleOrDefault(entry => RuntimePaths.Comparer.Equals(entry.Path, currentCandidate.Path));
+            if (finalTmpEntry is null || finalTmpEntry.State != DirectoryState.Present || finalTmpEntry.AmbiguousIdentity
+                || !string.Equals(finalTmpEntry.Id, candidate.BeadId, StringComparison.Ordinal)
+                || !string.Equals(finalTmpEntry.Path, Path.Combine(finalTmp.Path, candidate.BeadId), StringComparison.Ordinal))
+            {
+                await EscalateFailureAsync(repository, actor, candidate.BeadId, candidate.Path,
+                    "the temporary directory changed identity or became unsafe before deletion", diagnostics, cancellationToken)
+                    .ConfigureAwait(false);
+                protectedIds.Add(candidate.BeadId);
+                continue;
+            }
+
+            EnsureSharedRoots(paths, project);
             try
             {
                 WorktreeProvisioner.ValidateNestedTree(currentCandidate.Path);
-                EnsureSharedRoots(paths, project);
-                // Recheck the Bead and all surviving worktree backing immediately before deletion.
-                var finalState = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
-                if (!finalState.ById.TryGetValue(candidate.BeadId, out var bead)
-                    || !StartupEnvironmentClassifier.IsCompletedTmpOwner(bead, actor))
-                {
-                    diagnostics.Add(new(candidate.BeadId, candidate.Path,
-                        "temporary files were retained because the Bead is missing, paused, or no longer completed"));
-                    continue;
-                }
-                var finalRegistry = await new GitWorktreeReader(processRunner).ReadAsync(repository, cancellationToken).ConfigureAwait(false);
-                var finalWorktrees = RuntimeDirectoryReader.ReadRoot(paths.WorktreesRoot(project));
-                var stillProtected = finalRegistry.Any(entry => !entry.Main && !entry.Bare
-                        && RuntimePaths.Comparer.Equals(RuntimePaths.ChildId(finalWorktrees.Path, entry.Path), candidate.BeadId))
-                    || finalWorktrees.Entries.Any(entry => RuntimePaths.Comparer.Equals(entry.Id, candidate.BeadId));
-                if (stillProtected)
-                {
-                    diagnostics.Add(new(candidate.BeadId, candidate.Path,
-                        "temporary files were retained because a worktree registration or directory survives cleanup"));
-                    continue;
-                }
-
-                var finalTmp = RuntimeDirectoryReader.ReadRoot(paths.TmpRoot(project));
-                var finalTmpEntry = finalTmp.Entries.SingleOrDefault(entry => RuntimePaths.Comparer.Equals(entry.Path, currentCandidate.Path));
-                if (finalTmp.State != DirectoryState.Present || finalTmpEntry is null
-                    || finalTmpEntry.State != DirectoryState.Present || finalTmpEntry.AmbiguousIdentity
-                    || !string.Equals(finalTmpEntry.Id, candidate.BeadId, StringComparison.Ordinal)
-                    || !string.Equals(finalTmpEntry.Path, Path.Combine(finalTmp.Path, candidate.BeadId), StringComparison.Ordinal))
-                    throw new IOException("the temporary directory changed identity or became unsafe before deletion");
-                WorktreeProvisioner.ValidateNestedTree(currentCandidate.Path);
-
                 Directory.Delete(currentCandidate.Path, recursive: true);
                 if (Directory.Exists(currentCandidate.Path) || File.Exists(currentCandidate.Path))
                     throw new IOException("the temporary directory still exists after recursive removal");
@@ -182,7 +205,7 @@ internal sealed class StartupEnvironmentCleaner(BeadsReader reader, BeadsWriter 
         var registry = await new GitWorktreeReader(processRunner).ReadAsync(repository, cancellationToken).ConfigureAwait(false);
         var worktrees = RuntimeDirectoryReader.ReadRoot(paths.WorktreesRoot(project));
         var tmp = RuntimeDirectoryReader.ReadRoot(paths.TmpRoot(project));
-        return new(inventory, registry, worktrees, tmp, StartupPlanner.Plan(actor, inventory, registry, worktrees, tmp));
+        return new(inventory, registry, worktrees, tmp, StartupPlanner.PlanForStartup(actor, inventory, registry, worktrees, tmp));
     }
 
     private async Task<string?> ValidateCandidateAsync(HostPaths paths, ProjectSlug project,

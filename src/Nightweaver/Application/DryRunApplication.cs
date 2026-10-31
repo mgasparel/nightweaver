@@ -37,7 +37,7 @@ internal static class DryRunApplication
         var readiness = await beadsReader.ReadReadinessAsync(repository, inventory, config.RecoveryActor, cancellationToken);
         var registry = await new GitWorktreeReader(processRunner).ReadAsync(repository, cancellationToken);
         var runtime = RuntimeDirectoryReader.Read(hostPaths, config.Name);
-        var startupPlan = StartupPlanner.Plan(config.RecoveryActor, inventory, registry, runtime.Worktrees, runtime.Tmp);
+        var startupPlan = StartupPlanner.PlanForStartup(config.RecoveryActor, inventory, registry, runtime.Worktrees, runtime.Tmp);
         var postSweep = PostSweepReadinessProjector.Project(startupPlan, readiness);
         var planningPoolPlan = PlanningPoolPlanner.Plan(postSweep,
             config.Concurrency.MaxConcurrentPlanning, config.Concurrency.MaxActivePlanBeads);

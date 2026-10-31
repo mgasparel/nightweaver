@@ -8,6 +8,44 @@ namespace Nightweaver.Tests;
 public sealed class WorktreeIntegrationTests
 {
     [Fact]
+    public async Task DryRunRetainsCompletedWorktreeWithNestedJunctionAndProtectsItsTmp()
+    {
+        using var fixture = new StartupSweepFixture();
+        var id = fixture.PlannedBeadId;
+        var worktree = fixture.WorktreePath(id);
+        WorktreeInspectionTests.CreateDirectoryLink(Path.Combine(worktree, "nested-link"), fixture.External);
+        var hostBefore = Snapshot.FileTree(fixture.Host);
+        var targetBefore = Snapshot.FileTree(fixture.Target.Path);
+        var externalBefore = Snapshot.FileTree(fixture.External);
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            var environment = new Dictionary<string, string?>(fixture.Target.Environment, StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in request.Environment) environment[pair.Key] = pair.Value;
+            return new SystemProcessRunner().RunAsync(request with { Environment = environment }, token);
+        });
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = await NightweaverApp.RunAsync(["--project", "demo", "--dry-run"],
+            new(fixture.Host, fixture.Caller, output, error), runner, CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(error.ToString());
+        var report = output.ToString();
+        var retained = Section(report, "Retained worktrees\n", "\nOrphan tmp deletions (hypothetical)");
+        var orphanTmp = Section(report, "Orphan tmp deletions (hypothetical)\n", "\nStartup diagnostics");
+        Assert.Contains($"{JsonSerializer.Serialize(id)}:", retained, StringComparison.Ordinal);
+        Assert.DoesNotContain($"{JsonSerializer.Serialize(id)}:", orphanTmp, StringComparison.Ordinal);
+        Assert.Contains("unsafe_runtime_path", report, StringComparison.Ordinal);
+        Assert.Contains("tmp_cleanup_deferred", report, StringComparison.Ordinal);
+        Assert.Contains("nested reparse point", report, StringComparison.Ordinal);
+        Assert.Contains("nested-link", report, StringComparison.Ordinal);
+        Assert.Equal(hostBefore, Snapshot.FileTree(fixture.Host));
+        Assert.Equal(targetBefore, Snapshot.FileTree(fixture.Target.Path));
+        Assert.Equal(externalBefore, Snapshot.FileTree(fixture.External));
+    }
+
+    [Fact]
     public async Task RealGitAndBeadsSweepIsDeterministicAndPreservesDiskAndTracker()
     {
         using var fixture = new StartupSweepFixture();
@@ -127,6 +165,7 @@ internal sealed class StartupSweepFixture : IDisposable
     internal string Config { get; }
     internal string External { get; }
     internal IReadOnlyList<string> StaleIds { get; }
+    internal string PlannedBeadId => seededIds["planned"];
     internal IReadOnlyList<string> ActiveIds { get; }
     internal IReadOnlyList<string> PausedIds { get; }
     internal IReadOnlyList<string> OrphanIds { get; }
@@ -206,7 +245,7 @@ internal sealed class StartupSweepFixture : IDisposable
             temp.WriteFile($"nightweaver host/tmp/demo/{id}/invocation/output", "preserve invocation data");
     }
 
-    private string WorktreePath(string id) => Path.Combine(Host, "worktrees", "demo", id);
+    internal string WorktreePath(string id) => Path.Combine(Host, "worktrees", "demo", id);
     private string Worktree(string title, bool named = false)
     {
         var id = seededIds[title];

@@ -56,7 +56,8 @@ internal static class StartupPlanner
             if (entry.Locked) Diagnostic(id, StartupDiagnosticCode.LockedWorktree, entry.RawPath, entry.LockReason);
             if (entry.Prunable) Diagnostic(id, StartupDiagnosticCode.PrunableRegistration, entry.RawPath, entry.PruneReason);
             if (presence == DirectoryState.Missing) Diagnostic(id, StartupDiagnosticCode.MissingRegisteredPath, entry.RawPath);
-            if (presence == DirectoryState.UnsafeLink) Diagnostic(id, StartupDiagnosticCode.UnsafeRuntimePath, entry.RawPath);
+            if (presence == DirectoryState.UnsafeLink) Diagnostic(id, StartupDiagnosticCode.UnsafeRuntimePath, entry.RawPath,
+                disk?.FailureReason);
             if (presence == DirectoryState.Unusable) Diagnostic(id, StartupDiagnosticCode.UnusableRuntimePath, entry.RawPath,
                 disk?.FailureReason ?? "worktree child could not be inspected");
             if (ambiguous) Diagnostic(id, StartupDiagnosticCode.AmbiguousWorktreeIdentity, entry.RawPath);
@@ -153,6 +154,19 @@ internal static class StartupPlanner
                 .ThenBy(entry => entry.BeadId, StringComparer.Ordinal).ThenBy(entry => entry.Path, StringComparer.Ordinal)
                 .ThenBy(entry => entry.Code).ThenBy(entry => entry.Reason, StringComparer.Ordinal).ToList().AsReadOnly()
         };
+    }
+
+    internal static StartupPlan PlanForStartup(string recoveryActor, BeadsInventory inventory,
+        IReadOnlyList<GitWorktreeSnapshot> registry, RuntimeDirectorySnapshot worktrees, RuntimeDirectorySnapshot tmp)
+    {
+        var preliminary = Plan(recoveryActor, inventory, registry, worktrees, tmp);
+        if (preliminary.Removals.Count == 0) return preliminary;
+
+        // The live cleaner rejects nested links before removal. Dry-run and live planning
+        // must use the same read-only tree inspection so neither can project deleting one.
+        var inspected = RuntimeDirectoryReader.InspectNestedWorktrees(worktrees,
+            preliminary.Removals.Select(candidate => candidate.Path));
+        return Plan(recoveryActor, inventory, registry, inspected, tmp);
     }
 
     private static bool PathsOverlap(string left, string right)
