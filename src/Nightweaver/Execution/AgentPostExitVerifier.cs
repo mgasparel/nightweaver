@@ -38,7 +38,8 @@ internal sealed record AgentStageResult(
     IReadOnlyList<string> Diagnostics,
     BeadWorkflowState? VerifiedState = null,
     AgentStageObservations? Observations = null,
-    AgentOutcomeClassificationResult? OutcomeClassification = null)
+    AgentOutcomeClassificationResult? OutcomeClassification = null,
+    IReadOnlySet<string>? PreInvocationCommentIds = null)
 {
     internal bool Succeeded => Failure is null;
 }

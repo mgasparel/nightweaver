@@ -37,6 +37,70 @@ public sealed class AgentStageRetryIntegrationTests : AgentStageIntegrationTestS
     }
 
     [Fact]
+    public async Task ResolvedHistoricalProductQuestionDoesNotControlNewImplementerInvocation()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead("Historical comment must not classify new work", "task", "stage:implement");
+        target.AddComment(bead, "Implementer product decision: this old question was resolved before the new invocation.");
+
+        var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer, ["slot-implement-unlabeled"]);
+
+        Assert.True(outcome.Succeeded, outcome.StageResult.Failure?.Reason);
+        Assert.Equal("stage:review", target.ReadState(bead).Stage);
+        Assert.False(target.ReadState(bead).ProductDecisionRequired);
+        Assert.Equal("open", target.ReadBead(bead).Status);
+        Assert.Null(target.ReadBead(bead).Assignee);
+    }
+
+    [Fact]
+    public async Task PublisherRereadsOutcomeThatCommittedBeforeBdReportedFailure()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture { FailOutcomePublishResponseAfterCommitOnce = true };
+        var bead = target.CreateBead("Uncertain outcome publication", "task", "stage:implement");
+
+        var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer, ["slot-implement-unlabeled"]);
+
+        Assert.True(outcome.Succeeded, outcome.StageResult.Failure?.Reason);
+        Assert.Equal("stage:review", target.ReadState(bead).Stage);
+        Assert.Equal("open", target.ReadBead(bead).Status);
+        Assert.Null(target.ReadBead(bead).Assignee);
+        Assert.Equal(1, target.LastRetryRequests.Count(request => request.FileName == "bd"
+            && request.Arguments.Contains("--add-label", StringComparer.Ordinal)
+            && request.Arguments.Contains("stage:review", StringComparer.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData("owner")]
+    [InlineData("workflow")]
+    public async Task PublisherRefusesWhenOwnerOrWorkflowChangesAfterEvidenceComment(string changeKind)
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture { ChangeOutcomeStateAfterEvidenceComment = changeKind };
+        var bead = target.CreateBead("Guarded outcome publication race", "task", "stage:implement");
+
+        await Assert.ThrowsAsync<AgentStageInputException>(() => target.RunRetryAgentAsync(
+            bead, AgentRole.Implementer, ["slot-implement-unlabeled"]));
+
+        var final = target.ReadBead(bead);
+        if (changeKind == "owner")
+        {
+            Assert.Equal("human@example.invalid", final.Assignee);
+            Assert.Equal("stage:implement", target.ReadState(bead).Stage);
+        }
+        else
+        {
+            Assert.Equal("nightweaver:demo", final.Assignee);
+            Assert.Equal("stage:qa", target.ReadState(bead).Stage);
+        }
+        Assert.Equal("in_progress", final.Status);
+        Assert.DoesNotContain(target.LastRetryRequests, request => request.FileName == "bd"
+            && request.Arguments.Contains("--add-label", StringComparer.Ordinal)
+            && request.Arguments.Contains("stage:review", StringComparer.Ordinal));
+    }
+
+    [Fact]
     public async Task PlanningRetryKeepsWarmProvisionedWorktreeDetachedAndRetainsClaim()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
@@ -902,14 +966,47 @@ public abstract class AgentStageIntegrationTestSupport
         internal int LastRetryLifecycleCount { get; private set; }
         internal IReadOnlyList<ProcessRequest> LastSlotRequests { get; private set; } = [];
         internal AgentRole[] LastSlotRoles { get; private set; } = [];
+        internal bool FailOutcomePublishResponseAfterCommitOnce { get; set; }
+        internal string? ChangeOutcomeStateAfterEvidenceComment { get; set; }
 
         internal string Path => TargetPath;
         internal string RunTarget(string tool, IReadOnlyList<string> arguments, string? workingDirectory = null) =>
             Run(tool, arguments, workingDirectory ?? TargetPath, BeadsEnvironment);
-        internal Task<ProcessResult> RunWithFixturePullRequestAsync(IProcessRunner inner, ProcessRequest request,
+        internal async Task<ProcessResult> RunWithFixturePullRequestAsync(IProcessRunner inner, ProcessRequest request,
             CancellationToken cancellationToken)
         {
-            if (request.FileName != "gh") return inner.RunAsync(request, cancellationToken);
+            if (request.FileName == "bd" && request.Arguments.Contains("comments", StringComparer.Ordinal)
+                && request.Arguments.Contains("add", StringComparer.Ordinal)
+                && request.Arguments[^1].Contains("nightweaver-implementer-outcome-v1", StringComparison.Ordinal))
+            {
+                var commentResult = await inner.RunAsync(request, cancellationToken);
+                if (commentResult.ExitCode == 0 && ChangeOutcomeStateAfterEvidenceComment is { } changeKind)
+                {
+                    var beadId = request.Arguments[^2];
+                    if (changeKind == "owner")
+                        Run("bd", ["update", beadId, "--assignee", "human@example.invalid", "--force", "--json"], TargetPath, BeadsEnvironment);
+                    else if (changeKind == "workflow")
+                        Run("bd", ["update", beadId, "--remove-label", "stage:implement", "--add-label", "stage:qa", "--json"], TargetPath, BeadsEnvironment);
+                    else
+                        throw new InvalidOperationException($"Unknown publication race '{changeKind}'.");
+                    ChangeOutcomeStateAfterEvidenceComment = null;
+                }
+                return commentResult;
+            }
+            if (request.FileName == "bd" && FailOutcomePublishResponseAfterCommitOnce
+                && request.Arguments.Contains("update", StringComparer.Ordinal)
+                && request.Arguments.Contains("--add-label", StringComparer.Ordinal)
+                && request.Arguments.Contains("stage:review", StringComparer.Ordinal))
+            {
+                var committed = await inner.RunAsync(request, cancellationToken);
+                if (committed.ExitCode == 0)
+                {
+                    FailOutcomePublishResponseAfterCommitOnce = false;
+                    return new ProcessResult(1, string.Empty, "simulated lost publication response after commit");
+                }
+                return committed;
+            }
+            if (request.FileName != "gh") return await inner.RunAsync(request, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             var branch = Run("git", ["branch", "--show-current"], request.WorkingDirectory, BeadsEnvironment).Trim();
             var head = Run("git", ["rev-parse", "HEAD"], request.WorkingDirectory, BeadsEnvironment).Trim();
@@ -921,7 +1018,7 @@ public abstract class AgentStageIntegrationTestSupport
                 headRefOid = head,
                 url = $"https://example.invalid/pull/{Uri.EscapeDataString(branch)}"
             });
-            return Task.FromResult(new ProcessResult(0, response, string.Empty));
+            return new ProcessResult(0, response, string.Empty);
         }
         internal string WorktreePath(string beadId) => System.IO.Path.Combine(Host.WorktreesRoot(ProjectSlug.Parse("demo")), beadId);
         internal string CurrentBranch(string beadId) => Run("git", ["branch", "--show-current"], WorktreePath(beadId)).Trim();
@@ -1157,8 +1254,18 @@ public abstract class AgentStageIntegrationTestSupport
             }
             var retryCoordinator = new OperationalRetryCoordinator(runner, stages: stageCoordinator, classifier: classifier,
                 outcomeClassifier: FixtureOutcomeClassifier.Create());
-            var outcome = await retryCoordinator.RunAsync(Host, project, new(TargetPath, "main"), beadId, role, actor,
-                TestContext.Current.CancellationToken);
+            OperationalRetryOutcome outcome;
+            try
+            {
+                outcome = await retryCoordinator.RunAsync(Host, project, new(TargetPath, "main"), beadId, role, actor,
+                    TestContext.Current.CancellationToken);
+            }
+            catch
+            {
+                LastRetryRequests = runner.Requests.ToArray();
+                LastRetryLifecycleCount = pidFiles.Count;
+                throw;
+            }
             LastRetryRequests = runner.Requests.ToArray();
             Assert.True(pidFiles.Count <= actions.Count);
             LastRetryLifecycleCount = pidFiles.Count;

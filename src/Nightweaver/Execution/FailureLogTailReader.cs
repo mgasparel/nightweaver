@@ -77,9 +77,32 @@ internal static class FailureLogTailReader
 
         if (read != bytes.Length) Array.Resize(ref bytes, read);
         var hadInvalidUtf8 = false;
+        if (originalLength > DuplicateFailureClassifierLimits.MaximumLogTailBytes && offset > 0
+            && bytes.Length > 0 && IsUtf8ContinuationByte(bytes[0]))
+        {
+            var prefixLength = (int)Math.Min(3, offset);
+            var prefix = new byte[prefixLength];
+            stream.Position = offset - prefixLength;
+            var prefixRead = 0;
+            while (prefixRead < prefix.Length)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var count = await stream.ReadAsync(prefix.AsMemory(prefixRead), cancellationToken).ConfigureAwait(false);
+                if (count == 0) break;
+                prefixRead += count;
+            }
+            if (prefixRead != prefix.Length) Array.Resize(ref prefix, prefixRead);
+
+            if (TryGetValidCrossBoundaryCharacterLength(prefix, bytes, out var continuationCount))
+                bytes = bytes[continuationCount..];
+            else
+                hadInvalidUtf8 = true;
+        }
+
         string text;
         try
         {
+            if (hadInvalidUtf8) throw new DecoderFallbackException("Truncated log tail begins with an invalid UTF-8 continuation byte.");
             text = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes);
         }
         catch (DecoderFallbackException)
@@ -92,6 +115,43 @@ internal static class FailureLogTailReader
             originalLength > DuplicateFailureClassifierLimits.MaximumLogTailBytes || read != retainedLength,
             hadInvalidUtf8);
     }
+
+    private static bool TryGetValidCrossBoundaryCharacterLength(byte[] prefix, byte[] tail, out int continuationCount)
+    {
+        continuationCount = 0;
+        while (continuationCount < tail.Length && IsUtf8ContinuationByte(tail[continuationCount]))
+            continuationCount++;
+        if (continuationCount is < 1 or > 3) return false;
+
+        for (var leadIndex = prefix.Length - 1; leadIndex >= 0; leadIndex--)
+        {
+            var characterLength = GetUtf8CharacterLength(prefix[leadIndex]);
+            if (characterLength <= 1 || prefix.Length - leadIndex + continuationCount != characterLength)
+                continue;
+            if (prefix[(leadIndex + 1)..].Any(value => !IsUtf8ContinuationByte(value))) continue;
+
+            var characterBytes = prefix[leadIndex..].Concat(tail[..continuationCount]).ToArray();
+            try
+            {
+                _ = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(characterBytes);
+                return true;
+            }
+            catch (DecoderFallbackException) { }
+        }
+
+        continuationCount = 0;
+        return false;
+    }
+
+    private static bool IsUtf8ContinuationByte(byte value) => (value & 0b1100_0000) == 0b1000_0000;
+
+    private static int GetUtf8CharacterLength(byte value) => value switch
+    {
+        >= 0b1100_0010 and <= 0b1101_1111 => 2,
+        >= 0b1110_0000 and <= 0b1110_1111 => 3,
+        >= 0b1111_0000 and <= 0b1111_0100 => 4,
+        _ => 0
+    };
 
     internal static string RoleSuffix(AgentRole role) => role switch
     {
