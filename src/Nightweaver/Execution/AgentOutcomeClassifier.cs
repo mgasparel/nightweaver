@@ -222,8 +222,15 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
 
         try
         {
-            var before = await RetainedWorktreeContentSnapshotReader.ReadAsync(worktreePath, cancellationToken)
-                .ConfigureAwait(false);
+            var beadTemporaryRoot = Path.Combine(hostPaths.TmpRoot(project.Name), context.BeadId);
+            var beadLogsRoot = Path.Combine(hostPaths.LogsRoot(project.Name), context.BeadId);
+            if (RuntimeArtifactExists(invocation.TemporaryDirectory) || RuntimeArtifactExists(invocation.LogFilePath))
+                return new(null, "standard-agent-cli", "Fallback invocation paths collide with retained Bead artifacts; its answer was rejected.",
+                    invocation.InvocationId, invocation.LogFilePath);
+
+            var before = await RetainedWorktreeContentSnapshotReader.ReadInvocationEnvironmentAsync(
+                worktreePath, beadTemporaryRoot, beadLogsRoot, invocation.TemporaryDirectory, invocation.LogFilePath,
+                cancellationToken).ConfigureAwait(false);
             AgentStandardOutputCaptureResult? captured = null;
             Exception? executionFailure = null;
             try
@@ -234,10 +241,11 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
             catch (OperationCanceledException) { throw; }
             catch (Exception exception) { executionFailure = exception; }
 
-            var after = await RetainedWorktreeContentSnapshotReader.ReadAsync(worktreePath, cancellationToken)
-                .ConfigureAwait(false);
+            var after = await RetainedWorktreeContentSnapshotReader.ReadInvocationEnvironmentAsync(
+                worktreePath, beadTemporaryRoot, beadLogsRoot, invocation.TemporaryDirectory, invocation.LogFilePath,
+                cancellationToken).ConfigureAwait(false);
             if (!string.Equals(before.Fingerprint, after.Fingerprint, StringComparison.Ordinal))
-                return new(null, "standard-agent-cli", "Fallback classifier changed retained worktree content; its answer was rejected.",
+                return new(null, "standard-agent-cli", "Fallback classifier changed retained worktree content or prior Bead temporary/log artifacts; its answer was rejected.",
                     invocation.InvocationId, invocation.LogFilePath);
             if (executionFailure is not null)
             {
@@ -267,6 +275,17 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
             return new(null, "standard-agent-cli", $"Fallback classifier could not be safely verified: {exception.GetType().Name}: {message}",
                 invocation.InvocationId, invocation.LogFilePath);
         }
+    }
+
+    private static bool RuntimeArtifactExists(string path)
+    {
+        try
+        {
+            _ = File.GetAttributes(path);
+            return true;
+        }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
     }
 
     private static async Task<OutcomeEvidenceDocument> BuildEvidenceAsync(

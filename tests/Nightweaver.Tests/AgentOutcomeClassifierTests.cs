@@ -284,6 +284,56 @@ public sealed class AgentOutcomeClassifierTests
     }
 
     [Fact]
+    public async Task FallbackDeletionOfPriorInvocationFileInRetainedBeadTempRootIsDetected()
+    {
+        using var fixture = new OutcomeFixture();
+        var earlierInvocationDirectory = Path.Combine(fixture.Paths.TmpRoot(fixture.Project.Name), fixture.Context.BeadId,
+            "earlier-implementer");
+        Directory.CreateDirectory(earlierInvocationDirectory);
+        var retainedFile = Path.Combine(earlierInvocationDirectory, "retained.txt");
+        File.WriteAllText(retainedFile, "unfinished work from a prior invocation");
+        using var client = UnavailablePrimaryClient();
+        var fallbackCalls = 0;
+        var classifier = new AgentOutcomeClassifier(client,
+            executeFallback: (_, _, invocation, _, _) =>
+            {
+                fallbackCalls++;
+                File.Delete(retainedFile);
+                return Task.FromResult(ValidFallbackResult(invocation));
+            }, apiKeyOverride: "fixture-key");
+
+        var result = await fixture.ClassifyAsync(classifier);
+
+        Assert.Null(result.Outcome);
+        Assert.Contains("changed retained worktree content", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Equal(1, fallbackCalls);
+        Assert.False(File.Exists(retainedFile));
+    }
+
+    [Fact]
+    public async Task FallbackRewriteOfOriginalImplementerLogIsDetected()
+    {
+        using var fixture = new OutcomeFixture();
+        var originalEvidence = File.ReadAllText(fixture.Invocation.LogFilePath);
+        using var client = UnavailablePrimaryClient();
+        var fallbackCalls = 0;
+        var classifier = new AgentOutcomeClassifier(client,
+            executeFallback: (_, _, invocation, _, _) =>
+            {
+                fallbackCalls++;
+                File.WriteAllText(fixture.Invocation.LogFilePath, "rewritten by the fallback");
+                return Task.FromResult(ValidFallbackResult(invocation));
+            }, apiKeyOverride: "fixture-key");
+
+        var result = await fixture.ClassifyAsync(classifier);
+
+        Assert.Null(result.Outcome);
+        Assert.Contains("changed retained worktree content", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Equal(1, fallbackCalls);
+        Assert.NotEqual(originalEvidence, File.ReadAllText(fixture.Invocation.LogFilePath));
+    }
+
+    [Fact]
     public async Task InvalidFallbackIsReportedAfterOneAttemptAndNeverRepeatsTheLifecycleInvocation()
     {
         using var fixture = new OutcomeFixture();
