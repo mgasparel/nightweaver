@@ -132,6 +132,19 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
         CancellationToken cancellationToken) => RunAsync(repository,
         ["comments", "add", beadId, comment], $"add needs-human diagnostic comment to Bead '{beadId}'", cancellationToken);
 
+    internal Task EscalateStartupCleanupFailureAsync(ValidatedTargetRepository repository, string beadId,
+        string expectedStatus, string? expectedAssignee, string actor, CancellationToken cancellationToken)
+    {
+        var arguments = new List<string> { "update", beadId, "--add-label", "needs-human", "--assignee",
+            expectedAssignee ?? string.Empty, "--if-status", expectedStatus, "--if-assignee", expectedAssignee ?? string.Empty, "--json" };
+        return RunAsync(repository, arguments,
+            $"escalate startup cleanup failure for Bead '{beadId}' without changing its status or owner", cancellationToken, actor);
+    }
+
+    internal Task AddStartupCleanupCommentAsync(ValidatedTargetRepository repository, string beadId, string comment,
+        string actor, CancellationToken cancellationToken) => RunAsync(repository,
+        ["comments", "add", beadId, comment], $"record startup cleanup diagnostic for Bead '{beadId}'", cancellationToken, actor);
+
     internal Task ReleaseClaimAsync(ValidatedTargetRepository repository, string beadId, string assignee,
         CancellationToken cancellationToken) => RunAsync(repository,
         ["update", beadId, "--status", "open", "--assignee", "", "--if-assignee", assignee, "--if-status", "in_progress"],

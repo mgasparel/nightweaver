@@ -2,6 +2,32 @@ namespace Nightweaver.Inspection;
 
 internal static class SharedRuntimeRootValidator
 {
+    internal static void EnsureExistingSafe(string root)
+    {
+        var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        try
+        {
+            var volumeRoot = Path.GetPathRoot(fullRoot)
+                ?? throw new IOException("path has no filesystem root");
+            var current = Path.TrimEndingDirectorySeparator(volumeRoot);
+            if (current.Length == 0) current = volumeRoot;
+
+            var relative = Path.GetRelativePath(volumeRoot, fullRoot);
+            foreach (var segment in relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                         StringSplitOptions.RemoveEmptyEntries))
+            {
+                current = Path.Combine(current, segment);
+                EnsureDirectory(current, createMissing: false);
+            }
+        }
+        catch (ToolExecutionException) { throw; }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or ArgumentException or NotSupportedException)
+        {
+            throw new ToolExecutionException($"shared runtime root '{fullRoot}' is unusable: {exception.Message}");
+        }
+    }
+
     internal static void EnsureUsable(string root)
     {
         var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));

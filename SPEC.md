@@ -208,6 +208,8 @@ The Orchestrator reads the complete Beads inventory and considers only `in_progr
 
 A guard mismatch triggers fresh inspection and the observed state is respected. An update with an uncertain result is reread and never blindly replayed. Required inventory/recovery read or write failures stop startup. Once recovery finishes, the Orchestrator obtains a fresh inventory and actual native `bd ready` snapshot; admission uses that state, never projected recovery success. Paused or blocked claims remain ineligible.
 
+Before that fresh admission snapshot, live startup performs a separate conservative completed-environment sweep. It removes only a safely identified `planned` Product Bead's detached Planning worktree or a closed Plan Bead's exact `nightweaver/<bead-id>` Delivery worktree, after rereading current Bead state and validating the canonical Project path, registration, ownership, checkout identity, lock state, and path safety. A pause or changed identity cancels the stale removal. Locked, missing/prunable, unregistered, deleted-Bead, linked, or ambiguous leftovers remain in place and are diagnosed. Startup never runs repository-wide worktree pruning or deletes branches by name. It checks actual surviving registrations and directories before deleting a known completed Bead's tmp tree. A local removal failure records its path and reason, adds `needs-human` without reopening a closed Bead, protects remaining resources, and allows unrelated recovery to continue; failure to persist required escalation state or an unusable shared root stops startup.
+
 ```mermaid
 flowchart TD
     Dispatch[Live dispatch] --> Validate[Read-only config and Git validation]
@@ -215,7 +217,9 @@ flowchart TD
     Mutex -- no --> Loser[Exit before tracker or runtime mutation]
     Mutex -- yes --> Roots[Validate or create current Project runtime roots]
     Roots --> Recovery[Recover exact current-Project actor claims]
-    Recovery --> Actual[Read fresh inventory and actual bd ready state]
+    Recovery --> Sweep[Revalidate and remove only completed managed worktrees]
+    Sweep --> Tmp[Delete owned tmp only after checking actual survivors]
+    Tmp --> Actual[Read fresh inventory and actual bd ready state]
     Actual --> Admit[Ordinary guarded dispatch admission]
     DryRun[Dry-run] --> Inspect[Read-only inspection and projection]
     Inspect --> Report[Report without a mutex or recovery]
@@ -292,6 +296,9 @@ flowchart TD
      - `NIGHTWEAVER_BEAD_ID=<bead-id>`
      - Invocation-scoped `TMP`, `TEMP`, and `TMPDIR` pointing to `<nightweaver-root>/tmp/<project-slug>/<bead-id>/<timestamp>-<role>/`
    - Nightweaver does not inject slot port variables (`NIGHTWEAVER_SLOT_ID`); **Target Repositories** use ephemeral runtime environments (such as .NET Aspire) that avoid port collisions natively.
+6. **Startup Cleanup Ownership**:
+   - Only the **Orchestrator** removes completed managed environments during startup. It matches Product/Plan role, current completion state, canonical Bead-ID child path, and the checkout's actual Target Repository identity before targeted removal. Agents and branch names do not establish cleanup ownership.
+   - Startup retains every paused, unfinished, locked, missing/prunable, unregistered, unsafe-link, deleted-Bead, or ambiguous environment and its associated tmp. It does not use broad `git worktree prune` or delete local/remote branches. Ordinary Delivery completion branch cleanup remains a separate lifecycle responsibility.
 
 ### 5.4 Deterministic Cleanup Contract
 
@@ -301,7 +308,8 @@ flowchart TD
 | **Planning Completion (`planned`)** | Remove the detached worktree, prune its completed registration, delete the Bead temporary tree, and release the claim. |
 | **Planning or Delivery Pause (`product-decision-required` / `needs-human`)** | Retain the worktree, current HEAD, branch refs, tracked and untracked files, ignored caches, logs, and all Bead temporary files; record the diagnostic and release only the still-owned claim. |
 | **Delivery Completion (`closed`)** | Remove the local worktree (`git worktree remove --force <path>`), delete the local branch (`git branch -D nightweaver/<bead-id>`), ensure remote branch `origin/nightweaver/<bead-id>` is deleted, run `git worktree prune`, delete `<nightweaver-root>/tmp/<project-slug>/<bead-id>/`, and auto-close the parent `planned` **Product Bead** if all its `discovered-from` **Plan Beads** are now `closed`. |
-| **Orchestrator Startup (Crash Sweep)** | Under repository-wide process exclusion, release only exact current-Project actor-matching `in_progress` claims with status/assignee guards and fresh rereads; do not reclaim claims or reset stage, pause, or repair state. Required tracker failures and unusable shared runtime roots stop startup. Read actual current inventory and readiness after recovery before admission. Completed-environment cleanup is a separate conservative startup phase. |
+| **Orchestrator Startup (Crash Recovery)** | Under repository-wide process exclusion, release only exact current-Project actor-matching `in_progress` claims with status/assignee guards and fresh rereads; do not reclaim claims or reset stage, pause, or repair state. Required tracker failures and unusable shared runtime roots stop startup. |
+| **Orchestrator Startup (Completed-Environment Sweep)** | After claim recovery and before admission, remove only revalidated `planned` Product Bead detached worktrees and closed Plan Bead worktrees on their exact `nightweaver/<bead-id>` branches. Retain and diagnose locked, missing/prunable, unregistered, unsafe-link, deleted-Bead, paused, or ambiguous environments. Use targeted worktree removal only; keep branch refs and logs. Delete known completed-Bead tmp only after observing actual surviving environments. A local failure preserves remaining resources, records path/reason, pauses the existing Bead without reopening closed status, and continues unrelated cleanup. Required escalation persistence or shared-root failure stops startup. |
 
 ---
 

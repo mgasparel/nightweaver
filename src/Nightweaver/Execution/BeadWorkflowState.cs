@@ -34,7 +34,9 @@ internal sealed record BeadWorkflowState(
         var planned = bead.Labels.Contains("planned", StringComparer.Ordinal);
         var productDecision = bead.Labels.Contains("product-decision-required", StringComparer.Ordinal);
         var needsHuman = bead.Labels.Contains("needs-human", StringComparer.Ordinal);
-        if ((planned && (stage is not null || productDecision || needsHuman)) || (productDecision && needsHuman))
+        // A failed startup cleanup may add needs-human to an already planned Product Bead.
+        // Keep that terminal planning state intact while making the human pause visible.
+        if ((planned && (stage is not null || productDecision)) || (productDecision && needsHuman))
             throw new FormatException($"Bead '{bead.Id}' has contradictory workflow labels.");
 
         var repairCycles = ReadRepairCycles(bead);

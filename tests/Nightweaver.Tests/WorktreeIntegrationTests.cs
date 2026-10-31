@@ -159,25 +159,29 @@ internal sealed class StartupSweepFixture : IDisposable
         var seeds = new[]
         {
             new { title = "closed", status = "closed", labels = Array.Empty<string>() },
-            new { title = "planned", status = "open", labels = new[] { "planned" } },
-            new { title = "paused", status = "open", labels = new[] { "product-decision-required" } },
-            new { title = "needs human", status = "open", labels = new[] { "needs-human" } },
+            new { title = "planned", status = "in_progress", labels = new[] { "planned" } },
+            new { title = "paused", status = "in_progress", labels = new[] { "product-decision-required" } },
+            new { title = "needs human", status = "in_progress", labels = new[] { "needs-human" } },
             new { title = "active", status = "in_progress", labels = Array.Empty<string>() },
             new { title = "merge", status = "open", labels = new[] { "stage:merge" } },
             new { title = "locked closed", status = "closed", labels = Array.Empty<string>() },
-            new { title = "missing path", status = "closed", labels = Array.Empty<string>() }
+            new { title = "missing path", status = "closed", labels = Array.Empty<string>() },
+            new { title = "orphan tmp", status = "closed", labels = Array.Empty<string>() }
         };
         var seedFile = Path.Combine(temp.Path, "startup-seed.jsonl");
         File.WriteAllText(seedFile, string.Join('\n', seeds.Select(seed => JsonSerializer.Serialize(new
         {
-            seed.title, seed.status, seed.labels, issue_type = "task", priority = 2, assignee = "nightweaver:demo"
+            seed.title, seed.status, seed.labels,
+            issue_type = seed.title == "planned" ? "feature" : "task",
+            priority = 2,
+            assignee = seed.status == "closed" ? null : "nightweaver:demo"
         }))));
         Target.Run("bd", ["import", seedFile, "--json"]);
         seededIds = BeadsReader.Parse(Target.Run("bd", BeadsCommand.Create(Target.Path).Arguments)).ById.Values
             .ToDictionary(bead => bead.Payload.GetProperty("title").GetString()!, bead => bead.Id, StringComparer.Ordinal);
         File.Delete(seedFile);
-        var closed = Worktree("closed");
-        var planned = Worktree("planned", named: true);
+        var closed = Worktree("closed", named: true);
+        var planned = Worktree("planned");
         var paused = Worktree("paused");
         var needsHuman = Worktree("needs human");
         var active = Worktree("active");
@@ -197,8 +201,8 @@ internal sealed class StartupSweepFixture : IDisposable
         StaleIds = Array.AsReadOnly(new[] { closed, planned });
         ActiveIds = Array.AsReadOnly(new[] { active, merge });
         PausedIds = Array.AsReadOnly(new[] { paused, needsHuman });
-        OrphanIds = Array.AsReadOnly(new[] { closed, planned, missing, "orphan" });
-        foreach (var id in new[] { closed, planned, paused, needsHuman, active, merge, locked, missing, "fixture.absent", "unregistered", "linked-worktree", "orphan" })
+        OrphanIds = Array.AsReadOnly(new[] { closed, planned, seededIds["orphan tmp"] });
+        foreach (var id in new[] { closed, planned, paused, needsHuman, active, merge, locked, missing, seededIds["orphan tmp"], "fixture.absent", "unregistered", "linked-worktree" })
             temp.WriteFile($"nightweaver host/tmp/demo/{id}/invocation/output", "preserve invocation data");
     }
 

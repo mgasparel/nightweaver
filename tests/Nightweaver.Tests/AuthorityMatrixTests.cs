@@ -8,6 +8,15 @@ namespace Nightweaver.Tests;
 public sealed class AuthorityMatrixTests
 {
     [Fact]
+    public void PlannedProductCanCarryNeedsHumanAfterStartupCleanupFailure()
+    {
+        var state = State("planned-product", "feature", labels: ["planned", "needs-human"]);
+        Assert.True(state.Planned);
+        Assert.True(state.NeedsHuman);
+        Assert.Null(state.Stage);
+    }
+
+    [Fact]
     public void AcceptsEveryAuthorityMatrixTransition()
     {
         var cases = new (AgentRole Role, BeadWorkflowState Before, BeadWorkflowState After,
