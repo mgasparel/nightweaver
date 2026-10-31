@@ -199,6 +199,27 @@ stateDiagram-v2
 
 ### 5.1 Event-Driven Discovery via `bd events tail --follow`
 
+**Repository Exclusion and Startup Recovery for Live Dispatch**:
+Before any Beads inventory/readiness query, recovery, dispatch write, Project runtime-directory creation, worktree operation, or Agent launch, a live Orchestrator performs read-only configuration and Git validation, then acquires an OS-managed mutex keyed to the physical Git common-directory identity. The mutex is shared by every Project name and Nightweaver host root that targets the same local repository, is outside the Target Repository, and remains owned for the process lifetime. A competing process exits with a diagnostic before tracker or runtime mutations. Process exit or death releases ownership; no lease database, heartbeat, or PID proof is used.
+
+While holding the mutex, the Orchestrator validates the current Project's worktree, temporary, and log roots and every ancestor. Safe missing directories may be created under the mutex. An inaccessible parent, file in place of a directory, reparse-point shared root, or otherwise unusable root fails startup. Read-only inspection and `--dry-run` do not acquire recovery authority.
+
+The Orchestrator reads the complete Beads inventory and considers only `in_progress` claims whose assignee exactly matches the current Project's recovery actor. Before each release it rereads that Bead and applies one guarded update requiring the observed `in_progress` status and exact assignee, changing only status to `open` and assignee to empty. Stages, pause labels, repair counts, comments, dependencies, and other Bead fields remain intact. Unassigned, lookalike, foreign-person, and other-Project claims are untouched.
+
+A guard mismatch triggers fresh inspection and the observed state is respected. An update with an uncertain result is reread and never blindly replayed. Required inventory/recovery read or write failures stop startup. Once recovery finishes, the Orchestrator obtains a fresh inventory and actual native `bd ready` snapshot; admission uses that state, never projected recovery success. Paused or blocked claims remain ineligible.
+
+```mermaid
+flowchart TD
+    Dispatch[Live dispatch] --> Validate[Read-only config and Git validation]
+    Validate --> Mutex{Repository mutex acquired?}
+    Mutex -- no --> Loser[Exit before tracker or runtime mutation]
+    Mutex -- yes --> Roots[Validate or create current Project runtime roots]
+    Roots --> Recovery[Recover exact current-Project actor claims]
+    Recovery --> Actual[Read fresh inventory and actual bd ready state]
+    Actual --> Admit[Ordinary guarded dispatch admission]
+    DryRun[Dry-run] --> Inspect[Read-only inspection and projection]
+    Inspect --> Report[Report without a mutex or recovery]
+```
 1. **Durable Events Journal Initialization**:
    - Nightweaver does not use fixed-interval polling. On startup for a **Project**, the **Orchestrator** ensures `bd`'s built-in durable events journal is enabled on the **Target Repository** (`bd config set events-journal true` / `BD_EVENTS_JOURNAL=1`), captures the current head sequence number, performs the startup crash sweep (Section 5.4), and runs an initial discovery pass (`bd ready` and paused-Bead activity check).
 2. **Reactive Scheduling Loop**:
@@ -255,6 +276,7 @@ stateDiagram-v2
 2. **Target Repository Root Invariant**:
    - The **Orchestrator** never checks out branches, mutates files, or executes **Agents** in the **Target Repository** root checkout. The root checkout is used solely for `git fetch origin`, `git worktree` management, and `bd` queries.
    - Because `bd` natively discovers the shared `.beads` database via the Git common directory, **Agents** execute standard `bd` commands directly inside their worktrees with zero path redirection.
+    - **Cross-Project Process Exclusion**: the mutex key comes from the local physical Git common directory, not a Project slug or host path. It is acquired before Beads inventory, applies across copied Nightweaver hosts, and remains held when recovery or dispatch fails. No persistent lock file or tracker-side lease is created.
 3. **Planning Worktrees (Detached `HEAD`)**:
    - Fresh worktrees are created at `<nightweaver-root>/worktrees/<project-slug>/<bead-id>` via:
      `git fetch origin <default_branch> && git worktree add --detach <path> origin/<default_branch>`
@@ -279,7 +301,7 @@ stateDiagram-v2
 | **Planning Completion (`planned`)** | Remove the detached worktree, prune its completed registration, delete the Bead temporary tree, and release the claim. |
 | **Planning or Delivery Pause (`product-decision-required` / `needs-human`)** | Retain the worktree, current HEAD, branch refs, tracked and untracked files, ignored caches, logs, and all Bead temporary files; record the diagnostic and release only the still-owned claim. |
 | **Delivery Completion (`closed`)** | Remove the local worktree (`git worktree remove --force <path>`), delete the local branch (`git branch -D nightweaver/<bead-id>`), ensure remote branch `origin/nightweaver/<bead-id>` is deleted, run `git worktree prune`, delete `<nightweaver-root>/tmp/<project-slug>/<bead-id>/`, and auto-close the parent `planned` **Product Bead** if all its `discovered-from` **Plan Beads** are now `closed`. |
-| **Orchestrator Startup (Crash Sweep)** | Release or reclaim stranded Orchestrator claims. Completed `closed` or `planned` environments may be removed according to their lifecycle. Pause-labeled environments and their temporary files are retained even when a completion label or status also applies. Uncertain or locally unusable environments are reported and excluded from projected eligibility; unrelated valid Beads remain eligible. |
+| **Orchestrator Startup (Crash Sweep)** | Under repository-wide process exclusion, release only exact current-Project actor-matching `in_progress` claims with status/assignee guards and fresh rereads; do not reclaim claims or reset stage, pause, or repair state. Required tracker failures and unusable shared runtime roots stop startup. Read actual current inventory and readiness after recovery before admission. Completed-environment cleanup is a separate conservative startup phase. |
 
 ---
 
@@ -388,7 +410,7 @@ Each **Project** configuration binds one **Target Repository** to the **Orchestr
 1. **CLI Invocation**:
    - `nightweaver --project <project-slug>` (loads `<nightweaver-root>/projects/<project-slug>.json`)
    - `nightweaver --config <path-to-project-json>`
-   - `--dry-run`: Runs the startup crash sweep inspection and initial discovery pass against the **Target Repository** and prints the actions that *would* be taken across the **Planning**, **Delivery**, and **Merger** pools without mutating `bd`, creating/removing worktrees, or launching **Agents**, then exits.
+   - `--dry-run`: Runs startup recovery inspection and initial discovery against the **Target Repository** and prints the actions that *would* be taken across the **Planning**, **Delivery**, and **Merger** pools without acquiring recovery authority, mutating `bd`, creating/removing worktrees, or launching **Agents**, then exits.
 2. **Two-Mode Shutdown**:
    - **Graceful Shutdown (Default — first `Ctrl+C` / `SIGINT` / stop signal)**:
      - Immediately stops claiming new Beads and stops advancing active Beads to subsequent stages in their pool loop.

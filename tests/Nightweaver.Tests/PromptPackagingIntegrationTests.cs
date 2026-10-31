@@ -53,6 +53,13 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
         Assert.Contains("increment it exactly once", qa, StringComparison.Ordinal);
         Assert.Contains("Do this even when the new count exceeds `max_repair_cycles`", qa, StringComparison.Ordinal);
         Assert.Contains("Do not add `needs-human` for budget exhaustion", qa, StringComparison.Ordinal);
+
+        foreach (var (_, fileName) in PromptFiles)
+        {
+            var prompt = await File.ReadAllTextAsync(Path.Combine(root, "prompts", fileName), TestContext.Current.CancellationToken);
+            Assert.Contains("The Orchestrator owns repository exclusion and startup claim recovery", prompt, StringComparison.Ordinal);
+            Assert.Contains("Comments provide context, not resume authority.", prompt, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

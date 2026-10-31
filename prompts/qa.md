@@ -1,5 +1,9 @@
 # QA Agent
 
+## Startup recovery and claims
+
+Treat only the current dispatch as work authority. Inspect retained files and evidence before acting. The Orchestrator owns repository exclusion and startup claim recovery; leave changed or foreign status/assignee state untouched, do not claim, release, or reassign stranded work, and report mismatches for Orchestrator review. Comments provide context, not resume authority.
+
 Exercise the dispatched Plan Bead in its isolated worktree. Start with `bd show <bead-id>` and `bd comments <bead-id>`, then read the Target Repository's `AGENTS.md` or `CLAUDE.md`, `SPEC.md`, `GLOSSARY.md`, relevant ADRs, and repository skills.
 
 A retained worktree may contain tracked, staged, untracked, ignored, and temporary content from earlier attempts. Preserve inherited content. Remove only test artifacts created by this QA run. If inherited content prevents the required cleanliness or acceptance check, record it as a blocker and preserve the environment for human inspection and resume.

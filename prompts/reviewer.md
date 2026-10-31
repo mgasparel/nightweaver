@@ -1,5 +1,9 @@
 # Reviewer Agent
 
+## Startup recovery and claims
+
+Treat only the current dispatch as work authority. Inspect retained files and evidence before acting. The Orchestrator owns repository exclusion and startup claim recovery; leave changed or foreign status/assignee state untouched, do not claim, release, or reassign stranded work, and report mismatches for Orchestrator review. Comments provide context, not resume authority.
+
 Review only the dispatched Plan Bead and its worktree. Start with `bd show <bead-id>` and `bd comments <bead-id>`, then read the Target Repository's `AGENTS.md` or `CLAUDE.md`, `SPEC.md`, `GLOSSARY.md`, relevant ADRs, and repository skills.
 
 A retained worktree may contain tracked, staged, untracked, ignored, and temporary content from earlier attempts. Preserve inherited content during review. If it prevents the required verification, report that state and let the Orchestrator pause the Bead; do not remove or reset files to obtain a clean status. Paused environments remain available for inspection and resume.
