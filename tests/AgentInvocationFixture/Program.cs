@@ -145,6 +145,14 @@ internal static class Program
             WriteResult(mutation);
             if (mutation.ExitCode != 0) return mutation.ExitCode;
         }
+        if (mode == "recovery-uncertain-foreign" && isRecoveryRelease)
+        {
+            var mutation = RunRealBd(realBd, ["--sandbox", "update", args[updateIndex + 1], "--assignee", "person@example.invalid"]);
+            WriteResult(mutation);
+            if (mutation.ExitCode != 0) return mutation.ExitCode;
+            Console.Error.WriteLine("fixture recovery write failed after a concurrent foreign claim");
+            return 74;
+        }
 
         var result = RunRealBd(realBd, args);
         WriteResult(result);

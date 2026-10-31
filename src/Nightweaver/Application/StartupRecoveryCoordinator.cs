@@ -33,12 +33,15 @@ internal sealed class StartupRecoveryCoordinator(BeadsReader reader, BeadsWriter
             }
 
             var observedInventory = await ReadForVerificationAsync(repository).ConfigureAwait(false);
-            if (!observedInventory.ById.TryGetValue(release.BeadId, out var observed))
+            if (writeFailure is not null)
             {
-                if (writeFailure is not null)
+                if (!observedInventory.ById.TryGetValue(release.BeadId, out var failedWriteObserved))
                     throw Unconfirmed(release.BeadId, writeFailure, "the Bead disappeared during recovery verification");
-                continue;
+                throw Unconfirmed(release.BeadId, writeFailure,
+                    $"the fresh state is status '{failedWriteObserved.Status}' and assignee '{failedWriteObserved.Assignee ?? "(none)"}'");
             }
+
+            if (!observedInventory.ById.TryGetValue(release.BeadId, out var observed)) continue;
 
             if (IsReleasedClaim(observed)) continue;
 
@@ -46,18 +49,14 @@ internal sealed class StartupRecoveryCoordinator(BeadsReader reader, BeadsWriter
             {
                 // Status and assignee are the complete guard. Any fresh state is authoritative;
                 // do not replay a stale transition even when it still resembles the old claim.
-                if (writeFailure is null) continue;
+                continue;
             }
 
             if (!IsExactOwnedClaim(observed, actor))
             {
                 // A concurrent actor or terminal/status transition won. Preserve that current state.
-                if (writeFailure is null || result == GuardedStrandedClaimReleaseResult.GuardMismatch) continue;
+                continue;
             }
-
-            if (writeFailure is not null)
-                throw Unconfirmed(release.BeadId, writeFailure,
-                    $"the fresh state remains status '{observed.Status}' and assignee '{observed.Assignee ?? "(none)"}'");
 
             throw new ToolExecutionException(
                 $"startup recovery for Bead '{release.BeadId}' returned success but the fresh state remains status '{observed.Status}' "

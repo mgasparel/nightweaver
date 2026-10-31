@@ -253,7 +253,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
             ["dispatch", writeFailureBead, "--project", "demo"], "review", "recovery-write-failure", writeFailureBead);
         Assert.Equal(1, writeFailure.ExitCode);
         Assert.Contains("fixture recovery write failure", writeFailure.StandardErrorText, StringComparison.Ordinal);
-        Assert.Contains("fresh state remains status 'in_progress'", writeFailure.StandardErrorText, StringComparison.Ordinal);
+        Assert.Contains("fresh state is status 'in_progress'", writeFailure.StandardErrorText, StringComparison.Ordinal);
         Assert.Equal("in_progress", ReadBead(target, writeFailureBead).Status);
         Assert.Equal("nightweaver:demo", ReadBead(target, writeFailureBead).Assignee);
         Assert.False(Directory.Exists(fixture.WorktreePath(writeFailureBead)));
@@ -321,16 +321,42 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         var shimLog = fixture.GateFile("uncertain recovery bd calls.jsonl");
         var uncertain = await fixture.RunAtAsync(fixture.Host, "demo",
             ["dispatch", requestedAfterUncertain, "--project", "demo"], "review", "recovery-uncertain-write", uncertainWrite, shimLog);
-        Assert.True(uncertain.ExitCode == 0,
-            $"Uncertain-write run failed (exit {uncertain.ExitCode}).\nstdout:\n{uncertain.StandardOutputText}\nstderr:\n{uncertain.StandardErrorText}");
+        Assert.Equal(1, uncertain.ExitCode);
+        Assert.Contains("uncertain write", uncertain.StandardErrorText, StringComparison.OrdinalIgnoreCase);
         var rereadReleased = ReadBead(target, uncertainWrite);
         Assert.Equal("open", rereadReleased.Status);
         Assert.Null(rereadReleased.Assignee);
+        var notAdmittedAfterUncertain = ReadBead(target, requestedAfterUncertain);
+        Assert.Equal("open", notAdmittedAfterUncertain.Status);
+        Assert.Null(notAdmittedAfterUncertain.Assignee);
+        Assert.False(Directory.Exists(fixture.WorktreePath(requestedAfterUncertain)));
         var recoveryCommandCount = File.ReadAllLines(shimLog)
             .Count(line => line.Contains(uncertainWrite, StringComparison.Ordinal)
                 && line.Contains("--if-status", StringComparison.Ordinal)
                 && line.Contains("in_progress", StringComparison.Ordinal));
         Assert.Equal(1, recoveryCommandCount);
+
+        var foreignAfterUncertain = target.Create("Foreign state observed after recovery write error",
+            "nightweaver:demo", "in_progress", "task");
+        var requestedAfterForeignError = target.Create("Admission must stop after foreign state write error");
+        var foreignShimLog = fixture.GateFile("foreign recovery bd calls.jsonl");
+        var foreignError = await fixture.RunAtAsync(fixture.Host, "demo",
+            ["dispatch", requestedAfterForeignError, "--project", "demo"], "review",
+            "recovery-uncertain-foreign", foreignAfterUncertain, foreignShimLog);
+        Assert.Equal(1, foreignError.ExitCode);
+        Assert.Contains("uncertain write", foreignError.StandardErrorText, StringComparison.OrdinalIgnoreCase);
+        var preservedForeign = ReadBead(target, foreignAfterUncertain);
+        Assert.Equal("in_progress", preservedForeign.Status);
+        Assert.Equal("person@example.invalid", preservedForeign.Assignee);
+        var notAdmittedAfterForeignError = ReadBead(target, requestedAfterForeignError);
+        Assert.Equal("open", notAdmittedAfterForeignError.Status);
+        Assert.Null(notAdmittedAfterForeignError.Assignee);
+        Assert.False(Directory.Exists(fixture.WorktreePath(requestedAfterForeignError)));
+        var foreignRecoveryCommandCount = File.ReadAllLines(foreignShimLog)
+            .Count(line => line.Contains(foreignAfterUncertain, StringComparison.Ordinal)
+                && line.Contains("--if-status", StringComparison.Ordinal)
+                && line.Contains("in_progress", StringComparison.Ordinal));
+        Assert.Equal(1, foreignRecoveryCommandCount);
     }
 
     private static void AssertSuccessfulHandoff(BeadsFixture target, string beadId, string expectedStage)
