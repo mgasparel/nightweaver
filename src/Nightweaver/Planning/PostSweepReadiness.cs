@@ -20,7 +20,13 @@ internal static class PostSweepReadinessProjector
                 || bead.Labels.Contains("product-decision-required", StringComparer.Ordinal))
             .Select(bead => bead.Id).ToFrozenSet(StringComparer.Ordinal);
         var blocked = startupPlan.Diagnostics
-            .Where(item => item.Code is StartupDiagnosticCode.UnsafeRuntimePath or StartupDiagnosticCode.UnusableRuntimePath)
+            .Where(item => item.Code is StartupDiagnosticCode.UnsafeRuntimePath
+                or StartupDiagnosticCode.UnusableRuntimePath
+                or StartupDiagnosticCode.UnregisteredWorktreeDirectory
+                or StartupDiagnosticCode.AmbiguousWorktreeIdentity
+                or StartupDiagnosticCode.LockedWorktree
+                or StartupDiagnosticCode.MissingRegisteredPath
+                or StartupDiagnosticCode.PrunableRegistration)
             .Select(item => item.BeadId).Where(id => id.Length > 0).ToFrozenSet(StringComparer.Ordinal);
         var sharedUnsafeRoot = startupPlan.Diagnostics.Any(item => item.BeadId.Length == 0
             && item.Code is StartupDiagnosticCode.UnsafeRuntimePath or StartupDiagnosticCode.UnusableRuntimePath);

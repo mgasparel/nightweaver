@@ -401,6 +401,55 @@ public sealed class AgentStageIntegrationTests : AgentStageIntegrationTestSuppor
     }
 
     [Fact]
+    public async Task PerBeadTemporaryReservationFailurePausesClaimAndAllowsUnrelatedBeadToProgress()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        var blockedBead = target.CreateBead("Blocked tmp reservation", "task", "stage:implement");
+        var unrelatedBead = target.CreateBead("Unrelated after tmp obstruction", "task", "stage:implement");
+        var tmpRoot = target.Host.TmpRoot(ProjectSlug.Parse("demo"));
+        Directory.CreateDirectory(tmpRoot);
+        var obstructionPath = Path.Combine(tmpRoot, blockedBead);
+        File.WriteAllText(obstructionPath, "preserve tmp obstruction");
+
+        var blocked = await target.RunRetryAgentAsync(blockedBead, AgentRole.Implementer, ["review"]);
+
+        Assert.Equal(OperationalRetryStatus.Escalated, blocked.Status);
+        Assert.Equal(NeedsHumanCause.EnvironmentBlocked, blocked.EscalationCause);
+        Assert.Equal(AgentOperationalFailureKind.EnvironmentBlocked, blocked.StageResult.Failure!.Kind);
+        Assert.Equal(0, blocked.AttemptCount);
+        Assert.Equal(0, target.LastRetryLifecycleCount);
+        Assert.Equal("preserve tmp obstruction", File.ReadAllText(obstructionPath));
+        var paused = target.ReadBead(blockedBead);
+        Assert.Equal("open", paused.Status);
+        Assert.Null(paused.Assignee);
+        Assert.Contains("needs-human", paused.Labels);
+        Assert.Equal("stage:implement", target.ReadState(blockedBead).Stage);
+        using (var comments = JsonDocument.Parse(target.ReadComments(blockedBead)))
+        {
+            var diagnosticText = StringValues(comments.RootElement)
+                .Single(value => value.Contains("nightweaver-needs-human-v1", StringComparison.Ordinal));
+            using var diagnostic = JsonDocument.Parse(diagnosticText);
+            var reason = diagnostic.RootElement.GetProperty("reason").GetString();
+            var findings = diagnostic.RootElement.GetProperty("latest_findings").GetString();
+            Assert.Contains(obstructionPath, reason, StringComparison.Ordinal);
+            Assert.Contains(obstructionPath, findings, StringComparison.Ordinal);
+            Assert.Contains("directory", reason, StringComparison.OrdinalIgnoreCase);
+        }
+        Assert.DoesNotContain(target.LastRetryRequests, request => request.FileName == "git"
+            && request.Arguments.Any(argument => argument is "remove" or "prune" or "-D" or "clean" or "reset"));
+
+        var unrelated = await target.RunRetryAgentAsync(unrelatedBead, AgentRole.Implementer, ["review"]);
+
+        Assert.True(unrelated.Succeeded, unrelated.StageResult.Failure?.Reason);
+        Assert.Equal(1, unrelated.AttemptCount);
+        Assert.Equal(1, target.LastRetryLifecycleCount);
+        Assert.Equal("stage:review", target.ReadState(unrelatedBead).Stage);
+        Assert.Equal("in_progress", target.ReadBead(unrelatedBead).Status);
+        Assert.Equal("preserve tmp obstruction", File.ReadAllText(obstructionPath));
+    }
+
+    [Fact]
     public async Task OperationalRetryRunsRealAgentJobAfterResettingTheSameClaimedWorktree()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
@@ -898,7 +947,7 @@ public abstract class AgentStageIntegrationTestSupport
                 return invocation;
             }
 
-            Task<AgentExecutionResult> Execute(HostPaths hostPaths, ProjectSlug projectSlug,
+            async Task<AgentExecutionResult> Execute(HostPaths hostPaths, ProjectSlug projectSlug,
                 PreparedAgentInvocation invocation, CancellationToken token)
             {
                 var index = Interlocked.Increment(ref actionIndex) - 1;
@@ -926,14 +975,22 @@ public abstract class AgentStageIntegrationTestSupport
                     Assert.Equal("old invocation", File.ReadAllText(System.IO.Path.Combine(hostPaths.TmpRoot(ProjectSlug.Parse("demo")), beadId,
                         "old", "sentinel.txt")));
                 }
-                return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
-                    CreateProcessLauncher(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-                    {
-                        ["BD_ACTOR"] = actor,
-                        ["NIGHTWEAVER_FIXTURE_ACTION"] = latestAction,
-                        ["NIGHTWEAVER_FIXTURE_PID_FILE"] = latestPidFile,
-                        ["NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION"] = null
-                    }), token);
+                try
+                {
+                    return await AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
+                        CreateProcessLauncher(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            ["BD_ACTOR"] = actor,
+                            ["NIGHTWEAVER_FIXTURE_ACTION"] = latestAction,
+                            ["NIGHTWEAVER_FIXTURE_PID_FILE"] = latestPidFile,
+                            ["NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION"] = null
+                        }), token);
+                }
+                catch (AgentInvocationExecutionException exception) when (exception.InnerException is BeadEnvironmentException)
+                {
+                    pidFiles.Remove(pidFile);
+                    throw;
+                }
             }
 
             var stageCoordinator = new AgentStageCoordinator(runner, prepare: Prepare, execute: Execute);

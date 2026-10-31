@@ -114,9 +114,10 @@ internal sealed class DeliverySlotCoordinator
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var inventory = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
-            var readiness = await reader.ReadReadinessAsync(repository, inventory, project.RecoveryActor, cancellationToken)
-                .ConfigureAwait(false);
+            var admissionSnapshot = await reader.ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor,
+                cancellationToken).ConfigureAwait(false);
+            var inventory = admissionSnapshot.Inventory;
+            var readiness = admissionSnapshot.Readiness;
             if (!inventory.ById.TryGetValue(beadId, out var candidate))
                 return Result(DeliverySlotDisposition.Refused, null, null, null, false,
                     $"Bead '{beadId}' was not found in the Target Repository tracker.");
@@ -138,9 +139,10 @@ internal sealed class DeliverySlotCoordinator
                 .ConfigureAwait(false);
             claimAcquired = true;
 
-            var claimedInventory = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
-            var claimedReadiness = await reader.ReadReadinessAsync(repository, claimedInventory, project.RecoveryActor,
+            var claimedSnapshot = await reader.ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor,
                 cancellationToken).ConfigureAwait(false);
+            var claimedInventory = claimedSnapshot.Inventory;
+            var claimedReadiness = claimedSnapshot.Readiness;
             if (!claimedInventory.ById.TryGetValue(beadId, out claimed))
                 return await RefuseAfterClaimAsync(project, repository, beadId, null,
                     "Bead disappeared after guarded claim acquisition.", null).ConfigureAwait(false);

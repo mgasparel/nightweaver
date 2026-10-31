@@ -108,6 +108,81 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
     }
 
     [Fact]
+    public async Task PublishedDryRunExcludesInvalidWorktreeIdentitiesAndPreservesReadySiblingAndState()
+    {
+        using var fixture = new StartupSweepFixture(published.PublishDirectory);
+        var target = fixture.Target;
+        var ids = ImportBeads(target,
+            new("Unregistered file worktree", "task", ["stage:implement"]),
+            new("Unregistered directory worktree", "task", ["stage:implement"]),
+            new("Locked registered worktree", "task", ["stage:implement"]),
+            new("Missing registered worktree", "task", ["stage:implement"]),
+            new("Ambiguous registered worktree", "task", ["stage:implement"]),
+            new("Valid sibling worktree", "task", ["stage:implement"]));
+        var fileId = ids[0];
+        var unregisteredDirectoryId = ids[1];
+        var lockedId = ids[2];
+        var missingId = ids[3];
+        var ambiguousId = ids[4];
+        var validId = ids[5];
+        foreach (var id in ids) target.Run("bd", ["comments", "add", id, "preserve dry-run fixture state"]);
+        WriteProjectConfig(fixture.Config, target.Path, "claude", maxActivePlanBeads: 50,
+            maxConcurrentPlanning: 2, maxConcurrentDelivery: 10);
+
+        var worktreesRoot = Path.Combine(fixture.Host, "worktrees", "demo");
+        var filePath = Path.Combine(worktreesRoot, fileId);
+        File.WriteAllText(filePath, "unregistered worktree file sentinel");
+        var unregisteredDirectoryPath = Path.Combine(worktreesRoot, unregisteredDirectoryId);
+        Directory.CreateDirectory(unregisteredDirectoryPath);
+        File.WriteAllText(Path.Combine(unregisteredDirectoryPath, "sentinel.txt"), "unregistered directory sentinel");
+
+        var lockedPath = Path.Combine(worktreesRoot, lockedId);
+        target.Run("git", ["worktree", "add", "--detach", lockedPath, "HEAD"]);
+        target.Run("git", ["worktree", "lock", "--reason", "preserve invalid readiness fixture", lockedPath]);
+
+        var missingPath = Path.Combine(worktreesRoot, missingId);
+        target.Run("git", ["worktree", "add", "--detach", missingPath, "HEAD"]);
+        Directory.Delete(missingPath, recursive: true);
+
+        var ambiguousPath = Path.Combine(worktreesRoot, ambiguousId);
+        target.Run("git", ["worktree", "add", "--detach", ambiguousPath, "HEAD"]);
+        var temporaryRenamePath = ambiguousPath + ".case-rename";
+        var differentlyCasedPath = Path.Combine(worktreesRoot, ambiguousId.ToUpperInvariant());
+        Directory.Move(ambiguousPath, temporaryRenamePath);
+        Directory.Move(temporaryRenamePath, differentlyCasedPath);
+
+        var tmpRoot = Path.Combine(fixture.Host, "tmp", "demo");
+        foreach (var id in ids)
+        {
+            var invocation = Path.Combine(tmpRoot, id, "old");
+            Directory.CreateDirectory(invocation);
+            File.WriteAllText(Path.Combine(invocation, "sentinel.txt"), $"preserve tmp for {id}");
+        }
+
+        var commentIds = ids;
+        var baseline = CaptureState(fixture, published, commentIds);
+        var environment = published.EnvironmentWithAgentTraps(target.Environment);
+        var result = await RunApphostAsync(fixture, published, environment, ["--project", "demo", "--dry-run"]);
+        var report = result.StandardOutputText;
+
+        Assert.Contains("unusable_runtime_path", report, StringComparison.Ordinal);
+        Assert.Contains(JsonSerializer.Serialize(filePath), report, StringComparison.Ordinal);
+        Assert.Contains("unregistered_worktree_directory", report, StringComparison.Ordinal);
+        Assert.Contains(JsonSerializer.Serialize(unregisteredDirectoryPath), report, StringComparison.Ordinal);
+        Assert.Contains("locked_worktree", report, StringComparison.Ordinal);
+        Assert.Contains("missing_registered_path", report, StringComparison.Ordinal);
+        Assert.Contains("prunable_registration", report, StringComparison.Ordinal);
+        Assert.Contains("ambiguous_worktree_identity", report, StringComparison.Ordinal);
+        foreach (var blockedId in ids.Take(5))
+            Assert.DoesNotContain($"{JsonSerializer.Serialize(blockedId)}; role=", report, StringComparison.Ordinal);
+        Assert.Contains($"{JsonSerializer.Serialize(validId)}; role=implementer", report, StringComparison.Ordinal);
+        Assert.Equal("preserve tmp for " + fileId, File.ReadAllText(Path.Combine(tmpRoot, fileId, "old", "sentinel.txt")));
+        Assert.Equal("preserve tmp for " + unregisteredDirectoryId,
+            File.ReadAllText(Path.Combine(tmpRoot, unregisteredDirectoryId, "old", "sentinel.txt")));
+        AssertStateUnchanged(baseline, CaptureState(fixture, published, commentIds));
+    }
+
+    [Fact]
     public async Task PublishedApphostReportsEveryCandidatePastTheDefaultPageLimitForBothSelectors()
     {
         using var fixture = new StartupSweepFixture(published.PublishDirectory);

@@ -136,13 +136,22 @@ internal sealed class OperationalRetryCoordinator
         catch (BeadEnvironmentException exception)
         {
             return await EscalateProvisionFailureAsync(paths, project, repository, beadId, role, expectedAssignee,
-                expectedState, exception, cancellationToken).ConfigureAwait(false);
+                expectedState, 0, exception, cancellationToken).ConfigureAwait(false);
         }
         var attemptCount = 1L;
         var beforeState = session.InitialState;
         var beforeHead = session.Worktree.HeadSha;
         progress?.Invoke(new(OperationalRetryProgressKind.AttemptStarted, attemptCount, maximumAttempts));
-        var latest = await stages.RunAttemptAsync(session, beforeState, beforeHead, cancellationToken).ConfigureAwait(false);
+        AgentStageResult latest;
+        try
+        {
+            latest = await stages.RunAttemptAsync(session, beforeState, beforeHead, cancellationToken).ConfigureAwait(false);
+        }
+        catch (AgentInvocationExecutionException exception) when (exception.InnerException is BeadEnvironmentException environmentException)
+        {
+            return await EscalateProvisionFailureAsync(paths, project, repository, beadId, role, expectedAssignee,
+                session.InitialState, 0, environmentException, cancellationToken).ConfigureAwait(false);
+        }
         if (latest.Succeeded)
             return Success(latest, attemptCount);
 
@@ -234,7 +243,15 @@ internal sealed class OperationalRetryCoordinator
             progress?.Invoke(new(OperationalRetryProgressKind.AttemptStarted, attemptCount, maximumAttempts,
                 previous.Failure!.Kind, previous.Failure.Reason, InvocationId: previous.InvocationId,
                 LogFilePath: previous.LogFilePath));
-            latest = await stages.RunAttemptAsync(session, beforeState, beforeHead, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                latest = await stages.RunAttemptAsync(session, beforeState, beforeHead, cancellationToken).ConfigureAwait(false);
+            }
+            catch (AgentInvocationExecutionException exception) when (exception.InnerException is BeadEnvironmentException environmentException)
+            {
+                return await EscalateProvisionFailureAsync(paths, project, repository, beadId, role, expectedAssignee,
+                    session.InitialState, attemptCount - 1, environmentException, cancellationToken).ConfigureAwait(false);
+            }
             if (latest.Succeeded)
                 return new(OperationalRetryStatus.Succeeded, latest, attemptCount, null, null, lastClassification);
         }
@@ -282,6 +299,7 @@ internal sealed class OperationalRetryCoordinator
         AgentRole role,
         string expectedAssignee,
         BeadWorkflowState? expectedState,
+        long attemptCount,
         BeadEnvironmentException exception,
         CancellationToken cancellationToken)
     {
@@ -308,20 +326,20 @@ internal sealed class OperationalRetryCoordinator
         }
         catch (NeedsHumanEscalationException escalationException)
         {
-            var incomplete = new OperationalRetryOutcome(OperationalRetryStatus.Escalated, synthetic, 0,
+            var incomplete = new OperationalRetryOutcome(OperationalRetryStatus.Escalated, synthetic, attemptCount,
                 NeedsHumanCause.EnvironmentBlocked, escalationException.Progress, null);
             throw new OperationalRetryEscalationIncompleteException(escalationException.Message, incomplete,
                 escalationException);
         }
         if (!progress.Succeeded)
         {
-            var incomplete = new OperationalRetryOutcome(OperationalRetryStatus.Escalated, synthetic, 0,
+            var incomplete = new OperationalRetryOutcome(OperationalRetryStatus.Escalated, synthetic, attemptCount,
                 NeedsHumanCause.EnvironmentBlocked, progress, null);
             throw new OperationalRetryEscalationIncompleteException(
                 $"Needs-human escalation for unusable environment '{exception.Path}' was incomplete: {string.Join("; ", progress.Failures)}",
                 incomplete);
         }
-        return new OperationalRetryOutcome(OperationalRetryStatus.Escalated, synthetic, 0,
+        return new OperationalRetryOutcome(OperationalRetryStatus.Escalated, synthetic, attemptCount,
             NeedsHumanCause.EnvironmentBlocked, progress, null);
     }
 

@@ -77,6 +77,8 @@ internal static class StartupPlanner
         foreach (var disk in worktrees.Entries)
         {
             if (disk.State == DirectoryState.UnsafeLink) Diagnostic(disk.Id, StartupDiagnosticCode.UnsafeRuntimePath, disk.Path);
+            if (disk.State == DirectoryState.Unusable)
+                Diagnostic(disk.Id, StartupDiagnosticCode.UnusableRuntimePath, disk.Path, disk.FailureReason);
             if (disk.AmbiguousIdentity)
             {
                 Diagnostic(disk.Id, StartupDiagnosticCode.AmbiguousWorktreeIdentity, disk.Path);

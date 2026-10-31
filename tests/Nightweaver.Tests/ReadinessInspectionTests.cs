@@ -42,6 +42,25 @@ public sealed class ReadinessInspectionTests
         Assert.DoesNotContain("native", readiness.RecoverableOwnedReady);
     }
 
+    [Fact]
+    public async Task SnapshotReadinessRefreshesTheEntirePairOnceAfterConcurrentStateChange()
+    {
+        var stale = Row("candidate", "open", "task", null, ["stage:implement"]);
+        var current = Row("candidate", "in_progress", "task", Actor, ["stage:implement"]);
+        var outputs = new Queue<string>([$"[{stale}]", $"[{stale}]", $"[{current}]", $"[{current}]", "[]", $"[{current}]"]);
+        var runner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(0, outputs.Dequeue(), "")));
+
+        var snapshot = await new BeadsReader(runner).ReadSnapshotWithReadinessAsync(
+            new("target", "main"), Actor, CancellationToken.None);
+
+        Assert.Equal("in_progress", snapshot.Inventory.ById["candidate"].Status);
+        Assert.Equal(Actor, snapshot.Inventory.ById["candidate"].Assignee);
+        Assert.Empty(snapshot.Readiness.NativeUnassignedReady);
+        Assert.Equal(["candidate"], snapshot.Readiness.RecoverableOwnedReady);
+        Assert.Equal(6, runner.Requests.Count);
+        Assert.Equal(2, runner.Requests.Count(request => request.Arguments.Contains("--all")));
+    }
+
     [Theory]
     [InlineData("unknown")]
     [InlineData("status")]
@@ -66,7 +85,7 @@ public sealed class ReadinessInspectionTests
         };
         var runner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(0, $"[{response}]", "")));
 
-        var exception = await Assert.ThrowsAsync<ToolExecutionException>(() =>
+        var exception = await Assert.ThrowsAnyAsync<ToolExecutionException>(() =>
             new BeadsReader(runner).ReadReadinessAsync(new("target" , "main"), inventory, Actor, CancellationToken.None));
 
         Assert.Contains(mismatch == "unknown" ? "absent from the complete inventory" : "readiness", exception.Message, StringComparison.Ordinal);
@@ -87,6 +106,42 @@ public sealed class ReadinessInspectionTests
         Assert.Contains("--assignee nightweaver:demo", exception.Message, StringComparison.Ordinal);
         Assert.Contains("query failed", exception.StandardError, StringComparison.Ordinal);
         Assert.Equal(2, runner.Requests.Count);
+    }
+
+    [Theory]
+    [InlineData("inventory-tool", 1)]
+    [InlineData("inventory-json", 1)]
+    [InlineData("native-json", 2)]
+    [InlineData("recoverable-tool", 3)]
+    public async Task SnapshotRefreshDoesNotRetryMalformedOrUnavailableTrackerReads(string failure, int expectedCalls)
+    {
+        var row = Row("candidate", "open", "task", null, ["stage:implement"]);
+        var current = Row("candidate", "in_progress", "task", Actor, ["stage:implement"]);
+        var runner = new RecordingProcessRunner((request, _) =>
+        {
+            if (request.Arguments.Contains("--all"))
+            {
+                return Task.FromResult(failure switch
+                {
+                    "inventory-tool" => new ProcessResult(2, "", "inventory unavailable"),
+                    "inventory-json" => new ProcessResult(0, "not-json", ""),
+                    _ => new ProcessResult(0, $"[{row}]", "")
+                });
+            }
+            if (request.Arguments.Contains("--unassigned"))
+                return Task.FromResult(failure == "native-json"
+                    ? new ProcessResult(0, "not-json", "")
+                    : new ProcessResult(0, $"[{row}]", ""));
+            return Task.FromResult(failure == "recoverable-tool"
+                ? new ProcessResult(2, "", "readiness unavailable")
+                : new ProcessResult(0, $"[{current}]", ""));
+        });
+
+        var exception = await Assert.ThrowsAnyAsync<ToolExecutionException>(() =>
+            new BeadsReader(runner).ReadSnapshotWithReadinessAsync(new("target", "main"), Actor, CancellationToken.None));
+
+        Assert.IsNotType<BeadsReadinessSnapshotMismatchException>(exception);
+        Assert.Equal(expectedCalls, runner.Requests.Count);
     }
 
     private static string Row(string id, string status, string type, string? assignee, string[] labels,

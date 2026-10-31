@@ -9,6 +9,39 @@ namespace Nightweaver.Tests;
 public sealed class DeliveryPoolCoordinatorTests
 {
     [Fact]
+    public async Task RepeatedReadinessSnapshotMismatchFailsBeforeDeliverySelectionOrLaunch()
+    {
+        const string actor = "nightweaver:pool-tests";
+        var stale = Row("candidate", status: "open", labels: ["stage:implement"]);
+        var current = Row("candidate", status: "in_progress", assignee: actor, labels: ["stage:implement"]);
+        var outputs = new Queue<ProcessResult>([
+            new(0, $"[{stale}]", ""), new(0, $"[{stale}]", ""), new(0, $"[{current}]", ""),
+            new(0, $"[{stale}]", ""), new(0, $"[{stale}]", ""), new(0, $"[{current}]", "")
+        ]);
+        var runner = new RecordingProcessRunner((_, _) => Task.FromResult(outputs.Dequeue()));
+        var repository = new ValidatedTargetRepository(
+            Path.GetFullPath(Path.Combine(Path.GetTempPath(), "delivery-pool-target")), "main");
+        var reader = new BeadsReader(runner);
+        var launches = 0;
+        var pool = CreatePool(1, async () =>
+        {
+            var snapshot = await reader.ReadSnapshotWithReadinessAsync(repository, actor, CancellationToken.None);
+            return new DeliveryPoolSnapshot(snapshot.Inventory, snapshot.Readiness);
+        }, (_, _, _, _, _, _) =>
+        {
+            Interlocked.Increment(ref launches);
+            return Task.FromResult(SlotOutcome(DeliverySlotDisposition.StoppedAtUnsupportedOutcome));
+        });
+
+        await Assert.ThrowsAsync<BeadsReadinessSnapshotMismatchException>(() =>
+            pool.EvaluateAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(6, runner.Requests.Count);
+        Assert.Equal(0, launches);
+        Assert.Empty(pool.ActiveReservations);
+    }
+
+    [Fact]
     public async Task EvaluateUsesFreshNativeReadinessAndRanksOnlyValidDeliveryCandidates()
     {
         var rows = new[]

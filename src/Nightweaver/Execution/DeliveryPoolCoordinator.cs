@@ -137,9 +137,8 @@ internal sealed class DeliveryPoolCoordinator
             var reader = new BeadsReader(processRunner);
             this.readSnapshot = async (target, actor, cancellationToken) =>
             {
-                var inventory = await reader.ReadSnapshotAsync(target, cancellationToken).ConfigureAwait(false);
-                var readiness = await reader.ReadReadinessAsync(target, inventory, actor, cancellationToken).ConfigureAwait(false);
-                return new DeliveryPoolSnapshot(inventory, readiness);
+                var snapshot = await reader.ReadSnapshotWithReadinessAsync(target, actor, cancellationToken).ConfigureAwait(false);
+                return new DeliveryPoolSnapshot(snapshot.Inventory, snapshot.Readiness);
             };
         }
         else

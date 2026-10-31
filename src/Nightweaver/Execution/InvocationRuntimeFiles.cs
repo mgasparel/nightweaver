@@ -56,8 +56,11 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         try
         {
             files.PinDirectoryChain(invocation.WorkingDirectory, createMissing: false, exclusiveLeaf: false);
-            files.PinDirectoryChain(Path.GetDirectoryName(invocation.TemporaryDirectory)!, createMissing: true, exclusiveLeaf: false);
-            files.PinDirectoryChain(invocation.TemporaryDirectory, createMissing: true, exclusiveLeaf: true);
+            var beadTemporaryDirectory = Path.GetDirectoryName(invocation.TemporaryDirectory)!;
+            var projectTemporaryDirectory = Path.GetDirectoryName(beadTemporaryDirectory)!;
+            files.PinDirectoryChain(projectTemporaryDirectory, createMissing: true, exclusiveLeaf: false);
+            files.PinBeadTemporaryDirectory(beadTemporaryDirectory, exclusiveLeaf: false);
+            files.PinBeadTemporaryDirectory(invocation.TemporaryDirectory, exclusiveLeaf: true);
             files.PinDirectoryChain(Path.GetDirectoryName(invocation.LogFilePath)!, createMissing: true, exclusiveLeaf: false);
 
             var logHandle = CreateFileW(
@@ -305,6 +308,18 @@ internal sealed class InvocationRuntimeFiles : IDisposable
             }
 
             PinExistingDirectory(current);
+        }
+    }
+
+    private void PinBeadTemporaryDirectory(string path, bool exclusiveLeaf)
+    {
+        try
+        {
+            PinDirectoryChain(path, createMissing: true, exclusiveLeaf);
+        }
+        catch (Exception exception) when (exception is InvalidDataException || exception is IOException || exception is UnauthorizedAccessException)
+        {
+            throw new BeadEnvironmentException(path, exception.Message);
         }
     }
 

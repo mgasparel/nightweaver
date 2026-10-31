@@ -5,6 +5,29 @@ namespace Nightweaver.Inspection;
 
 internal sealed class BeadsReader(IProcessRunner processRunner)
 {
+    internal async Task<(BeadsInventory Inventory, BeadsReadiness Readiness)> ReadSnapshotWithReadinessAsync(
+        ValidatedTargetRepository repository,
+        string recoveryActor,
+        CancellationToken cancellationToken)
+    {
+        var inventory = await ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var readiness = await ReadReadinessAsync(repository, inventory, recoveryActor, cancellationToken)
+                .ConfigureAwait(false);
+            return (inventory, readiness);
+        }
+        catch (BeadsReadinessSnapshotMismatchException)
+        {
+            // Inventory and readiness are independent tracker reads. A concurrent claim or stage
+            // transition can make only this pair stale; refresh the entire pair once, then fail closed.
+            var refreshedInventory = await ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
+            var refreshedReadiness = await ReadReadinessAsync(repository, refreshedInventory, recoveryActor,
+                cancellationToken).ConfigureAwait(false);
+            return (refreshedInventory, refreshedReadiness);
+        }
+    }
+
     internal async Task<BeadsInventory> ReadSnapshotAsync(ValidatedTargetRepository repository, CancellationToken cancellationToken)
     {
         var context = $"bd --readonly --sandbox list inventory in Target Repository '{repository.Path}'";
@@ -191,11 +214,13 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
             {
                 var path = $"readiness row '{bead.Id}'";
                 if (!inventory.ById.TryGetValue(bead.Id, out var authoritative))
-                    throw new JsonException($"{path}: ID is absent from the complete inventory");
+                    throw new BeadsReadinessSnapshotMismatchException(
+                        $"{context}: {path}: ID is absent from the complete inventory snapshot");
                 if (bead.Status != authoritative.Status || bead.IssueType != authoritative.IssueType || bead.Assignee != authoritative.Assignee ||
                     bead.Priority != authoritative.Priority || bead.CreatedAt != authoritative.CreatedAt ||
                     !PolicyLabels(bead.Labels).SetEquals(PolicyLabels(authoritative.Labels)))
-                    throw new JsonException($"{path}: readiness fields disagree with the complete inventory");
+                    throw new BeadsReadinessSnapshotMismatchException(
+                        $"{context}: {path}: readiness fields disagree with the complete inventory snapshot");
                 if (!queryPredicate(bead))
                     throw new JsonException($"{path}: row does not match the requested readiness query");
                 if (!ids.Add(bead.Id)) throw new JsonException($"{path}: duplicate ID '{bead.Id}'");
@@ -386,3 +411,5 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
     }
 
 }
+
+internal sealed class BeadsReadinessSnapshotMismatchException(string message) : ToolExecutionException(message);
