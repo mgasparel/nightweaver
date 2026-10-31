@@ -18,8 +18,38 @@ try
         await RunAsync("bd", repository, userHome, cancellationToken, "init", "--prefix", "qa", "--non-interactive", "--skip-agents", "--skip-hooks");
         await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "QA fixture control", "--type", "task");
         await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "Active QA task", "--type", "task", "--status", "in_progress");
-        await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "QA product decision", "--type", "feature", "--labels", "product-decision-required");
-        await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "QA needs human", "--type", "task", "--labels", "needs-human");
+        var decisionId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA product decision", "feature", "product-decision-required");
+        await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", decisionId, "Prior cycle: the implementation can keep the current route.");
+        await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", decisionId, "Which option should we choose now? Keep the existing API contract.");
+        var secondDecisionId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA second decision", "feature", "product-decision-required");
+        await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", secondDecisionId, "Which option should this second fixture choose?");
+
+        var needsHumanId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA needs human", "task", "needs-human", "stage:qa");
+        await RunAsync("bd", repository, userHome, cancellationToken, "update", needsHumanId, "--set-metadata", "repair_cycles=2");
+        await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", needsHumanId,
+            NeedsHumanDiagnostic(needsHumanId, "task", "qa", "stage:qa", "Verification needs a human choice."));
+
+        var abortId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA abort action", "task", "needs-human", "stage:review");
+        await RunAsync("bd", repository, userHome, cancellationToken, "update", abortId, "--set-metadata", "repair_cycles=1");
+        await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", abortId,
+            NeedsHumanDiagnostic(abortId, "task", "reviewer", "stage:review", "Review cannot continue without an explicit decision."));
+
+        var markdownId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA workspace markdown", "feature");
+        var longCode = new string('x', 600);
+        var markdown = string.Join("\n\n", "# Long workspace fixture",
+            "This specification checks **Markdown** rendering, tables, code and links.",
+            $"```text\n{longCode}\n```",
+            "| Column | Value |\n| --- | --- |\n| Safe | wrapped |",
+            "[Relative file](notes.txt) [Root file](/notes.txt) [Protocol-relative](//example.invalid/file) [Unsafe](javascript:alert(1)) [Data](data:text/html,hello) [Allowed](https://example.com/reference) [Current comment](#workspace-comment-0)",
+            "<script>window.__workspaceInjected = true</script><img src=\"https://example.invalid/remote.png\" onerror=\"window.__workspaceInjected = true\">",
+            "![remote image](https://example.invalid/markdown-image.png)");
+        await RunAsync("bd", repository, userHome, cancellationToken, "update", markdownId,
+            "--description", markdown,
+            "--design", "## Design source\n\nKeep this text exact.",
+            "--acceptance", "- [ ] Acceptance remains readable as text.",
+            "--notes", "Workspace fixture note.");
+        await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", markdownId,
+            "Comment anchor for the sanitizer fixture. <script>window.__workspaceInjected = true</script><img src=\"https://example.invalid/comment.png\" onerror=\"window.__workspaceInjected = true\">");
         await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "Blocked QA task", "--type", "task", "--status", "blocked");
     });
     builder.AddProject<Projects.Nightweaver_Web>("web")
@@ -68,7 +98,38 @@ finally
     }
 }
 
-static async Task RunAsync(string executable, string repository, string userHome, CancellationToken cancellationToken, params string[] arguments)
+static async Task<string> CreateBeadAsync(string repository, string userHome, CancellationToken cancellationToken,
+    string title, string type, params string[] labels)
+{
+    var arguments = new List<string> { "create", "--title", title, "--type", type, "--json" };
+    if (labels.Length > 0)
+    {
+        arguments.Add("--labels");
+        arguments.Add(string.Join(',', labels));
+    }
+    using var document = JsonDocument.Parse(await RunAsync("bd", repository, userHome, cancellationToken, arguments.ToArray()));
+    return document.RootElement.GetProperty("id").GetString()
+        ?? throw new InvalidOperationException("The QA Bead fixture has no ID.");
+}
+
+static string NeedsHumanDiagnostic(string beadId, string beadType, string failedRole, string stage, string reason)
+    => JsonSerializer.Serialize(new
+    {
+        schema = "nightweaver-needs-human-v1",
+        bead_id = beadId,
+        bead_type = beadType,
+        cause = "operational-retries-exhausted",
+        failed_role = failedRole,
+        reason,
+        latest_findings = "The isolated browser fixture needs a human decision.",
+        cleanup_preflight = "",
+        stage,
+        invocation_id = "qa-fixture",
+        log_directory = "logs/qa-fixture",
+        log_files = Array.Empty<string>()
+    });
+
+static async Task<string> RunAsync(string executable, string repository, string userHome, CancellationToken cancellationToken, params string[] arguments)
 {
     var start = new ProcessStartInfo(executable)
     {
@@ -104,6 +165,7 @@ static async Task RunAsync(string executable, string repository, string userHome
         var error = await stderr;
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"{executable} failed (exit {process.ExitCode}): {error} {output}");
+        return output;
     }
     catch (OperationCanceledException)
     {

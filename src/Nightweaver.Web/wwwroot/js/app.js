@@ -840,13 +840,18 @@ function markdownSafeFragment(source) {
       anchor.dataset.workspaceAnchor = "true";
       continue;
     }
+    if (!/^https?:\/\//i.test(href)) {
+      unwrapElement(anchor);
+      continue;
+    }
     let url;
-    try { url = new URL(href, document.baseURI); }
+    try { url = new URL(href); }
     catch {
       unwrapElement(anchor);
       continue;
     }
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
+    if ((url.protocol !== "http:" && url.protocol !== "https:")
+      || !url.hostname || url.username || url.password) {
       unwrapElement(anchor);
       continue;
     }
@@ -955,6 +960,7 @@ function renderWorkspaceComment(comment, index, activeCommentId) {
   const article = document.createElement("article");
   article.className = `workspace-comment${comment.id === activeCommentId ? " workspace-comment-active" : ""}`;
   article.id = `workspace-comment-${index}`;
+  article.tabIndex = -1;
   article.dataset.commentKind = comment.kind;
   const heading = document.createElement("div");
   heading.className = "workspace-comment-heading";
@@ -1181,8 +1187,8 @@ function renderWorkspace(data) {
   workspaceId.textContent = data.bead.id;
   workspaceTitle.textContent = data.bead.title;
   renderWorkspaceMeta(data.bead);
-  renderWorkspaceSpecifications(data.bead);
   renderWorkspaceHistory(data);
+  renderWorkspaceSpecifications(data.bead);
   renderWorkspaceEnvironment(data.environment);
   renderWorkspaceRelations(data.relations);
   workspaceGuidanceInput.value = attentionDrafts.get(data.bead.id) ?? "";
@@ -1193,6 +1199,7 @@ function renderWorkspace(data) {
 function showWorkspaceLoading(id, message = "Loading Bead workspace…") {
   workspaceId.textContent = id;
   workspaceTitle.textContent = "Loading workspace…";
+  workspaceMeta.replaceChildren();
   workspaceStatus.textContent = message;
   workspaceError.hidden = true;
   workspaceStale.hidden = true;

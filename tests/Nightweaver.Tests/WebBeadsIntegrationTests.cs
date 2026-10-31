@@ -85,7 +85,7 @@ public sealed class WebBeadsIntegrationTests
         var nativeReadyJson = target.Run("bd", ["--readonly", "--sandbox", "ready", "--limit", "0", "--json"]);
         var nativeBlockedJson = target.Run("bd", ["--readonly", "--sandbox", "blocked", "--json"]);
         var commentJson = target.Run("bd", ["--readonly", "--sandbox", "comments", htmlLooking, "--json"]);
-        var targetTreeBefore = Snapshot.FileTree(target.Path);
+        var targetTreeBefore = Snapshot.FileTree(target.Path, allowReadOnlyBdLastTouchedTimestamp: true);
         var foreignTreeBefore = Snapshot.FileTree(foreign.Path);
         var targetGitBefore = Snapshot.GitStatus(target.Path);
         var foreignGitBefore = Snapshot.GitStatus(foreign.Path);
@@ -115,6 +115,14 @@ public sealed class WebBeadsIntegrationTests
         Assert.True(all.Rows.Length > 50);
         Assert.Contains(all.Rows, row => row.GetProperty("id").GetString() == beyondDefaultLimit);
         Assert.DoesNotContain(all.Rows, row => row.GetProperty("id").GetString() == foreignBead);
+
+        using (var workspaceResponse = await client.GetAsync($"/api/beads/{Uri.EscapeDataString(beyondDefaultLimit)}", TestContext.Current.CancellationToken))
+        using (var workspaceDocument = JsonDocument.Parse(await workspaceResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)))
+        {
+            Assert.Equal(HttpStatusCode.OK, workspaceResponse.StatusCode);
+            Assert.Equal(beyondDefaultLimit, workspaceDocument.RootElement.GetProperty("bead").GetProperty("id").GetString());
+            Assert.Equal("Inventory beyond default limit", workspaceDocument.RootElement.GetProperty("bead").GetProperty("title").GetString());
+        }
 
         foreach (var row in all.Rows)
         {
@@ -204,7 +212,7 @@ public sealed class WebBeadsIntegrationTests
         var noMatches = await GetRowsAsync(client, "/api/beads?view=closed&q=ordinary");
         Assert.Empty(noMatches.Rows);
 
-        Assert.Equal(targetTreeBefore, Snapshot.FileTree(target.Path));
+        Assert.Equal(targetTreeBefore, Snapshot.FileTree(target.Path, allowReadOnlyBdLastTouchedTimestamp: true));
         Assert.Equal(foreignTreeBefore, Snapshot.FileTree(foreign.Path));
         Assert.Equal(targetGitBefore, Snapshot.GitStatus(target.Path));
         Assert.Equal(foreignGitBefore, Snapshot.GitStatus(foreign.Path));
