@@ -48,9 +48,20 @@ internal static class DispatchApplication
         var project = ProjectConfigLoader.Load(configPath, expectedName, hostPaths);
         var repository = await new TargetRepositoryValidator(processRunner)
             .ValidateAsync(project.TargetRepository, project.ConfigFilePath, cancellationToken).ConfigureAwait(false);
+
+        // The process-owned OS mutex precedes tracker recovery and every dispatch mutation.
+        // Its dedicated owner thread remains alive until this native process exits.
+        ProcessLifetimeTargetRepositoryLock.Acquire(repository);
+        SharedRuntimeRootValidator.EnsureUsable(hostPaths.WorktreesRoot(project.Name));
+        SharedRuntimeRootValidator.EnsureUsable(hostPaths.TmpRoot(project.Name));
+        SharedRuntimeRootValidator.EnsureUsable(hostPaths.LogsRoot(project.Name));
+
         var beadsReader = new BeadsReader(processRunner);
-        var inventory = await beadsReader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
-        var readiness = await beadsReader.ReadReadinessAsync(repository, inventory, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
+        var beadsWriter = new BeadsWriter(processRunner);
+        await new StartupRecoveryCoordinator(beadsReader, beadsWriter)
+            .RecoverAsync(repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
+        var (inventory, readiness) = await beadsReader
+            .ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
 
         if (!inventory.ById.TryGetValue(beadId, out var bead))
             return Fail(environment, $"Bead '{beadId}' was not found in Target Repository '{repository.Path}'.");
@@ -78,7 +89,7 @@ internal static class DispatchApplication
         if (!readiness.NativeUnassignedReady.Contains(beadId))
             return Fail(environment, $"Bead '{beadId}' is not in bd's native unassigned ready set; it may be blocked or deferred.");
 
-        var writer = new BeadsWriter(processRunner);
+        var writer = beadsWriter;
         var claimWriteStarted = false;
         try
         {

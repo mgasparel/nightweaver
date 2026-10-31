@@ -15,6 +15,9 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "bd", StringComparison.OrdinalIgnoreCase))
+            return RunBdShim(args);
+
         var classifierAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION");
         if (classifierAction is not null) return RunClassifierAction(classifierAction);
         var stageAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION");
@@ -95,6 +98,103 @@ internal static class Program
                 return 66;
         }
     }
+
+    private static int RunBdShim(string[] args)
+    {
+        var realBd = Environment.GetEnvironmentVariable("NIGHTWEAVER_BD_REAL_PATH")
+            ?? throw new InvalidOperationException("The native bd shim real executable path is missing.");
+        var mode = Environment.GetEnvironmentVariable("NIGHTWEAVER_BD_SHIM_MODE");
+        var targetId = Environment.GetEnvironmentVariable("NIGHTWEAVER_BD_SHIM_TARGET");
+        var logPath = Environment.GetEnvironmentVariable("NIGHTWEAVER_BD_SHIM_LOG");
+        if (!string.IsNullOrWhiteSpace(logPath))
+        {
+            File.AppendAllText(logPath, JsonSerializer.Serialize(new { args, mode }) + Environment.NewLine, new UTF8Encoding(false));
+        }
+
+        var updateIndex = Array.FindIndex(args, argument => argument == "update");
+        var isRecoveryRelease = updateIndex >= 0 && updateIndex + 1 < args.Length
+            && (targetId is null || args[updateIndex + 1] == targetId)
+            && HasOptionValue(args, "--if-status", "in_progress")
+            && HasOptionValue(args, "--status", "open");
+
+        if (mode == "read-failure" && args.Contains("list", StringComparer.Ordinal))
+        {
+            Console.Error.WriteLine("fixture tracker read failure");
+            return 71;
+        }
+        if (mode == "recovery-write-failure" && isRecoveryRelease)
+        {
+            Console.Error.WriteLine("fixture recovery write failure");
+            return 72;
+        }
+        if (mode == "recovery-guard-mismatch" && isRecoveryRelease)
+        {
+            var mutation = RunRealBd(realBd, ["--sandbox", "update", args[updateIndex + 1], "--status", "closed", "--force"]);
+            WriteResult(mutation);
+            if (mutation.ExitCode != 0) return mutation.ExitCode;
+        }
+        if (mode == "recovery-assignee-mismatch" && isRecoveryRelease)
+        {
+            var mutation = RunRealBd(realBd, ["--sandbox", "update", args[updateIndex + 1], "--assignee", "person@example.invalid"]);
+            WriteResult(mutation);
+            if (mutation.ExitCode != 0) return mutation.ExitCode;
+        }
+        if (mode == "recovery-label-race" && isRecoveryRelease)
+        {
+            var mutation = RunRealBd(realBd, ["--sandbox", "update", args[updateIndex + 1], "--add-label", "needs-human"]);
+            WriteResult(mutation);
+            if (mutation.ExitCode != 0) return mutation.ExitCode;
+        }
+        if (mode == "recovery-uncertain-foreign" && isRecoveryRelease)
+        {
+            var mutation = RunRealBd(realBd, ["--sandbox", "update", args[updateIndex + 1], "--assignee", "person@example.invalid"]);
+            WriteResult(mutation);
+            if (mutation.ExitCode != 0) return mutation.ExitCode;
+            Console.Error.WriteLine("fixture recovery write failed after a concurrent foreign claim");
+            return 74;
+        }
+
+        var result = RunRealBd(realBd, args);
+        WriteResult(result);
+        if (mode == "recovery-uncertain-write" && isRecoveryRelease && result.ExitCode == 0) return 73;
+        return result.ExitCode;
+    }
+
+    private static bool HasOptionValue(string[] args, string option, string value)
+    {
+        for (var index = 0; index + 1 < args.Length; index++)
+            if (args[index] == option && args[index + 1] == value) return true;
+        return false;
+    }
+
+    private static FixtureProcessResult RunRealBd(string executable, string[] args)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executable,
+            WorkingDirectory = Environment.CurrentDirectory,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var argument in args) startInfo.ArgumentList.Add(argument);
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start the real bd executable.");
+        process.StandardInput.Close();
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return new(process.ExitCode, stdout, stderr);
+    }
+
+    private static void WriteResult(FixtureProcessResult result)
+    {
+        Console.Out.Write(result.StandardOutput);
+        Console.Error.Write(result.StandardError);
+    }
+
+    private sealed record FixtureProcessResult(int ExitCode, string StandardOutput, string StandardError);
 
     private static int RunClassifierAction(string action)
     {

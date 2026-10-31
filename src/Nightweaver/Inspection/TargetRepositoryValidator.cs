@@ -83,7 +83,10 @@ internal sealed class TargetRepositoryValidator(IProcessRunner processRunner)
                 $"Target Repository has no initialized bd tracker ({detail}). Run 'bd init' in the Target Repository; Nightweaver never initializes trackers: {path}");
         }
 
-        return new ValidatedTargetRepository(path, targetRepository.DefaultBranch);
+        return new ValidatedTargetRepository(path, targetRepository.DefaultBranch)
+        {
+            GitCommonDirectory = commonDirectory
+        };
     }
 
     private static string[] SplitLinesPreservingEmpty(string value)

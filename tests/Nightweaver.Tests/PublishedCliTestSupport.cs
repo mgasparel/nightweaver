@@ -148,6 +148,26 @@ public sealed class PublishedCliArtifactFixture : IDisposable
 
 internal static class ProcessTool
 {
+    internal static RunningProcess Start(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
+        IReadOnlyDictionary<string, string?>? environment)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        if (environment is not null)
+            foreach (var (key, value) in environment) startInfo.Environment[key] = value;
+
+        var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {fileName}");
+        return new RunningProcess(process);
+    }
+
     internal static async Task<RawProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
         IReadOnlyDictionary<string, string?>? environment, TimeSpan timeout)
     {
@@ -185,5 +205,78 @@ internal static class ProcessTool
         await Task.WhenAll(stdoutTask, stderrTask);
         if (timedOut) throw new TimeoutException($"Process '{fileName}' exceeded its {timeout} timeout");
         return new(process.ExitCode, standardOutput.ToArray(), standardError.ToArray());
+    }
+}
+
+internal sealed class RunningProcess : IDisposable
+{
+    private readonly Process process;
+    private readonly Task<string> standardOutput;
+    private readonly Task<string> standardError;
+    private bool disposed;
+
+    internal RunningProcess(Process process)
+    {
+        this.process = process;
+        standardOutput = process.StandardOutput.ReadToEndAsync();
+        standardError = process.StandardError.ReadToEndAsync();
+    }
+
+    internal int Id => process.Id;
+    internal bool HasExited => process.HasExited;
+
+    internal async Task WaitForFileAsync(string path, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (File.Exists(path)) return;
+            if (process.HasExited)
+            {
+                var result = await WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+                throw new InvalidOperationException($"Process exited before '{path}' appeared (exit {result.ExitCode}): {result.StandardErrorText}");
+            }
+            await Task.Delay(50).ConfigureAwait(false);
+        }
+        throw new TimeoutException($"Process {process.Id} did not create '{path}' within {timeout}");
+    }
+
+    internal async Task<RawProcessResult> WaitAsync(TimeSpan timeout)
+    {
+        using var cancellation = new CancellationTokenSource(timeout);
+        var timedOut = false;
+        try
+        {
+            await process.WaitForExitAsync(cancellation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            timedOut = true;
+            KillTree();
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        await Task.WhenAll(standardOutput, standardError).ConfigureAwait(false);
+        if (timedOut) throw new TimeoutException($"Process {process.Id} exceeded its {timeout} timeout");
+        return new(process.ExitCode, Encoding.UTF8.GetBytes(await standardOutput.ConfigureAwait(false)),
+            Encoding.UTF8.GetBytes(await standardError.ConfigureAwait(false)));
+    }
+
+    internal void KillTree()
+    {
+        if (!process.HasExited)
+        {
+            try { process.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) { }
+        }
+    }
+
+    public void Dispose()
+    {
+        if (disposed) return;
+        disposed = true;
+        KillTree();
+        try { process.WaitForExit(5000); }
+        catch (InvalidOperationException) { }
+        process.Dispose();
     }
 }

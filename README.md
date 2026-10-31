@@ -124,7 +124,7 @@ After a confirmed 201, the console clears its saved form draft, switches the Exp
 
 ## Single-stage dispatch
 
-`dispatch` validates the Project and Target Repository, reads the complete Beads inventory and bd's native unassigned-ready set, acquires one guarded claim, then invokes the operational retry coordinator for exactly one lifecycle stage. It does not start a scheduler or automatically choose the next role. Run one Nightweaver process at a time for a Project.
+`dispatch` validates the Project and Target Repository, then acquires an OS-managed process-lifetime lock keyed to the Target Repository's Git common-directory identity. The lock is shared across Project names and Nightweaver host roots and lives outside the Target Repository. A competing process exits before Beads inventory/readiness queries, recovery, dispatch, or runtime-directory changes; process exit or death releases the lock. Under the lock, dispatch validates the current Project's shared worktree, temporary, and log roots, releases only exact `in_progress` claims assigned to that Project's recovery actor with guarded status/assignee updates, and rereads uncertain writes rather than replaying them. It then reads current inventory and bd's actual unassigned-ready set, acquires one guarded claim, and invokes the operational retry coordinator for exactly one lifecycle stage. `--dry-run` remains read-only and acquires no recovery authority. Dispatch does not start a scheduler or automatically choose the next role.
 
 ```text
 nightweaver dispatch <bead-id> [--role <role>] (--project <project-slug> | --config <path-to-project-json>)
@@ -209,9 +209,9 @@ These role settings are reported by `--dry-run` and used when `dispatch` launche
 
 ## Dry-run report and safety
 
-`--dry-run` validates the Project and Target Repository, reads the complete Beads inventory and readiness, inspects the Git worktree registry and Project runtime directories, then prints a deterministic hypothetical startup snapshot. It performs no cleanup or claim changes and launches no Agent processes. It still needs no Agent CLI, origin, network, or `gh`.
+`--dry-run` validates the Project and Target Repository, reads the complete Beads inventory and readiness, inspects the Git worktree registry and Project runtime directories, then prints a deterministic hypothetical startup snapshot. It does not acquire the Target Repository lock, perform claim recovery, create runtime directories, or launch Agent processes. It still needs no Agent CLI, origin, network, or `gh`.
 
-- **Startup claim releases** list owned stranded `in_progress` Beads that a startup recovery would release. The tracker is unchanged.
+- **Startup claim releases** list exact current-Project actor-matching stranded `in_progress` Beads that live dispatch recovery would release. The tracker is unchanged.
 - **Worktree removals** and **orphan tmp deletions** describe hypothetical completed-environment cleanup. Pause-labeled environments and their associated tmp are retained, including when `planned` or `closed` also applies. Linked, locked, external, missing, or uncertain paths are preserved or reported conservatively.
 - **Retained worktrees** identify checkouts that the startup sweep would keep.
 - Paused and locally unsafe or unusable environments are excluded from projected selection; diagnostics identify the affected path while unrelated valid Beads remain eligible. This projection does not perform an escalation or write tracker state.

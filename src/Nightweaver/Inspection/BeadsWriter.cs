@@ -9,6 +9,8 @@ internal sealed record ProductBeadIntakeSubmission(string Type, int Priority, st
 internal sealed record ProductBeadCreateResult(string Id, string Title, string Type, int Priority,
     string Status, IReadOnlyList<string> Labels, string? Assignee);
 
+internal enum GuardedStrandedClaimReleaseResult { Released, GuardMismatch }
+
 internal sealed class ProductBeadCreationException(string message, Exception innerException)
     : Exception(message, innerException);
 
@@ -91,6 +93,33 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
         return RunAsync(repository, arguments,
             $"release dispatch claim for Bead '{beadId}' as '{actor}' guarded by its observed {expectedStatus} state",
             cancellationToken, actor);
+    }
+
+    internal async Task<GuardedStrandedClaimReleaseResult> ReleaseStrandedClaimAsync(
+        ValidatedTargetRepository repository, string beadId, string actor, CancellationToken cancellationToken)
+    {
+        try
+        {
+            BeadsReader.EnsureMutationFreeBackend(repository);
+            var result = await processRunner.RunAsync(BeadsCommand.CreateWrite(repository.Path,
+                ["update", beadId, "--status", "open", "--assignee", string.Empty,
+                    "--if-status", "in_progress", "--if-assignee", actor, "--json"], actor), cancellationToken)
+                .ConfigureAwait(false);
+            if (result.ExitCode == 13) return GuardedStrandedClaimReleaseResult.GuardMismatch;
+            if (result.ExitCode != 0)
+                throw new ToolExecutionException(
+                    $"guarded startup recovery for Bead '{beadId}' as '{actor}' in Target Repository '{repository.Path}' failed: bd exited {result.ExitCode}"
+                    + (string.IsNullOrWhiteSpace(result.StandardError) ? string.Empty : $": {result.StandardError.TrimEnd()}"),
+                    result.StandardError);
+            return GuardedStrandedClaimReleaseResult.Released;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (ToolExecutionException exception)
+        {
+            throw new ToolExecutionException(
+                $"guarded startup recovery for Bead '{beadId}' as '{actor}' in Target Repository '{repository.Path}' failed: {exception.Message}",
+                exception.StandardError);
+        }
     }
 
     internal Task ApplyNeedsHumanAsync(ValidatedTargetRepository repository, string beadId, string expectedAssignee, string expectedStatus,
