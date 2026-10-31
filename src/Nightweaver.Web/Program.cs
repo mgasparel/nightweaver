@@ -68,6 +68,9 @@ public sealed class Program
         builder.Services.AddSingleton<TargetRepositoryValidator>();
         builder.Services.AddSingleton<BeadsReader>();
         builder.Services.AddSingleton<BeadsWriter>();
+        builder.Services.AddSingleton<GitWorktreeReader>();
+        builder.Services.AddSingleton<IBeadWorkspaceRuntimeObserver, UnavailableBeadWorkspaceRuntimeObserver>();
+        builder.Services.AddSingleton<BeadWorkspaceEnvironmentObserver>();
         builder.Services.AddSingleton<TrackerBridge>();
         builder.Services.AddSingleton<LocalMutationRequestPolicy>();
 
@@ -106,6 +109,31 @@ public sealed class Program
             }
             catch (Exception exception) when (exception is ToolExecutionException or TargetRepositoryException
                 or ProjectConfigurationException or JsonException or IOException or UnauthorizedAccessException)
+            {
+                LogBeadsExplorerFailure(logger, exception);
+                var (title, detail) = GetSafeFailure(exception);
+                return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: title, detail: detail);
+            }
+        });
+        app.MapGet("/api/beads/{id}", async (HttpContext context, string id, TrackerBridge tracker, ILogger<Program> logger) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (context.Request.Query.Count != 0)
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Bead workspace query", detail: "Query parameters are not supported.");
+            try
+            {
+                return Results.Ok(await tracker.ReadWorkspaceAsync(id, context.RequestAborted));
+            }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (BeadWorkspaceException exception)
+            {
+                return Results.Problem(statusCode: exception.StatusCode, title: exception.Title, detail: exception.Detail);
+            }
+            catch (Exception exception) when (IsExpectedTrackerFailure(exception))
             {
                 LogBeadsExplorerFailure(logger, exception);
                 var (title, detail) = GetSafeFailure(exception);

@@ -43,6 +43,10 @@ internal static class AttentionDeskProjector
 
     internal static AttentionDeskItem Project(BeadSnapshot bead, IReadOnlyList<BeadsCommentSnapshot> comments,
         int maxRepairCycles)
+        => ProjectWithSelection(bead, comments, maxRepairCycles).Item;
+
+    internal static AttentionDeskProjection ProjectWithSelection(BeadSnapshot bead, IReadOnlyList<BeadsCommentSnapshot> comments,
+        int maxRepairCycles)
     {
         var productDecision = bead.Labels.Contains(ProductDecisionLabel, StringComparer.Ordinal);
         var needsHuman = bead.Labels.Contains(NeedsHumanLabel, StringComparer.Ordinal);
@@ -90,7 +94,7 @@ internal static class AttentionDeskProjector
         var canAbort = canRetry;
         var projected = BeadExplorerItem.FromSnapshot(bead);
 
-        return new AttentionDeskItem(
+        var item = new AttentionDeskItem(
             projected.Id,
             projected.Title,
             projected.Type,
@@ -111,6 +115,44 @@ internal static class AttentionDeskProjector
             canAbort,
             unavailableReason,
             selectedPauseComment?.Author);
+
+        var selectionSource = selectedPauseComment is null
+            ? "none"
+            : productDecision && !needsHuman ? "legacy-context"
+            : needsHuman && !productDecision ? "structured"
+            : "none";
+        return new AttentionDeskProjection(item, selectedPauseComment?.Id, selectionSource);
+    }
+
+    internal static BeadWorkspaceCommentClassification ClassifyComment(BeadsCommentSnapshot comment, BeadSnapshot bead)
+    {
+        var diagnostic = TryReadNeedsHumanDiagnostic(comment, bead);
+        if (diagnostic is not null)
+            return new("diagnostic", diagnostic.FailedRole,
+                diagnostic.Stage == "(none)" ? null : diagnostic.Stage);
+        if (TryReadCleanupFailure(comment) is not null)
+            return new("cleanup-warning", null, null);
+
+        try
+        {
+            using var document = JsonDocument.Parse(comment.Text);
+            if (document.RootElement.ValueKind != JsonValueKind.Object) return new("ordinary", null, null);
+            var fields = ReadUniqueProperties(document.RootElement);
+            if (!ReadString(fields, "schema", out var schema) || !ReadString(fields, "actor", out var actor)
+                || actor != "local-console" || !ReadString(fields, "action", out var action))
+                return new("ordinary", null, null);
+            if (schema == "nightweaver-human-guidance-v1"
+                && (action is "resume" or "note_only")
+                && ReadString(fields, "instruction", out _))
+                return new("human-guidance", null, null);
+            if (schema == "nightweaver-human-action-v1" && (action is "retry" or "abort"))
+                return new("human-action", null, null);
+        }
+        catch (JsonException)
+        {
+            // Unknown or malformed comments remain available as exact plain text.
+        }
+        return new("ordinary", null, null);
     }
 
     internal static bool IsPaused(BeadSnapshot bead)
@@ -263,7 +305,7 @@ internal static class AttentionDeskProjector
                 if (string.IsNullOrWhiteSpace(logFile)) return null;
                 logs.Add(logFile);
             }
-            return new(cause, failedRole, reason, latestFindings, cleanupPreflight, logs);
+            return new(cause, stage, failedRole, reason, latestFindings, cleanupPreflight, logs);
         }
         catch (JsonException)
         {
@@ -406,6 +448,9 @@ internal static class AttentionDeskProjector
     }
 
     private sealed record AttentionWorkflow(string? Stage, int? RepairCycles, string? InvalidReason);
-    private sealed record NeedsHumanDiagnostic(string Cause, string FailedRole, string Reason, string LatestFindings,
+    private sealed record NeedsHumanDiagnostic(string Cause, string Stage, string FailedRole, string Reason, string LatestFindings,
         string CleanupPreflight, IReadOnlyList<string> LogFiles);
 }
+
+internal sealed record AttentionDeskProjection(AttentionDeskItem Item, string? ActiveCommentId, string SelectionSource);
+internal sealed record BeadWorkspaceCommentClassification(string Kind, string? Role, string? Stage);

@@ -38,6 +38,7 @@ internal sealed record BeadExplorerItem(
 // The shared gate serializes embedded-Dolt reads and writes within this host.
 internal sealed class TrackerBridge(
     ProjectConfig project,
+    BeadWorkspaceEnvironmentObserver environmentObserver,
     TargetRepositoryValidator targetRepositoryValidator,
     BeadsReader beadsReader,
     BeadsWriter beadsWriter) : IDisposable
@@ -102,6 +103,43 @@ internal sealed class TrackerBridge(
                 .ThenBy(item => item.PausedAt)
                 .ThenBy(item => item.BeadId, StringComparer.Ordinal)
                 .ToArray();
+        }
+        finally
+        {
+            operationGate.Release();
+        }
+    }
+
+    internal async Task<BeadWorkspaceResponse> ReadWorkspaceAsync(string beadId, CancellationToken cancellationToken)
+    {
+        if (!BeadIdSafety.IsSafe(beadId))
+            throw new BeadWorkspaceException(400, "Invalid Bead ID", "The Bead ID is not a safe exact tracker ID.");
+
+        await operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            var target = await targetRepositoryValidator.ValidateAsync(
+                project.TargetRepository, project.ConfigFilePath, cancellationToken);
+            var inventory = await beadsReader.ReadSnapshotAsync(target, cancellationToken);
+            if (!inventory.ById.TryGetValue(beadId, out var initial))
+                throw new BeadWorkspaceException(404, "Bead not found", "No exact Bead ID matched the configured target inventory.");
+
+            var initialIdentity = AttentionMutationIdentity.Capture(initial);
+            var detail = await beadsReader.ReadDetailAsync(target, beadId, cancellationToken);
+            if (!initialIdentity.SameObservedIdentity(AttentionMutationIdentity.Capture(detail)))
+                throw new BeadWorkspaceException(409, "Bead changed", "The Bead workflow changed while its workspace was being read. Refresh and try again.");
+
+            var comments = await beadsReader.ReadDetailCommentsAsync(target, beadId, cancellationToken);
+            var finalInventory = await beadsReader.ReadSnapshotAsync(target, cancellationToken);
+            if (!finalInventory.ById.TryGetValue(beadId, out var final)
+                || !initialIdentity.SameObservedIdentity(AttentionMutationIdentity.Capture(final)))
+                throw new BeadWorkspaceException(409, "Bead changed", "The Bead disappeared or its workflow changed while its workspace was being read. Refresh and try again.");
+
+            var attention = AttentionDeskProjector.IsPaused(detail) && !AttentionDeskProjector.IsTerminal(detail)
+                ? AttentionDeskProjector.ProjectWithSelection(detail, comments, project.Limits.MaxRepairCycles)
+                : null;
+            var environment = await environmentObserver.ObserveAsync(target, beadId, cancellationToken);
+            return BeadWorkspaceProjector.Project(detail, comments, attention, environment);
         }
         finally
         {

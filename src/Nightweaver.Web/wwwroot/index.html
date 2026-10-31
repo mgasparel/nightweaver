@@ -6,6 +6,8 @@
   <meta name="color-scheme" content="dark">
   <title>Nightweaver | Factory Console</title>
   <link rel="stylesheet" href="/css/site.css">
+  <script src="/vendor/markdown-it.min.js" defer></script>
+  <script src="/vendor/purify.min.js" defer></script>
   <script src="/js/app.js" defer></script>
 </head>
 <body>
@@ -93,6 +95,7 @@
   </dialog>
 
   <main class="page-shell" id="main-content" tabindex="-1">
+    <div id="console-deck">
     <div class="page-intro">
       <p class="eyebrow">Factory console</p>
       <h1>Nightweaver console</h1>
@@ -213,6 +216,66 @@
       </div>
     </section>
 
+    </div>
+    <section id="bead-workspace" class="bead-workspace" aria-labelledby="workspace-title" hidden>
+      <div class="workspace-toolbar">
+        <a class="workspace-back" href="#main-content">Back to Console</a>
+        <button class="secondary-action" id="workspace-refresh" type="button">Refresh</button>
+      </div>
+      <p id="workspace-status" class="workspace-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p>
+      <div id="workspace-error" class="workspace-error" role="alert" hidden></div>
+      <p id="workspace-stale" class="workspace-stale" role="status" hidden>This is the last confirmed snapshot. Refresh before taking an action.</p>
+      <header class="workspace-heading">
+        <div>
+          <p id="workspace-id" class="eyebrow"></p>
+          <h1 id="workspace-title" tabindex="-1"></h1>
+          <div id="workspace-meta" class="workspace-meta"></div>
+        </div>
+      </header>
+      <div class="workspace-layout">
+        <div class="workspace-reading-column">
+          <section class="workspace-section" aria-labelledby="workspace-specification-title">
+            <h2 id="workspace-specification-title">Specification</h2>
+            <div id="workspace-specs" class="workspace-specs"></div>
+          </section>
+          <section class="workspace-section" aria-labelledby="workspace-history-title">
+            <div class="workspace-section-heading">
+              <div><p class="eyebrow">Chronological comments</p><h2 id="workspace-history-title">History</h2></div>
+              <div class="history-controls">
+                <button id="workspace-expand-history" class="secondary-action" type="button">Expand All</button>
+                <button id="workspace-collapse-history" class="secondary-action" type="button">Collapse Older</button>
+              </div>
+            </div>
+            <div id="workspace-history" class="workspace-history"></div>
+          </section>
+          <section id="workspace-guidance" class="workspace-section workspace-guidance" aria-labelledby="workspace-guidance-title">
+            <p class="eyebrow">Human decision</p>
+            <h2 id="workspace-guidance-title">Guidance Studio</h2>
+            <div id="workspace-guidance-context" class="workspace-guidance-context"></div>
+            <label for="workspace-guidance-input">Guidance</label>
+            <textarea id="workspace-guidance-input" rows="9" maxlength="16384" placeholder="Write a decision, constraint, or acceptance detail…" aria-describedby="workspace-guidance-help"></textarea>
+            <span id="workspace-guidance-help" class="field-help">Outer whitespace is trimmed; maximum 16 KiB of UTF-8 text.</span>
+            <div class="workspace-template-chips" aria-label="Insert a guidance template">
+              <button class="secondary-action" type="button" data-guidance-template="Decision: ">Decision</button>
+              <button class="secondary-action" type="button" data-guidance-template="Constraints: ">Constraints</button>
+              <button class="secondary-action" type="button" data-guidance-template="Acceptance: ">Acceptance</button>
+            </div>
+            <div id="workspace-guidance-actions" class="workspace-guidance-actions"></div>
+            <p id="workspace-action-message" class="workspace-action-message" role="status" aria-live="polite" tabindex="-1" hidden></p>
+          </section>
+        </div>
+        <aside class="workspace-sidebar" aria-label="Bead context">
+          <section class="workspace-sidebar-card" aria-labelledby="workspace-environment-title">
+            <p class="eyebrow">Execution context</p><h2 id="workspace-environment-title">Environment</h2>
+            <dl id="workspace-environment" class="workspace-environment"></dl>
+          </section>
+          <section class="workspace-sidebar-card" aria-labelledby="workspace-relations-title">
+            <p class="eyebrow">Tracker links</p><h2 id="workspace-relations-title">Relations</h2>
+            <div id="workspace-relations" class="workspace-relations"></div>
+          </section>
+        </aside>
+      </div>
+    </section>
   </main>
 
   <footer class="site-footer">

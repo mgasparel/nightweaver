@@ -24,6 +24,29 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         }
     }
 
+    internal async Task<BeadSnapshot> ReadDetailAsync(ValidatedTargetRepository repository, string beadId,
+        CancellationToken cancellationToken)
+    {
+        var context = $"bd --readonly --sandbox show '{beadId}' --json in Target Repository '{repository.Path}'";
+        var json = await RunQueryAsync(repository, BeadsCommand.CreateShow(repository.Path, beadId), context, cancellationToken);
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() != 1)
+                throw new JsonException("$: expected exactly one issue row");
+
+            var inventory = Parse(json);
+            if (inventory.ById.Count != 1 || !inventory.ById.TryGetValue(beadId, out var bead)
+                || !string.Equals(bead.Id, beadId, StringComparison.Ordinal))
+                throw new JsonException("$: show returned a different Bead ID");
+            return bead;
+        }
+        catch (JsonException exception)
+        {
+            throw new ToolExecutionException($"{context}: incompatible or malformed bd JSON: {exception.Message}");
+        }
+    }
+
     internal async Task<BeadsReadiness> ReadReadinessAsync(ValidatedTargetRepository repository, BeadsInventory inventory,
         string recoveryActor, CancellationToken cancellationToken)
     {
@@ -55,7 +78,7 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
             throw new ToolExecutionException($"{context}: comment output exceeded the 2 MiB read limit");
         try
         {
-            return ParseAttentionComments(json, beadId);
+            return ParseAttentionComments(json, beadId, rejectCrossBeadRows: false);
         }
         catch (JsonException exception)
         {
@@ -63,7 +86,24 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         }
     }
 
-    private static BeadsCommentSnapshot[] ParseAttentionComments(string json, string beadId)
+    internal async Task<IReadOnlyList<BeadsCommentSnapshot>> ReadDetailCommentsAsync(ValidatedTargetRepository repository,
+        string beadId, CancellationToken cancellationToken)
+    {
+        var context = $"bd --readonly --sandbox comments '{beadId}' --json in Target Repository '{repository.Path}'";
+        var json = await RunQueryAsync(repository, BeadsCommand.CreateComments(repository.Path, beadId), context, cancellationToken);
+        if (Encoding.UTF8.GetByteCount(json) > MaxCommentsJsonBytes)
+            throw new ToolExecutionException($"{context}: comment output exceeded the 2 MiB read limit");
+        try
+        {
+            return ParseAttentionComments(json, beadId, rejectCrossBeadRows: true);
+        }
+        catch (JsonException exception)
+        {
+            throw new ToolExecutionException($"{context}: incompatible or malformed bd comment JSON: {exception.Message}");
+        }
+    }
+
+    private static BeadsCommentSnapshot[] ParseAttentionComments(string json, string beadId, bool rejectCrossBeadRows)
     {
         using var document = JsonDocument.Parse(json);
         if (document.RootElement.ValueKind != JsonValueKind.Array)
@@ -109,10 +149,14 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
                 throw new JsonException($"{path}.created_at: expected an ISO timestamp");
             if (!ids.Add(id)) throw new JsonException($"{path}.id: duplicate comment ID");
 
-            // bd is authoritative for this query. Ignore any cross-bead row rather than
-            // allowing it to supply a pause timestamp or guidance for this Bead.
-            if (string.Equals(issueId, beadId, StringComparison.Ordinal))
-                comments.Add(new BeadsCommentSnapshot(id, issueId, author, text, createdAt.ToUniversalTime()));
+            // Attention preserves its established behavior of ignoring cross-Bead rows.
+            // Full detail fails closed instead of silently returning incomplete history.
+            if (!string.Equals(issueId, beadId, StringComparison.Ordinal))
+            {
+                if (rejectCrossBeadRows) throw new JsonException($"{path}.issue_id: comment does not belong to Bead '{beadId}'");
+                continue;
+            }
+            comments.Add(new BeadsCommentSnapshot(id, issueId, author, text, createdAt.ToUniversalTime()));
         }
 
         return comments.OrderBy(comment => comment.CreatedAt).ThenBy(comment => comment.Id, StringComparer.Ordinal).ToArray();
