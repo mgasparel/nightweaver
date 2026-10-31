@@ -48,6 +48,16 @@ internal static class RuntimeDirectoryReader
         return snapshot with { Entries = entries };
     }
 
+    internal static RuntimeDirectorySnapshot MarkInvalidCheckoutIdentities(RuntimeDirectorySnapshot snapshot,
+        IReadOnlyDictionary<string, string> failuresByPath)
+    {
+        if (snapshot.State != DirectoryState.Present || failuresByPath.Count == 0) return snapshot;
+        var entries = snapshot.Entries.Select(entry => failuresByPath.TryGetValue(entry.Path, out var reason)
+            ? entry with { State = DirectoryState.Unusable, FailureReason = reason }
+            : entry).ToList().AsReadOnly();
+        return snapshot with { Entries = entries };
+    }
+
     internal static RuntimeDirectoryEntry InspectNestedTree(string path) =>
         InspectNestedTree(new RuntimeDirectoryEntry(Path.GetFileName(RuntimePaths.Normalize(path)),
             RuntimePaths.Normalize(path), DirectoryState.Present));

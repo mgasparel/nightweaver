@@ -230,6 +230,12 @@ internal sealed class StartupEnvironmentCleaner(BeadsReader reader, BeadsWriter 
         try { WorktreeProvisioner.ValidateNestedTree(candidate.Path); }
         catch (ToolExecutionException exception) { return exception.Message; }
 
+        return await ValidateCheckoutIdentityAsync(processRunner, repository, candidate, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task<string?> ValidateCheckoutIdentityAsync(IProcessRunner processRunner,
+        ValidatedTargetRepository repository, RemoveWorktree candidate, CancellationToken cancellationToken)
+    {
         string topLevel;
         string gitDirectory;
         string commonDirectory;
@@ -237,13 +243,16 @@ internal sealed class StartupEnvironmentCleaner(BeadsReader reader, BeadsWriter 
         string head;
         try
         {
-            topLevel = await ReadGitValueAsync(candidate.Path, ["rev-parse", "--show-toplevel"], cancellationToken).ConfigureAwait(false);
-            gitDirectory = RuntimePaths.Normalize(await ReadGitValueAsync(candidate.Path,
+            topLevel = await ReadGitValueAsync(processRunner, candidate.Path,
+                ["rev-parse", "--show-toplevel"], cancellationToken).ConfigureAwait(false);
+            gitDirectory = RuntimePaths.Normalize(await ReadGitValueAsync(processRunner, candidate.Path,
                 ["rev-parse", "--path-format=absolute", "--git-dir"], cancellationToken).ConfigureAwait(false));
-            commonDirectory = RuntimePaths.Normalize(await ReadGitValueAsync(candidate.Path,
+            commonDirectory = RuntimePaths.Normalize(await ReadGitValueAsync(processRunner, candidate.Path,
                 ["rev-parse", "--path-format=absolute", "--git-common-dir"], cancellationToken).ConfigureAwait(false));
-            branch = await ReadGitValueAsync(candidate.Path, ["rev-parse", "--abbrev-ref", "HEAD"], cancellationToken).ConfigureAwait(false);
-            head = await ReadGitValueAsync(candidate.Path, ["rev-parse", "HEAD"], cancellationToken).ConfigureAwait(false);
+            branch = await ReadGitValueAsync(processRunner, candidate.Path,
+                ["rev-parse", "--abbrev-ref", "HEAD"], cancellationToken).ConfigureAwait(false);
+            head = await ReadGitValueAsync(processRunner, candidate.Path,
+                ["rev-parse", "HEAD"], cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { throw; }
         catch (ToolExecutionException exception) { return exception.Message; }
@@ -261,7 +270,8 @@ internal sealed class StartupEnvironmentCleaner(BeadsReader reader, BeadsWriter 
         return null;
     }
 
-    private async Task<string> ReadGitValueAsync(string workingDirectory, IReadOnlyList<string> arguments,
+    private static async Task<string> ReadGitValueAsync(IProcessRunner processRunner, string workingDirectory,
+        IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
     {
         var result = await processRunner.RunAsync(GitCommand.Create(arguments, workingDirectory), cancellationToken).ConfigureAwait(false);

@@ -58,17 +58,26 @@ public sealed class WorktreeIntegrationTests
         var externalBefore = Snapshot.FileTree(fixture.External);
         var runner = new RecordingProcessRunner((request, token) =>
         {
-            Assert.Equal(request.Arguments[0] == "check-ref-format" ? Path.GetTempPath() : target.Path, request.WorkingDirectory);
             if (request.FileName == "bd")
+            {
+                Assert.Equal(target.Path, request.WorkingDirectory);
                 Assert.True(request.Arguments.SequenceEqual(inventoryArgs)
                     || request.Arguments.SequenceEqual(BeadsCommand.CreateUnassignedReadiness(target.Path).Arguments)
                     || request.Arguments.SequenceEqual(BeadsCommand.CreateRecoverableReadiness(target.Path, "nightweaver:demo").Arguments));
+            }
             else
             {
                 Assert.Equal("git", request.FileName);
-                Assert.True(request.Arguments.SequenceEqual(["check-ref-format", "--branch", "main"])
+                var branchCheck = request.Arguments.SequenceEqual(["check-ref-format", "--branch", "main"]);
+                var checkoutIdentityRead = IsCheckoutIdentityRead(request.Arguments);
+                if (branchCheck) Assert.Equal(Path.GetTempPath(), request.WorkingDirectory);
+                else if (checkoutIdentityRead)
+                    Assert.Contains(fixture.StaleIds, id => RuntimePaths.Comparer.Equals(request.WorkingDirectory, fixture.WorktreePath(id)));
+                else Assert.Equal(target.Path, request.WorkingDirectory);
+                Assert.True(branchCheck
                     || request.Arguments.SequenceEqual(["rev-parse", "--is-inside-work-tree", "--show-prefix", "--path-format=absolute", "--git-dir", "--git-common-dir"])
-                    || request.Arguments.SequenceEqual(["worktree", "list", "--porcelain", "-z"]));
+                    || request.Arguments.SequenceEqual(["worktree", "list", "--porcelain", "-z"])
+                    || checkoutIdentityRead);
             }
             var environment = new Dictionary<string, string?>(target.Environment);
             foreach (var pair in request.Environment) environment[pair.Key] = pair.Value;
@@ -86,7 +95,7 @@ public sealed class WorktreeIntegrationTests
         var first = await DryRun(["--project", "demo", "--dry-run"]);
         var second = await DryRun(["--config", Path.GetRelativePath(fixture.Caller, fixture.Config), "--dry-run"]);
         Assert.Equal(first, second);
-        Assert.Equal(12, runner.Requests.Count);
+        Assert.Equal(32, runner.Requests.Count);
         var runtime = RuntimeDirectoryReader.Read(new(fixture.Host), new("demo"));
         var registry = GitWorktreeReader.Parse(registryBefore);
         Assert.Contains(registry, entry => entry.Main && entry.Branch == "refs/heads/main");
@@ -151,6 +160,13 @@ public sealed class WorktreeIntegrationTests
         Assert.True(start >= 0 && end >= 0, $"Could not find report section '{startMarker}'.");
         return value[start..end];
     }
+
+    private static bool IsCheckoutIdentityRead(IReadOnlyList<string> arguments) =>
+        arguments.SequenceEqual(["rev-parse", "--show-toplevel"])
+        || arguments.SequenceEqual(["rev-parse", "--path-format=absolute", "--git-dir"])
+        || arguments.SequenceEqual(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        || arguments.SequenceEqual(["rev-parse", "--abbrev-ref", "HEAD"])
+        || arguments.SequenceEqual(["rev-parse", "HEAD"]);
 }
 
 // Reusable real-tool fixture for downstream dry-run/readiness integration gates.

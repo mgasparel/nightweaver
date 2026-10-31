@@ -39,7 +39,7 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
         Assert.True(HasDependency(baseline.Logical.Dependencies, ids.DiscoveredChild, ids.PlannedParent, "discovered-from"));
         Assert.True(HasDependency(baseline.Logical.Dependencies, ids.BlockedChild, ids.Blocker, "blocks"));
 
-        var runner = CreateRecordingGuard(target, published);
+        var runner = CreateRecordingGuard(fixture, published);
         var inProcessOutput = new StringWriter();
         var inProcessError = new StringWriter();
         var inProcessCode = await NightweaverApp.RunAsync(
@@ -180,6 +180,41 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
         Assert.Equal("preserve tmp for " + unregisteredDirectoryId,
             File.ReadAllText(Path.Combine(tmpRoot, unregisteredDirectoryId, "old", "sentinel.txt")));
         AssertStateUnchanged(baseline, CaptureState(fixture, published, commentIds));
+    }
+
+    [Fact]
+    public async Task PublishedDryRunRetainsCompletedWorktreeWithMismatchedGitLinkageAndProtectsTmp()
+    {
+        using var fixture = new StartupSweepFixture(published.PublishDirectory);
+        var target = fixture.Target;
+        var id = fixture.PlannedBeadId;
+        var worktreePath = fixture.WorktreePath(id);
+        var gitFile = Path.Combine(worktreePath, ".git");
+        Assert.True(File.Exists(gitFile));
+        File.SetAttributes(gitFile, FileAttributes.Normal);
+
+        // Match the production repro: keep the ordinary Git registration and Product state,
+        // but redirect this linked checkout's .git file to the Target Repository's main .git.
+        var targetGitDirectory = Path.Combine(target.Path, ".git").Replace('\\', '/');
+        File.WriteAllText(gitFile, $"gitdir: {targetGitDirectory}{Environment.NewLine}", new UTF8Encoding(false));
+
+        var tmpSentinel = Path.Combine(fixture.Host, "tmp", "demo", id, "invocation", "output");
+        Assert.True(File.Exists(tmpSentinel));
+        var baseline = CaptureState(fixture, published, Array.Empty<string>());
+        var environment = published.EnvironmentWithAgentTraps(target.Environment);
+        var result = await RunApphostAsync(fixture, published, environment, ["--project", "demo", "--dry-run"]);
+        var report = result.StandardOutputText;
+
+        Assert.DoesNotContain($"{JsonSerializer.Serialize(id)}:",
+            Section(report, "Worktree removals (hypothetical)\n", "\nRetained worktrees\n"), StringComparison.Ordinal);
+        Assert.Contains($"{JsonSerializer.Serialize(id)}:",
+            Section(report, "Retained worktrees\n", "\nOrphan tmp deletions (hypothetical)\n"), StringComparison.Ordinal);
+        Assert.DoesNotContain($"{JsonSerializer.Serialize(id)}:",
+            Section(report, "Orphan tmp deletions (hypothetical)\n", "\nStartup diagnostics\n"), StringComparison.Ordinal);
+        Assert.Contains("the .git linkage or actual checkout identity no longer matches", report, StringComparison.Ordinal);
+        Assert.Contains("unusable_runtime_path", report, StringComparison.Ordinal);
+        Assert.Contains("tmp_cleanup_deferred", report, StringComparison.Ordinal);
+        AssertStateUnchanged(baseline, CaptureState(fixture, published, Array.Empty<string>()));
     }
 
     [Fact]
@@ -424,9 +459,10 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
         File.WriteAllText(path, json, new UTF8Encoding(false));
     }
 
-    private static RecordingProcessRunner CreateRecordingGuard(BeadsFixture target, PublishedCliArtifactFixture published) =>
+    private static RecordingProcessRunner CreateRecordingGuard(StartupSweepFixture fixture, PublishedCliArtifactFixture published) =>
         new(async (request, cancellationToken) =>
         {
+            var target = fixture.Target;
             if (request.FileName == "bd")
             {
                 Assert.Equal(target.Path, request.WorkingDirectory);
@@ -445,10 +481,15 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
             else if (request.FileName == "git")
             {
                 var branchCheck = request.Arguments.SequenceEqual(["check-ref-format", "--branch", "main"]);
-                Assert.Equal(branchCheck ? Path.GetTempPath() : target.Path, request.WorkingDirectory);
+                var checkoutIdentityRead = IsCheckoutIdentityRead(request.Arguments);
+                if (branchCheck) Assert.Equal(Path.GetTempPath(), request.WorkingDirectory);
+                else if (checkoutIdentityRead)
+                    Assert.Contains(fixture.StaleIds, id => RuntimePaths.Comparer.Equals(request.WorkingDirectory, fixture.WorktreePath(id)));
+                else Assert.Equal(target.Path, request.WorkingDirectory);
                 var allowed = branchCheck
                     || request.Arguments.SequenceEqual(["rev-parse", "--is-inside-work-tree", "--show-prefix", "--path-format=absolute", "--git-dir", "--git-common-dir"])
-                    || request.Arguments.SequenceEqual(["worktree", "list", "--porcelain", "-z"]);
+                    || request.Arguments.SequenceEqual(["worktree", "list", "--porcelain", "-z"])
+                    || checkoutIdentityRead;
                 if (!allowed) throw new InvalidOperationException($"Unexpected Git request reached the recording guard: git {string.Join(' ', request.Arguments)}");
                 Assert.Equal("0", request.Environment["GIT_OPTIONAL_LOCKS"]);
                 Assert.Equal("0", request.Environment["GIT_TERMINAL_PROMPT"]);
@@ -475,6 +516,13 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
         Assert.Contains(requests, request => request.FileName == "bd" && request.Arguments.SequenceEqual(BeadsCommand.CreateRecoverableReadiness(targetPath, Actor).Arguments));
         Assert.Contains(requests, request => request.FileName == "git" && request.Arguments.SequenceEqual(["worktree", "list", "--porcelain", "-z"]));
     }
+
+    private static bool IsCheckoutIdentityRead(IReadOnlyList<string> arguments) =>
+        arguments.SequenceEqual(["rev-parse", "--show-toplevel"])
+        || arguments.SequenceEqual(["rev-parse", "--path-format=absolute", "--git-dir"])
+        || arguments.SequenceEqual(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        || arguments.SequenceEqual(["rev-parse", "--abbrev-ref", "HEAD"])
+        || arguments.SequenceEqual(["rev-parse", "HEAD"]);
 
     private static async Task<RawProcessResult> RunApphostAsync(StartupSweepFixture fixture, PublishedCliArtifactFixture published,
         IReadOnlyDictionary<string, string?> environment, IReadOnlyList<string> arguments,

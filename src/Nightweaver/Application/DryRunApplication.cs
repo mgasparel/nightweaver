@@ -37,7 +37,26 @@ internal static class DryRunApplication
         var readiness = await beadsReader.ReadReadinessAsync(repository, inventory, config.RecoveryActor, cancellationToken);
         var registry = await new GitWorktreeReader(processRunner).ReadAsync(repository, cancellationToken);
         var runtime = RuntimeDirectoryReader.Read(hostPaths, config.Name);
-        var startupPlan = StartupPlanner.PlanForStartup(config.RecoveryActor, inventory, registry, runtime.Worktrees, runtime.Tmp);
+        var worktrees = runtime.Worktrees;
+        var startupPlan = StartupPlanner.PlanForStartup(config.RecoveryActor, inventory, registry, worktrees, runtime.Tmp);
+        if (startupPlan.Removals.Count > 0)
+        {
+            var identityFailures = new Dictionary<string, string>(RuntimePaths.Comparer);
+            foreach (var candidate in startupPlan.Removals)
+            {
+                var failure = await StartupEnvironmentCleaner.ValidateCheckoutIdentityAsync(processRunner, repository,
+                    candidate, cancellationToken).ConfigureAwait(false);
+                if (failure is not null) identityFailures[candidate.Path] = failure;
+            }
+
+            if (identityFailures.Count > 0)
+            {
+                // Use the same live checkout-identity check before projecting removal. Mark failed
+                // observations as unusable so the planner retains the worktree and protects its tmp.
+                worktrees = RuntimeDirectoryReader.MarkInvalidCheckoutIdentities(worktrees, identityFailures);
+                startupPlan = StartupPlanner.PlanForStartup(config.RecoveryActor, inventory, registry, worktrees, runtime.Tmp);
+            }
+        }
         var postSweep = PostSweepReadinessProjector.Project(startupPlan, readiness);
         var planningPoolPlan = PlanningPoolPlanner.Plan(postSweep,
             config.Concurrency.MaxConcurrentPlanning, config.Concurrency.MaxActivePlanBeads);
