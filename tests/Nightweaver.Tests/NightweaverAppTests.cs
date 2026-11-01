@@ -49,7 +49,7 @@ public sealed class NightweaverAppTests
     }
 
     [Fact]
-    public async Task UnsupportedLiveModeFailsBeforeConfigurationOrToolAccess()
+    public async Task LiveModeLoadsConfigurationBeforeProbingTargetRepository()
     {
         using var temp = new TempDirectory();
         var host = temp.CreateDirectory("host");
@@ -66,7 +66,7 @@ public sealed class NightweaverAppTests
 
         Assert.Equal(2, code);
         Assert.Equal(string.Empty, output.ToString());
-        Assert.Contains("only '--dry-run' is supported", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains(Path.Combine(host, "missing.json"), error.ToString(), StringComparison.Ordinal);
         Assert.Empty(runner.Requests);
     }
 

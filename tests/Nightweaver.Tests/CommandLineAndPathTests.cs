@@ -10,6 +10,10 @@ public sealed class CommandLineAndPathTests
     {
         var cases = new[]
         {
+            new[] { "--project", "demo" },
+            new[] { "--project=demo" },
+            new[] { "--config", "project.json" },
+            new[] { "--config=project.json" },
             new[] { "--project", "demo", "--dry-run" },
             new[] { "--project=demo", "--dry-run" },
             new[] { "--config", "project.json", "--dry-run" },
@@ -19,7 +23,7 @@ public sealed class CommandLineAndPathTests
         foreach (var args in cases)
         {
             var options = CommandLineParser.Parse(args);
-            Assert.True(options.DryRun);
+            Assert.Equal(args.Contains("--dry-run", StringComparer.Ordinal), options.DryRun);
             Assert.False(options.Help);
             Assert.NotNull(options.Selector);
         }
@@ -42,7 +46,6 @@ public sealed class CommandLineAndPathTests
             (["--project", "demo", "--config", "other.json", "--dry-run"], "options '--project' and '--config' cannot be used together"),
             ([], "one of '--project <project-slug>' or '--config <path-to-project-json>' is required"),
             (["--project", "bad.slug", "--dry-run"], "invalid project slug 'bad.slug':"),
-            (["--project", "demo"], "live orchestration is not implemented yet; only '--dry-run' is supported")
         };
 
         foreach (var (args, error) in cases)
@@ -50,6 +53,17 @@ public sealed class CommandLineAndPathTests
             var exception = Assert.Throws<UsageException>(() => CommandLineParser.Parse(args));
             Assert.StartsWith(error, exception.Message, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void SelectorWithoutDryRunSelectsContinuousDeliveryMode()
+    {
+        var options = CommandLineParser.Parse(["--project", "demo"]);
+
+        Assert.False(options.DryRun);
+        Assert.False(options.Help);
+        Assert.IsType<ProjectSelector.BySlug>(options.Selector);
+        Assert.Contains("continuous Delivery Orchestrator", HelpText.Usage, StringComparison.Ordinal);
     }
 
     [Fact]

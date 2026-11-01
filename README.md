@@ -1,14 +1,14 @@
 # Nightweaver
 
-Nightweaver is a discovery-driven software factory for Beads (`bd`) work. It is under active development. The CLI supports a read-only startup inspection and `--dry-run`, plus `dispatch` for one live lifecycle stage on one ready Bead. A scheduler that automatically advances Beads through their next stages is not implemented.
+Nightweaver is a discovery-driven software factory for Beads (`bd`) work. It is under active development. The CLI supports a read-only `--dry-run`, a continuous Delivery runtime, and `dispatch` for one explicitly selected lifecycle stage. Continuous Planning and Merger pool execution are not part of this slice.
 
 ## Local prerequisites
 
 - The .NET 10 SDK to build, test, and publish Nightweaver.
 - The .NET 10 runtime to run the framework-dependent published executable.
-- Git and `bd` on `PATH` for a dry run. The supported tracker is bd 1.3.1 using an initialized embedded Dolt database.
+- Git and `bd` on `PATH` for target repository operations. The supported tracker is bd 1.3.1 using an initialized embedded Dolt database.
 - The Target Repository must be the root of a Git working tree and contain a prepared `.beads` tracker. Complete tracker setup before running Nightweaver. A fresh `bd init` may need a normal bd write outside the dry-run to create bd's persistent gate-lock files. Nightweaver does not initialize or migrate a tracker.
-- Live `dispatch` currently requires Windows for Win32 Job Object process containment, the configured Agent CLI installed and available on `PATH`, and the role prompt under `<nightweaver-root>\prompts\`. Worktree provisioning also needs the configured default branch on `origin`. A role's mandate can use `git`, `gh`, or the Target Repository's own build and test tools.
+- Live operation currently requires Windows for Win32 Job Object process containment, the configured Agent CLI installed and available on `PATH`, and the role prompt under `<nightweaver-root>\prompts\`. Worktree provisioning also needs the configured default branch on `origin`. A role's mandate can use `git`, `gh`, or the Target Repository's own build and test tools.
 
 The integration tests use real Git and bd against disposable repositories and use native fake Agent apphosts for live execution. They require those tools and fail with a prerequisite error if a required tool is missing; the real-tool gate does not silently skip. A dry run does not need an Agent CLI, `gh`, a network connection, an `origin` remote, or credentials.
 
@@ -51,7 +51,10 @@ Both selectors work from an unrelated working directory. These PowerShell exampl
 $nightweaverRoot = 'C:\Tools\Nightweaver Host'
 Set-Location 'C:\Tools\Unrelated Caller Directory'
 
-# Loads C:\Tools\Nightweaver Host\projects\demo.json
+# Loads C:\Tools\Nightweaver Host\projects\demo.json and starts continuous Delivery until Ctrl+C.
+& (Join-Path $nightweaverRoot 'nightweaver.exe') --project demo
+
+# Prints a one-shot read-only startup snapshot and exits.
 & (Join-Path $nightweaverRoot 'nightweaver.exe') --project demo --dry-run
 
 # Relative to the caller's current directory; quote the path with spaces.
@@ -150,7 +153,7 @@ Description, design, acceptance criteria, and notes render as Markdown through l
 
 ## Single-stage dispatch
 
-`dispatch` validates the Project and Target Repository, then acquires an OS-managed process-lifetime lock keyed to the Target Repository's Git common-directory identity. The lock is shared across Project names and Nightweaver host roots and lives outside the Target Repository. A competing process exits before Beads inventory/readiness queries, recovery, dispatch, or runtime-directory changes; process exit or death releases the lock. Under the lock, dispatch validates the current Project's shared worktree, temporary, and log roots, releases only exact `in_progress` claims assigned to that Project's recovery actor with guarded status/assignee updates, and rereads uncertain writes rather than replaying them. It then reads current inventory and bd's actual unassigned-ready set, acquires one guarded claim, and invokes the operational retry coordinator for exactly one lifecycle stage. `--dry-run` remains read-only and acquires no recovery authority. Dispatch does not start a scheduler or automatically choose the next role.
+`dispatch` validates the Project and Target Repository, then acquires an OS-managed process-lifetime lock keyed to the Target Repository's Git common-directory identity. The lock is shared across Project names and Nightweaver host roots and lives outside the Target Repository. A competing process exits before Beads inventory/readiness queries, recovery, dispatch, or runtime-directory changes; process exit or death releases the lock. Under the lock, dispatch validates the current Project's shared worktree, temporary, and log roots, releases only exact `in_progress` claims assigned to that Project's recovery actor with guarded status/assignee updates, and rereads uncertain writes rather than replaying them. It then reads current inventory and bd's actual unassigned-ready set, acquires one guarded claim, and invokes the operational retry coordinator for exactly one lifecycle stage. `--dry-run` remains read-only and acquires no recovery authority. `dispatch` does not start or join the continuous scheduler.
 
 ```text
 nightweaver dispatch <bead-id> [--role <role>] (--project <project-slug> | --config <path-to-project-json>)
@@ -231,7 +234,15 @@ For example, this sets a shared model and overrides the reviewer's effort while 
 }
 ```
 
-These role settings are reported by `--dry-run` and used when `dispatch` launches a configured Agent for its selected lifecycle stage.
+These role settings are reported by `--dry-run` and used when continuous Delivery or `dispatch` launches a configured Agent.
+
+## Continuous Delivery runtime
+
+A selector without `--dry-run` starts the live Orchestrator. It acquires the Target Repository process lock, validates shared runtime roots, performs startup recovery and conservative environment cleanup, then begins Delivery discovery. The process stays alive when no work is eligible.
+
+Startup, an always-on 30-second timer, and each Delivery slot completion after local capacity release request the same single-reader discovery path. Bursts coalesce, overlapping passes do not run, and a request received during a pass stays pending for a subsequent fresh read. Each pass uses current Beads inventory and readiness. A failed tracker read admits no work from a stale snapshot; a later timer or slot completion retries it. Delivery reserves local capacity before preparation so slow setup for one Plan Bead does not hold up shared admission. Eligible candidates retain priority, creation-time, then ordinal-ID ordering.
+
+This executable currently wires the Delivery Pool only. Planning and Merger execution, automatic journal tail transport, UI pause resumption, and the complete two-signal shutdown flow remain later integrations. The durable events journal is not required for admission; periodic discovery still runs when journal transport is unavailable. Ctrl+C stops admission, cancels active slots, and waits up to two minutes for local slots to settle before exit. Startup recovery handles exact Nightweaver-owned claims after a process interruption.
 
 ## Dry-run report and safety
 
