@@ -21,7 +21,7 @@ Relevant domain vocabulary is defined in [`GLOSSARY.md`](./GLOSSARY.md). Archite
 
 3. **Crash-Stateless Orchestrator with Verifiable Agent Evidence**:
    - **Orchestrator responsibilities**:
-     - Watch `bd` mutations in the **Target Repository** via `bd events tail --follow`.
+     - Use a best-effort `bd events tail --follow` on the configured **Target Repository** as a discovery wake-up hint; periodic discovery remains active when the journal is unavailable.
      - Claim eligible Beads (`bd update <id> --claim`) and schedule them across three bounded concurrency pools (**Planning**, **Delivery**, and singleton **Merger**).
      - Provision, reset, and clean up isolated Git worktrees, per-invocation temporary directories, and **Win32 Job Objects**.
      - Map each Bead's `(type, stage:* label)` to its corresponding **Agent** role and launch the configured **Agent CLI**.
@@ -236,14 +236,17 @@ flowchart TD
     Reserve --> Slot[Prepare and run slot independently]
     Slot --> Complete[Release local capacity and publish completion]
     Complete --> Discover
+    JournalTail[Best-effort Target Repository journal tail] -. event hint .-> Discover
+    JournalTail -->|termination or truncation| Reconnect[Request discovery and reconnect with capped backoff]
+    Reconnect --> JournalTail
     Timer[Always-on 30-second timer] --> Discover
     DryRun[Dry-run] --> Inspect[Read-only inspection and projection]
     Inspect --> Report[Report without a mutex or recovery]
 ```
-1. Startup recovery and environment cleanup complete before the initial Delivery discovery pass. A competing runtime exits before tracker or runtime mutation.
-2. Startup, an always-on 30-second timer, and every Delivery completion after local capacity release enter one bounded, coalescing signal. A single reader serializes passes. It consumes the current signal before evaluation, so a request that arrives during a pass remains pending for one subsequent pass. Bursts while a signal is already pending coalesce.
+1. Startup recovery and environment cleanup complete before the initial Delivery discovery pass. A competing runtime exits before tracker or runtime mutation. Journal setup and tailing begin as best-effort background work; admission does not wait for setup, attachment, head capture, or historical replay.
+2. Startup, best-effort journal event hints, an always-on 30-second timer, and every Delivery completion after local capacity release enter one bounded, coalescing signal. A single reader serializes passes. It consumes the current signal before evaluation, so a request that arrives during a pass remains pending for one subsequent pass. Bursts while a signal is already pending coalesce.
 3. Every pass reads fresh inventory and native readiness. A failed tracker read admits no work from a prior snapshot and waits for a later timer or completion trigger; it does not retry in a tight loop. Discovery does not perform no-op tracker writes.
-4. The durable `bd` events journal and `bd events tail --follow` transport are not prerequisites and are not wired in this slice. If added later, journal activity must request discovery through this same coalescing path. Periodic discovery keeps work moving through journal outages.
+4. The watcher follows the configured Project's actual Target Repository. Journal records, including Orchestrator-authored events, are wake-up hints only; duplicate or old records are harmless, and fresh tracker reads—not event payloads or counts—establish eligibility. Unexpected tail termination or truncation requests discovery and reconnects with exponential backoff capped at 30 seconds. Truncation discards the obsolete in-memory sequence and resumes after the reported head. Timer and completion triggers stay active throughout reconnect, and stream failure alone does not stop admission or running Agents. No durable cursor or replay ledger is kept.
 5. Ordinary comments and description edits do not resume paused Beads. Paused work stays ineligible until an explicit supported state change.
 
 ### 5.2 Three Concurrency Pools & Planning Backpressure

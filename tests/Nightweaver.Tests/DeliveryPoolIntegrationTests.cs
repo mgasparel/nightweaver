@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.Json;
 using System.Threading.Channels;
 using Nightweaver.Application;
 using Nightweaver.Configuration;
@@ -41,6 +43,13 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         var executionAttempts = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         var preparationReturned = new TaskCompletionSource<PreparedAgentInvocation>(TaskCreationOptions.RunContinuationsAsynchronously);
         var releasePreparation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var journalEnableAttempted = NewSignal();
+        var allowJournalEnable = NewSignal();
+        var journalEnabled = NewSignal();
+        var reconnectDelayEntered = NewSignal();
+        var allowReconnect = NewSignal();
+        var tailProcesses = Channel.CreateUnbounded<Process>();
+        var duplicateBurstDelivered = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         var mergerEvaluations = Channel.CreateUnbounded<int>();
         var mergerCompletions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
         long pidSequence = 0;
@@ -108,6 +117,13 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         using var runtimeLifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var pool = new DeliveryPoolCoordinator(target.Host, project, new(target.Path, "main"), processRunner,
             runSlot: slotRunner, slotLifetimeToken: runtimeLifetime.Token);
+        var nativeJournalClient = new GatedNativeJournalClient(
+            new BeadsJournalClient(processRunner, request =>
+            {
+                var process = StartNativeJournalTail(request);
+                tailProcesses.Writer.TryWrite(process);
+                return process;
+            }), journalEnableAttempted, allowJournalEnable, journalEnabled, duplicateBurstDelivered);
         var evaluations = Channel.CreateUnbounded<DeliveryPoolEvaluation>();
         var noTimerTicks = Channel.CreateUnbounded<bool>();
         var runtime = new ContinuousDiscoveryCoordinator(
@@ -137,11 +153,21 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
             _ => Task.CompletedTask,
             TextWriter.Null,
             TextWriter.Null,
-            token => ReadTimerTicksAsync(noTimerTicks.Reader, token));
+            token => ReadTimerTicksAsync(noTimerTicks.Reader, token),
+            (requestDiscovery, token) => new BeadsJournalWatcher(
+                nativeJournalClient,
+                requestDiscovery,
+                TextWriter.Null,
+                (_, delayToken) =>
+                {
+                    reconnectDelayEntered.TrySetResult(true);
+                    return allowReconnect.Task.WaitAsync(delayToken);
+                }).RunAsync(new(target.Path, "main"), token));
         var runtimeTask = runtime.RunAsync(runtimeLifetime.Token);
 
         try
         {
+        await journalEnableAttempted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         var first = await evaluations.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
             .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         var completedBeforeAttempt = first.Admitted.Where(admission => admission.Completion.IsCompletedSuccessfully)
@@ -176,6 +202,8 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         Assert.Equal(2, pool.ActiveReservations.Count);
         Assert.Contains(pool.ActiveReservations, reservation => reservation.BeadId == beads[0]);
         Assert.Contains(pool.ActiveReservations, reservation => reservation.BeadId == beads[1]);
+        Assert.False(journalEnabled.Task.IsCompleted,
+            "Startup discovery and real Delivery admission must finish while native journal attachment is still blocked.");
         foreach (var beadId in beads.Take(2))
         {
             var claimed = target.ReadBead(beadId);
@@ -183,19 +211,38 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
             Assert.Equal(project.RecoveryActor, claimed.Assignee);
         }
 
-        // Repeated discovery ticks must preserve A's reservation and must not prepare or launch
-        // a duplicate A slot while the already-prepared invocation remains gated.
-        noTimerTicks.Writer.TryWrite(true);
+        // The selected native tracker emits one real event followed by duplicate and older
+        // sequence hints. Every hint is only a wakeup: fresh tracker eligibility and existing
+        // reservations prevent duplicate Agent launches.
+        allowJournalEnable.TrySetResult(true);
+        await journalEnabled.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        var initialJournalHead = await ReadNativeJournalHeadAsync(processRunner, target.Path,
+            TestContext.Current.CancellationToken);
+        var firstTail = await tailProcesses.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await nativeJournalClient.WaitForObservedSequenceAsync(initialJournalHead,
+            TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await DrainEvaluationsUntilQuietAsync(evaluations.Reader, TimeSpan.FromMilliseconds(250),
+            TestContext.Current.CancellationToken);
+        nativeJournalClient.DuplicateNextEventBurst();
+        target.RunTarget("bd", ["comments", "add", beads[0], "duplicate and old journal wakeup fixture"]);
+        var burstSequence = await duplicateBurstDelivered.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.True(burstSequence > 0);
         var repeatedEvaluation = await evaluations.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
             .WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
         Assert.Empty(repeatedEvaluation.Admitted);
         Assert.Equal(2, repeatedEvaluation.ActiveReservations.Count);
         Assert.Equal(1, preparationAttempts[beads[0]]);
         Assert.DoesNotContain(beads[0], executionAttempts.Keys);
+        Assert.Equal(1, executionAttempts[beads[1]]);
         await mergerEvaluations.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
             .WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
         Assert.False(releasePreparation.Task.IsCompleted, "The later Merger pool must evaluate while A preparation remains gated.");
 
+        // Stop the actual native tail. While reconnect delay is held, the B completion must
+        // still request discovery and admit C without disturbing A's active reservation.
+        if (!firstTail.HasExited) firstTail.Kill(entireProcessTree: true);
+        await reconnectDelayEntered.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         File.WriteAllText(gates[beads[1]].Release, "release B", new System.Text.UTF8Encoding(false));
         var bCompletion = await first.Admitted.Single(admission => admission.BeadId == beads[1]).Completion
             .WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
@@ -271,6 +318,8 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         }
         finally
         {
+            allowJournalEnable.TrySetResult(true);
+            allowReconnect.TrySetResult(true);
             releasePreparation.TrySetResult();
             foreach (var gate in gates.Values)
                 File.WriteAllText(gate.Release, "cleanup release", new System.Text.UTF8Encoding(false));
@@ -432,6 +481,115 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
 
     private sealed record PoolStageObservation(string BeadId, AgentRole Role, string? Stage, string Status,
         string? Assignee, string WorktreePath, string Branch, string Head);
+
+    private sealed class GatedNativeJournalClient(
+        IBeadsJournalClient inner,
+        TaskCompletionSource<bool> enableAttempted,
+        TaskCompletionSource<bool> allowEnable,
+        TaskCompletionSource<bool> enabled,
+        TaskCompletionSource<long> duplicateBurstDelivered) : IBeadsJournalClient
+    {
+        private readonly Channel<long> observedSequences = Channel.CreateUnbounded<long>();
+        private int duplicateNextEvent;
+
+        internal void DuplicateNextEventBurst() => Interlocked.Exchange(ref duplicateNextEvent, 1);
+
+        public async Task EnableAsync(ValidatedTargetRepository repository, CancellationToken cancellationToken)
+        {
+            enableAttempted.TrySetResult(true);
+            await allowEnable.Task.WaitAsync(cancellationToken);
+            await inner.EnableAsync(repository, cancellationToken);
+            enabled.TrySetResult(true);
+        }
+
+        public async Task FollowAsync(ValidatedTargetRepository repository, long afterSequence,
+            Action<long> onEvent, CancellationToken cancellationToken)
+        {
+            await inner.FollowAsync(repository, afterSequence, sequence =>
+            {
+                observedSequences.Writer.TryWrite(sequence);
+                if (Interlocked.Exchange(ref duplicateNextEvent, 0) != 0)
+                {
+                    onEvent(sequence);
+                    onEvent(sequence);
+                    onEvent(Math.Max(0, sequence - 1));
+                    duplicateBurstDelivered.TrySetResult(sequence);
+                }
+                else
+                {
+                    onEvent(sequence);
+                }
+            }, cancellationToken);
+        }
+
+        internal async Task WaitForObservedSequenceAsync(long expected, CancellationToken cancellationToken)
+        {
+            var greatest = 0L;
+            while (greatest < expected)
+                greatest = Math.Max(greatest, await observedSequences.Reader.ReadAsync(cancellationToken));
+        }
+    }
+
+    private static Process StartNativeJournalTail(ProcessRequest request)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = request.FileName,
+            WorkingDirectory = request.WorkingDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
+        };
+        foreach (var argument in request.Arguments) startInfo.ArgumentList.Add(argument);
+        foreach (var (name, value) in request.Environment)
+        {
+            if (value is null) startInfo.Environment.Remove(name);
+            else startInfo.Environment[name] = value;
+        }
+
+        var process = new Process { StartInfo = startInfo };
+        if (!process.Start())
+        {
+            process.Dispose();
+            throw new InvalidOperationException("Could not start the native Delivery journal tail fixture.");
+        }
+        process.StandardInput.Close();
+        return process;
+    }
+
+    private static async Task<long> ReadNativeJournalHeadAsync(
+        IProcessRunner processRunner, string repositoryPath, CancellationToken cancellationToken)
+    {
+        var tail = BeadsCommand.CreateJournalTail(repositoryPath, 0);
+        var result = await processRunner.RunAsync(new ProcessRequest("bd",
+            ["--readonly", "--sandbox", "events", "tail", "--json"], repositoryPath,
+            tail.Environment, TimeSpan.FromSeconds(30)), cancellationToken);
+        Assert.Equal(0, result.ExitCode);
+        var head = 0L;
+        foreach (var line in result.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            using var record = JsonDocument.Parse(line);
+            head = Math.Max(head, record.RootElement.GetProperty("seq").GetInt64());
+        }
+        return head;
+    }
+
+    private static async Task DrainEvaluationsUntilQuietAsync(
+        ChannelReader<DeliveryPoolEvaluation> evaluations, TimeSpan quietPeriod, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            while (evaluations.TryRead(out _)) { }
+            var available = evaluations.WaitToReadAsync(cancellationToken).AsTask();
+            var quiet = Task.Delay(quietPeriod, cancellationToken);
+            if (await Task.WhenAny(available, quiet) == quiet) return;
+            if (!await available) return;
+        }
+    }
 
     private sealed class ConcurrentRecordingProcessRunner(
         IProcessRunner inner,

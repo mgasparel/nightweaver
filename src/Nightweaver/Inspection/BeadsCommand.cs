@@ -32,6 +32,14 @@ internal static class BeadsCommand
     internal static ProcessRequest CreateShow(string workingDirectory, string beadId)
         => Create(workingDirectory, ["--readonly", "--sandbox", "show", beadId, "--json"]);
 
+    internal static ProcessRequest CreateJournalSetup(string workingDirectory)
+        => CreateWrite(workingDirectory, ["config", "set", "events-journal", "true"]);
+
+    internal static ProcessRequest CreateJournalTail(string workingDirectory, long afterSequence)
+        => new("bd", ["--readonly", "--sandbox", "events", "tail", "--follow", "--since",
+                afterSequence.ToString(System.Globalization.CultureInfo.InvariantCulture), "--json"],
+            workingDirectory, CreateEnvironment(workingDirectory, readOnly: true), Timeout.InfiniteTimeSpan);
+
     internal static ProcessRequest CreateWrite(string workingDirectory, IReadOnlyList<string> arguments, string? actor = null)
     {
         var environment = CreateEnvironment(workingDirectory, readOnly: false);
