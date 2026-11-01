@@ -96,9 +96,7 @@ internal static class AuthorityMatrix
         {
             AgentRole.Planner => ValidatePlanner(before, after, postBeads, dependencies),
             AgentRole.PlanChallenger => ValidatePlanChallenger(before, after),
-            AgentRole.Implementer => ValidateWorkerObservation(before, after, null, null),
-            AgentRole.Reviewer => ValidateReviewOrQa(before, after, "stage:review", "stage:qa", role),
-            AgentRole.Qa => ValidateReviewOrQa(before, after, "stage:qa", "stage:merge", role),
+            AgentRole.Implementer or AgentRole.Reviewer or AgentRole.Qa => ValidateWorkerObservation(before, after, null, null),
             AgentRole.Merger => ValidateMerger(before, after),
             _ => AuthorityMatrixResult.Illegal($"Role '{role}' is not supported by the Authority Matrix.")
         };
@@ -113,9 +111,9 @@ internal static class AuthorityMatrix
     {
         if (before != after)
             return AuthorityMatrixResult.Illegal(
-                "Implementer may report evidence but cannot mutate Bead status, type, stage, pause labels, planned state, or repair_cycles.");
+                "Delivery agents may report evidence but cannot mutate Bead status, type, stage, pause labels, planned state, or repair_cycles.");
         if (!string.Equals(beforeAssignee, afterAssignee, StringComparison.Ordinal))
-            return AuthorityMatrixResult.Illegal("Implementer cannot change Bead claim ownership.");
+            return AuthorityMatrixResult.Illegal("Delivery agents cannot change Bead claim ownership.");
         return AuthorityMatrixResult.Legal;
     }
 

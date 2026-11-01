@@ -415,6 +415,22 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         return new BeadsInventory(beads);
     }
 
+    internal static BeadSnapshot ParsePublicationResult(string json, string expectedBeadId)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        var rows = root.ValueKind switch
+        {
+            JsonValueKind.Array when root.GetArrayLength() == 1 => root.GetRawText(),
+            JsonValueKind.Object => $"[{root.GetRawText()}]",
+            _ => throw new JsonException("publication result must contain exactly one Bead row")
+        };
+        var inventory = Parse(rows);
+        if (inventory.ById.Count != 1 || !inventory.ById.TryGetValue(expectedBeadId, out var bead))
+            throw new JsonException($"publication result did not identify Bead '{expectedBeadId}' exactly once");
+        return bead;
+    }
+
     internal async Task<IReadOnlyList<Execution.BeadDependency>> ReadUpDependenciesAsync(
         ValidatedTargetRepository repository,
         string beadId,

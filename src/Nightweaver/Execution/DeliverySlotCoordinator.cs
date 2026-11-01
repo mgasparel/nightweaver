@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 
@@ -228,6 +229,19 @@ internal sealed class DeliverySlotCoordinator
                     return Result(DeliverySlotDisposition.Failed, currentState, role, lastStage, false,
                         $"The {AgentRoles.ToConfigKey(role)} stage returned no verified successful workflow state.");
 
+                var publication = lastStage.StageResult.PublicationReceipt;
+                if (publication is { Role: AgentRole.Qa, Outcome: AgentOutcomeChoice.Approved,
+                    HandoffToMerger: true, ClaimReleased: true })
+                {
+                    return Result(DeliverySlotDisposition.MergeReady, publication.PublishedState, role, lastStage,
+                        true, null);
+                }
+                if (publication is { Outcome: AgentOutcomeChoice.ProductDecisionRequired, ClaimReleased: true })
+                {
+                    return Result(DeliverySlotDisposition.PausedForProductDecision, publication.PublishedState, role,
+                        lastStage, true, null);
+                }
+
                 var afterInventory = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
                 if (!afterInventory.ById.TryGetValue(beadId, out var afterBead))
                     return Result(DeliverySlotDisposition.Failed, verified, role, lastStage, false,
@@ -293,8 +307,8 @@ internal sealed class DeliverySlotCoordinator
 
                 if (role == AgentRole.Qa && after.Stage == "stage:merge")
                 {
-                    return await ReleaseMergeReadyClaimAsync(repository, beadId, project.RecoveryActor, after,
-                        role, lastStage, cancellationToken).ConfigureAwait(false);
+                    return Result(DeliverySlotDisposition.Failed, after, role, lastStage, false,
+                        "QA published stage:merge without a verified atomic claim-release receipt; no separate release was attempted.");
                 }
 
                 if (repairRejection)
@@ -526,7 +540,19 @@ internal sealed class DeliverySlotCoordinator
             var comments = await reader.ReadCommentsAsync(repository, beadId, cancellationToken).ConfigureAwait(false);
             if (comments.Count == 0)
                 return [$"No Bead comments were available. {evidenceContext}."];
-            return [comments[^1].Text];
+
+            var invocationComments = stageResult?.PreInvocationCommentIds is { } priorCommentIds
+                ? comments.Where(comment => !priorCommentIds.Contains(comment.Id)).ToArray()
+                : comments.ToArray();
+            if (invocationComments.Length == 0) invocationComments = comments.ToArray();
+            var latest = invocationComments[^1];
+            if (stageResult is not null && IsDeliveryOutcomePublicationComment(latest.Text, stageResult))
+            {
+                var agentEvidence = invocationComments.LastOrDefault(comment =>
+                    !IsDeliveryOutcomePublicationComment(comment.Text, stageResult));
+                if (agentEvidence is not null) return [agentEvidence.Text, latest.Text];
+            }
+            return [latest.Text];
         }
         catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
@@ -537,6 +563,29 @@ internal sealed class DeliverySlotCoordinator
             var invocation = string.IsNullOrWhiteSpace(stageResult?.InvocationId) ? "unavailable" : stageResult.InvocationId;
             var log = string.IsNullOrWhiteSpace(stageResult?.LogFilePath) ? "unavailable" : stageResult.LogFilePath;
             return [$"Latest Bead comments could not be read ({exception.Message}). {evidenceContext}, invocation={invocation}, log={log}."];
+        }
+    }
+
+    private static bool IsDeliveryOutcomePublicationComment(string text, AgentStageResult stageResult)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("schema", out var schema)
+                && schema.ValueKind == JsonValueKind.String
+                && schema.GetString() == "nightweaver-delivery-outcome-v1"
+                && root.TryGetProperty("invocation_id", out var invocation)
+                && invocation.ValueKind == JsonValueKind.String
+                && invocation.GetString() == stageResult.InvocationId
+                && root.TryGetProperty("role", out var role)
+                && role.ValueKind == JsonValueKind.String
+                && role.GetString() == AgentRoles.ToConfigKey(stageResult.Role);
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 

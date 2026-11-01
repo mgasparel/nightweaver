@@ -31,12 +31,8 @@ public sealed class AuthorityMatrixTests
             (AgentRole.PlanChallenger, State("p5", "bug", "stage:plan-challenge", repairCycles: 2), State("p5", "bug", "stage:plan", repairCycles: 3), Beads(), null),
             (AgentRole.Implementer, State("t0", "task"), State("t0", "task"), Beads(), null),
             (AgentRole.Implementer, State("t1", "task", "stage:implement"), State("t1", "task", "stage:implement"), Beads(), null),
-            (AgentRole.Reviewer, State("t2", "task", "stage:review"), State("t2", "task", "stage:qa"), Beads(), null),
-            (AgentRole.Reviewer, State("t3", "task", "stage:review"), State("t3", "task", "stage:review", labels: ["product-decision-required"]), Beads(), null),
-            (AgentRole.Reviewer, State("t4", "task", "stage:review", repairCycles: 1), State("t4", "task", "stage:implement", repairCycles: 2), Beads(), null),
-            (AgentRole.Qa, State("t5", "task", "stage:qa"), State("t5", "task", "stage:merge"), Beads(), null),
-            (AgentRole.Qa, State("t6", "task", "stage:qa"), State("t6", "task", "stage:qa", labels: ["product-decision-required"]), Beads(), null),
-            (AgentRole.Qa, State("t7", "task", "stage:qa"), State("t7", "task", "stage:implement", repairCycles: 1), Beads(), null),
+            (AgentRole.Reviewer, State("t2", "task", "stage:review"), State("t2", "task", "stage:review"), Beads(), null),
+            (AgentRole.Qa, State("t5", "task", "stage:qa"), State("t5", "task", "stage:qa"), Beads(), null),
             (AgentRole.Merger, State("t8", "task", "stage:merge"), State("t8", "task", status: "closed"), Beads(), null),
             (AgentRole.Merger, State("t9", "task", "stage:merge"), State("t9", "task", "stage:merge", status: "closed"), Beads(), null),
             (AgentRole.Merger, State("t10", "task", "stage:merge"), State("t10", "task", "stage:implement", repairCycles: 1), Beads(), null)
@@ -124,7 +120,7 @@ public sealed class AuthorityMatrixTests
     public void RejectsNoOpIdentityTypePolicyAndUnexpectedClosureChanges()
     {
         var before = State("task", "task", "stage:review");
-        Assert.False(AuthorityMatrix.Validate(AgentRole.Reviewer, before, before, Beads(), null).IsLegal);
+        Assert.True(AuthorityMatrix.Validate(AgentRole.Reviewer, before, before, Beads(), null).IsLegal);
         Assert.False(AuthorityMatrix.Validate(AgentRole.Reviewer, before, State("different", "task", "stage:qa"), Beads(), null).IsLegal);
         Assert.False(AuthorityMatrix.Validate(AgentRole.Reviewer, before, State("task", "feature", "stage:qa"), Beads(), null).IsLegal);
         Assert.False(AuthorityMatrix.Validate(AgentRole.Reviewer, before, State("task", "task", "stage:qa", status: "closed"), Beads(), null).IsLegal);
@@ -133,14 +129,18 @@ public sealed class AuthorityMatrixTests
     }
 
     [Fact]
-    public void ImplementerCannotPublishWorkflowChangesOrChangeClaimOwnership()
+    public void DeliveryRolesCannotPublishWorkflowChangesOrChangeClaimOwnership()
     {
         var before = State("task", "task", "stage:implement");
-        Assert.False(AuthorityMatrix.ValidateWorkerObservation(before,
-            State("task", "task", "stage:review"), "nightweaver:demo", "nightweaver:demo").IsLegal);
-        Assert.False(AuthorityMatrix.ValidateWorkerObservation(before,
-            State("task", "task", "stage:implement", labels: ["product-decision-required"]),
-            "nightweaver:demo", "nightweaver:demo").IsLegal);
+        foreach (var role in new[] { AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa })
+        {
+            Assert.False(AuthorityMatrix.ValidateWorkerObservation(before,
+                State("task", "task", "stage:review"), "nightweaver:demo", "nightweaver:demo").IsLegal);
+            Assert.False(AuthorityMatrix.ValidateWorkerObservation(before,
+                State("task", "task", "stage:implement", labels: ["product-decision-required"]),
+                "nightweaver:demo", "nightweaver:demo").IsLegal);
+            Assert.True(AuthorityMatrix.Validate(role, before, before, Beads(), null).IsLegal);
+        }
         Assert.False(AuthorityMatrix.ValidateWorkerObservation(before, before,
             "nightweaver:demo", "human:owner").IsLegal);
         Assert.True(AuthorityMatrix.ValidateWorkerObservation(before, before,
@@ -152,13 +152,13 @@ public sealed class AuthorityMatrixTests
     [InlineData(0, 2)]
     [InlineData(2, 2)]
     [InlineData(2, 4)]
-    public void RejectionRequiresExactlyOneRepairCycle(int beforeCycles, int afterCycles)
+    public void ReviewerCannotPublishRepairStageOrCounter(int beforeCycles, int afterCycles)
     {
         var result = AuthorityMatrix.Validate(AgentRole.Reviewer,
             State("task", "task", "stage:review", repairCycles: beforeCycles),
             State("task", "task", "stage:implement", repairCycles: afterCycles), Beads(), null);
         Assert.False(result.IsLegal);
-        Assert.Contains("exactly once", result.Reason!, StringComparison.Ordinal);
+        Assert.Contains("cannot mutate", result.Reason!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -172,7 +172,12 @@ public sealed class AuthorityMatrixTests
 
         var max = State("max", "task", "stage:review", repairCycles: int.MaxValue);
         var overflow = State("max", "task", "stage:implement", repairCycles: int.MaxValue);
-        Assert.Contains("overflowing", AuthorityMatrix.Validate(AgentRole.Reviewer, max, overflow, Beads(), null).Reason!, StringComparison.Ordinal);
+        Assert.Contains("cannot mutate", AuthorityMatrix.Validate(AgentRole.Reviewer, max, overflow, Beads(), null).Reason!, StringComparison.Ordinal);
+
+        var challengerMax = State("max-challenger", "feature", "stage:plan-challenge", repairCycles: int.MaxValue);
+        var challengerOverflow = State("max-challenger", "feature", "stage:plan", repairCycles: int.MaxValue);
+        Assert.Contains("overflowing", AuthorityMatrix.Validate(AgentRole.PlanChallenger, challengerMax,
+            challengerOverflow, Beads(), null).Reason!, StringComparison.Ordinal);
     }
 
     private static BeadWorkflowState State(string id, string type, string? stage = null, string status = "open",

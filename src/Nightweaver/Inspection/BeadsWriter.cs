@@ -96,13 +96,14 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
             cancellationToken, actor);
     }
 
-    internal Task PublishImplementerOutcomeAsync(
+    internal async Task<ProcessResult> PublishDeliveryOutcomeAsync(
         ValidatedTargetRepository repository,
         string beadId,
         string actor,
         string expectedStatus,
         string outcomeLabel,
         string? removeStageLabel,
+        int? repairCycles,
         bool releaseClaim,
         CancellationToken cancellationToken)
     {
@@ -111,6 +112,11 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
         {
             arguments.Add("--remove-label");
             arguments.Add(removeStageLabel);
+        }
+        if (repairCycles is { } counter)
+        {
+            arguments.Add("--set-metadata");
+            arguments.Add($"repair_cycles={counter.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
         }
         if (releaseClaim)
         {
@@ -134,9 +140,9 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
         arguments.Add("--if-status");
         arguments.Add(expectedStatus);
         arguments.Add("--json");
-        return RunAsync(repository, arguments,
-            $"publish Implementer outcome '{outcomeLabel}' for Bead '{beadId}' under the current claim guard",
-            cancellationToken, actor);
+        BeadsReader.EnsureMutationFreeBackend(repository);
+        return await processRunner.RunAsync(BeadsCommand.CreateWrite(repository.Path, arguments, actor), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     internal async Task<GuardedStrandedClaimReleaseResult> ReleaseStrandedClaimAsync(

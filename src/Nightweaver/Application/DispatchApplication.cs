@@ -165,8 +165,9 @@ internal static class DispatchApplication
             if (!outcome.Succeeded || !outcome.StageResult.Succeeded || verifiedState is null)
                 return Fail(environment, $"Dispatch coordinator returned no verified successful state for Bead '{beadId}'.");
 
-            await ReleaseSuccessfulClaimAsync(beadsReader, writer, repository, beadId, project.RecoveryActor,
-                role, verifiedState, cancellationToken).ConfigureAwait(false);
+            if (outcome.StageResult.PublicationReceipt is not { ClaimReleased: true })
+                await ReleaseSuccessfulClaimAsync(beadsReader, writer, repository, beadId, project.RecoveryActor,
+                    role, verifiedState, cancellationToken).ConfigureAwait(false);
             var verifiedLabel = verifiedState.Status == "closed" ? "closed"
                 : verifiedState.Planned ? "planned"
                 : verifiedState.ProductDecisionRequired ? "product-decision-required"

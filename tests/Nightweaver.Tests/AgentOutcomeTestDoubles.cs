@@ -21,13 +21,32 @@ internal static class FixtureOutcomeClassifier
             cancellationToken.ThrowIfCancellationRequested();
             using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
             var evidence = body.RootElement.GetProperty("input").GetString() ?? string.Empty;
-            var choice = evidence.Contains("Implementer product decision:", StringComparison.OrdinalIgnoreCase)
-                ? "product_decision_required" : "ready_for_review";
+            using var document = JsonDocument.Parse(evidence);
+            var role = document.RootElement.GetProperty("role").GetString();
+            var sources = document.RootElement.GetProperty("sources").ToString();
+            var choice = sources.Contains("product decision:", StringComparison.OrdinalIgnoreCase)
+                ? "product_decision_required"
+                : role switch
+                {
+                    "implementer" => "ready_for_review",
+                    "reviewer" when sources.Contains("blocking finding:", StringComparison.OrdinalIgnoreCase) => "changes_required",
+                    "reviewer" => "approved",
+                    "qa" when sources.Contains("qa failure:", StringComparison.OrdinalIgnoreCase) => "changes_required",
+                    "qa" => "approved",
+                    _ => throw new InvalidOperationException($"Unexpected outcome role '{role}'.")
+                };
+            var question = role switch
+            {
+                "implementer" => AgentOutcomeClassifier.QuestionName,
+                "reviewer" => "reviewer_outcome",
+                "qa" => "qa_outcome",
+                _ => throw new InvalidOperationException($"Unexpected outcome role '{role}'.")
+            };
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(JsonSerializer.Serialize(new
                 {
-                    answers = new[] { new { name = AgentOutcomeClassifier.QuestionName, type = "choice", choice } }
+                    answers = new[] { new { name = question, type = "choice", choice } }
                 }), Encoding.UTF8, "application/json")
             };
         }
@@ -51,17 +70,17 @@ internal sealed class FixedAgentOutcomeClassifier(AgentOutcomeChoice? outcome, s
     }
 }
 
-internal sealed class DelegateImplementerOutcomePublisher(
+internal sealed class DelegateDeliveryOutcomePublisher(
     Func<AgentStageSession, AgentStageResult, AgentOutcomeClassificationResult, bool, CancellationToken,
-        Task<AgentStageResult>> publish) : IImplementerOutcomePublisher
+        Task<AgentStageResult>> publish) : IDeliveryOutcomePublisher
 {
     public Task<AgentStageResult> PublishAsync(AgentStageSession session, AgentStageResult invocation,
         AgentOutcomeClassificationResult classification, bool releaseClaim, CancellationToken cancellationToken) =>
         publish(session, invocation, classification, releaseClaim, cancellationToken);
 }
 
-internal sealed class FixedImplementerOutcomeVerifier(
-    string? mutationFailure = null, string? readyFailure = null) : IImplementerOutcomeVerifier
+internal sealed class FixedDeliveryOutcomeVerifier(
+    string? mutationFailure = null, string? readyFailure = null) : IDeliveryOutcomeVerifier
 {
     public Task<string?> VerifyNoClassifierMutationAsync(Nightweaver.Inspection.ValidatedTargetRepository repository,
         string worktreePath, AgentStageResult invocation, string expectedAssignee, CancellationToken cancellationToken)
@@ -70,7 +89,7 @@ internal sealed class FixedImplementerOutcomeVerifier(
         return Task.FromResult(mutationFailure);
     }
 
-    public Task<string?> VerifyReadyForReviewAsync(Nightweaver.Inspection.ValidatedTargetRepository repository,
+    public Task<string?> VerifyApprovalAsync(Nightweaver.Inspection.ValidatedTargetRepository repository,
         string worktreePath, AgentStageResult invocation, string expectedAssignee, string defaultBranch,
         CancellationToken cancellationToken)
     {

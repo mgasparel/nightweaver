@@ -28,12 +28,12 @@ public sealed class OperationalRetryCoordinatorTests
         var outcome = await fixture.RunAsync();
 
         Assert.Equal(OperationalRetryStatus.Escalated, outcome.Status);
-        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, outcome.EscalationCause);
+        Assert.Equal(NeedsHumanCause.DeliveryOutcomeFailure, outcome.EscalationCause);
         Assert.Equal(1, outcome.AttemptCount);
         Assert.Equal(1, fixture.AttemptCount);
         Assert.Equal(0, fixture.ResetCount);
         Assert.Equal("stage:implement", fixture.Stage);
-        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, fixture.LastEscalation!.Cause);
+        Assert.Equal(NeedsHumanCause.DeliveryOutcomeFailure, fixture.LastEscalation!.Cause);
     }
 
     [Fact]
@@ -224,7 +224,7 @@ public sealed class OperationalRetryCoordinatorTests
 
         Assert.Equal(OperationalRetryStatus.Escalated, outcome.Status);
         Assert.Equal(1, outcome.AttemptCount);
-        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, outcome.EscalationCause);
+        Assert.Equal(NeedsHumanCause.DeliveryOutcomeFailure, outcome.EscalationCause);
         Assert.Equal(AgentOperationalFailureKind.NonZeroExit, outcome.StageResult.Failure!.Kind);
         Assert.Equal(0, fixture.ResetCount);
         Assert.Equal(0, fixture.CompareCount);
@@ -241,7 +241,7 @@ public sealed class OperationalRetryCoordinatorTests
 
         Assert.Equal(OperationalRetryStatus.Escalated, outcome.Status);
         Assert.Equal(1, outcome.AttemptCount);
-        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, outcome.EscalationCause);
+        Assert.Equal(NeedsHumanCause.DeliveryOutcomeFailure, outcome.EscalationCause);
         Assert.Equal(AgentOperationalFailureKind.NonZeroExit, outcome.StageResult.Failure!.Kind);
         Assert.Null(outcome.StageResult.Observations);
         Assert.Equal(0, fixture.ResetCount);
@@ -255,7 +255,7 @@ public sealed class OperationalRetryCoordinatorTests
 
         var outcome = await fixture.RunAsync();
 
-        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, outcome.EscalationCause);
+        Assert.Equal(NeedsHumanCause.DeliveryOutcomeFailure, outcome.EscalationCause);
         Assert.Equal(5, fixture.RepairCycles);
         Assert.Equal(0, fixture.ResetCount);
         Assert.Equal(0, fixture.CompareCount);
@@ -270,7 +270,7 @@ public sealed class OperationalRetryCoordinatorTests
 
         var outcome = await fixture.RunAsync();
 
-        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, outcome.EscalationCause);
+        Assert.Equal(NeedsHumanCause.DeliveryOutcomeFailure, outcome.EscalationCause);
         Assert.Equal(WorktreePurpose.Planning, fixture.LastEscalation!.CleanupPurpose);
         Assert.Equal(AgentRole.Implementer, fixture.LastEscalation.Role);
         Assert.Equal(0, fixture.ResetCount);
@@ -284,7 +284,7 @@ public sealed class OperationalRetryCoordinatorTests
 
         var outcome = await fixture.RunAsync();
 
-        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, outcome.EscalationCause);
+        Assert.Equal(NeedsHumanCause.DeliveryOutcomeFailure, outcome.EscalationCause);
         Assert.Equal(1, fixture.EscalateCount);
         Assert.Equal(0, fixture.ResetCount);
     }
@@ -454,7 +454,7 @@ public sealed class OperationalRetryCoordinatorTests
                     return Task.FromResult(new NeedsHumanEscalationResult(true, true, true, true, []));
                 },
                 outcomeClassifier: new FixedAgentOutcomeClassifier(Outcome),
-                outcomePublisher: new DelegateImplementerOutcomePublisher((session, invocation, classification, releaseClaim, token) =>
+                outcomePublisher: new DelegateDeliveryOutcomePublisher((session, invocation, classification, releaseClaim, token) =>
                 {
                     token.ThrowIfCancellationRequested();
                     currentStage = classification.Outcome == AgentOutcomeChoice.ReadyForReview
@@ -473,7 +473,7 @@ public sealed class OperationalRetryCoordinatorTests
                         OutcomeClassification = classification
                     });
                 }),
-                outcomeVerifier: new FixedImplementerOutcomeVerifier(readyFailure: ReadyVerificationFailure));
+                outcomeVerifier: new FixedDeliveryOutcomeVerifier(readyFailure: ReadyVerificationFailure));
         }
 
         internal OperationalRetryCoordinator Coordinator { get; }

@@ -31,7 +31,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
 
         var explicitDispatch = await fixture.RunAsync(
             ["dispatch", implementer, "--role=reviewer", "--config=" + Path.GetRelativePath(fixture.Caller, fixture.Config)],
-            "review-qa");
+            "slot-review");
         Assert.True(explicitDispatch.ExitCode == 0,
             $"Explicit Reviewer dispatch failed (exit {explicitDispatch.ExitCode}).\\nstdout:\\n{explicitDispatch.StandardOutputText}\\nstderr:\\n{explicitDispatch.StandardErrorText}");
         Assert.Empty(explicitDispatch.StandardError);

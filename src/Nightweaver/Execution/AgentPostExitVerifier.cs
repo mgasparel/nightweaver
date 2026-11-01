@@ -29,6 +29,14 @@ internal sealed record AgentStageObservations(
     string? WorktreeStatus,
     bool? WorktreeClean);
 
+internal sealed record DeliveryOutcomePublicationReceipt(
+    AgentRole Role,
+    AgentOutcomeChoice Outcome,
+    BeadWorkflowState PublishedState,
+    string? PublishedAssignee,
+    bool ClaimReleased,
+    bool HandoffToMerger);
+
 internal sealed record AgentStageResult(
     AgentRole Role,
     string BeadId,
@@ -39,7 +47,8 @@ internal sealed record AgentStageResult(
     BeadWorkflowState? VerifiedState = null,
     AgentStageObservations? Observations = null,
     AgentOutcomeClassificationResult? OutcomeClassification = null,
-    IReadOnlySet<string>? PreInvocationCommentIds = null)
+    IReadOnlySet<string>? PreInvocationCommentIds = null,
+    DeliveryOutcomePublicationReceipt? PublicationReceipt = null)
 {
     internal bool Succeeded => Failure is null;
 }
@@ -84,7 +93,7 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
             diagnostics.Add($"Could not inspect worktree status: {exception.Message}");
         }
 
-        if (role == AgentRole.Implementer)
+        if (AgentRoles.IsDeliveryRole(role))
         {
             try
             {
@@ -154,7 +163,7 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
             && before.Stage == "stage:plan-approved" && dependencies is null;
         if (after is not null && postInventory is not null && !missingMaterializationEvidence)
         {
-            transition = role == AgentRole.Implementer
+            transition = AgentRoles.IsDeliveryRole(role)
                 ? AuthorityMatrix.ValidateWorkerObservation(before, after, beforeAssignee, afterAssignee)
                 : AuthorityMatrix.Validate(role, before, after, postInventory.ById, dependencies);
         }
@@ -181,7 +190,7 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
         if (transition is { IsLegal: false })
             findings.Add(new(AgentOperationalFailureKind.IllegalBeadTransition, transition.Reason!));
 
-        var observations = role == AgentRole.Implementer && after is not null
+        var observations = AgentRoles.IsDeliveryRole(role) && after is not null
             ? new AgentStageObservations(before, after, beforeAssignee, afterAssignee,
                 execution.Status, execution.ExitCode, branchName, afterHead, porcelain, worktreeClean)
             : null;
@@ -192,26 +201,26 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
             foreach (var secondary in findings.Where(failure => !ReferenceEquals(failure, primary)))
                 diagnostics.Add($"{secondary.Kind}: {secondary.Reason}");
             return new(role, before.Id, execution.InvocationId, execution.LogFilePath, primary,
-                diagnostics.AsReadOnly(), role == AgentRole.Implementer ? null : after, observations);
+                diagnostics.AsReadOnly(), AgentRoles.IsDeliveryRole(role) ? null : after, observations);
         }
 
-        if (role == AgentRole.Implementer && observations is null)
+        if (AgentRoles.IsDeliveryRole(role) && observations is null)
             throw new AgentPostExitVerificationException(execution.InvocationId, execution.LogFilePath,
-                "the completed Implementer invocation lacks a readable unchanged Bead state");
+                "the completed Delivery invocation lacks readable unchanged Bead state");
 
-        if (diagnostics.Count > 0 && role != AgentRole.Implementer)
+        if (diagnostics.Count > 0 && !AgentRoles.IsDeliveryRole(role))
         {
             throw new AgentPostExitVerificationException(execution.InvocationId, execution.LogFilePath,
                 string.Join("; ", diagnostics));
         }
-        if (transition is null && role != AgentRole.Implementer)
+        if (transition is null && !AgentRoles.IsDeliveryRole(role))
         {
             throw new AgentPostExitVerificationException(execution.InvocationId, execution.LogFilePath,
                 "the post-exit Bead state could not be validated");
         }
 
         return new(role, before.Id, execution.InvocationId, execution.LogFilePath, null,
-            diagnostics.AsReadOnly(), role == AgentRole.Implementer ? null : after, observations);
+            diagnostics.AsReadOnly(), AgentRoles.IsDeliveryRole(role) ? null : after, observations);
     }
 
     private async Task<ProcessResult> RunGitAsync(IReadOnlyList<string> arguments, string workingDirectory,
