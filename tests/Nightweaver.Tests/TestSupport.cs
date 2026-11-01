@@ -60,7 +60,28 @@ internal sealed class TempDirectory : IDisposable
                 else File.Delete(entry);
             }
         }
-        Directory.Delete(root);
+        DeleteDirectory(root);
+    }
+
+    private static void DeleteDirectory(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path);
+                return;
+            }
+            catch (IOException exception) when (OperatingSystem.IsWindows()
+                && (exception.HResult & 0xFFFF) == 32
+                && attempt < 5)
+            {
+                // A killed Windows CLI can release its repository directory handle
+                // just after its parent exits. Retry only the observed sharing error;
+                // a persistent lock still fails after this bounded backoff.
+                Thread.Sleep(TimeSpan.FromMilliseconds(50 << attempt));
+            }
+        }
     }
 }
 

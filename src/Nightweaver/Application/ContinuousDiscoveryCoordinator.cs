@@ -8,16 +8,16 @@ internal delegate IAsyncEnumerable<bool> DiscoveryTimerTicks(CancellationToken c
 
 /// <summary>Coalesces startup, timer, and released-slot signals into one serial discovery reader.</summary>
 internal sealed class ContinuousDiscoveryCoordinator(
-    Func<CancellationToken, Task<IReadOnlyList<DeliveryPoolDiagnostic>>> evaluateDelivery,
-    ChannelReader<DeliveryPoolCompletion> deliveryCompletions,
+    IReadOnlyList<ContinuousPoolRegistration> configuredPools,
     Func<CancellationToken, Task> validateAdmissionInfrastructure,
-    Action cancelSlots,
-    Func<CancellationToken, Task> drainSlots,
     TextWriter output,
     TextWriter error,
     DiscoveryTimerTicks? timerTicks = null)
 {
     internal static readonly TimeSpan DiscoveryInterval = TimeSpan.FromSeconds(30);
+
+    private readonly IReadOnlyList<ContinuousPoolRegistration> pools =
+        ContinuousPoolRegistration.Order(configuredPools);
 
     private readonly Channel<bool> requests = Channel.CreateBounded<bool>(new BoundedChannelOptions(1)
     {
@@ -34,13 +34,16 @@ internal sealed class ContinuousDiscoveryCoordinator(
         using var runtimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var worker = DiscoveryLoopAsync(runtimeCancellation.Token);
         var timer = TimerLoopAsync(runtimeCancellation.Token);
-        var completions = CompletionLoopAsync(runtimeCancellation.Token);
+        var poolCompletionReaders = pools
+            .Select(pool => ReadPoolCompletionsAsync(pool, runtimeCancellation.Token))
+            .ToArray();
+        var completionMonitor = MonitorPoolCompletionReadersAsync(poolCompletionReaders);
         var drained = true;
         RequestDiscovery();
 
         try
         {
-            var first = await Task.WhenAny(worker, timer, completions,
+            var first = await Task.WhenAny(worker, timer, completionMonitor,
                 Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken)).ConfigureAwait(false);
             if (!cancellationToken.IsCancellationRequested)
             {
@@ -53,11 +56,22 @@ internal sealed class ContinuousDiscoveryCoordinator(
         }
         finally
         {
-            cancelSlots();
+            foreach (var pool in pools)
+            {
+                try
+                {
+                    pool.Cancel();
+                }
+                catch (Exception exception)
+                {
+                    drained = false;
+                    error.WriteLine($"nightweaver: {pool.Kind} shutdown could not cancel local work: {exception.Message}");
+                }
+            }
             runtimeCancellation.Cancel();
             try
             {
-                await Task.WhenAll(worker, timer, completions)
+                await Task.WhenAll(poolCompletionReaders.Append(worker).Append(timer).Append(completionMonitor))
                     .WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is OperationCanceledException or TimeoutException)
@@ -74,14 +88,17 @@ internal sealed class ContinuousDiscoveryCoordinator(
             }
 
             using var drainTimeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-            try
+            foreach (var pool in pools)
             {
-                await drainSlots(drainTimeout.Token).ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                drained = false;
-                error.WriteLine($"nightweaver: Delivery shutdown could not confirm all local slots stopped: {exception.Message}");
+                try
+                {
+                    await pool.Drain(drainTimeout.Token).ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    drained = false;
+                    error.WriteLine($"nightweaver: {pool.Kind} shutdown could not confirm local work stopped: {exception.Message}");
+                }
             }
             output.WriteLine("Continuous Delivery runtime stopped.");
         }
@@ -95,21 +112,24 @@ internal sealed class ContinuousDiscoveryCoordinator(
             // Shared runtime roots are infrastructure. A broken root ends admission and shutdowns
             // active work; ordinary fresh tracker reads below are retryable on a later trigger.
             await validateAdmissionInfrastructure(cancellationToken).ConfigureAwait(false);
-            try
+            foreach (var pool in pools)
             {
-                var diagnostics = await evaluateDelivery(cancellationToken).ConfigureAwait(false);
-                foreach (var diagnostic in diagnostics)
-                    error.WriteLine($"nightweaver: Delivery skipped '{diagnostic.BeadId}' ({diagnostic.Code}): {diagnostic.Message}");
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception exception)
-            {
-                if (exception is not ToolExecutionException)
+                try
+                {
+                    var diagnostics = await pool.EvaluateAsync(cancellationToken).ConfigureAwait(false);
+                    foreach (var diagnostic in diagnostics)
+                        error.WriteLine($"nightweaver: {pool.Kind} skipped '{diagnostic.BeadId}' ({diagnostic.Code}): {diagnostic.Message}");
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
                     throw;
-                error.WriteLine($"nightweaver: Delivery discovery failed; a later trigger will reread current tracker state: {exception.Message}");
+                }
+                catch (Exception exception)
+                {
+                    if (exception is not ToolExecutionException)
+                        throw;
+                    error.WriteLine($"nightweaver: {pool.Kind} discovery failed; a later trigger will reread current tracker state: {exception.Message}");
+                }
             }
         }
     }
@@ -121,18 +141,27 @@ internal sealed class ContinuousDiscoveryCoordinator(
             RequestDiscovery();
     }
 
-    private async Task CompletionLoopAsync(CancellationToken cancellationToken)
+    private async Task ReadPoolCompletionsAsync(
+        ContinuousPoolRegistration pool,
+        CancellationToken cancellationToken)
     {
-        await foreach (var completion in deliveryCompletions.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        await foreach (var completion in pool.Completions.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
             var result = completion.Exception is not null
                 ? $"failed: {completion.Exception.Message}"
                 : completion.IsCanceled
                     ? "canceled"
                     : completion.Outcome?.Disposition.ToString() ?? "ended without an outcome";
-            output.WriteLine($"Delivery slot '{completion.BeadId}' released local capacity ({result}).");
+            output.WriteLine($"{pool.Kind} slot '{completion.BeadId}' released local capacity ({result}).");
             RequestDiscovery();
         }
+    }
+
+    private static async Task MonitorPoolCompletionReadersAsync(Task[] readers)
+    {
+        var first = await Task.WhenAny(readers).ConfigureAwait(false);
+        await first.ConfigureAwait(false);
+        throw new InvalidOperationException("A configured pool completion stream stopped unexpectedly.");
     }
 
     private static async IAsyncEnumerable<bool> ReadTimerTicksAsync(

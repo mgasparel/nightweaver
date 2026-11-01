@@ -36,7 +36,7 @@ internal static class ContinuousApplication
 
         // The process-owned lock precedes startup recovery and every live Delivery admission.
         ProcessLifetimeTargetRepositoryLock.Acquire(repository);
-        ValidateRoots(hostPaths, project.Name);
+        EnsureInitialRoots(hostPaths, project.Name);
 
         var beadsReader = new BeadsReader(processRunner);
         var beadsWriter = new BeadsWriter(processRunner);
@@ -50,22 +50,28 @@ internal static class ContinuousApplication
         using var slotLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var pool = new DeliveryPoolCoordinator(hostPaths, project, repository, processRunner,
             slotLifetimeToken: slotLifetime.Token);
+        var configuredPools = new[]
+        {
+            new ContinuousPoolRegistration(
+                ContinuousPoolKind.Delivery,
+                async token =>
+                {
+                    var evaluation = await pool.EvaluateAsync(token).ConfigureAwait(false);
+                    foreach (var admission in evaluation.Admitted)
+                        environment.Out.WriteLine($"Delivery reserved Plan Bead '{admission.BeadId}' (capacity {pool.CapacityLimit}).");
+                    return evaluation.Diagnostics;
+                },
+                pool.CompletionReader,
+                slotLifetime.Cancel,
+                async token => { await pool.WaitForActiveSlotsAsync(token).ConfigureAwait(false); })
+        };
         var runtime = new ContinuousDiscoveryCoordinator(
-            async token =>
-            {
-                var evaluation = await pool.EvaluateAsync(token).ConfigureAwait(false);
-                foreach (var admission in evaluation.Admitted)
-                    environment.Out.WriteLine($"Delivery reserved Plan Bead '{admission.BeadId}' (capacity {pool.CapacityLimit}).");
-                return evaluation.Diagnostics;
-            },
-            pool.CompletionReader,
+            configuredPools,
             _ =>
             {
-                ValidateRoots(hostPaths, project.Name);
+                ValidateAdmissionRoots(hostPaths, project.Name);
                 return Task.CompletedTask;
             },
-            slotLifetime.Cancel,
-            async token => { await pool.WaitForActiveSlotsAsync(token).ConfigureAwait(false); },
             environment.Out,
             environment.Err);
 
@@ -75,10 +81,17 @@ internal static class ContinuousApplication
         return drained ? ExitCodes.Success : ExitCodes.InspectionFailure;
     }
 
-    private static void ValidateRoots(HostPaths hostPaths, ProjectSlug project)
+    internal static void EnsureInitialRoots(HostPaths hostPaths, ProjectSlug project)
     {
         SharedRuntimeRootValidator.EnsureUsable(hostPaths.WorktreesRoot(project));
         SharedRuntimeRootValidator.EnsureUsable(hostPaths.TmpRoot(project));
         SharedRuntimeRootValidator.EnsureUsable(hostPaths.LogsRoot(project));
+    }
+
+    internal static void ValidateAdmissionRoots(HostPaths hostPaths, ProjectSlug project)
+    {
+        SharedRuntimeRootValidator.EnsureExistingUsable(hostPaths.WorktreesRoot(project));
+        SharedRuntimeRootValidator.EnsureExistingUsable(hostPaths.TmpRoot(project));
+        SharedRuntimeRootValidator.EnsureExistingUsable(hostPaths.LogsRoot(project));
     }
 }
