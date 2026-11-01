@@ -18,6 +18,23 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
     ];
 
     [Fact]
+    public async Task MergerPromptRequiresCurrentHeadChecksAndConfirmedMergeBeforeClosure()
+    {
+        var root = FindRepositoryRoot();
+        var merger = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "merger.md"), TestContext.Current.CancellationToken);
+
+        Assert.Contains("rebase the pull request branch onto the fetched `origin/<default_branch>`", merger, StringComparison.Ordinal);
+        Assert.Contains("finish with `git rebase --continue`", merger, StringComparison.Ordinal);
+        Assert.Contains("run the repository's required local build and test checks again", merger, StringComparison.Ordinal);
+        Assert.Contains("git push --force-with-lease origin HEAD:nightweaver/<bead-id>", merger, StringComparison.Ordinal);
+        Assert.Contains("gh pr checks <number-or-url> --watch", merger, StringComparison.Ordinal);
+        Assert.Contains("if it changed, synchronize, push, and rerun the required local and pull request checks", merger, StringComparison.Ordinal);
+        Assert.Contains("gh pr merge <number-or-url> --squash --delete-branch", merger, StringComparison.Ordinal);
+        Assert.Contains("confirm it is `MERGED` before closing the Plan Bead", merger, StringComparison.Ordinal);
+        Assert.Contains("synchronized and checked head SHA", merger, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DeliveryRolePromptsContainTheSuccessfulPathHandoffInstructions()
     {
         var root = FindRepositoryRoot();
