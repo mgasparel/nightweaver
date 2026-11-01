@@ -495,8 +495,17 @@ internal sealed class OperationalRetryCoordinator
                     verificationFailure, classification, cancellationToken).ConfigureAwait(false);
         }
 
-        var published = await outcomePublisher.PublishAsync(session, invocation, classification,
-            releaseClaim, cancellationToken).ConfigureAwait(false);
+        AgentStageResult published;
+        try
+        {
+            published = await outcomePublisher.PublishAsync(session, invocation, classification,
+                releaseClaim, cancellationToken).ConfigureAwait(false);
+        }
+        catch (DeliveryRepairCounterOverflowException exception)
+        {
+            return await EscalateDeliveryOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                exception.Message, classification, cancellationToken).ConfigureAwait(false);
+        }
         return Success(published, attempts);
     }
 

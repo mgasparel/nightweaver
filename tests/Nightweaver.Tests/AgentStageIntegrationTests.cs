@@ -314,6 +314,62 @@ public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTe
         Assert.True(File.Exists(Path.Combine(target.WorktreePath(bead), "fixture-dirty.txt")));
     }
 
+    [Theory]
+    [InlineData("stage:review", "reviewer", "slot-review-reject-2147483647")]
+    [InlineData("stage:qa", "qa", "slot-qa-reject-2147483647")]
+    public async Task RepairCounterOverflowEscalatesWithoutWrappingOrRerunningRole(
+        string stage, string roleName, string action)
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        var role = roleName switch
+        {
+            "reviewer" => AgentRole.Reviewer,
+            "qa" => AgentRole.Qa,
+            _ => throw new ArgumentOutOfRangeException(nameof(roleName), roleName, "Unsupported Delivery role.")
+        };
+        using var target = new AgentStageTargetFixture();
+        var bead = target.CreateBead($"{role} repair counter overflow", "task", stage);
+        target.SetRepairCycles(bead, int.MaxValue);
+        var remoteSha = target.SeedRemoteDeliveryBranch(bead);
+        var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-overflow-observations.jsonl");
+
+        var outcome = await target.RunDeliverySlotAsync(bead, [(role, action)], observations,
+            maxRepairCycles: int.MaxValue);
+
+        Assert.Equal(DeliverySlotDisposition.Escalated, outcome.Disposition);
+        Assert.Equal(NeedsHumanCause.DeliveryOutcomeFailure, outcome.LastStage?.EscalationCause);
+        Assert.True(outcome.ClaimReleased);
+        Assert.Equal([role], target.LastSlotRoles);
+        var snapshot = target.ReadBead(bead);
+        var state = BeadWorkflowState.Parse(snapshot);
+        Assert.Equal(stage, state.Stage);
+        Assert.Equal(int.MaxValue, state.RepairCycles);
+        Assert.True(state.NeedsHuman);
+        Assert.Equal("open", snapshot.Status);
+        Assert.Null(snapshot.Assignee);
+        Assert.True(Directory.Exists(target.WorktreePath(bead)));
+        Assert.True(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
+        Assert.Equal(remoteSha, target.RemoteBranchSha(bead));
+        Assert.DoesNotContain(target.LastSlotRequests, request => request.FileName == "bd"
+            && request.Arguments.Contains("update", StringComparer.Ordinal)
+            && request.Arguments.Contains(bead, StringComparer.Ordinal)
+            && request.Arguments.Contains("--set-metadata", StringComparer.Ordinal));
+
+        using var comments = JsonDocument.Parse(target.ReadComments(bead));
+        var commentTexts = StringValues(comments.RootElement).ToArray();
+        var finding = role == AgentRole.Reviewer
+            ? "Blocking finding: reviewer cycle 2147483647"
+            : "QA failure: cycle 2147483647";
+        Assert.Contains(commentTexts, value => value.Contains(finding, StringComparison.Ordinal));
+        var diagnosticText = commentTexts
+            .Single(value => value.Contains("nightweaver-needs-human-v1", StringComparison.Ordinal));
+        using var diagnostic = JsonDocument.Parse(diagnosticText);
+        Assert.Equal("delivery-outcome-failure", diagnostic.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("cannot be incremented at repair_cycles=2147483647", diagnostic.RootElement.GetProperty("reason").GetString(), StringComparison.Ordinal);
+        Assert.Contains("cannot be incremented at repair_cycles=2147483647",
+            diagnostic.RootElement.GetProperty("latest_findings").GetString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task DeliverySlotKeepsOneClaimAndPersistentWorktreeAcrossEverySupportedEntryStage()
     {

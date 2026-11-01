@@ -41,6 +41,12 @@ internal sealed class AgentInvocationPreparationException(string message) : Nigh
 
 internal sealed class AgentStageInputException(string message) : NightweaverException(message);
 
+internal sealed class DeliveryRepairCounterOverflowException(int repairCycles)
+    : NightweaverException($"The shared Delivery repair counter cannot be incremented at repair_cycles={repairCycles} without overflowing.")
+{
+    internal int RepairCycles { get; } = repairCycles;
+}
+
 internal sealed class AgentPostExitVerificationException(string invocationId, string logFilePath, string message)
     : NightweaverException($"Agent invocation '{invocationId}' (log '{logFilePath}') could not be fully verified: {message}")
 {

@@ -171,7 +171,7 @@ stateDiagram-v2
      - Process exits with a non-zero exit code.
      - Process exceeds its configured per-role wall-clock timeout (`timeout_minutes`) and is terminated by its **Win32 Job Object**.
      - Worktree fails post-exit cleanliness (`git status --porcelain` is non-empty, or forbidden `HEAD` mutations occurred during a read-only stage).
-     - Process exits `0` without performing a legal `bd` state transition out of its pre-dispatch state (per Section 3).
+     - A Planning or Merger Agent exits `0` without performing the legal `bd` state transition owned by that role (per Section 3). Delivery Agents (Implementer, Reviewer, and QA) are expected to leave workflow fields unchanged and provide evidence; the Orchestrator classifies that evidence, verifies the outcome independently, and publishes the guarded transition. Missing Agent-written Delivery transitions are not operational failures.
 2. **In-Memory Retry Tracking (`max_operational_retries`, default `2`)**:
    - Operational retries are tracked in-memory inside the **Orchestrator** for the active stage without mutating `repair_cycles` metadata in `bd`.
    - Before retrying an initially clean session, the **Orchestrator** may reset the isolated worktree to its recorded `HEAD` and remove untracked, non-ignored files. If a retained session was already dirty when opened, retries preserve its tracked, staged, untracked, ignored, and temporary contents; when those contents prevent a verified success, the **Orchestrator** preserves them and escalates instead of resetting them.

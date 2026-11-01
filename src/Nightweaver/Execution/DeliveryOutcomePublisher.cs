@@ -144,7 +144,7 @@ internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : I
         try { cycles = checked(expected.RepairCycles + 1); }
         catch (OverflowException)
         {
-            throw new AgentStageInputException("The shared Delivery repair counter cannot be incremented without overflowing.");
+            throw new DeliveryRepairCounterOverflowException(expected.RepairCycles);
         }
         return new("stage:implement", expected.Stage, cycles,
             expected with { Stage = "stage:implement", RepairCycles = cycles, Status = release ? "open" : expected.Status },
