@@ -31,6 +31,28 @@ public sealed class MergerSlotCoordinatorTests
     }
 
     [Fact]
+    public async Task SameActorInProgressRecoveryCandidateIsRefusedWithoutLaunchOrMutation()
+    {
+        var runner = new MergerSlotProcessRunner(initialStatus: "in_progress", initialAssignee: "nightweaver:merger-slot-tests");
+        var launches = 0;
+        var slot = CreateSlot(runner, (_, _, _, _, _, _, _, _, _) =>
+        {
+            Interlocked.Increment(ref launches);
+            throw new InvalidOperationException("Recovered claims must not bypass startup recovery.");
+        });
+
+        var result = await slot.RunAsync(CreateHost(), CreateProject(), CreateRepository(), "candidate",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MergerSlotDisposition.Refused, result.Disposition);
+        Assert.False(result.ClaimHandoffCompleted);
+        Assert.Equal(0, launches);
+        Assert.Equal("in_progress", runner.Bead.Status);
+        Assert.Equal("nightweaver:merger-slot-tests", runner.Bead.Assignee);
+        Assert.Empty(runner.ClaimWrites("candidate"));
+    }
+
+    [Fact]
     public async Task ChangedReadinessAfterGuardedClaimReleasesOnlyItsOwnClaimBeforeDispatch()
     {
         var runner = new MergerSlotProcessRunner(removeReadinessAfterClaim: true);
@@ -77,6 +99,196 @@ public sealed class MergerSlotCoordinatorTests
         Assert.Equal("nightweaver:merger-slot-tests", runner.Bead.Assignee);
         Assert.Equal("stage:implement", result.FinalState!.Stage);
         Assert.Equal(1, result.FinalState.RepairCycles);
+        Assert.Equal("open", MergerSlotProcessRunner.GuardedStatus(Assert.Single(runner.ClaimWrites("candidate"))));
+    }
+
+    [Fact]
+    public async Task VerifiedClosurePreservesNonzeroRepairCyclesAndReleasesTheClosedClaim()
+    {
+        var runner = new MergerSlotProcessRunner(initialRepairCycles: 7);
+        var slot = CreateSlot(runner, (_, _, _, beadId, role, _, _, _, _) =>
+        {
+            runner.Bead.Status = "closed";
+            return Task.FromResult(Success(beadId, role, runner.ReadState()));
+        });
+
+        var result = await slot.RunAsync(CreateHost(), CreateProject(), CreateRepository(), "candidate",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MergerSlotDisposition.Merged, result.Disposition);
+        Assert.True(result.MergeCompleted);
+        Assert.True(result.ClaimHandoffCompleted);
+        Assert.Equal(7, result.FinalState!.RepairCycles);
+        Assert.Equal("closed", runner.Bead.Status);
+        Assert.Null(runner.Bead.Assignee);
+        Assert.Equal(["open", "closed"], runner.ClaimWrites("candidate").Select(MergerSlotProcessRunner.GuardedStatus));
+    }
+
+    [Fact]
+    public async Task MissingVerifiedStateIsFailedAndLeavesTheClaimUntouched()
+    {
+        var runner = new MergerSlotProcessRunner();
+        var slot = CreateSlot(runner, (_, _, _, beadId, role, _, _, _, _) =>
+        {
+            var stageResult = new AgentStageResult(role, beadId, "fixture-invocation", string.Empty, null, []);
+            return Task.FromResult(new OperationalRetryOutcome(OperationalRetryStatus.Succeeded,
+                stageResult, 1, null, null, null));
+        });
+
+        var result = await slot.RunAsync(CreateHost(), CreateProject(), CreateRepository(), "candidate",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MergerSlotDisposition.Failed, result.Disposition);
+        Assert.False(result.ClaimHandoffCompleted);
+        Assert.Contains("no verified successful workflow state", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("in_progress", runner.Bead.Status);
+        Assert.Equal("nightweaver:merger-slot-tests", runner.Bead.Assignee);
+        Assert.Single(runner.ClaimWrites("candidate"));
+    }
+
+    [Fact]
+    public async Task WrongVerifiedResultIdentityIsFailedWithoutClaimRelease()
+    {
+        var runner = new MergerSlotProcessRunner();
+        var slot = CreateSlot(runner, (_, _, _, _, _, _, _, _, _) =>
+            Task.FromResult(Success("different-bead", AgentRole.Merger,
+                new("different-bead", "task", "closed", "stage:merge", false, false, false, 0))));
+
+        var result = await slot.RunAsync(CreateHost(), CreateProject(), CreateRepository(), "candidate",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MergerSlotDisposition.Failed, result.Disposition);
+        Assert.Contains("different role or Bead", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.False(result.ClaimHandoffCompleted);
+        Assert.Equal("in_progress", runner.Bead.Status);
+        Assert.Equal("nightweaver:merger-slot-tests", runner.Bead.Assignee);
+        Assert.Single(runner.ClaimWrites("candidate"));
+    }
+
+    [Fact]
+    public async Task ChangedRepairCyclesRejectVerifiedClosureAndRetainTheClaim()
+    {
+        var runner = new MergerSlotProcessRunner(initialRepairCycles: 7);
+        var slot = CreateSlot(runner, (_, _, _, beadId, role, _, _, _, _) =>
+        {
+            runner.Bead.Status = "closed";
+            runner.Bead.RepairCycles++;
+            return Task.FromResult(Success(beadId, role, runner.ReadState()));
+        });
+
+        var result = await slot.RunAsync(CreateHost(), CreateProject(), CreateRepository(), "candidate",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MergerSlotDisposition.Failed, result.Disposition);
+        Assert.Contains("unchanged repair_cycles", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.False(result.ClaimHandoffCompleted);
+        Assert.Equal(8, runner.Bead.RepairCycles);
+        Assert.Equal("closed", runner.Bead.Status);
+        Assert.Equal("nightweaver:merger-slot-tests", runner.Bead.Assignee);
+        Assert.Single(runner.ClaimWrites("candidate"));
+    }
+
+    [Theory]
+    [InlineData("owner")]
+    [InlineData("state")]
+    public async Task StaleOwnerOrWorkflowBeforeFinalizationLeavesClosedClaimUntouched(string change)
+    {
+        var runner = new MergerSlotProcessRunner(initialRepairCycles: 2);
+        var slot = CreateSlot(runner, (_, _, _, beadId, role, _, _, _, _) =>
+        {
+            runner.Bead.Status = "closed";
+            var verified = runner.ReadState();
+            runner.BeforeNextSnapshot = () =>
+            {
+                if (change == "owner")
+                    runner.Bead.Assignee = "human:changed";
+                else
+                    runner.Bead.RepairCycles++;
+            };
+            return Task.FromResult(Success(beadId, role, verified));
+        });
+
+        var result = await slot.RunAsync(CreateHost(), CreateProject(), CreateRepository(), "candidate",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MergerSlotDisposition.Failed, result.Disposition);
+        Assert.False(result.ClaimHandoffCompleted);
+        Assert.Single(runner.ClaimWrites("candidate"));
+        Assert.Equal("closed", runner.Bead.Status);
+        Assert.Equal(change == "owner" ? "human:changed" : "nightweaver:merger-slot-tests", runner.Bead.Assignee);
+        Assert.Equal(change == "owner" ? 2 : 3, runner.Bead.RepairCycles);
+    }
+
+    [Fact]
+    public async Task CompletedOperationalEscalationIsReportedWithoutClosedClaimFinalization()
+    {
+        var runner = new MergerSlotProcessRunner();
+        var slot = CreateSlot(runner, (_, _, _, beadId, role, _, _, _, _) =>
+        {
+            runner.Bead.Status = "open";
+            runner.Bead.Assignee = null;
+            runner.Bead.Labels.Add("needs-human");
+            var stageResult = new AgentStageResult(role, beadId, "fixture-invocation", string.Empty, null, [], runner.ReadState());
+            var progress = new NeedsHumanEscalationResult(true, true, true, true, []);
+            return Task.FromResult(new OperationalRetryOutcome(OperationalRetryStatus.Escalated, stageResult, 2,
+                NeedsHumanCause.OperationalRetriesExhausted, progress, null));
+        });
+
+        var result = await slot.RunAsync(CreateHost(), CreateProject(), CreateRepository(), "candidate",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MergerSlotDisposition.Escalated, result.Disposition);
+        Assert.True(result.ClaimHandoffCompleted);
+        Assert.True(result.Stage?.Escalation?.Succeeded);
+        Assert.Equal("open", runner.Bead.Status);
+        Assert.Null(runner.Bead.Assignee);
+        Assert.Single(runner.ClaimWrites("candidate"));
+    }
+
+    [Fact]
+    public async Task IncompleteOperationalEscalationIsFailedAndNotReportedAsHandoff()
+    {
+        var runner = new MergerSlotProcessRunner();
+        var slot = CreateSlot(runner, (_, _, _, beadId, role, _, _, _, _) =>
+        {
+            var stageResult = new AgentStageResult(role, beadId, "fixture-invocation", string.Empty, null, [], runner.ReadState());
+            var progress = new NeedsHumanEscalationResult(true, false, true, false, ["diagnostic write failed"]);
+            return Task.FromResult(new OperationalRetryOutcome(OperationalRetryStatus.Escalated, stageResult, 2,
+                NeedsHumanCause.OperationalRetriesExhausted, progress, null));
+        });
+
+        var result = await slot.RunAsync(CreateHost(), CreateProject(), CreateRepository(), "candidate",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MergerSlotDisposition.Failed, result.Disposition);
+        Assert.False(result.ClaimHandoffCompleted);
+        Assert.Contains("without a verified claim handoff", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("in_progress", runner.Bead.Status);
+        Assert.Equal("nightweaver:merger-slot-tests", runner.Bead.Assignee);
+        Assert.Single(runner.ClaimWrites("candidate"));
+    }
+
+    [Fact]
+    public async Task IncompleteEscalationExceptionIsFailedWithoutBlindClaimRelease()
+    {
+        var runner = new MergerSlotProcessRunner();
+        var slot = CreateSlot(runner, (_, _, _, beadId, role, _, _, _, _) =>
+        {
+            var stageResult = new AgentStageResult(role, beadId, "fixture-invocation", string.Empty, null, [], runner.ReadState());
+            var progress = new NeedsHumanEscalationResult(true, false, true, false, ["claim release failed"]);
+            var outcome = new OperationalRetryOutcome(OperationalRetryStatus.Escalated, stageResult, 2,
+                NeedsHumanCause.OperationalRetriesExhausted, progress, null);
+            throw new OperationalRetryEscalationIncompleteException("controlled escalation failure", outcome);
+        });
+
+        var result = await slot.RunAsync(CreateHost(), CreateProject(), CreateRepository(), "candidate",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MergerSlotDisposition.Failed, result.Disposition);
+        Assert.False(result.ClaimHandoffCompleted);
+        Assert.Contains("controlled escalation failure", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Equal("in_progress", runner.Bead.Status);
+        Assert.Equal("nightweaver:merger-slot-tests", runner.Bead.Assignee);
         Assert.Single(runner.ClaimWrites("candidate"));
     }
 
@@ -102,11 +314,13 @@ public sealed class MergerSlotCoordinatorTests
         return new OperationalRetryOutcome(OperationalRetryStatus.Succeeded, result, 1, null, null, null);
     }
 
-    private sealed class MergerSlotProcessRunner(bool foreignClaimOnAcquire = false, bool removeReadinessAfterClaim = false)
+    private sealed class MergerSlotProcessRunner(bool foreignClaimOnAcquire = false, bool removeReadinessAfterClaim = false,
+        string initialStatus = "open", string? initialAssignee = null, int initialRepairCycles = 0)
         : IProcessRunner
     {
         private readonly List<ProcessRequest> requests = [];
-        internal FakeBead Bead { get; } = new();
+        internal FakeBead Bead { get; } = new(initialStatus, initialAssignee, initialRepairCycles);
+        internal Action? BeforeNextSnapshot { get; set; }
 
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
@@ -117,7 +331,13 @@ public sealed class MergerSlotCoordinatorTests
             if (arguments.Contains("update", StringComparer.Ordinal)) return Task.FromResult(Update(arguments));
             if (arguments.Contains("ready", StringComparer.Ordinal) || arguments.Contains("--ready", StringComparer.Ordinal))
                 return Task.FromResult(Readiness(arguments));
-            if (arguments.Contains("list", StringComparer.Ordinal)) return Task.FromResult(Json([ToRow()]));
+            if (arguments.Contains("list", StringComparer.Ordinal))
+            {
+                var beforeNextSnapshot = BeforeNextSnapshot;
+                BeforeNextSnapshot = null;
+                beforeNextSnapshot?.Invoke();
+                return Task.FromResult(Json([ToRow()]));
+            }
             throw new InvalidOperationException($"Unexpected bd request: {string.Join(' ', arguments)}");
         }
 
@@ -202,13 +422,13 @@ public sealed class MergerSlotCoordinatorTests
         }
     }
 
-    private sealed class FakeBead
+    private sealed class FakeBead(string status, string? assignee, int repairCycles)
     {
         internal string Id { get; } = "candidate";
-        internal string Status { get; set; } = "open";
-        internal string? Assignee { get; set; }
+        internal string Status { get; set; } = status;
+        internal string? Assignee { get; set; } = assignee;
         internal List<string> Labels { get; } = ["stage:merge"];
-        internal int RepairCycles { get; set; }
+        internal int RepairCycles { get; set; } = repairCycles;
         internal bool Ready { get; set; } = true;
     }
 }

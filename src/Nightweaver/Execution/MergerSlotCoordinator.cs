@@ -61,16 +61,26 @@ internal sealed class MergerSlotCoordinator
         }
     }
 
+    internal Task<MergerSlotOutcome> RunAsync(
+        HostPaths paths,
+        ProjectConfig project,
+        ValidatedTargetRepository repository,
+        string beadId,
+        CancellationToken cancellationToken) =>
+        RunAsync(paths, project, repository, beadId, static () => { }, cancellationToken);
+
     internal async Task<MergerSlotOutcome> RunAsync(
         HostPaths paths,
         ProjectConfig project,
         ValidatedTargetRepository repository,
         string beadId,
+        Action agentAttemptStarted,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(agentAttemptStarted);
         if (string.IsNullOrWhiteSpace(beadId))
             return Result(MergerSlotDisposition.Refused, null, null, false, "Bead ID must be nonblank.");
 
@@ -95,19 +105,15 @@ internal sealed class MergerSlotCoordinator
                     $"Bead '{beadId}' has invalid workflow state: {exception.Message}");
             }
 
-            var refusal = ValidateAdmission(candidate, initialState, admission.Readiness, project.RecoveryActor);
+            var refusal = ValidateAdmission(candidate, initialState, admission.Readiness);
             if (refusal is not null)
                 return Result(MergerSlotDisposition.Refused, initialState, null, false, refusal);
 
-            var wasAlreadyOwned = candidate.Status == "in_progress";
-            if (!wasAlreadyOwned)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                claimAcquisitionAttempted = true;
-                await writer.AcquireDispatchClaimAsync(repository, beadId, project.RecoveryActor, cancellationToken)
-                    .ConfigureAwait(false);
-                claimAcquiredHere = true;
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            claimAcquisitionAttempted = true;
+            await writer.AcquireDispatchClaimAsync(repository, beadId, project.RecoveryActor, cancellationToken)
+                .ConfigureAwait(false);
+            claimAcquiredHere = true;
 
             var claimedSnapshot = await reader.ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor,
                 cancellationToken).ConfigureAwait(false);
@@ -130,7 +136,7 @@ internal sealed class MergerSlotCoordinator
                     $"Guarded claim verification failed: observed status '{claimed.Status}' and assignee '{claimed.Assignee ?? "(none)"}'.")
                     .ConfigureAwait(false);
 
-            var expectedClaimedState = wasAlreadyOwned ? initialState : initialState with { Status = "in_progress" };
+            var expectedClaimedState = initialState with { Status = "in_progress" };
             if (claimedState != expectedClaimedState)
                 return await RefuseAfterClaimAsync(project, repository, beadId, claimed, claimAcquiredHere,
                     "Bead type, stage, pause labels, or repair_cycles changed during claim acquisition.")
@@ -146,7 +152,8 @@ internal sealed class MergerSlotCoordinator
             try
             {
                 stage = await runRole(paths, project, repository, beadId, AgentRole.Merger,
-                    project.RecoveryActor, claimedState, cancellationToken, progress: null).ConfigureAwait(false);
+                    project.RecoveryActor, claimedState, cancellationToken,
+                    progress: ObserveFirstAgentAttempt(agentAttemptStarted)).ConfigureAwait(false);
             }
             catch (OperationalRetryEscalationIncompleteException exception)
             {
@@ -238,7 +245,7 @@ internal sealed class MergerSlotCoordinator
     }
 
     internal static string? ValidateAdmission(BeadSnapshot bead, BeadWorkflowState state,
-        BeadsReadiness readiness, string recoveryActor)
+        BeadsReadiness readiness)
     {
         if (bead.IssueType != "task")
             return $"Merger accepts Plan Beads of type task; '{bead.Id}' is '{bead.IssueType}'.";
@@ -248,15 +255,20 @@ internal sealed class MergerSlotCoordinator
         if (state.Planned || state.ProductDecisionRequired || state.NeedsHuman)
             return $"Bead '{bead.Id}' is planned or paused and cannot enter the Merger slot.";
 
-        if (bead.Status == "open" && bead.Assignee is null)
-            return readiness.NativeUnassignedReady.Contains(bead.Id)
-                ? null
-                : $"Bead '{bead.Id}' is not in bd's native unassigned ready set; it may be blocked or deferred.";
-        if (bead.Status == "in_progress" && string.Equals(bead.Assignee, recoveryActor, StringComparison.Ordinal))
-            return readiness.RecoverableOwnedReady.Contains(bead.Id)
-                ? null
-                : $"Bead '{bead.Id}' is not in bd's recoverable-owned ready set.";
-        return $"Bead '{bead.Id}' must be open and unassigned or recoverable under '{recoveryActor}'; observed status '{bead.Status}' and assignee '{bead.Assignee ?? "(none)"}'.";
+        if (bead.Status != "open" || bead.Assignee is not null)
+            return $"Bead '{bead.Id}' must be open and unassigned for a fresh Merger claim; observed status '{bead.Status}' and assignee '{bead.Assignee ?? "(none)"}'.";
+        return readiness.NativeUnassignedReady.Contains(bead.Id)
+            ? null
+            : $"Bead '{bead.Id}' is not in bd's native unassigned ready set; it may be blocked or deferred.";
+    }
+
+    private static Action<OperationalRetryProgress> ObserveFirstAgentAttempt(Action agentAttemptStarted)
+    {
+        return progress =>
+        {
+            if (progress.Kind == OperationalRetryProgressKind.AttemptStarted)
+                agentAttemptStarted();
+        };
     }
 
     private async Task<MergerSlotOutcome> ReleaseClosedClaimAsync(ValidatedTargetRepository repository, string beadId,
