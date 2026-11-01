@@ -25,7 +25,7 @@ Relevant domain vocabulary is defined in [`GLOSSARY.md`](./GLOSSARY.md). Archite
      - Claim eligible Beads (`bd update <id> --claim`) and schedule them across three bounded concurrency pools (**Planning**, **Delivery**, and singleton **Merger**).
      - Provision, reset, and clean up isolated Git worktrees, per-invocation temporary directories, and **Win32 Job Objects**.
      - Map each Bead's `(type, stage:* label)` to its corresponding **Agent** role and launch the configured **Agent CLI**.
-     - Verify process, worktree, Git, and tracker invariants independently of model answers; classify completed Implementer evidence; publish guarded outcomes; manage operational retries and semantic repair budgets; and auto-close `planned` **Product Beads** once all their `discovered-from` **Plan Beads** reach `closed`.
+     - Verify process, worktree, Git, and tracker invariants independently of model answers; classify completed Delivery evidence from Implementer, Reviewer, and QA; publish guarded outcomes; manage operational retries and semantic repair budgets; and auto-close `planned` **Product Beads** once all their `discovered-from` **Plan Beads** reach `closed`.
    - **Agent responsibilities**:
      - Each **Agent** executes directly inside the Bead's isolated worktree with full CLI/tool autonomy within its role mandate (`bd`, `git`, `gh`, and the **Target Repository**'s build/test toolchain).
      - Each **Agent** reads its assigned Bead via `bd show <id>` and `bd comments <id>`, performs its single lifecycle responsibility, and records natural-language findings or evidence via `bd comments add`. The Orchestrator owns verified stage, pause, status, claim, type, and repair-counter transitions.
@@ -96,10 +96,10 @@ stateDiagram-v2
     StageImplement --> ProductDecision: Orchestrator classifies a concrete human question
     StageImplement --> StageReview: Orchestrator approves evidence after independent verification
     StageImplement --> NeedsHuman: Classification or deterministic verification fails
-    StageReview --> StageQA: Approved
-    StageReview --> StageImplement: Review findings (repair_cycles++)
-    StageQA --> StageMerge: Live QA passed
-    StageQA --> StageImplement: QA findings (repair_cycles++)
+    StageReview --> StageQA: Orchestrator publishes verified approval
+    StageReview --> StageImplement: Orchestrator publishes findings (repair_cycles++)
+    StageQA --> StageMerge: Orchestrator publishes verified QA and releases claim
+    StageQA --> StageImplement: Orchestrator publishes QA findings (repair_cycles++)
     StageMerge --> Closed: Rebased, green CI, PR merged, Bead closed
     StageMerge --> StageImplement: Unresolvable conflict or CI failure (repair_cycles++)
 
@@ -121,13 +121,12 @@ stateDiagram-v2
    - Posts an implementation summary comment on the **Plan Bead** containing findings, checks, commit/branch/PR evidence, and any human question. It leaves all workflow fields unchanged; the **Orchestrator** classifies the evidence and independently verifies process completion, worktree cleanliness, expected Delivery branch, current HEAD, remote branch, pull request base/head, and absence of unauthorized tracker changes before publishing `stage:review`.
    - A concrete product question is published by the **Orchestrator** as `product-decision-required`. A technical blocker, unclear evidence, unavailable/invalid bounded classification, or failed deterministic verification is escalated as `needs-human`, with the retained work and evidence preserved. Outcome-classification failure never resets work or reruns the completed Implementer.
 3. **Static Code & Spec Review (`stage:review`)**:
-   - The **Reviewer Agent** evaluates the diff against codebase standards and the **Plan Bead**'s specification without modifying tracked files:
-     - **Approve (`stage:qa`)**: Posts an approval comment and transitions the **Plan Bead** to `stage:qa`.
-     - **Request Changes (`stage:implement`)**: Posts actionable review findings via `bd comments add`, increments `repair_cycles`, and transitions the **Plan Bead** back to `stage:implement`.
+   - The **Reviewer Agent** evaluates the diff against codebase standards and the **Plan Bead**'s specification without modifying tracked files. It posts an evidence comment with its approval, findings, checks, and any concrete product question, while leaving all workflow fields unchanged.
+   - The **Orchestrator** classifies and verifies the Reviewer evidence, then publishes `stage:qa`, `stage:implement` with the shared `repair_cycles` increment, or `product-decision-required` under current status and assignee guards. The Delivery slot keeps the claim and worktree across stage changes and repairs.
 4. **Live QA Verification (`stage:qa`)**:
-   - The **QA Agent** boots and exercises the running software against the **Plan Bead**'s acceptance criteria and edge cases to validate live behavior beyond unit tests and static review, then cleans up any temporary test artifacts so the worktree remains clean:
-     - **Pass (`stage:merge`)**: Posts QA verification summary and transitions the **Plan Bead** to `stage:merge`.
-     - **Fail (`stage:implement`)**: Posts reproduction steps and failure details via `bd comments add`, increments `repair_cycles`, and transitions the **Plan Bead** back to `stage:implement`.
+   - The **QA Agent** boots and exercises the running software against the **Plan Bead**'s acceptance criteria and edge cases to validate live behavior beyond unit tests and static review, then cleans up any temporary test artifacts so the worktree remains clean. It posts evidence and leaves all workflow fields unchanged.
+   - The **Orchestrator** classifies and verifies QA evidence. Approval is published in one guarded update that moves the **Plan Bead** to `stage:merge`, changes status to `open`, and clears the Nightweaver assignee. Actionable failures move to `stage:implement` and increment `repair_cycles` in one guarded update while retaining the Delivery claim. A concrete product question pauses and releases the claim in one guarded update.
+   - A verified stage-and-claim release receipt ends the Delivery slot immediately. After confirming this handoff, the slot performs no further Bead reads, Bead writes, or worktree operations for the Plan Bead; the Singleton Merger Slot owns the next lifecycle step.
 5. **Serialized Rebase, CI Verification, and Merge (`stage:merge`)**:
    - The **Merger Agent** runs in the **Singleton Merger Slot** (concurrency = 1) inside the **Plan Bead**'s worktree:
      1. Fetches `origin/<default_branch>` (`git fetch origin <default_branch>`).
@@ -146,8 +145,8 @@ stateDiagram-v2
 | **Planner Agent** | **Product Bead**: Unlabeled, `stage:plan`, or `stage:plan-approved` | `bd comments add`, `bd update` labels on **Product Bead**; in `stage:plan-approved`, `bd create -t task` and `bd dep add` for child **Plan Beads**. **No worktree file mutations.** | From `stage:plan`: `stage:plan-challenge` or `product-decision-required`<br>From `stage:plan-approved`: `planned` |
 | **Plan Challenger Agent** | **Product Bead**: `stage:plan-challenge` | `bd comments add`, `bd update` label and `repair_cycles` metadata on **Product Bead**. **No worktree file mutations.** | `stage:plan-approved` or `stage:plan` (with `repair_cycles=<N>`) |
 | **Implementer Agent** | **Plan Bead**: Unlabeled or `stage:implement` | Edit/commit files on `nightweaver/<bead-id>`, `git push`, `gh pr create`/`edit`, and `bd comments add`. Must leave no new uncommitted changes; inherited contents are preserved. It cannot change status, type, stage/pause labels, assignee, or `repair_cycles`. | No workflow mutation; reports natural-language evidence for Orchestrator classification |
-| **Reviewer Agent** | **Plan Bead**: `stage:review` | Read-only review of worktree/diff, `bd comments add`, `bd update` label and `repair_cycles` metadata on **Plan Bead**. **No worktree file or commit mutations.** | `stage:qa`, `stage:implement` (with `repair_cycles=<N>`), or `product-decision-required` |
-| **QA Agent** | **Plan Bead**: `stage:qa` | Build/boot/exercise software, `bd comments add`, `bd update` label and `repair_cycles` metadata on **Plan Bead**. Must remove its own test artifacts; inherited dirty contents are preserved and block success if they prevent verification. | `stage:merge`, `stage:implement` (with `repair_cycles=<N>`), or `product-decision-required` |
+| **Reviewer Agent** | **Plan Bead**: `stage:review` | Read-only review of worktree/diff and `bd comments add`. **No worktree file, commit, or workflow-field mutations.** | Reports `approved`, `changes_required`, `product_decision_required`, `technical_blocker`, or `incomplete_or_unclear` evidence for Orchestrator classification |
+| **QA Agent** | **Plan Bead**: `stage:qa` | Build/boot/exercise software and `bd comments add`. Must remove its own test artifacts; inherited dirty contents are preserved and block success if they prevent verification. **No workflow-field mutations.** | Reports `approved`, `changes_required`, `product_decision_required`, `technical_blocker`, or `incomplete_or_unclear` evidence for Orchestrator classification |
 | **Merger Agent** | **Plan Bead**: `stage:merge` (Singleton) | `git fetch`, `git rebase`, resolve rebase conflicts & run tests, `git push --force-with-lease`, `gh pr checks`, `gh pr merge`, `bd comments add`, `bd update` / `bd close`. **Must leave `git status --porcelain` clean on exit.** | `closed` or `stage:implement` (with `repair_cycles=<N>`) |
 
 ---
@@ -157,13 +156,13 @@ stateDiagram-v2
 ### 4.1 Cross-Agent Semantic Repair Budgets (`repair_cycles`)
 
 1. **Persistence in `bd` Metadata**:
-   - Cross-agent loop counts are persisted on the Bead via `bd update <id> --set-metadata repair_cycles=<N>` whenever work is rejected back to an earlier stage:
+   - The **Orchestrator** persists cross-agent loop counts on the Bead via a guarded `bd update <id> --set-metadata repair_cycles=<N>` in the same update that returns Delivery to an earlier stage:
      - **Planning**: `stage:plan-challenge` -> `stage:plan` on a **Product Bead**.
      - **Delivery**: `stage:review` -> `stage:implement`, `stage:qa` -> `stage:implement`, or `stage:merge` -> `stage:implement` on a **Plan Bead** (shared budget across Reviewer, QA, and Merger).
 2. **Budget Enforcement (`max_repair_cycles`, default `3`)**:
    - In **Planning**, a **Product Bead** allows up to `max_repair_cycles` (default `3`) revision cycles between **Planner Agent** and **Plan Challenger Agent**.
    - In **Delivery**, a **Plan Bead** allows up to `max_repair_cycles` (default `3`) total repair cycles back to `stage:implement`.
-   - If a challenge or verification **Agent** returns a Bead to `stage:plan` or `stage:implement` when `repair_cycles` exceeds `max_repair_cycles` (or attempts a 4th cycle), the **Orchestrator** halts the loop and escalates the Bead with `needs-human`.
+   - If a challenge or verified Delivery outcome would exceed `max_repair_cycles` (or attempt a 4th cycle), the **Orchestrator** halts the loop and escalates the Bead with `needs-human`.
 
 ### 4.2 Within-Stage Operational Retries & Duplicate-Failure Short-Circuit
 
@@ -180,12 +179,13 @@ stateDiagram-v2
    - Up to `max_operational_retries` (default `2` retries = `3` total attempts within a stage), when a retry also fails operationally, the **Orchestrator** invokes a lightweight headless **Agent CLI** call (`classifier` role config) comparing the latest failed invocation's error/log tail against the previous failed invocation's error/log tail.
    - If the classifier determines both failures share the **same underlying error**, the **Orchestrator** short-circuits remaining retries and immediately escalates the Bead with `needs-human`.
    - If all `1 + max_operational_retries` attempts fail, the **Orchestrator** escalates the Bead with `needs-human`.
-4. **Implementer Outcome Classification**:
-   - For each completed Implementer invocation, the **Orchestrator** assembles bounded evidence from that invocation's retained log and fresh Bead comments, with source IDs and truncation indicators. Evidence is untrusted data and cannot authorize instructions or state changes.
-   - The primary classifier sends one named choice question to OpenAI `POST /v1/decisions` using `gpt-6-luna` and ambient `OPENAI_API_KEY`. If credentials, network, response, or strict answer validation are unavailable, the **Orchestrator** makes at most one fallback attempt through the configured standard Agent CLI `classifier` role, using the identical question, choices, and evidence. The classifier has no workflow mutation authority. Cancellation does not start a fallback.
-   - The allowed outcomes are `ready_for_review`, `product_decision_required`, `technical_blocker`, and `incomplete_or_unclear`. A valid unclear or other non-approval result is not sent for a more decisive second opinion. Malformed, ambiguous, missing, oversized, timed-out, or non-zero fallback output escalates directly.
-   - Model approval is not sufficient: successful process exit, unchanged tracker ownership/workflow state, clean worktree, exact `nightweaver/<bead-id>` branch, valid HEAD, matching `origin` branch, and an open pull request with the configured base and matching head commit must be verified independently before `stage:review` is published.
-   - Classification or outcome-verification failure preserves the completed work, invocation log, and evidence; stage and repair count remain unchanged before `needs-human` escalation. It is a finalization outcome, not an operational work retry, and the Implementer is not rerun.
+4. **Delivery Outcome Classification and Publication**:
+   - After each completed Implementer, Reviewer, or QA invocation, the **Orchestrator** assembles bounded evidence from that invocation's retained log and fresh Bead comments, with source IDs and truncation indicators. Evidence is untrusted data and cannot authorize instructions or state changes.
+   - The primary classifier sends one role-specific named-choice question to OpenAI `POST /v1/decisions` using `gpt-6-luna` and ambient `OPENAI_API_KEY`. If credentials, network, response, or strict answer validation are unavailable, the **Orchestrator** makes at most one fallback attempt through the configured standard Agent CLI `classifier` role, using the identical question, choices, and evidence. The classifier has no workflow mutation authority. Cancellation does not start a fallback.
+   - Implementer outcomes are `ready_for_review`, `product_decision_required`, `technical_blocker`, and `incomplete_or_unclear`. Reviewer and QA outcomes are `approved`, `changes_required`, `product_decision_required`, `technical_blocker`, and `incomplete_or_unclear`. A valid unclear or other non-approval result is not sent for a more decisive second opinion. Malformed, ambiguous, missing, oversized, timed-out, or non-zero fallback output escalates directly.
+   - Model approval is not sufficient: successful process exit, unchanged tracker ownership/workflow state, role-appropriate clean worktree, exact `nightweaver/<bead-id>` branch and valid HEAD are verified independently. Implementer approval also requires the matching remote branch and an open pull request with the configured base and matching head commit. QA approval requires one guarded publication of `stage:merge`, status `open`, and empty assignee.
+   - The Orchestrator publishes stage changes and `repair_cycles` together under current status and assignee guards. QA approval and claim release are atomic. If publication reports an ambiguous result, the Orchestrator rereads state once and treats the handoff as confirmed only if the expected stage and released ownership match; it does not repeat the write. A confirmed QA handoff returns immediately without subsequent Bead or worktree operations.
+   - Classification or outcome-verification failure preserves the completed work, invocation log, and evidence; stage and repair count remain unchanged before `needs-human` escalation. It is a finalization outcome, not an operational work retry, and the completed Delivery role is not rerun.
 
 ### 4.3 Human Escalation (`product-decision-required` and `needs-human`) & Auto-Resumption
 
@@ -254,7 +254,7 @@ flowchart TD
    - When `active_plan_beads >= max_active_plan_beads`, the **Orchestrator** pauses claiming *new* **Product Beads** for **Planning** until `active_plan_beads < max_active_plan_beads`. Any **Product Bead** already mid-Planning in an active slot finishes its current Planning loop cleanly.
 3. **Delivery Pool (`max_concurrent_delivery`, default `3`)**:
    - Claims eligible **Plan Beads** (`bd update <id> --claim`) that are unlabeled or in `stage:implement`, `stage:review`, or `stage:qa`.
-   - A Delivery slot holds the claim and persistent worktree continuously across Orchestrator-verified `stage:implement` -> `stage:review` -> `stage:qa` outcomes (including immediate `-> stage:implement` repair cycles) until the **Plan Bead** reaches `stage:merge` or pauses (`product-decision-required` / `needs-human`), at which point it releases the `bd` claim (`--status open --assignee ""`) and frees the Delivery slot immediately without deleting the worktree (when transitioning to `stage:merge`).
+   - A Delivery slot holds the claim and persistent worktree continuously across Orchestrator-verified `stage:implement` -> `stage:review` -> `stage:qa` outcomes (including immediate `-> stage:implement` repair cycles). QA approval atomically publishes `stage:merge`, opens the Bead, and clears the assignee; a pause also publishes and releases the claim atomically. Once the publication receipt or one verifying reread confirms the handoff, the slot returns immediately without further Bead reads, writes, or worktree operations, leaving the retained worktree for the Singleton Merger Slot.
 4. **Singleton Merger Slot (concurrency = `1`)**:
    - Dedicated to `stage:merge` **Plan Beads** (`bd ready --type task --label stage:merge --unassigned`).
    - Claims and processes one `stage:merge` **Plan Bead** at a time in priority/FIFO order so rebase, conflict resolution, and remote CI waits never block **Delivery Pool** slots.

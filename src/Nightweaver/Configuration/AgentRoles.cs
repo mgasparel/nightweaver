@@ -15,6 +15,8 @@ internal static class AgentRoles
 
     internal static IReadOnlyList<AgentRole> All { get; } = Array.AsReadOnly(Mappings.Select(mapping => mapping.Role).ToArray());
 
+    internal static bool IsDeliveryRole(AgentRole role) => role is AgentRole.Implementer or AgentRole.Reviewer or AgentRole.Qa;
+
     internal static string ToConfigKey(AgentRole role) =>
         Mappings.FirstOrDefault(mapping => mapping.Role == role).Key
         ?? throw new ArgumentOutOfRangeException(nameof(role), role, "Unknown Agent role");

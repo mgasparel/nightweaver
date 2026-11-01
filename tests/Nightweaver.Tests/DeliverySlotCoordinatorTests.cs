@@ -13,12 +13,15 @@ public sealed class DeliverySlotCoordinatorTests
         using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask();
         var roles = new List<AgentRole>();
+        var requestCountAtHandoffReceipt = -1;
 
         var outcome = await fixture.RunAsync(bead, (role, token) =>
         {
             roles.Add(role);
             fixture.Advance(bead, role);
-            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+            var result = Success(role, bead, fixture.ReadState(bead));
+            if (role == AgentRole.Qa) requestCountAtHandoffReceipt = fixture.Runner.Requests.Length;
+            return Task.FromResult(result);
         });
 
         Assert.True(outcome.MergeReady, outcome.Diagnostic);
@@ -33,9 +36,10 @@ public sealed class DeliverySlotCoordinatorTests
         Assert.Equal("stage:merge", outcome.FinalState!.Stage);
         Assert.Equal("open", outcome.FinalState.Status);
         Assert.True(outcome.ClaimHandoffCompleted);
-        Assert.Equal(2, fixture.ClaimWrites(bead).Length);
+        Assert.Single(fixture.ClaimWrites(bead));
         Assert.Equal("open", fixture.ReadBead(bead).Status);
         Assert.Null(fixture.ReadBead(bead).Assignee);
+        Assert.Equal(requestCountAtHandoffReceipt, fixture.Runner.Requests.Length);
     }
 
     [Fact]
@@ -61,9 +65,8 @@ public sealed class DeliverySlotCoordinatorTests
         Assert.Equal("open", fixture.ReadBead(reviewBead).Status);
         Assert.Null(fixture.ReadBead(reviewBead).Assignee);
         var reviewClaims = fixture.Runner.ClaimWrites(reviewBead);
-        Assert.Equal(2, reviewClaims.Length);
+        Assert.Single(reviewClaims);
         Assert.Equal("open", FastBeadsProcessRunner.GuardedStatus(reviewClaims[0]));
-        Assert.Equal("in_progress", FastBeadsProcessRunner.GuardedStatus(reviewClaims[1]));
 
         var qaBead = fixture.AddBead("task", "stage:qa");
         var qaRoles = new List<AgentRole>();
@@ -83,9 +86,8 @@ public sealed class DeliverySlotCoordinatorTests
         Assert.Equal("open", fixture.ReadBead(qaBead).Status);
         Assert.Null(fixture.ReadBead(qaBead).Assignee);
         var qaClaims = fixture.Runner.ClaimWrites(qaBead);
-        Assert.Equal(2, qaClaims.Length);
+        Assert.Single(qaClaims);
         Assert.Equal("open", FastBeadsProcessRunner.GuardedStatus(qaClaims[0]));
-        Assert.Equal("in_progress", FastBeadsProcessRunner.GuardedStatus(qaClaims[1]));
     }
 
     [Fact]
@@ -495,7 +497,7 @@ public sealed class DeliverySlotCoordinatorTests
         Assert.True(outcome.MergeReady, outcome.Diagnostic);
         Assert.Equal([AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa], roles);
         Assert.Equal(1, outcome.FinalState!.RepairCycles);
-        Assert.Equal(2, fixture.ClaimWrites(bead).Length);
+        Assert.Single(fixture.ClaimWrites(bead));
         Assert.Equal("open", fixture.ReadBead(bead).Status);
         Assert.Null(fixture.ReadBead(bead).Assignee);
     }
@@ -519,7 +521,7 @@ public sealed class DeliverySlotCoordinatorTests
         Assert.Equal([AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa,
             AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa], roles);
         Assert.Equal(1, outcome.FinalState!.RepairCycles);
-        Assert.Equal(2, fixture.ClaimWrites(bead).Length);
+        Assert.Single(fixture.ClaimWrites(bead));
     }
 
     [Fact]
@@ -920,29 +922,27 @@ public sealed class DeliverySlotCoordinatorTests
     }
 
     [Fact]
-    public async Task StaleStateAfterGuardedMergeReleaseIsNotReportedAsMergeReady()
+    public async Task QaStageMergeWithoutAtomicHandoffReceiptDoesNotReleaseClaim()
     {
         using var fixture = new FastSlotFixture();
         var bead = fixture.CreateTask("stage:qa");
-        var runner = new MutatingProcessRunner(fixture.Runner, request => SlotFixture.IsRelease(bead, request), () =>
-        {
-            fixture.SetStage(bead, "stage:implement");
-            return Task.CompletedTask;
-        });
 
         var outcome = await fixture.RunAsync(bead, (role, _) =>
         {
-            fixture.Advance(bead, role);
-            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
-        }, runner);
+            fixture.SetStage(bead, "stage:merge");
+            var result = new AgentStageResult(role, bead, "qa-without-receipt", string.Empty, null, [],
+                VerifiedState: fixture.ReadState(bead));
+            return Task.FromResult(new OperationalRetryOutcome(OperationalRetryStatus.Succeeded,
+                result, 1, null, null, null));
+        });
 
         Assert.Equal(DeliverySlotDisposition.Failed, outcome.Disposition);
         Assert.False(outcome.MergeReady);
         Assert.False(outcome.ClaimHandoffCompleted);
-        Assert.Equal(2, SlotFixture.ClaimWrites(runner.Requests, bead).Length);
-        Assert.Equal("open", fixture.ReadBead(bead).Status);
-        Assert.Null(fixture.ReadBead(bead).Assignee);
-        Assert.Equal("stage:implement", fixture.ReadState(bead).Stage);
+        Assert.Single(fixture.ClaimWrites(bead));
+        Assert.Equal("in_progress", fixture.ReadBead(bead).Status);
+        Assert.Equal(fixture.RecoveryActor, fixture.ReadBead(bead).Assignee);
+        Assert.Equal("stage:merge", fixture.ReadState(bead).Stage);
     }
 
     [Fact]
@@ -1032,7 +1032,20 @@ public sealed class DeliverySlotCoordinatorTests
 
     private static OperationalRetryOutcome Success(AgentRole role, string beadId, BeadWorkflowState verifiedState)
     {
-        var result = new AgentStageResult(role, beadId, $"fixture-{role}", string.Empty, null, [], verifiedState);
+        var outcome = verifiedState.ProductDecisionRequired ? AgentOutcomeChoice.ProductDecisionRequired : role switch
+        {
+            AgentRole.Implementer => AgentOutcomeChoice.ReadyForReview,
+            AgentRole.Reviewer or AgentRole.Qa when verifiedState.Stage == "stage:implement" => AgentOutcomeChoice.ChangesRequired,
+            AgentRole.Reviewer or AgentRole.Qa => AgentOutcomeChoice.Approved,
+            _ => throw new InvalidOperationException($"Unexpected Delivery role {role}.")
+        };
+        var handoff = role == AgentRole.Qa && outcome == AgentOutcomeChoice.Approved
+            && verifiedState.Stage == "stage:merge" && verifiedState.Status == "open";
+        var receipt = verifiedState.ProductDecisionRequired ? null
+            : new DeliveryOutcomePublicationReceipt(role, outcome, verifiedState,
+                handoff ? null : "nightweaver:demo", handoff, handoff);
+        var result = new AgentStageResult(role, beadId, $"fixture-{role}", string.Empty, null, [],
+            VerifiedState: verifiedState, PublicationReceipt: receipt);
         return new(OperationalRetryStatus.Succeeded, result, 1, null, null, null);
     }
 
@@ -1275,6 +1288,7 @@ public sealed class DeliverySlotCoordinatorTests
         private readonly Dictionary<string, List<string>> comments = new(StringComparer.Ordinal);
 
         internal IEnumerable<ProcessRequest> WriteRequests => requests.Where(IsWrite);
+        internal ProcessRequest[] Requests => requests.ToArray();
 
         internal string AddBead(string issueType, IReadOnlyList<string> labels)
         {
@@ -1315,6 +1329,11 @@ public sealed class DeliverySlotCoordinatorTests
                 AgentRole.Qa => "stage:merge",
                 _ => throw new InvalidOperationException($"Unexpected role {role}.")
             });
+            if (role == AgentRole.Qa)
+            {
+                bead.Status = "open";
+                bead.Assignee = null;
+            }
         }
 
         internal void Reject(string beadId, string expectedStage, int nextRepairCycles)

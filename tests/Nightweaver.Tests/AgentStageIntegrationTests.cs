@@ -234,8 +234,8 @@ public sealed class AgentStageRepairIntegrationTests : AgentStageIntegrationTest
         Assert.Equal(2, target.ReadState(bead).RepairCycles);
         using var comments = JsonDocument.Parse(target.ReadComments(bead));
         var commentTexts = StringValues(comments.RootElement).ToArray();
-        Assert.Contains(commentTexts, value => value.Contains("Reviewer finding cycle 1", StringComparison.Ordinal));
-        Assert.Contains(commentTexts, value => value.Contains("QA reproduction cycle 2", StringComparison.Ordinal));
+        Assert.Contains(commentTexts, value => value.Contains("Blocking finding: reviewer cycle 1", StringComparison.Ordinal));
+        Assert.Contains(commentTexts, value => value.Contains("QA failure: cycle 2; POST /fixture returned 500", StringComparison.Ordinal));
     }
 
 
@@ -283,7 +283,8 @@ public sealed class AgentStageRepairIntegrationTests : AgentStageIntegrationTest
         Assert.Equal("repair-budget-exhausted", diagnostic.RootElement.GetProperty("cause").GetString());
         Assert.Equal("qa", diagnostic.RootElement.GetProperty("failed_role").GetString());
         Assert.Contains("max_repair_cycles=3", diagnostic.RootElement.GetProperty("reason").GetString(), StringComparison.Ordinal);
-        Assert.Contains("QA reproduction cycle 4", diagnostic.RootElement.GetProperty("latest_findings").GetString(), StringComparison.Ordinal);
+        Assert.Contains("QA failure: cycle 4; POST /fixture returned 500",
+            diagnostic.RootElement.GetProperty("latest_findings").GetString(), StringComparison.Ordinal);
         Assert.Equal(outcome.LastStage!.StageResult.InvocationId, diagnostic.RootElement.GetProperty("invocation_id").GetString());
         Assert.Equal(outcome.LastStage.StageResult.LogFilePath, diagnostic.RootElement.GetProperty("log_files")[0].GetString());
     }
@@ -303,7 +304,7 @@ public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTe
         var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer, ["review-dirty"]);
 
         Assert.Equal(OperationalRetryStatus.Escalated, outcome.Status);
-        Assert.Equal(NeedsHumanCause.ImplementerOutcomeFailure, outcome.EscalationCause);
+        Assert.Equal(NeedsHumanCause.DeliveryOutcomeFailure, outcome.EscalationCause);
         Assert.Equal(1, outcome.AttemptCount);
         Assert.Equal(1, target.LastRetryLifecycleCount);
         Assert.Equal(AgentOperationalFailureKind.OutcomeVerificationFailed, outcome.StageResult.Failure?.Kind);
@@ -332,6 +333,7 @@ public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTe
         foreach (var entry in entries)
         {
             var bead = entryBeads[$"Delivery slot {entry.Label ?? "(unlabeled)"}"];
+            if (entry.Label is "stage:review" or "stage:qa") target.SeedRemoteDeliveryBranch(bead);
             var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-observations.jsonl");
             var actions = entry.Roles.Select(role => (role, Action: role switch
             {
@@ -354,7 +356,7 @@ public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTe
             var claimWrites = AgentStageTargetFixture.ClaimWrites(target.LastSlotRequests, bead);
             Assert.Single(claimWrites, request => AgentStageTargetFixture.ClaimWriteStatus(request) == "open");
             var inProgressWrites = claimWrites.Where(request => AgentStageTargetFixture.ClaimWriteStatus(request) == "in_progress").ToArray();
-            var expectedInProgressWrites = entry.Roles.Contains(AgentRole.Implementer) ? 2 : 1;
+            var expectedInProgressWrites = entry.Roles.Length;
             Assert.True(inProgressWrites.Length == expectedInProgressWrites, string.Join(Environment.NewLine,
                 claimWrites.Select(request => string.Join(' ', request.Arguments))));
             var final = target.ReadBead(bead);
@@ -398,6 +400,53 @@ public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTe
                 Assert.Contains("slot fixture implementation", target.RunTarget("git", ["log", "-1", "--format=%s"], worktree), StringComparison.Ordinal);
             }
         }
+    }
+
+    [Fact]
+    public async Task LostQaHandoffResponseAcceptsReceivingMergerClaimAndStopsDeliverySlotImmediately()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture { ClaimMergerAfterQaHandoffResponseLostOnce = true };
+        var bead = target.CreateBead("Receiver claims only after safe QA handoff", "task", "stage:qa");
+        target.SeedRemoteDeliveryBranch(bead);
+        var observations = System.IO.Path.Combine(target.RootPath, $"{bead}-receiver-observations.jsonl");
+
+        var outcome = await target.RunDeliverySlotAsync(bead,
+            [(AgentRole.Qa, "slot-qa")], observations);
+
+        Assert.True(outcome.MergeReady,
+            $"{outcome.Disposition}: {outcome.Diagnostic}; escalation={outcome.LastStage?.EscalationCause}: {outcome.EscalationProgress}; "
+            + $"stage={outcome.LastStage?.Status}: {string.Join(" | ", outcome.LastStage?.StageResult.Diagnostics ?? [])}; "
+            + $"failure={outcome.LastStage?.StageResult.Failure?.Kind}: {outcome.LastStage?.StageResult.Failure?.Reason}; "
+            + $"log={ReadInvocationLog(outcome.LastStage?.StageResult.LogFilePath)}; comments={target.ReadComments(bead)}; "
+            + string.Join(Environment.NewLine, target.LastSlotRequests.Select(request => $"{request.FileName} {string.Join(' ', request.Arguments)}")));
+        Assert.True(outcome.ClaimHandoffCompleted);
+        Assert.Equal([AgentRole.Qa], target.LastSlotRoles);
+        Assert.True(target.MergerClaimedAfterQaHandoffResponseLost);
+        var final = target.ReadBead(bead);
+        Assert.Equal("stage:merge", BeadWorkflowState.Parse(final).Stage);
+        Assert.Equal("in_progress", final.Status);
+        Assert.Equal("nightweaver:merger", final.Assignee);
+
+        var qaPublication = Assert.Single(target.LastSlotRequests, request => request.FileName == "bd"
+            && request.Arguments.Contains("update", StringComparer.Ordinal)
+            && request.Arguments.Contains(bead, StringComparer.Ordinal)
+            && request.Arguments.Contains("stage:merge", StringComparer.Ordinal));
+        Assert.Equal("open", ArgumentAfter(qaPublication, "--status"));
+        Assert.Equal(string.Empty, ArgumentAfter(qaPublication, "--assignee"));
+        Assert.Equal("in_progress", ArgumentAfter(qaPublication, "--if-status"));
+        Assert.Equal("nightweaver:demo", ArgumentAfter(qaPublication, "--if-assignee"));
+        var publicationIndex = target.LastSlotRequests.ToList().IndexOf(qaPublication);
+        var afterPublication = target.LastSlotRequests.Skip(publicationIndex + 1).ToArray();
+        Assert.Single(afterPublication); // one reread resolves the lost response; no outgoing write or worktree operation follows
+        Assert.Equal("bd", afterPublication[0].FileName);
+        Assert.Contains("--readonly", afterPublication[0].Arguments);
+    }
+
+    private static string? ArgumentAfter(ProcessRequest request, string option)
+    {
+        var index = request.Arguments.ToList().IndexOf(option);
+        return index >= 0 && index + 1 < request.Arguments.Count ? request.Arguments[index + 1] : null;
     }
 }
 
@@ -752,13 +801,15 @@ public sealed class AgentStageIntegrationTests : AgentStageIntegrationTestSuppor
 
         var reviewId = beads["Reviewer transition"];
         var reviewed = await target.RunAgentAsync(reviewId, AgentRole.Reviewer, "review-qa", AgentCli.Claude);
-        AssertSuccess(reviewed, "review-qa");
-        Assert.Equal("stage:qa", reviewed.VerifiedState?.Stage);
+        AssertFailure(reviewed, AgentOperationalFailureKind.IllegalBeadTransition);
+        Assert.Contains("cannot mutate", reviewed.Failure!.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(reviewed.VerifiedState);
 
         var qaId = beads["QA transition"];
         var qa = await target.RunAgentAsync(qaId, AgentRole.Qa, "qa-merge", AgentCli.Codex);
-        AssertSuccess(qa, "qa-merge");
-        Assert.Equal("stage:merge", qa.VerifiedState?.Stage);
+        AssertFailure(qa, AgentOperationalFailureKind.IllegalBeadTransition);
+        Assert.Contains("cannot mutate", qa.Failure!.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(qa.VerifiedState);
 
         var merger = beads["Merger closure"];
         var merged = await target.RunAgentAsync(merger, AgentRole.Merger, "close-commit", AgentCli.Codex);
@@ -767,8 +818,8 @@ public sealed class AgentStageIntegrationTests : AgentStageIntegrationTestSuppor
 
         var rejectionId = beads["Correct repair increment"];
         var rejection = await target.RunAgentAsync(rejectionId, AgentRole.Reviewer, "reject-with-increment", AgentCli.Claude);
-        AssertSuccess(rejection, "reject-with-increment");
-        Assert.Equal(1, rejection.VerifiedState?.RepairCycles);
+        AssertFailure(rejection, AgentOperationalFailureKind.IllegalBeadTransition);
+        Assert.Contains("repair_cycles", rejection.Failure!.Reason, StringComparison.Ordinal);
 
         var nonzeroId = beads["Nonzero exit"];
         var nonzero = await target.RunAgentAsync(nonzeroId, AgentRole.Implementer, "review-nonzero", AgentCli.Codex);
@@ -967,6 +1018,8 @@ public abstract class AgentStageIntegrationTestSupport
         internal IReadOnlyList<ProcessRequest> LastSlotRequests { get; private set; } = [];
         internal AgentRole[] LastSlotRoles { get; private set; } = [];
         internal bool FailOutcomePublishResponseAfterCommitOnce { get; set; }
+        internal bool ClaimMergerAfterQaHandoffResponseLostOnce { get; set; }
+        internal bool MergerClaimedAfterQaHandoffResponseLost { get; private set; }
         internal string? ChangeOutcomeStateAfterEvidenceComment { get; set; }
 
         internal string Path => TargetPath;
@@ -977,7 +1030,7 @@ public abstract class AgentStageIntegrationTestSupport
         {
             if (request.FileName == "bd" && request.Arguments.Contains("comments", StringComparer.Ordinal)
                 && request.Arguments.Contains("add", StringComparer.Ordinal)
-                && request.Arguments[^1].Contains("nightweaver-implementer-outcome-v1", StringComparison.Ordinal))
+                && request.Arguments[^1].Contains("nightweaver-delivery-outcome-v1", StringComparison.Ordinal))
             {
                 var commentResult = await inner.RunAsync(request, cancellationToken);
                 if (commentResult.ExitCode == 0 && ChangeOutcomeStateAfterEvidenceComment is { } changeKind)
@@ -993,15 +1046,38 @@ public abstract class AgentStageIntegrationTestSupport
                 }
                 return commentResult;
             }
-            if (request.FileName == "bd" && FailOutcomePublishResponseAfterCommitOnce
+            var losesQaHandoffResponse = request.FileName == "bd" && ClaimMergerAfterQaHandoffResponseLostOnce
                 && request.Arguments.Contains("update", StringComparer.Ordinal)
                 && request.Arguments.Contains("--add-label", StringComparer.Ordinal)
-                && request.Arguments.Contains("stage:review", StringComparer.Ordinal))
+                && request.Arguments.Contains("stage:merge", StringComparer.Ordinal);
+            var losesImplementerResponse = request.FileName == "bd" && FailOutcomePublishResponseAfterCommitOnce
+                && request.Arguments.Contains("update", StringComparer.Ordinal)
+                && request.Arguments.Contains("--add-label", StringComparer.Ordinal)
+                && request.Arguments.Contains("stage:review", StringComparer.Ordinal);
+            if (losesQaHandoffResponse || losesImplementerResponse)
             {
                 var committed = await inner.RunAsync(request, cancellationToken);
                 if (committed.ExitCode == 0)
                 {
-                    FailOutcomePublishResponseAfterCommitOnce = false;
+                    if (losesQaHandoffResponse)
+                    {
+                        var args = request.Arguments.ToList();
+                        if (ArgumentAfter(request, "--status") != "open"
+                            || ArgumentAfter(request, "--assignee") != string.Empty
+                            || ArgumentAfter(request, "--if-status") != "in_progress"
+                            || ArgumentAfter(request, "--if-assignee") != "nightweaver:demo")
+                            throw new InvalidOperationException("QA stage publication did not atomically release the current Delivery claim.");
+                        var updateIndex = args.IndexOf("update");
+                        var beadId = args[updateIndex + 1];
+                        var receiver = Run("bd", ["--actor", "nightweaver:merger", "--dolt-auto-commit", "on", "update", beadId,
+                            "--if-status", "open", "--if-assignee", string.Empty, "--status", "in_progress",
+                            "--assignee", "nightweaver:merger", "--json"], TargetPath, BeadsEnvironment);
+                        if (!receiver.Contains("in_progress", StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidOperationException($"Receiving Merger claim failed after the atomic QA publication: {receiver}");
+                        ClaimMergerAfterQaHandoffResponseLostOnce = false;
+                        MergerClaimedAfterQaHandoffResponseLost = true;
+                    }
+                    else FailOutcomePublishResponseAfterCommitOnce = false;
                     return new ProcessResult(1, string.Empty, "simulated lost publication response after commit");
                 }
                 return committed;
@@ -1423,6 +1499,12 @@ public abstract class AgentStageIntegrationTestSupport
             return index >= 0 && index + 1 < request.Arguments.Count ? request.Arguments[index + 1] : null;
         }
 
+        private static string? ArgumentAfter(ProcessRequest request, string option)
+        {
+            var index = request.Arguments.ToList().IndexOf(option);
+            return index >= 0 && index + 1 < request.Arguments.Count ? request.Arguments[index + 1] : null;
+        }
+
         internal string CaptureRootState()
         {
             var indexPath = System.IO.Path.Combine(TargetPath, ".git", "index");
@@ -1458,11 +1540,16 @@ public abstract class AgentStageIntegrationTestSupport
         private static void AssertFixtureExited(string pidFile)
         {
             Assert.True(File.Exists(pidFile), $"The native fixture did not create its process handshake: {pidFile}");
-            var pid = int.Parse(File.ReadAllText(pidFile), System.Globalization.CultureInfo.InvariantCulture);
+            var identity = File.ReadAllText(pidFile).Split('|', StringSplitOptions.TrimEntries);
+            Assert.Equal(2, identity.Length);
+            var pid = int.Parse(identity[0], System.Globalization.CultureInfo.InvariantCulture);
+            var startTime = long.Parse(identity[1], System.Globalization.CultureInfo.InvariantCulture);
             try
             {
                 using var process = Process.GetProcessById(pid);
-                Assert.True(process.WaitForExit(5000), $"Fixture process {pid} survived executor completion.");
+                var actualStartTime = process.StartTime.ToUniversalTime().Ticks;
+                if (actualStartTime != startTime) return;
+                Assert.True(process.WaitForExit(5000), $"Fixture process {pid} started at {new DateTime(startTime, DateTimeKind.Utc):O} survived executor completion.");
             }
             catch (ArgumentException)
             {

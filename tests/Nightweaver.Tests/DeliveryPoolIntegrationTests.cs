@@ -163,9 +163,9 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
             Assert.True(File.Exists(Path.Combine(target.WorktreePath(beadId), ".nightweaver-ignored", "slot-sentinel.bin")));
             Assert.NotEmpty(target.RemoteBranchSha(beadId));
             var claimWrites = AgentStageTargetFixture.ClaimWrites(processRunner.Requests, beadId);
-            Assert.Equal(3, claimWrites.Length);
+            Assert.Equal(4, claimWrites.Length);
             Assert.Single(claimWrites, request => AgentStageTargetFixture.ClaimWriteStatus(request) == "open");
-            Assert.Equal(2, claimWrites.Count(request => AgentStageTargetFixture.ClaimWriteStatus(request) == "in_progress"));
+            Assert.Equal(3, claimWrites.Count(request => AgentStageTargetFixture.ClaimWriteStatus(request) == "in_progress"));
             Assert.Empty(RunGit(target.WorktreePath(beadId), "status", "--porcelain"));
         }
 
@@ -335,11 +335,16 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
     private static void AssertFixtureExited(string pidFile)
     {
         Assert.True(File.Exists(pidFile), $"The native fixture did not create its process handshake: {pidFile}");
-        var pid = int.Parse(File.ReadAllText(pidFile), System.Globalization.CultureInfo.InvariantCulture);
+        var identity = File.ReadAllText(pidFile).Split('|', StringSplitOptions.TrimEntries);
+        Assert.Equal(2, identity.Length);
+        var pid = int.Parse(identity[0], System.Globalization.CultureInfo.InvariantCulture);
+        var startTime = long.Parse(identity[1], System.Globalization.CultureInfo.InvariantCulture);
         try
         {
             using var process = Process.GetProcessById(pid);
-            Assert.True(process.WaitForExit(5000), $"Fixture process {pid} survived executor completion.");
+            var actualStartTime = process.StartTime.ToUniversalTime().Ticks;
+            if (actualStartTime != startTime) return;
+            Assert.True(process.WaitForExit(5000), $"Fixture process {pid} started at {new DateTime(startTime, DateTimeKind.Utc):O} survived executor completion.");
         }
         catch (ArgumentException)
         {

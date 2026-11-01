@@ -238,6 +238,40 @@ public sealed class AgentOutcomeClassifierTests
         Assert.Equal(AgentOutcomeChoice.ReadyForReview, result.Outcome);
     }
 
+    [Theory]
+    [InlineData("reviewer", "stage:review", "reviewer_outcome", "approved")]
+    [InlineData("qa", "stage:qa", "qa_outcome", "approved")]
+    public async Task ReviewerAndQaUseDistinctRoleSpecificOutcomeContracts(
+        string roleKey, string stage, string questionName, string expectedChoice)
+    {
+        Assert.True(AgentRoles.TryParseConfigKey(roleKey, out var role));
+        using var fixture = new OutcomeFixture();
+        var invocation = fixture.InvocationFor(role, stage);
+        using var client = new HttpClient(new DelegateHttpMessageHandler(async request =>
+        {
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            var evidence = body.RootElement.GetProperty("input").GetString();
+            Assert.Contains($"\"role\":\"{AgentRoles.ToConfigKey(role)}\"", evidence, StringComparison.Ordinal);
+            var question = Assert.Single(body.RootElement.GetProperty("questions").EnumerateArray());
+            Assert.Equal(questionName, question.GetProperty("name").GetString());
+            var choices = question.GetProperty("choices").EnumerateArray()
+                .Select(choice => choice.GetProperty("value").GetString()).ToArray();
+            Assert.Contains("approved", choices);
+            Assert.Contains("changes_required", choices);
+            Assert.Contains("incomplete_or_unclear", choices);
+            return JsonResponse(expectedChoice, questionName);
+        }), disposeHandler: true);
+
+        var result = await new AgentOutcomeClassifier(client, apiKeyOverride: "fixture-key").ClassifyAsync(
+            fixture.Paths, fixture.Project,
+            new AgentDispatchContext(invocation.BeadId, "task", stage, 0), fixture.Worktree,
+            invocation,
+            [new BeadCommentSnapshot("current", $"{AgentRoles.ToConfigKey(role)} evidence supports approval.", DateTimeOffset.UtcNow)],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(AgentOutcomeChoice.Approved, result.Outcome);
+    }
+
     [Fact]
     public async Task FallbackRewriteOfExistingDirtyFileIsDetectedEvenWhenPorcelainIsUnchanged()
     {
@@ -356,11 +390,11 @@ public sealed class AgentOutcomeClassifierTests
         Assert.Equal(1, fallbackCalls);
     }
 
-    private static HttpResponseMessage JsonResponse(string choice) => new(HttpStatusCode.OK)
+    private static HttpResponseMessage JsonResponse(string choice, string question = AgentOutcomeClassifier.QuestionName) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(JsonSerializer.Serialize(new
         {
-            answers = new[] { new { name = AgentOutcomeClassifier.QuestionName, type = "choice", choice, confidence = 0.9 } }
+            answers = new[] { new { name = question, type = "choice", choice, confidence = 0.9 } }
         }), Encoding.UTF8, "application/json")
     };
 
@@ -417,6 +451,19 @@ public sealed class AgentOutcomeClassifierTests
         internal string Worktree { get; }
         internal AgentDispatchContext Context { get; }
         internal AgentStageResult Invocation { get; }
+        internal AgentStageResult InvocationFor(AgentRole role, string stage)
+        {
+            var invocationId = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfffffff'Z'", System.Globalization.CultureInfo.InvariantCulture)
+                + "-" + FailureLogTailReader.RoleSuffix(role);
+            var logDirectory = Directory.CreateDirectory(Path.Combine(Paths.LogsRoot(Project.Name), BeadId)).FullName;
+            var logPath = Path.Combine(logDirectory, invocationId + ".log");
+            File.WriteAllText(logPath, $"{AgentRoles.ToConfigKey(role)} completed with evidence.");
+            var state = new BeadWorkflowState(BeadId, "task", "in_progress", stage, false, false, false, 0);
+            var observations = new AgentStageObservations(state, state, Owner, Owner, AgentExecutionStatus.Exited,
+                0, $"nightweaver/{BeadId}", new string('a', 40), string.Empty, true);
+            return new AgentStageResult(role, BeadId, invocationId, logPath, null, [], Observations: observations,
+                PreInvocationCommentIds: new HashSet<string>(StringComparer.Ordinal));
+        }
         internal Task<AgentOutcomeClassificationResult> ClassifyAsync(AgentOutcomeClassifier classifier) =>
             classifier.ClassifyAsync(Paths, Project, Context, Worktree, Invocation,
                 [new BeadCommentSnapshot("comment-1", "Implementation checks passed.", DateTimeOffset.UtcNow)],

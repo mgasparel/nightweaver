@@ -4,7 +4,7 @@ using Nightweaver.Inspection;
 
 namespace Nightweaver.Execution;
 
-internal interface IImplementerOutcomeVerifier
+internal interface IDeliveryOutcomeVerifier
 {
     Task<string?> VerifyNoClassifierMutationAsync(
         ValidatedTargetRepository repository,
@@ -13,7 +13,7 @@ internal interface IImplementerOutcomeVerifier
         string expectedAssignee,
         CancellationToken cancellationToken);
 
-    Task<string?> VerifyReadyForReviewAsync(
+    Task<string?> VerifyApprovalAsync(
         ValidatedTargetRepository repository,
         string worktreePath,
         AgentStageResult invocation,
@@ -22,8 +22,8 @@ internal interface IImplementerOutcomeVerifier
         CancellationToken cancellationToken);
 }
 
-/// <summary>Checks completed Implementer work independently of the classifier's answer.</summary>
-internal sealed class ImplementerOutcomeVerifier(IProcessRunner processRunner) : IImplementerOutcomeVerifier
+/// <summary>Checks completed Delivery work independently of the classifier's answer.</summary>
+internal sealed class DeliveryOutcomeVerifier(IProcessRunner processRunner) : IDeliveryOutcomeVerifier
 {
     private readonly BeadsReader beadsReader = new(processRunner);
 
@@ -35,25 +35,25 @@ internal sealed class ImplementerOutcomeVerifier(IProcessRunner processRunner) :
         CancellationToken cancellationToken)
     {
         if (invocation.Observations is not { } original)
-            return "The Implementer invocation has no deterministic observations.";
+            return "The Delivery invocation has no deterministic observations.";
         try
         {
             var status = await RunGitAsync(["status", "--porcelain"], worktreePath, cancellationToken).ConfigureAwait(false);
             var branch = await RunGitAsync(["branch", "--show-current"], worktreePath, cancellationToken).ConfigureAwait(false);
             var head = await RunGitAsync(["rev-parse", "HEAD"], worktreePath, cancellationToken).ConfigureAwait(false);
             if (!string.Equals(status.StandardOutput, original.WorktreeStatus, StringComparison.Ordinal))
-                return "Outcome fallback changed the Implementer worktree status.";
+                return "Outcome classifier changed the Delivery worktree status.";
             if (!string.Equals(branch.StandardOutput.Trim(), original.BranchName, StringComparison.Ordinal))
-                return "Outcome fallback changed the Implementer worktree branch.";
+                return "Outcome classifier changed the Delivery worktree branch.";
             if (!string.Equals(head.StandardOutput.Trim(), original.HeadSha, StringComparison.OrdinalIgnoreCase))
-                return "Outcome fallback changed the Implementer worktree HEAD.";
+                return "Outcome classifier changed the Delivery worktree HEAD.";
             var inventory = await beadsReader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
             if (!inventory.ById.TryGetValue(invocation.BeadId, out var bead))
-                return "Outcome fallback removed the Implementer Bead from the Target Repository tracker.";
+                return "Outcome classifier removed the Delivery Bead from the Target Repository tracker.";
             var state = BeadWorkflowState.Parse(bead);
             if (state != original.BeforeState
                 || !string.Equals(bead.Assignee, expectedAssignee, StringComparison.Ordinal))
-                return "Outcome fallback changed the Implementer Bead workflow state or claim owner.";
+                return "Outcome classifier changed the Delivery Bead workflow state or claim owner.";
             return null;
         }
         catch (OperationCanceledException) { throw; }
@@ -63,7 +63,7 @@ internal sealed class ImplementerOutcomeVerifier(IProcessRunner processRunner) :
         }
     }
 
-    public async Task<string?> VerifyReadyForReviewAsync(
+    public async Task<string?> VerifyApprovalAsync(
         ValidatedTargetRepository repository,
         string worktreePath,
         AgentStageResult invocation,
@@ -72,17 +72,17 @@ internal sealed class ImplementerOutcomeVerifier(IProcessRunner processRunner) :
         CancellationToken cancellationToken)
     {
         if (invocation.Observations is not { } observations)
-            return "The Implementer invocation has no deterministic process/work observations.";
+            return "The Delivery invocation has no deterministic process/work observations.";
         if (observations.ProcessStatus != AgentExecutionStatus.Exited || observations.ExitCode != 0)
-            return "The Implementer process did not exit successfully.";
+            return "The Delivery process did not exit successfully.";
         if (observations.WorktreeClean != true)
-            return "The Implementer worktree is not clean; approval was withheld and retained work was preserved.";
+            return "The Delivery worktree is not clean; approval was withheld and retained work was preserved.";
 
         var expectedBranch = $"nightweaver/{invocation.BeadId}";
         if (!string.Equals(observations.BranchName, expectedBranch, StringComparison.Ordinal))
-            return $"The Implementer worktree branch must be '{expectedBranch}', observed '{observations.BranchName ?? "(unavailable)"}'.";
+            return $"The Delivery worktree branch must be '{expectedBranch}', observed '{observations.BranchName ?? "(unavailable)"}'.";
         if (!IsSha(observations.HeadSha))
-            return "The Implementer worktree HEAD is unavailable or invalid.";
+            return "The Delivery worktree HEAD is unavailable or invalid.";
 
         var current = await VerifyNoClassifierMutationAsync(repository, worktreePath, invocation,
             expectedAssignee, cancellationToken).ConfigureAwait(false);

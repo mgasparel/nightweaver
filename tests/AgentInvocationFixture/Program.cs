@@ -110,12 +110,39 @@ internal static class Program
         using var stream = new MemoryStream();
         input.CopyTo(stream);
         var prompt = Encoding.UTF8.GetString(stream.ToArray());
-        var choice = prompt.Contains("Implementer product decision:", StringComparison.OrdinalIgnoreCase)
-            ? "product_decision_required" : "ready_for_review";
+        const string evidenceMarker = "Evidence JSON:\n";
+        var evidenceStart = prompt.IndexOf(evidenceMarker, StringComparison.Ordinal);
+        if (evidenceStart < 0) return 65;
+        evidenceStart += evidenceMarker.Length;
+        var evidenceEnd = prompt.IndexOf("\nReturn only one JSON object", evidenceStart, StringComparison.Ordinal);
+        if (evidenceEnd < 0) return 65;
+        using var evidence = JsonDocument.Parse(prompt[evidenceStart..evidenceEnd]);
+        var root = evidence.RootElement;
+        var role = root.GetProperty("role").GetString();
+        var sources = root.GetProperty("sources").ToString();
+        var choice = sources.Contains("product decision:", StringComparison.OrdinalIgnoreCase)
+            ? "product_decision_required"
+            : role switch
+            {
+                "implementer" => "ready_for_review",
+                "reviewer" when sources.Contains("blocking finding:", StringComparison.OrdinalIgnoreCase) => "changes_required",
+                "reviewer" => "approved",
+                "qa" when sources.Contains("qa failure:", StringComparison.OrdinalIgnoreCase) => "changes_required",
+                "qa" => "approved",
+                _ => "incomplete_or_unclear"
+            };
+        var schema = "nightweaver-" + role + "-outcome-v1";
+        var question = role switch
+        {
+            "implementer" => "implementer_outcome",
+            "reviewer" => "reviewer_outcome",
+            "qa" => "qa_outcome",
+            _ => "unknown_outcome"
+        };
         var response = JsonSerializer.Serialize(new
         {
-            schema = "nightweaver-implementer-outcome-v1",
-            question = "implementer_outcome",
+            schema,
+            question,
             choice
         });
         Console.OpenStandardOutput().Write(Encoding.UTF8.GetBytes(response));
@@ -342,7 +369,11 @@ internal static class Program
         var beadId = Environment.GetEnvironmentVariable("NIGHTWEAVER_BEAD_ID")
             ?? throw new InvalidOperationException("NIGHTWEAVER_BEAD_ID is missing.");
         var pidPath = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE");
-        if (!string.IsNullOrWhiteSpace(pidPath)) File.WriteAllText(pidPath, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (!string.IsNullOrWhiteSpace(pidPath))
+        {
+            var startTime = Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks;
+            File.WriteAllText(pidPath, $"{Environment.ProcessId}|{startTime}");
+        }
 
         switch (action)
         {
@@ -386,11 +417,9 @@ internal static class Program
                 break;
             case "slot-review-pause":
                 Run("bd", ["comments", "add", beadId, "Reviewer product decision: does this error handling match product requirements?"]);
-                Run("bd", ["update", beadId, "--add-label", "product-decision-required"]);
                 break;
             case "slot-qa-pause":
                 Run("bd", ["comments", "add", beadId, "QA product decision: is this edge case behavior intended?"]);
-                Run("bd", ["update", beadId, "--add-label", "product-decision-required"]);
                 break;
             case "pause-nonzero":
                 Run("bd", ["comments", "add", beadId, "question"]);
@@ -428,23 +457,23 @@ internal static class Program
                 Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
                 break;
             case "slot-review":
-                UpdateLabels(beadId, "stage:review", "stage:qa");
+                Run("bd", ["comments", "add", beadId, "Reviewer evidence: no blocking findings remain; approval is supported."]);
                 break;
             case var reviewRejection when action.StartsWith("slot-review-reject-", StringComparison.Ordinal):
             {
                 var cycle = int.Parse(reviewRejection["slot-review-reject-".Length..], System.Globalization.CultureInfo.InvariantCulture);
-                RejectToImplement(beadId, "stage:review", cycle,
-                    $"Reviewer finding cycle {cycle}: the serialized response is malformed; correct it and add a reproducible regression check.");
+                Run("bd", ["comments", "add", beadId,
+                    $"Blocking finding: reviewer cycle {cycle}; the serialized response is malformed; correct it and add a reproducible regression check."]);
                 break;
             }
             case "slot-qa":
-                UpdateLabels(beadId, "stage:qa", "stage:merge");
+                Run("bd", ["comments", "add", beadId, "QA evidence: required checks passed and observed behavior matches acceptance criteria."]);
                 break;
             case var qaRejection when action.StartsWith("slot-qa-reject-", StringComparison.Ordinal):
             {
                 var cycle = int.Parse(qaRejection["slot-qa-reject-".Length..], System.Globalization.CultureInfo.InvariantCulture);
-                RejectToImplement(beadId, "stage:qa", cycle,
-                    $"QA reproduction cycle {cycle}: POST /fixture returned 500; expected 200. Reproduce with the fixture command and fix the handler.");
+                Run("bd", ["comments", "add", beadId,
+                    $"QA failure: cycle {cycle}; POST /fixture returned 500; expected 200. Reproduce with the fixture command and fix the handler."]);
                 break;
             }
             case "plan-challenge":

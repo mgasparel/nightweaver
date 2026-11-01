@@ -12,7 +12,7 @@ internal enum NeedsHumanCause
     DuplicateFailure,
     RepairBudgetExhausted,
     EnvironmentBlocked,
-    ImplementerOutcomeFailure
+    DeliveryOutcomeFailure
 }
 
 internal sealed record NeedsHumanRequest(
@@ -473,7 +473,7 @@ internal sealed class NeedsHumanEscalator
         NeedsHumanCause.DuplicateFailure => "duplicate-failure",
         NeedsHumanCause.RepairBudgetExhausted => "repair-budget-exhausted",
         NeedsHumanCause.EnvironmentBlocked => "environment-blocked",
-        NeedsHumanCause.ImplementerOutcomeFailure => "implementer-outcome-failure",
+        NeedsHumanCause.DeliveryOutcomeFailure => "delivery-outcome-failure",
         _ => throw new ArgumentOutOfRangeException(nameof(cause), cause, "Unknown needs-human cause")
     };
 

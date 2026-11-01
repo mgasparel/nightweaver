@@ -37,23 +37,17 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
         Assert.Contains("do not reset or increment it", implementer, StringComparison.Ordinal);
 
         Assert.Contains("full committed branch diff against `origin/<default_branch>`", reviewer, StringComparison.Ordinal);
-        Assert.Contains("do not build, run tests", reviewer, StringComparison.Ordinal);
-        Assert.Contains("stage:qa", reviewer, StringComparison.Ordinal);
-        Assert.Contains("Keep status `in_progress`", reviewer, StringComparison.Ordinal);
-        Assert.Contains("increment it exactly once", reviewer, StringComparison.Ordinal);
-        Assert.Contains("Do this even when the new count exceeds `max_repair_cycles`", reviewer, StringComparison.Ordinal);
-        Assert.Contains("Do not add `needs-human` for budget exhaustion", reviewer, StringComparison.Ordinal);
+        Assert.Contains("Do not edit files, build, run tests", reviewer, StringComparison.Ordinal);
+        Assert.Contains("Do not use `bd update` or otherwise change stage labels", reviewer, StringComparison.Ordinal);
+        Assert.Contains("The Orchestrator classifies your evidence", reviewer, StringComparison.Ordinal);
 
-        Assert.Contains("build and boot the software", qa, StringComparison.Ordinal);
-        Assert.Contains("exact commands plus observed behavior", qa, StringComparison.Ordinal);
+        Assert.Contains("build and run it as needed", qa, StringComparison.Ordinal);
+        Assert.Contains("Record exact commands, results, and reproducible failures in your evidence report", qa, StringComparison.Ordinal);
         Assert.Contains("Stop any test services", qa, StringComparison.Ordinal);
-        Assert.Contains("remove temporary files, generated artifacts, and untracked test data created by this run", qa, StringComparison.Ordinal);
-        Assert.Contains("If inherited changes prevent required checks, report them without removing them", qa, StringComparison.Ordinal);
-        Assert.Contains("stage:merge", qa, StringComparison.Ordinal);
-        Assert.Contains("Keep status `in_progress`", qa, StringComparison.Ordinal);
-        Assert.Contains("increment it exactly once", qa, StringComparison.Ordinal);
-        Assert.Contains("Do this even when the new count exceeds `max_repair_cycles`", qa, StringComparison.Ordinal);
-        Assert.Contains("Do not add `needs-human` for budget exhaustion", qa, StringComparison.Ordinal);
+        Assert.Contains("Remove only test artifacts created by this QA run", qa, StringComparison.Ordinal);
+        Assert.Contains("If inherited content prevents required checks, report it and preserve the environment for inspection and resume", qa, StringComparison.Ordinal);
+        Assert.Contains("Do not use `bd update` or otherwise change stage labels", qa, StringComparison.Ordinal);
+        Assert.Contains("atomic Delivery-to-Merger handoff", qa, StringComparison.Ordinal);
 
         foreach (var (_, fileName) in PromptFiles)
         {
@@ -79,24 +73,23 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
 
         foreach (var prompt in new[] { reviewer, qa })
         {
-            Assert.Contains("product-decision-required", prompt, StringComparison.Ordinal);
             Assert.Contains("bd comments add <bead-id>", prompt, StringComparison.Ordinal);
-            Assert.Contains("direct question for the human", prompt, StringComparison.Ordinal);
-            Assert.Contains("bd update <bead-id> --add-label product-decision-required", prompt, StringComparison.Ordinal);
-            Assert.Contains("preserve `repair_cycles`", prompt, StringComparison.Ordinal);
-            Assert.Contains("keep status `in_progress` with the current assignee", prompt, StringComparison.Ordinal);
-            Assert.Contains("exit cleanly with code zero", prompt, StringComparison.Ordinal);
-            Assert.Contains("the Orchestrator retains the environment and releases only its still-owned claim", prompt, StringComparison.Ordinal);
+            Assert.DoesNotContain("bd update <bead-id> --add-label product-decision-required", prompt, StringComparison.Ordinal);
+            Assert.Contains("concrete ambiguity", prompt, StringComparison.Ordinal);
+            Assert.Contains("precise question", prompt, StringComparison.Ordinal);
+            Assert.Contains("Do not add a pause label or change workflow state", prompt, StringComparison.Ordinal);
+            Assert.Contains("The Orchestrator classifies your evidence", prompt, StringComparison.Ordinal);
+            Assert.Contains("Preserve the worktree and let the Orchestrator publish the pause", prompt, StringComparison.Ordinal);
         }
 
         Assert.Contains("git push -u origin nightweaver/<bead-id>", implementer, StringComparison.Ordinal);
         Assert.Contains("Do not write `stage:*`", implementer, StringComparison.Ordinal);
 
-        Assert.Contains("Remain read-only", reviewer, StringComparison.Ordinal);
-        Assert.Contains("Retain `stage:review`", reviewer, StringComparison.Ordinal);
+        Assert.Contains("Do not edit files", reviewer, StringComparison.Ordinal);
+        Assert.Contains("leave workflow state and claim unchanged", reviewer, StringComparison.Ordinal);
 
         Assert.Contains("Stop any test services", qa, StringComparison.Ordinal);
-        Assert.Contains("Retain `stage:qa`", qa, StringComparison.Ordinal);
+        Assert.Contains("Confirm tracked files and `HEAD` are unchanged", qa, StringComparison.Ordinal);
     }
 
     [Fact]
