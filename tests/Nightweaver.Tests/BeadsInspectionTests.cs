@@ -31,6 +31,28 @@ public sealed class BeadsInspectionTests
         Assert.Empty((await new BeadsReader(runner).ReadSnapshotAsync(new("target with spaces", "main"), cancellation.Token)).ById);
     }
 
+    [Fact]
+    public void JournalCommandsStayOnTheConfiguredTargetAndDoNotInheritTrackerSelectors()
+    {
+        var setup = BeadsCommand.CreateJournalSetup("actual target with spaces");
+        Assert.Equal("actual target with spaces", setup.WorkingDirectory);
+        Assert.Equal(["--sandbox", "--dolt-auto-commit", "on", "config", "set", "events-journal", "true"], setup.Arguments);
+        Assert.Null(setup.Environment["BD_DISABLE_EVENT_FLUSH"]);
+
+        var tail = BeadsCommand.CreateJournalTail("actual target with spaces", 27);
+        Assert.Equal("actual target with spaces", tail.WorkingDirectory);
+        Assert.Equal(Timeout.InfiniteTimeSpan, tail.Timeout);
+        Assert.Equal(["--readonly", "--sandbox", "events", "tail", "--follow", "--since", "27", "--json"], tail.Arguments);
+        foreach (var selector in new[]
+        {
+            "BEADS_DIR", "BEADS_DB", "BD_DB", "BEADS_DOLT_SERVER_DATABASE", "BEADS_DOLT_DATA_DIR",
+            "BEADS_DOLT_SERVER_MODE", "BEADS_DOLT_SHARED_SERVER"
+        })
+        {
+            Assert.Null(tail.Environment[selector]);
+        }
+    }
+
     public static TheoryData<string> InvalidJson => new()
     {
         "", "[", "null", "{}", "[null]", "[2]", "[{}]",

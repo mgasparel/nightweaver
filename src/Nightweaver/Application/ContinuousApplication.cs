@@ -73,7 +73,10 @@ internal static class ContinuousApplication
                 return Task.CompletedTask;
             },
             environment.Out,
-            environment.Err);
+            environment.Err,
+            journalWatcher: (requestDiscovery, token) => new BeadsJournalWatcher(
+                new BeadsJournalClient(processRunner), requestDiscovery, environment.Err)
+                .RunAsync(repository, token));
 
         environment.Out.WriteLine($"Continuous Delivery runtime starting for Project '{project.Name.Value}' and Target Repository '{repository.Path}'.");
         environment.Out.WriteLine($"Delivery capacity: {pool.CapacityLimit}; periodic discovery: 30 seconds; press Ctrl+C to stop.");

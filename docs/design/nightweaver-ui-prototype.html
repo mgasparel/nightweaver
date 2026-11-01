@@ -1122,7 +1122,7 @@
         spec: `
           <div class="space-y-4">
             <h3 class="text-base font-bold text-[var(--foreground)] mb-1.5">Reactive Event Stream Specification</h3>
-            <p class="leading-relaxed">Implement durable journal tailing via <code class="font-mono text-xs">bd events tail --follow</code> to replace polling loops. The Orchestrator must detect tracker mutations instantaneously, run startup sweep to release stranded claims, and recover cleanly after sudden power loss.</p>
+            <p class="leading-relaxed">Use <code class="font-mono text-xs">bd events tail --follow</code> as a best-effort wake-up hint, with periodic discovery as the fallback. Neither journal attachment nor historical replay gates startup; fresh tracker reads determine eligibility.</p>
           </div>
         `,
         comments: [
@@ -1440,7 +1440,7 @@
 
       const newId = 'ns-' + Math.random().toString(36).substring(2, 5);
 
-      alert(`Product Bead created successfully in bd!\n\nID: ${newId}\nType: ${type}\nPriority: ${priority}\nTitle: "${title}"\n\nNightweaver Orchestrator has picked up the event via bd events tail and added it to the Ready Backlog.`);
+      alert(`Product Bead created successfully in bd!\n\nID: ${newId}\nType: ${type}\nPriority: ${priority}\nTitle: "${title}"\n\nNightweaver Orchestrator will discover eligible work after tracker activity or its next periodic pass.`);
 
       // Add to mock DB
       BEADS_DB[newId] = {

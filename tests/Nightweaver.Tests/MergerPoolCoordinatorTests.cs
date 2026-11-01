@@ -305,9 +305,8 @@ public sealed class MergerPoolCoordinatorTests
 
         var deliveryPool = new DeliveryPoolCoordinator(host, project, target, processRunner,
             (_, _, _) => Task.FromResult(deliverySnapshot),
-            async (_, _, _, beadId, _, agentAttemptStarted) =>
+            async (_, _, _, beadId, _) =>
             {
-                agentAttemptStarted();
                 var gate = deliveryGates[beadId];
                 gate.Started.TrySetResult(true);
                 await gate.Release.Task;

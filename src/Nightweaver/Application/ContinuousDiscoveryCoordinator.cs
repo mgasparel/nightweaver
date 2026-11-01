@@ -12,7 +12,8 @@ internal sealed class ContinuousDiscoveryCoordinator(
     Func<CancellationToken, Task> validateAdmissionInfrastructure,
     TextWriter output,
     TextWriter error,
-    DiscoveryTimerTicks? timerTicks = null)
+    DiscoveryTimerTicks? timerTicks = null,
+    Func<Action, CancellationToken, Task>? journalWatcher = null)
 {
     internal static readonly TimeSpan DiscoveryInterval = TimeSpan.FromSeconds(30);
 
@@ -40,6 +41,9 @@ internal sealed class ContinuousDiscoveryCoordinator(
         var completionMonitor = MonitorPoolCompletionReadersAsync(poolCompletionReaders);
         var drained = true;
         RequestDiscovery();
+        var journalTask = journalWatcher is null
+            ? Task.CompletedTask
+            : ObserveJournalWatcherAsync(journalWatcher, runtimeCancellation.Token);
 
         try
         {
@@ -71,7 +75,7 @@ internal sealed class ContinuousDiscoveryCoordinator(
             runtimeCancellation.Cancel();
             try
             {
-                await Task.WhenAll(poolCompletionReaders.Append(worker).Append(timer).Append(completionMonitor))
+            await Task.WhenAll(poolCompletionReaders.Append(worker).Append(timer).Append(completionMonitor).Append(journalTask))
                     .WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is OperationCanceledException or TimeoutException)
@@ -162,6 +166,24 @@ internal sealed class ContinuousDiscoveryCoordinator(
         var first = await Task.WhenAny(readers).ConfigureAwait(false);
         await first.ConfigureAwait(false);
         throw new InvalidOperationException("A configured pool completion stream stopped unexpectedly.");
+    }
+
+    private async Task ObserveJournalWatcherAsync(
+        Func<Action, CancellationToken, Task> journalWatcher,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await journalWatcher(() => RequestDiscovery(), cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            RequestDiscovery();
+            error.WriteLine($"nightweaver: tracker journal watcher stopped; periodic and completion discovery remain active: {exception.Message}");
+        }
     }
 
     private static async IAsyncEnumerable<bool> ReadTimerTicksAsync(

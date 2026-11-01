@@ -123,6 +123,54 @@ public sealed class ContinuousDiscoveryCoordinatorTests
     }
 
     [Fact]
+    public async Task JournalWatcherFailureDoesNotStopTimerOrCompletionDiscovery()
+    {
+        using var lifetime = new CancellationTokenSource();
+        var completions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
+        var ticks = Channel.CreateUnbounded<bool>();
+        var error = new StringWriter();
+        var watcherStopped = NewSignal();
+        var thirdPass = NewSignal();
+        var calls = 0;
+        var coordinator = new ContinuousDiscoveryCoordinator(
+            [Registration(ContinuousPoolKind.Delivery, _ =>
+            {
+                if (Interlocked.Increment(ref calls) == 3) thirdPass.TrySetResult(true);
+                return EmptyDiagnostics();
+            }, completions.Reader)],
+            _ => Task.CompletedTask,
+            TextWriter.Null,
+            error,
+            token => ReadTicksAsync(ticks.Reader, token),
+            (requestDiscovery, _) =>
+            {
+                requestDiscovery();
+                watcherStopped.TrySetResult(true);
+                throw new IOException("tail transport exited");
+            });
+
+        var run = coordinator.RunAsync(lifetime.Token);
+        await watcherStopped.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await WaitForCallsAsync(1);
+        Assert.Contains("periodic and completion discovery remain active", error.ToString(), StringComparison.Ordinal);
+
+        completions.Writer.TryWrite(new DeliveryPoolCompletion("completed", null, null, false, true));
+        await WaitForCallsAsync(2);
+        ticks.Writer.TryWrite(true);
+        await thirdPass.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal(3, Volatile.Read(ref calls));
+
+        lifetime.Cancel();
+        await run.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        async Task WaitForCallsAsync(int desired)
+        {
+            while (Volatile.Read(ref calls) < desired)
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+    }
+
+    [Fact]
     public async Task LaterConfiguredPoolRunsWhileDeliveryPreparationIsBlockedAndCompletionFansIn()
     {
         using var lifetime = new CancellationTokenSource();
