@@ -133,6 +133,58 @@ public sealed class AgentInvocationPreparerTests
     }
 
     [Fact]
+    public async Task PreparesOutcomeClassifierWithDistinctPurposeAndInvocationScopedRuntimePaths()
+    {
+        using var temp = new TempDirectory();
+        var host = CreateHost(temp.Path);
+        var project = CreateProject();
+        var context = new AgentDispatchContext("ns-xci.2", "task", "stage:implement", 1);
+        var worktree = CanonicalWorktree(host, project, context.BeadId);
+
+        var prepared = await new AgentInvocationPreparer().PrepareOutcomeClassifierAsync(
+            host, project, context, worktree, "bounded evidence", TestContext.Current.CancellationToken);
+
+        Assert.Matches("^\\d{8}T\\d{13}Z-outcome-classifier$", prepared.InvocationId);
+        Assert.Equal("bounded evidence", prepared.StandardInput);
+        Assert.Equal("outcome-classifier", prepared.EnvironmentOverrides["NIGHTWEAVER_INVOCATION_PURPOSE"]);
+        Assert.Equal(5, prepared.EnvironmentOverrides.Count);
+        Assert.Contains("--tools", prepared.Arguments);
+        Assert.Contains("--strict-mcp-config", prepared.Arguments);
+        Assert.DoesNotContain(prepared.Arguments, argument => argument.Contains("dangerously", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(Path.Combine(host.Root, "tmp")));
+        Assert.False(Directory.Exists(Path.Combine(host.Root, "logs")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OutcomeClassifierUsesReadOnlyCliPolicyForEitherConfiguredFallback(bool useCodex)
+    {
+        using var temp = new TempDirectory();
+        var host = CreateHost(temp.Path);
+        var cli = useCodex ? AgentCli.Codex : AgentCli.Claude;
+        var project = CreateProject(cli, model: "fixture-model", effort: "low");
+        var context = new AgentDispatchContext("ns-xci.2", "task", "stage:implement", 1);
+        var worktree = CanonicalWorktree(host, project, context.BeadId);
+
+        var prepared = await new AgentInvocationPreparer().PrepareOutcomeClassifierAsync(
+            host, project, context, worktree, "bounded evidence", TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(prepared.Arguments, argument => argument.Contains("dangerously", StringComparison.Ordinal));
+        if (cli == AgentCli.Claude)
+        {
+            Assert.Contains("--tools", prepared.Arguments);
+            Assert.Contains(string.Empty, prepared.Arguments);
+            Assert.Contains("--strict-mcp-config", prepared.Arguments);
+            Assert.Contains("none", prepared.Arguments);
+        }
+        else
+        {
+            Assert.Equal("read-only", prepared.Arguments[Array.IndexOf(prepared.Arguments.ToArray(), "--sandbox") + 1]);
+        }
+    }
+
+    [Fact]
     public async Task ResolvesCanonicalPathsAndFourEnvironmentOverridesWithoutCreatingFiles()
     {
         using var temp = new TempDirectory();

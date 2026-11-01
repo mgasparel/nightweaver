@@ -48,8 +48,28 @@ public sealed class DuplicateFailureClassifierTests
         var splitAtScalar = fixture.CreateFailure(splitBytes);
         var splitTail = await FailureLogTailReader.ReadAsync(fixture.Paths, fixture.Project.Name, splitAtScalar,
             TestContext.Current.CancellationToken);
-        Assert.True(splitTail.HadInvalidUtf8);
-        Assert.StartsWith("\uFFFD", splitTail.Text, StringComparison.Ordinal);
+        Assert.False(splitTail.HadInvalidUtf8);
+        Assert.StartsWith("z", splitTail.Text, StringComparison.Ordinal);
+        Assert.True(Encoding.UTF8.GetByteCount(splitTail.Text) <= DuplicateFailureClassifierLimits.MaximumLogTailBytes);
+
+        var validMultibyteBytes = Encoding.UTF8.GetBytes(new string('é', 16_384) + "x");
+        Assert.Equal(DuplicateFailureClassifierLimits.MaximumLogTailBytes + 1, validMultibyteBytes.Length);
+        var validMultibyte = fixture.CreateFailure(validMultibyteBytes);
+        var validMultibyteTail = await FailureLogTailReader.ReadAsync(fixture.Paths, fixture.Project.Name,
+            validMultibyte, TestContext.Current.CancellationToken);
+        Assert.True(validMultibyteTail.Truncated);
+        Assert.False(validMultibyteTail.HadInvalidUtf8);
+        Assert.EndsWith("x", validMultibyteTail.Text, StringComparison.Ordinal);
+        Assert.True(Encoding.UTF8.GetByteCount(validMultibyteTail.Text) <= DuplicateFailureClassifierLimits.MaximumLogTailBytes);
+
+        var malformedBoundaryBytes = Enumerable.Repeat((byte)'p', 3)
+            .Append((byte)0x80)
+            .Concat(Enumerable.Repeat((byte)'x', DuplicateFailureClassifierLimits.MaximumLogTailBytes - 1))
+            .ToArray();
+        var malformedBoundary = fixture.CreateFailure(malformedBoundaryBytes);
+        var malformedBoundaryTail = await FailureLogTailReader.ReadAsync(fixture.Paths, fixture.Project.Name,
+            malformedBoundary, TestContext.Current.CancellationToken);
+        Assert.True(malformedBoundaryTail.HadInvalidUtf8);
     }
 
     [Fact]

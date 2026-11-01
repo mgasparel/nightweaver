@@ -191,9 +191,17 @@ internal sealed class InvocationRuntimeFiles : IDisposable
             || !invocation.EnvironmentOverrides.TryGetValue("TMPDIR", out var envTmpDir)
             || !RuntimePaths.Comparer.Equals(expectedTmp, RuntimePaths.Normalize(envTmpDir)))
             throw new InvalidDataException("Prepared environment overrides do not match the invocation identity and runtime paths.");
-        if (invocation.EnvironmentOverrides.Count != 4
-            || invocation.EnvironmentOverrides.Keys.Any(key => key is not ("NIGHTWEAVER_BEAD_ID" or "TMP" or "TEMP" or "TMPDIR")))
-            throw new InvalidDataException("Prepared invocation may override only NIGHTWEAVER_BEAD_ID, TMP, TEMP and TMPDIR.");
+        var outcomeClassifier = invocation.InvocationId.EndsWith("-outcome-classifier", StringComparison.Ordinal);
+        if (outcomeClassifier
+            && (!invocation.EnvironmentOverrides.TryGetValue("NIGHTWEAVER_INVOCATION_PURPOSE", out var purpose)
+                || purpose != "outcome-classifier"))
+            throw new InvalidDataException("Outcome classifier invocation purpose is missing or invalid.");
+        var allowedEnvironmentKeys = outcomeClassifier
+            ? new HashSet<string>(["NIGHTWEAVER_BEAD_ID", "TMP", "TEMP", "TMPDIR", "NIGHTWEAVER_INVOCATION_PURPOSE"], StringComparer.Ordinal)
+            : new HashSet<string>(["NIGHTWEAVER_BEAD_ID", "TMP", "TEMP", "TMPDIR"], StringComparer.Ordinal);
+        if (invocation.EnvironmentOverrides.Count != allowedEnvironmentKeys.Count
+            || invocation.EnvironmentOverrides.Keys.Any(key => !allowedEnvironmentKeys.Contains(key)))
+            throw new InvalidDataException("Prepared invocation may override only the runtime paths and its recognized invocation purpose.");
 
         foreach (var directory in new[] { invocation.WorkingDirectory, Path.GetDirectoryName(expectedTmp)!, expectedTmp, Path.GetDirectoryName(expectedLog)! })
             ValidatePathSegments(directory);
@@ -205,7 +213,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         if (!value.AsSpan(0, 8).ToString().All(char.IsAsciiDigit)
             || !value.AsSpan(9, 13).ToString().All(char.IsAsciiDigit)) return false;
         var suffix = value[24..];
-        if (suffix is not ("planner" or "plan-challenger" or "implementer" or "reviewer" or "qa" or "merger" or "classifier")) return false;
+        if (suffix is not ("planner" or "plan-challenger" or "implementer" or "reviewer" or "qa" or "merger" or "classifier" or "outcome-classifier")) return false;
         return DateTime.TryParseExact(value[..23], "yyyyMMdd'T'HHmmssfffffff'Z'", System.Globalization.CultureInfo.InvariantCulture,
             System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out _);
     }

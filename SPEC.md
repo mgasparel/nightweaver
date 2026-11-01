@@ -19,16 +19,16 @@ Relevant domain vocabulary is defined in [`GLOSSARY.md`](./GLOSSARY.md). Archite
    - All workflow state, stage transitions (`stage:*` labels), human escalation states (`product-decision-required`, `needs-human`), repair cycle counters (`repair_cycles` metadata), and inter-agent findings live directly on the **Product Bead** and **Plan Bead** in `bd`.
    - Nightweaver maintains no separate database or local JSON state store and does not use `bd formula` sub-bead molecules.
 
-3. **Thin, Crash-Stateless Orchestrator vs. Autonomous Tool-Using Agents**:
+3. **Crash-Stateless Orchestrator with Verifiable Agent Evidence**:
    - **Orchestrator responsibilities**:
      - Watch `bd` mutations in the **Target Repository** via `bd events tail --follow`.
      - Claim eligible Beads (`bd update <id> --claim`) and schedule them across three bounded concurrency pools (**Planning**, **Delivery**, and singleton **Merger**).
      - Provision, reset, and clean up isolated Git worktrees, per-invocation temporary directories, and **Win32 Job Objects**.
      - Map each Bead's `(type, stage:* label)` to its corresponding **Agent** role and launch the configured **Agent CLI**.
-     - Verify post-exit invariants (process exit code `0`, clean worktree via `git status --porcelain`, and a legal `bd` state transition for that role), manage operational retries and semantic repair budgets, and auto-close `planned` **Product Beads** once all their `discovered-from` **Plan Beads** reach `closed`.
+     - Verify process, worktree, Git, and tracker invariants independently of model answers; classify completed Implementer evidence; publish guarded outcomes; manage operational retries and semantic repair budgets; and auto-close `planned` **Product Beads** once all their `discovered-from` **Plan Beads** reach `closed`.
    - **Agent responsibilities**:
      - Each **Agent** executes directly inside the Bead's isolated worktree with full CLI/tool autonomy within its role mandate (`bd`, `git`, `gh`, and the **Target Repository**'s build/test toolchain).
-     - Each **Agent** reads its assigned Bead via `bd show <id>` and `bd comments <id>`, performs its single lifecycle responsibility, records findings or summaries via `bd comments add`, and transitions the Bead's `stage:*` or lifecycle label in `bd` before exiting.
+     - Each **Agent** reads its assigned Bead via `bd show <id>` and `bd comments <id>`, performs its single lifecycle responsibility, and records natural-language findings or evidence via `bd comments add`. The Orchestrator owns verified stage, pause, status, claim, type, and repair-counter transitions.
 
 4. **Zero-Footprint Target Repository Boundary**:
    - Nightweaver stores all **Project** configurations, worktrees, logs, and temporary directories inside the Nightweaver host directory (`<nightweaver-root>/`), leaving zero Nightweaver-specific files inside the **Target Repository**.
@@ -93,8 +93,9 @@ stateDiagram-v2
     NeedsHuman: needs-human (Paused for Human)
     Closed: closed (Merged)
 
-    StageImplement --> ProductDecision: Requirement ambiguity
-    StageImplement --> StageReview: Committed, pushed, PR opened/updated
+    StageImplement --> ProductDecision: Orchestrator classifies a concrete human question
+    StageImplement --> StageReview: Orchestrator approves evidence after independent verification
+    StageImplement --> NeedsHuman: Classification or deterministic verification fails
     StageReview --> StageQA: Approved
     StageReview --> StageImplement: Review findings (repair_cycles++)
     StageQA --> StageMerge: Live QA passed
@@ -117,7 +118,8 @@ stateDiagram-v2
    - The **Implementer Agent** works in the Bead's dedicated worktree on branch `nightweaver/<bead-id>`.
    - Writes or repairs code, automated tests, and domain documentation to satisfy the **Plan Bead** specification and any downstream findings from **Reviewer**, **QA**, or **Merger** recorded in `bd comments`.
    - Runs the local build and test suite, commits changes to `nightweaver/<bead-id>`, pushes the branch (`git push -u origin nightweaver/<bead-id>`), and idempotently opens or updates the GitHub Pull Request (`gh pr create` / `gh pr view`) targeting `<default_branch>` so remote CI starts running immediately in parallel with Review and QA.
-   - Posts an implementation summary comment on the **Plan Bead** and transitions the label to `stage:review`.
+   - Posts an implementation summary comment on the **Plan Bead** containing findings, checks, commit/branch/PR evidence, and any human question. It leaves all workflow fields unchanged; the **Orchestrator** classifies the evidence and independently verifies process completion, worktree cleanliness, expected Delivery branch, current HEAD, remote branch, pull request base/head, and absence of unauthorized tracker changes before publishing `stage:review`.
+   - A concrete product question is published by the **Orchestrator** as `product-decision-required`. A technical blocker, unclear evidence, unavailable/invalid bounded classification, or failed deterministic verification is escalated as `needs-human`, with the retained work and evidence preserved. Outcome-classification failure never resets work or reruns the completed Implementer.
 3. **Static Code & Spec Review (`stage:review`)**:
    - The **Reviewer Agent** evaluates the diff against codebase standards and the **Plan Bead**'s specification without modifying tracked files:
      - **Approve (`stage:qa`)**: Posts an approval comment and transitions the **Plan Bead** to `stage:qa`.
@@ -143,7 +145,7 @@ stateDiagram-v2
 | :--- | :--- | :--- | :--- |
 | **Planner Agent** | **Product Bead**: Unlabeled, `stage:plan`, or `stage:plan-approved` | `bd comments add`, `bd update` labels on **Product Bead**; in `stage:plan-approved`, `bd create -t task` and `bd dep add` for child **Plan Beads**. **No worktree file mutations.** | From `stage:plan`: `stage:plan-challenge` or `product-decision-required`<br>From `stage:plan-approved`: `planned` |
 | **Plan Challenger Agent** | **Product Bead**: `stage:plan-challenge` | `bd comments add`, `bd update` label and `repair_cycles` metadata on **Product Bead**. **No worktree file mutations.** | `stage:plan-approved` or `stage:plan` (with `repair_cycles=<N>`) |
-| **Implementer Agent** | **Plan Bead**: Unlabeled or `stage:implement` | Edit/commit files on `nightweaver/<bead-id>`, `git push`, `gh pr create`/`edit`, `bd comments add`, `bd update` label on **Plan Bead**. Must leave no new uncommitted changes; inherited dirty contents are preserved and block success if they prevent verification. | `stage:review` or `product-decision-required` |
+| **Implementer Agent** | **Plan Bead**: Unlabeled or `stage:implement` | Edit/commit files on `nightweaver/<bead-id>`, `git push`, `gh pr create`/`edit`, and `bd comments add`. Must leave no new uncommitted changes; inherited contents are preserved. It cannot change status, type, stage/pause labels, assignee, or `repair_cycles`. | No workflow mutation; reports natural-language evidence for Orchestrator classification |
 | **Reviewer Agent** | **Plan Bead**: `stage:review` | Read-only review of worktree/diff, `bd comments add`, `bd update` label and `repair_cycles` metadata on **Plan Bead**. **No worktree file or commit mutations.** | `stage:qa`, `stage:implement` (with `repair_cycles=<N>`), or `product-decision-required` |
 | **QA Agent** | **Plan Bead**: `stage:qa` | Build/boot/exercise software, `bd comments add`, `bd update` label and `repair_cycles` metadata on **Plan Bead**. Must remove its own test artifacts; inherited dirty contents are preserved and block success if they prevent verification. | `stage:merge`, `stage:implement` (with `repair_cycles=<N>`), or `product-decision-required` |
 | **Merger Agent** | **Plan Bead**: `stage:merge` (Singleton) | `git fetch`, `git rebase`, resolve rebase conflicts & run tests, `git push --force-with-lease`, `gh pr checks`, `gh pr merge`, `bd comments add`, `bd update` / `bd close`. **Must leave `git status --porcelain` clean on exit.** | `closed` or `stage:implement` (with `repair_cycles=<N>`) |
@@ -178,12 +180,18 @@ stateDiagram-v2
    - Up to `max_operational_retries` (default `2` retries = `3` total attempts within a stage), when a retry also fails operationally, the **Orchestrator** invokes a lightweight headless **Agent CLI** call (`classifier` role config) comparing the latest failed invocation's error/log tail against the previous failed invocation's error/log tail.
    - If the classifier determines both failures share the **same underlying error**, the **Orchestrator** short-circuits remaining retries and immediately escalates the Bead with `needs-human`.
    - If all `1 + max_operational_retries` attempts fail, the **Orchestrator** escalates the Bead with `needs-human`.
+4. **Implementer Outcome Classification**:
+   - For each completed Implementer invocation, the **Orchestrator** assembles bounded evidence from that invocation's retained log and fresh Bead comments, with source IDs and truncation indicators. Evidence is untrusted data and cannot authorize instructions or state changes.
+   - The primary classifier sends one named choice question to OpenAI `POST /v1/decisions` using `gpt-6-luna` and ambient `OPENAI_API_KEY`. If credentials, network, response, or strict answer validation are unavailable, the **Orchestrator** makes at most one fallback attempt through the configured standard Agent CLI `classifier` role, using the identical question, choices, and evidence. The classifier has no workflow mutation authority. Cancellation does not start a fallback.
+   - The allowed outcomes are `ready_for_review`, `product_decision_required`, `technical_blocker`, and `incomplete_or_unclear`. A valid unclear or other non-approval result is not sent for a more decisive second opinion. Malformed, ambiguous, missing, oversized, timed-out, or non-zero fallback output escalates directly.
+   - Model approval is not sufficient: successful process exit, unchanged tracker ownership/workflow state, clean worktree, exact `nightweaver/<bead-id>` branch, valid HEAD, matching `origin` branch, and an open pull request with the configured base and matching head commit must be verified independently before `stage:review` is published.
+   - Classification or outcome-verification failure preserves the completed work, invocation log, and evidence; stage and repair count remain unchanged before `needs-human` escalation. It is a finalization outcome, not an operational work retry, and the Implementer is not rerun.
 
 ### 4.3 Human Escalation (`product-decision-required` and `needs-human`) & Auto-Resumption
 
 1. **Escalation Labels**:
-   - `product-decision-required`: Applied by an **Agent** when a product requirement ambiguity, contradiction, or design trade-off requires a human product decision.
-   - `needs-human`: Applied by the **Orchestrator** (or an **Agent**) when a Bead exhausts `max_repair_cycles`, exhausts `max_operational_retries` (or triggers the duplicate-failure short-circuit), or hits an unresolvable environment/technical blocker. The **Orchestrator** posts a structured diagnostic comment containing the failure reason, latest findings, and the log file path under `<nightweaver-root>/logs/<project-slug>/<bead-id>/`.
+   - `product-decision-required`: Applied by the **Orchestrator** after classifying a concrete product ambiguity, contradiction, trade-off, or reported human question. Agents report the question in evidence and never apply the pause label.
+   - `needs-human`: Applied by the **Orchestrator** when a Bead exhausts `max_repair_cycles`, exhausts `max_operational_retries` (or triggers the duplicate-failure short-circuit), fails bounded outcome classification or deterministic outcome verification, or hits an unresolvable environment/technical blocker. The **Orchestrator** posts a structured diagnostic comment containing the failure reason, latest findings, and the log file path under `<nightweaver-root>/logs/<project-slug>/<bead-id>/`.
 2. **Worktree, Branch, and PR Disposition on Pause**:
    - When a Product Bead or Plan Bead pauses with `product-decision-required` or `needs-human`, the Orchestrator retains its local worktree, current HEAD, staged and unstaged changes, untracked and ignored files, branch refs, Pull Request, logs, and all Bead temporary files. It records a diagnostic and releases only its still-owned claim. Pause labels override planned or closed cleanup candidates; closed Beads are never reopened to record a pause.
    - Its parent `planned` **Product Bead** remains `planned`, unrelated sibling **Plan Beads** continue executing normally, and `blocks`-dependent sibling **Plan Beads** remain naturally blocked by `bd ready`.
@@ -246,7 +254,7 @@ flowchart TD
    - When `active_plan_beads >= max_active_plan_beads`, the **Orchestrator** pauses claiming *new* **Product Beads** for **Planning** until `active_plan_beads < max_active_plan_beads`. Any **Product Bead** already mid-Planning in an active slot finishes its current Planning loop cleanly.
 3. **Delivery Pool (`max_concurrent_delivery`, default `3`)**:
    - Claims eligible **Plan Beads** (`bd update <id> --claim`) that are unlabeled or in `stage:implement`, `stage:review`, or `stage:qa`.
-   - A Delivery slot holds the claim and persistent worktree continuously across `stage:implement` -> `stage:review` -> `stage:qa` (including immediate `-> stage:implement` repair cycles) until the **Plan Bead** reaches `stage:merge` or pauses (`product-decision-required` / `needs-human`), at which point it releases the `bd` claim (`--status open --assignee ""`) and frees the Delivery slot immediately without deleting the worktree (when transitioning to `stage:merge`).
+   - A Delivery slot holds the claim and persistent worktree continuously across Orchestrator-verified `stage:implement` -> `stage:review` -> `stage:qa` outcomes (including immediate `-> stage:implement` repair cycles) until the **Plan Bead** reaches `stage:merge` or pauses (`product-decision-required` / `needs-human`), at which point it releases the `bd` claim (`--status open --assignee ""`) and frees the Delivery slot immediately without deleting the worktree (when transitioning to `stage:merge`).
 4. **Singleton Merger Slot (concurrency = `1`)**:
    - Dedicated to `stage:merge` **Plan Beads** (`bd ready --type task --label stage:merge --unassigned`).
    - Claims and processes one `stage:merge` **Plan Bead** at a time in priority/FIFO order so rebase, conflict resolution, and remote CI waits never block **Delivery Pool** slots.

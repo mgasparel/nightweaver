@@ -23,6 +23,7 @@ internal sealed record AgentStageSession(
     WorktreePurpose Purpose,
     ProvisionedWorktree Worktree,
     BeadWorkflowState InitialState,
+    string? InitialAssignee,
     AgentDispatchContext DispatchContext,
     bool PreserveInheritedChanges);
 
@@ -99,7 +100,8 @@ internal sealed class AgentStageCoordinator
 
         _ = ParseProvisionedHead(worktree.HeadSha);
         return new AgentStageSession(hostPaths, project, repository, beadId, role, purpose, worktree,
-            fresh.State, new AgentDispatchContext(fresh.State.Id, fresh.State.IssueType, fresh.State.Stage, fresh.State.RepairCycles),
+            fresh.State, fresh.Bead.Assignee,
+            new AgentDispatchContext(fresh.State.Id, fresh.State.IssueType, fresh.State.Stage, fresh.State.RepairCycles),
             worktree.WasDirty);
     }
 
@@ -120,9 +122,18 @@ internal sealed class AgentStageCoordinator
         var invocation = await prepare(session.HostPaths, session.Project, session.Role, session.DispatchContext,
             session.Worktree.Path, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
+        IReadOnlySet<string>? preInvocationCommentIds = null;
+        if (session.Role == AgentRole.Implementer)
+        {
+            var comments = await beadsReader.ReadCommentsAsync(session.Repository, session.BeadId, cancellationToken)
+                .ConfigureAwait(false);
+            preInvocationCommentIds = comments.Select(comment => comment.Id).ToHashSet(StringComparer.Ordinal);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
         var execution = await execute(session.HostPaths, session.Project.Name, invocation, cancellationToken);
-        return await verifier.VerifyAsync(session.Repository, session.Worktree.Path, session.Role, before,
-            validHead, execution, cancellationToken);
+        var result = await verifier.VerifyAsync(session.Repository, session.Worktree.Path, session.Role, before,
+            session.InitialAssignee, validHead, execution, cancellationToken).ConfigureAwait(false);
+        return result with { PreInvocationCommentIds = preInvocationCommentIds };
     }
 
     internal async Task<(BeadSnapshot Bead, BeadWorkflowState State)> ReadRequestedStateAsync(

@@ -17,8 +17,12 @@ An Agent-authored (or human-authored) Bead linked to a Product Bead that contain
 _Avoid_: Implementation ticket, dev task, sub-ticket
 
 **Orchestrator**:
-The deterministic Nightweaver host process that discovers Beads, manages isolated execution environments, dispatches Agents, and performs cleanup.
+The deterministic Nightweaver host process that discovers Beads, manages isolated execution environments, dispatches Agents, independently verifies their work, owns guarded workflow transitions, and performs cleanup.
 _Avoid_: Runner, harness, daemon
+
+**Outcome classification**:
+The Orchestrator's bounded classification of one completed Implementer invocation's natural-language evidence into a role-specific outcome, followed by independent process, worktree, Git, pull request, and tracker verification before any workflow transition.
+_Avoid_: Agent-written stage, decision ledger
 
 **Agent**:
 A scoped LLM worker invocation dispatched by the Orchestrator to perform a single lifecycle responsibility on a Bead.
@@ -53,7 +57,7 @@ The Planning Agent that independently critiques a Planner Agent's drafted Plan B
 _Avoid_: Plan reviewer, spec validator
 
 **Implementer Agent**:
-The Delivery Agent that writes code, tests, and domain documentation in an isolated worktree to satisfy a Plan Bead's specification, commits and pushes its branch, opens or updates the Pull Request, and resolves findings from downstream verification or merge roles.
+The Delivery Agent that writes code, tests, and domain documentation in an isolated worktree to satisfy a Plan Bead's specification, commits and pushes its branch, opens or updates the Pull Request, and resolves findings from downstream verification or merge roles. It reports evidence and findings but does not change Bead workflow state; the Orchestrator classifies and verifies its outcome.
 _Avoid_: Coder, developer agent, builder
 
 **Human Attention Desk**:

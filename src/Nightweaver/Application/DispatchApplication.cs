@@ -224,6 +224,7 @@ internal static class DispatchApplication
         if (current.Assignee is null)
         {
             if (role == AgentRole.Merger && current.Status == "closed") return;
+            if (role == AgentRole.Implementer && current.Status == "open" && verifiedState.Status == "open") return;
             throw new ToolExecutionException($"Bead '{beadId}' claim ownership changed before handoff; observed it unassigned.");
         }
         if (!string.Equals(current.Assignee, actor, StringComparison.Ordinal))

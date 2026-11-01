@@ -17,6 +17,11 @@ internal static class Program
     {
         if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "bd", StringComparison.OrdinalIgnoreCase))
             return RunBdShim(args);
+        if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "gh", StringComparison.OrdinalIgnoreCase))
+            return RunGhShim();
+
+        if (Environment.GetEnvironmentVariable("NIGHTWEAVER_INVOCATION_PURPOSE") == "outcome-classifier")
+            return RunOutcomeClassifier();
 
         var classifierAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION");
         if (classifierAction is not null) return RunClassifierAction(classifierAction);
@@ -97,6 +102,42 @@ internal static class Program
             default:
                 return 66;
         }
+    }
+
+    private static int RunOutcomeClassifier()
+    {
+        using var input = Console.OpenStandardInput();
+        using var stream = new MemoryStream();
+        input.CopyTo(stream);
+        var prompt = Encoding.UTF8.GetString(stream.ToArray());
+        var choice = prompt.Contains("Implementer product decision:", StringComparison.OrdinalIgnoreCase)
+            ? "product_decision_required" : "ready_for_review";
+        var response = JsonSerializer.Serialize(new
+        {
+            schema = "nightweaver-implementer-outcome-v1",
+            question = "implementer_outcome",
+            choice
+        });
+        Console.OpenStandardOutput().Write(Encoding.UTF8.GetBytes(response));
+        Console.OpenStandardOutput().Flush();
+        return 0;
+    }
+
+    private static int RunGhShim()
+    {
+        var branch = Run("git", ["branch", "--show-current"]);
+        var head = Run("git", ["rev-parse", "HEAD"]);
+        var response = JsonSerializer.Serialize(new
+        {
+            state = "OPEN",
+            baseRefName = "main",
+            headRefName = branch.Trim(),
+            headRefOid = head.Trim(),
+            url = "https://example.invalid/pull/fixture"
+        });
+        Console.OpenStandardOutput().Write(Encoding.UTF8.GetBytes(response));
+        Console.OpenStandardOutput().Flush();
+        return 0;
     }
 
     private static int RunBdShim(string[] args)
@@ -311,7 +352,7 @@ internal static class Program
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored", "slot-sentinel.bin"), "keep across roles\n");
                 Run("git", ["add", "delivery-slot.txt"]);
                 Run("git", ["commit", "-m", "slot fixture implementation"]);
-                UpdateLabels(beadId, "stage:implement", "stage:review");
+                Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
                 break;
             case "slot-implement-unlabeled":
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-slot.txt"), "slot implementation\n");
@@ -319,7 +360,7 @@ internal static class Program
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored", "slot-sentinel.bin"), "keep across roles\n");
                 Run("git", ["add", "delivery-slot.txt"]);
                 Run("git", ["commit", "-m", "slot fixture implementation"]);
-                Run("bd", ["update", beadId, "--add-label", "stage:review"]);
+                Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
                 break;
             case "slot-implement-push":
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-slot.txt"), "slot implementation\n");
@@ -328,7 +369,6 @@ internal static class Program
                 Run("git", ["add", "delivery-slot.txt"]);
                 Run("git", ["commit", "-m", "slot fixture implementation"]);
                 Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
-                UpdateLabels(beadId, "stage:implement", "stage:review");
                 break;
             case "slot-implement-pause":
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-slot.txt"), "slot implementation\n");
@@ -336,7 +376,6 @@ internal static class Program
                 Run("git", ["commit", "-m", "slot fixture implementation before pause"]);
                 Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
                 Run("bd", ["comments", "add", beadId, "Implementer product decision: what database schema should be used?"]);
-                Run("bd", ["update", beadId, "--add-label", "product-decision-required"]);
                 break;
             case "slot-implement-pause-unlabeled":
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-slot.txt"), "slot implementation\n");
@@ -344,7 +383,6 @@ internal static class Program
                 Run("git", ["commit", "-m", "slot fixture implementation before pause"]);
                 Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
                 Run("bd", ["comments", "add", beadId, "Implementer product decision: should this feature be enabled by default?"]);
-                Run("bd", ["update", beadId, "--add-label", "product-decision-required"]);
                 break;
             case "slot-review-pause":
                 Run("bd", ["comments", "add", beadId, "Reviewer product decision: does this error handling match product requirements?"]);
@@ -381,7 +419,6 @@ internal static class Program
                 Run("git", ["add", "delivery-slot.txt"]);
                 Run("git", ["commit", "-m", "slot fixture implementation"]);
                 Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
-                UpdateLabels(beadId, "stage:implement", "stage:review");
                 break;
             }
             case "slot-implement-repair":
@@ -389,7 +426,6 @@ internal static class Program
                 Run("git", ["add", "delivery-repair.txt"]);
                 Run("git", ["commit", "-m", "slot fixture repair"]);
                 Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
-                UpdateLabels(beadId, "stage:implement", "stage:review");
                 break;
             case "slot-review":
                 UpdateLabels(beadId, "stage:review", "stage:qa");
@@ -434,10 +470,10 @@ internal static class Program
                 break;
             }
             case "review":
-                UpdateLabels(beadId, "stage:implement", "stage:review");
+                Run("git", ["commit", "--allow-empty", "-m", "fixture implementation"]);
+                Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
                 break;
             case "review-nonzero":
-                UpdateLabels(beadId, "stage:implement", "stage:review");
                 Console.WriteLine("fixture returned a nonzero exit after a legal Bead transition");
                 return 19;
             case "nonzero-dirty":
@@ -454,14 +490,12 @@ internal static class Program
             case "resume-inherited":
                 Run("git", ["add", "-A"]);
                 Run("git", ["commit", "-m", "resume inherited retained work"]);
-                UpdateLabels(beadId, "stage:implement", "stage:review");
+                Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
                 break;
             case "review-dirty":
-                UpdateLabels(beadId, "stage:implement", "stage:review");
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "fixture-dirty.txt"), "dirty\n");
                 break;
             case "review-commit":
-                UpdateLabels(beadId, "stage:implement", "stage:review");
                 Run("git", ["commit", "--allow-empty", "-m", "fixture read-only mutation"]);
                 break;
             case "review-qa-commit":

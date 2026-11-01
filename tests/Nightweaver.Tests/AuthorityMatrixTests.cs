@@ -29,8 +29,8 @@ public sealed class AuthorityMatrixTests
                 Beads(State("task-child", "task")), [new("task-child", "p3", "discovered-from")]),
             (AgentRole.PlanChallenger, State("p4", "feature", "stage:plan-challenge"), State("p4", "feature", "stage:plan-approved"), Beads(), null),
             (AgentRole.PlanChallenger, State("p5", "bug", "stage:plan-challenge", repairCycles: 2), State("p5", "bug", "stage:plan", repairCycles: 3), Beads(), null),
-            (AgentRole.Implementer, State("t0", "task"), State("t0", "task", "stage:review"), Beads(), null),
-            (AgentRole.Implementer, State("t1", "task", "stage:implement"), State("t1", "task", "stage:implement", labels: ["product-decision-required"]), Beads(), null),
+            (AgentRole.Implementer, State("t0", "task"), State("t0", "task"), Beads(), null),
+            (AgentRole.Implementer, State("t1", "task", "stage:implement"), State("t1", "task", "stage:implement"), Beads(), null),
             (AgentRole.Reviewer, State("t2", "task", "stage:review"), State("t2", "task", "stage:qa"), Beads(), null),
             (AgentRole.Reviewer, State("t3", "task", "stage:review"), State("t3", "task", "stage:review", labels: ["product-decision-required"]), Beads(), null),
             (AgentRole.Reviewer, State("t4", "task", "stage:review", repairCycles: 1), State("t4", "task", "stage:implement", repairCycles: 2), Beads(), null),
@@ -130,6 +130,21 @@ public sealed class AuthorityMatrixTests
         Assert.False(AuthorityMatrix.Validate(AgentRole.Reviewer, before, State("task", "task", "stage:qa", status: "closed"), Beads(), null).IsLegal);
         Assert.Throws<FormatException>(() => State("bad", "task", "stage:review", labels: ["stage:qa"]));
         Assert.Throws<FormatException>(() => State("bad", "task", labels: ["planned", "product-decision-required"]));
+    }
+
+    [Fact]
+    public void ImplementerCannotPublishWorkflowChangesOrChangeClaimOwnership()
+    {
+        var before = State("task", "task", "stage:implement");
+        Assert.False(AuthorityMatrix.ValidateWorkerObservation(before,
+            State("task", "task", "stage:review"), "nightweaver:demo", "nightweaver:demo").IsLegal);
+        Assert.False(AuthorityMatrix.ValidateWorkerObservation(before,
+            State("task", "task", "stage:implement", labels: ["product-decision-required"]),
+            "nightweaver:demo", "nightweaver:demo").IsLegal);
+        Assert.False(AuthorityMatrix.ValidateWorkerObservation(before, before,
+            "nightweaver:demo", "human:owner").IsLegal);
+        Assert.True(AuthorityMatrix.ValidateWorkerObservation(before, before,
+            "nightweaver:demo", "nightweaver:demo").IsLegal);
     }
 
     [Theory]

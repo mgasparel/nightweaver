@@ -29,7 +29,7 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
             return (Started: Path.Combine(directory, beadId + ".started"), Release: Path.Combine(directory, beadId + ".release"));
         }, StringComparer.Ordinal);
         var project = target.CreateProject(AgentCli.Codex, maxConcurrentDelivery: 2, timeoutMinutes: 5);
-        var processRunner = new ConcurrentRecordingProcessRunner(new SystemProcessRunner());
+        var processRunner = new ConcurrentRecordingProcessRunner(new SystemProcessRunner(), target);
         var prepare = new AgentInvocationPreparer();
         var invocationIdentities = new ConcurrentDictionary<string, (string BeadId, AgentRole Role)>(StringComparer.Ordinal);
         var observations = new ConcurrentQueue<PoolStageObservation>();
@@ -81,7 +81,8 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         }
 
         var stages = new AgentStageCoordinator(processRunner, prepare: Prepare, execute: Execute);
-        var retries = new OperationalRetryCoordinator(processRunner, stages: stages);
+        var retries = new OperationalRetryCoordinator(processRunner, stages: stages,
+            outcomeClassifier: FixtureOutcomeClassifier.Create());
         DeliveryRoleRunner roleRunner = (hostPaths, config, repository, beadId, role, actor, expectedState, token, progress) =>
             retries.RunAsync(hostPaths, config, repository, beadId, role, actor, token, progress, expectedState);
         DeliveryPoolSlotRunner slotRunner = (hostPaths, config, repository, beadId, token, agentAttemptStarted) =>
@@ -162,9 +163,9 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
             Assert.True(File.Exists(Path.Combine(target.WorktreePath(beadId), ".nightweaver-ignored", "slot-sentinel.bin")));
             Assert.NotEmpty(target.RemoteBranchSha(beadId));
             var claimWrites = AgentStageTargetFixture.ClaimWrites(processRunner.Requests, beadId);
-            Assert.Equal(2, claimWrites.Length);
+            Assert.Equal(3, claimWrites.Length);
             Assert.Single(claimWrites, request => AgentStageTargetFixture.ClaimWriteStatus(request) == "open");
-            Assert.Single(claimWrites, request => AgentStageTargetFixture.ClaimWriteStatus(request) == "in_progress");
+            Assert.Equal(2, claimWrites.Count(request => AgentStageTargetFixture.ClaimWriteStatus(request) == "in_progress"));
             Assert.Empty(RunGit(target.WorktreePath(beadId), "status", "--porcelain"));
         }
 
@@ -224,7 +225,7 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         var beadId = target.CreateBead("Delivery pool claim race", "task", "stage:implement");
         target.RunTarget("bd", ["update", beadId, "--priority", "0"]);
         var project = target.CreateProject(AgentCli.Codex, maxConcurrentDelivery: 1);
-        var processRunner = new ConcurrentRecordingProcessRunner(new SystemProcessRunner());
+        var processRunner = new ConcurrentRecordingProcessRunner(new SystemProcessRunner(), target);
         var reader = new BeadsReader(processRunner);
         var snapshotReady = NewSignal();
         var allowEvaluation = NewSignal();
@@ -291,7 +292,7 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
     private sealed record PoolStageObservation(string BeadId, AgentRole Role, string? Stage, string Status,
         string? Assignee, string WorktreePath, string Branch, string Head);
 
-    private sealed class ConcurrentRecordingProcessRunner(IProcessRunner inner) : IProcessRunner
+    private sealed class ConcurrentRecordingProcessRunner(IProcessRunner inner, AgentStageTargetFixture? target = null) : IProcessRunner
     {
         private readonly ConcurrentQueue<ProcessRequest> requests = new();
         internal IReadOnlyList<ProcessRequest> Requests => requests.ToArray();
@@ -299,7 +300,9 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
             requests.Enqueue(request);
-            return inner.RunAsync(request, cancellationToken);
+            return target is null
+                ? inner.RunAsync(request, cancellationToken)
+                : target.RunWithFixturePullRequestAsync(inner, request, cancellationToken);
         }
     }
 

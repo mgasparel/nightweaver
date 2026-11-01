@@ -96,6 +96,49 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
             cancellationToken, actor);
     }
 
+    internal Task PublishImplementerOutcomeAsync(
+        ValidatedTargetRepository repository,
+        string beadId,
+        string actor,
+        string expectedStatus,
+        string outcomeLabel,
+        string? removeStageLabel,
+        bool releaseClaim,
+        CancellationToken cancellationToken)
+    {
+        var arguments = new List<string> { "update", beadId, "--add-label", outcomeLabel };
+        if (removeStageLabel is not null)
+        {
+            arguments.Add("--remove-label");
+            arguments.Add(removeStageLabel);
+        }
+        if (releaseClaim)
+        {
+            arguments.Add("--status");
+            arguments.Add("open");
+            arguments.Add("--assignee");
+            arguments.Add(string.Empty);
+        }
+        else
+        {
+            // Beads applies --if-status/--if-assignee guards only when the same
+            // update writes at least one guarded field. Reassert the verified
+            // live claim values atomically with the lifecycle-label change.
+            arguments.Add("--status");
+            arguments.Add(expectedStatus);
+            arguments.Add("--assignee");
+            arguments.Add(actor);
+        }
+        arguments.Add("--if-assignee");
+        arguments.Add(actor);
+        arguments.Add("--if-status");
+        arguments.Add(expectedStatus);
+        arguments.Add("--json");
+        return RunAsync(repository, arguments,
+            $"publish Implementer outcome '{outcomeLabel}' for Bead '{beadId}' under the current claim guard",
+            cancellationToken, actor);
+    }
+
     internal async Task<GuardedStrandedClaimReleaseResult> ReleaseStrandedClaimAsync(
         ValidatedTargetRepository repository, string beadId, string actor, CancellationToken cancellationToken)
     {
@@ -350,9 +393,14 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
             BeadsReader.EnsureMutationFreeBackend(repository);
             var result = await processRunner.RunAsync(BeadsCommand.CreateWrite(repository.Path, arguments, actor), cancellationToken);
             if (result.ExitCode != 0)
+            {
+                var detail = !string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardError.TrimEnd()
+                    : string.IsNullOrWhiteSpace(result.StandardOutput) ? string.Empty
+                    : result.StandardOutput.TrimEnd()[..Math.Min(result.StandardOutput.TrimEnd().Length, 1024)];
                 throw new ToolExecutionException($"{operation}: bd exited {result.ExitCode}"
                     + (result.ExitCode == 13 ? " (the guarded state no longer matches; no retry was attempted)" : string.Empty)
-                    + (string.IsNullOrWhiteSpace(result.StandardError) ? string.Empty : $": {result.StandardError.TrimEnd()}"), result.StandardError);
+                    + (detail.Length == 0 ? string.Empty : $": {detail}"), result.StandardError);
+            }
         }
         catch (OperationCanceledException) { throw; }
         catch (ToolExecutionException exception)

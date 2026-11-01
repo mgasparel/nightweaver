@@ -29,8 +29,9 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
         Assert.Contains("gh pr list --head nightweaver/<bead-id>", implementer, StringComparison.Ordinal);
         Assert.Contains("gh pr view <number-or-url>", implementer, StringComparison.Ordinal);
         Assert.Contains("gh pr create --base <default_branch> --head nightweaver/<bead-id>", implementer, StringComparison.Ordinal);
-        Assert.Contains("Keep status `in_progress`", implementer, StringComparison.Ordinal);
-        Assert.Contains("stage:review", implementer, StringComparison.Ordinal);
+        Assert.Contains("owns all stage, pause, status, claim, type, and repair-counter changes", implementer, StringComparison.Ordinal);
+        Assert.Contains("Do not write a pause label or change any workflow field", implementer, StringComparison.Ordinal);
+        Assert.Contains("The Orchestrator classifies that evidence", implementer, StringComparison.Ordinal);
         Assert.Contains("Re-read Bead comments on every dispatch", implementer, StringComparison.Ordinal);
         Assert.Contains("map each Reviewer, QA, and Merger finding", implementer, StringComparison.Ordinal);
         Assert.Contains("do not reset or increment it", implementer, StringComparison.Ordinal);
@@ -70,9 +71,13 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
         var reviewer = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "reviewer.md"), TestContext.Current.CancellationToken);
         var qa = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "qa.md"), TestContext.Current.CancellationToken);
 
-        var prompts = new[] { implementer, reviewer, qa };
+        Assert.Contains("product-decision-required", implementer, StringComparison.Ordinal);
+        Assert.Contains("post a comment with the precise ambiguity", implementer, StringComparison.Ordinal);
+        Assert.Contains("direct question for the human", implementer, StringComparison.Ordinal);
+        Assert.Contains("Preserve the persisted shared `repair_cycles` value", implementer, StringComparison.Ordinal);
+        Assert.DoesNotContain("bd update <bead-id> --add-label product-decision-required", implementer, StringComparison.Ordinal);
 
-        foreach (var prompt in prompts)
+        foreach (var prompt in new[] { reviewer, qa })
         {
             Assert.Contains("product-decision-required", prompt, StringComparison.Ordinal);
             Assert.Contains("bd comments add <bead-id>", prompt, StringComparison.Ordinal);
@@ -84,8 +89,8 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
             Assert.Contains("the Orchestrator retains the environment and releases only its still-owned claim", prompt, StringComparison.Ordinal);
         }
 
-        Assert.Contains("Commit and push your changes only when that is appropriate", implementer, StringComparison.Ordinal);
-        Assert.Contains("Retain your current stage", implementer, StringComparison.Ordinal);
+        Assert.Contains("git push -u origin nightweaver/<bead-id>", implementer, StringComparison.Ordinal);
+        Assert.Contains("Do not write `stage:*`", implementer, StringComparison.Ordinal);
 
         Assert.Contains("Remain read-only", reviewer, StringComparison.Ordinal);
         Assert.Contains("Retain `stage:review`", reviewer, StringComparison.Ordinal);

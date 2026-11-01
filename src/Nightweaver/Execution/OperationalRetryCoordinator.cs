@@ -79,6 +79,10 @@ internal sealed class OperationalRetryCoordinator
         AgentStageResult, CancellationToken, Task<DuplicateFailureClassificationResult>> compare;
     private readonly Func<HostPaths, ProjectConfig, ValidatedTargetRepository, NeedsHumanRequest,
         CancellationToken, Task<NeedsHumanEscalationResult>> escalate;
+    private readonly BeadsReader beadsReader;
+    private readonly IAgentOutcomeClassifier outcomeClassifier;
+    private readonly IImplementerOutcomePublisher outcomePublisher;
+    private readonly IImplementerOutcomeVerifier outcomeVerifier;
 
     internal OperationalRetryCoordinator(
         IProcessRunner processRunner,
@@ -91,7 +95,10 @@ internal sealed class OperationalRetryCoordinator
         Func<HostPaths, ProjectConfig, AgentDispatchContext, AgentRole, string, AgentStageResult,
             AgentStageResult, CancellationToken, Task<DuplicateFailureClassificationResult>>? compare = null,
         Func<HostPaths, ProjectConfig, ValidatedTargetRepository, NeedsHumanRequest,
-            CancellationToken, Task<NeedsHumanEscalationResult>>? escalate = null)
+            CancellationToken, Task<NeedsHumanEscalationResult>>? escalate = null,
+        IAgentOutcomeClassifier? outcomeClassifier = null,
+        IImplementerOutcomePublisher? outcomePublisher = null,
+        IImplementerOutcomeVerifier? outcomeVerifier = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         this.stages = stages ?? new AgentStageCoordinator(processRunner);
@@ -101,6 +108,10 @@ internal sealed class OperationalRetryCoordinator
         this.reset = reset ?? this.resetter.ResetAsync;
         this.compare = compare ?? this.classifier.CompareAsync;
         this.escalate = escalate ?? this.escalator.EscalateAsync;
+        beadsReader = new BeadsReader(processRunner);
+        this.outcomeClassifier = outcomeClassifier ?? new AgentOutcomeClassifier();
+        this.outcomePublisher = outcomePublisher ?? new ImplementerOutcomePublisher(processRunner);
+        this.outcomeVerifier = outcomeVerifier ?? new ImplementerOutcomeVerifier(processRunner);
     }
 
     internal async Task<OperationalRetryOutcome> RunAsync(
@@ -153,7 +164,12 @@ internal sealed class OperationalRetryCoordinator
                 session.InitialState, 0, environmentException, cancellationToken).ConfigureAwait(false);
         }
         if (latest.Succeeded)
-            return Success(latest, attemptCount);
+            return await FinalizeSuccessfulStageAsync(session, latest, expectedAssignee,
+                releaseClaim: expectedState is null, attempts: attemptCount, cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        var unsafeImplementerAttempt = await EscalateUnsafeImplementerAttemptAsync(session, latest,
+            expectedAssignee, attemptCount, cancellationToken).ConfigureAwait(false);
+        if (unsafeImplementerAttempt is not null) return unsafeImplementerAttempt;
 
         AgentStageResult previous = latest;
         DuplicateFailureClassificationResult? lastClassification = null;
@@ -253,8 +269,59 @@ internal sealed class OperationalRetryCoordinator
                     session.InitialState, attemptCount - 1, environmentException, cancellationToken).ConfigureAwait(false);
             }
             if (latest.Succeeded)
-                return new(OperationalRetryStatus.Succeeded, latest, attemptCount, null, null, lastClassification);
+            {
+                var finalized = await FinalizeSuccessfulStageAsync(session, latest, expectedAssignee,
+                    releaseClaim: expectedState is null, attempts: attemptCount, cancellationToken: cancellationToken).ConfigureAwait(false);
+                return finalized with { LastClassification = lastClassification };
+            }
+            unsafeImplementerAttempt = await EscalateUnsafeImplementerAttemptAsync(session, latest,
+                expectedAssignee, attemptCount, cancellationToken).ConfigureAwait(false);
+            if (unsafeImplementerAttempt is not null) return unsafeImplementerAttempt;
         }
+    }
+
+    private async Task<OperationalRetryOutcome?> EscalateUnsafeImplementerAttemptAsync(
+        AgentStageSession session,
+        AgentStageResult invocation,
+        string expectedAssignee,
+        long attempts,
+        CancellationToken cancellationToken)
+    {
+        if (session.Role != AgentRole.Implementer || invocation.Failure is null) return null;
+
+        var observations = invocation.Observations;
+        var unsafeObservation = observations is null
+            || observations.BeforeState != observations.ObservedState
+            || !string.Equals(observations.BeforeAssignee, observations.ObservedAssignee, StringComparison.Ordinal)
+            || !string.Equals(observations.BeforeAssignee, expectedAssignee, StringComparison.Ordinal);
+        var forbiddenFailure = invocation.Failure.Kind is AgentOperationalFailureKind.IllegalBeadTransition
+            or AgentOperationalFailureKind.OutcomeVerificationFailed;
+        if (!unsafeObservation && !forbiddenFailure) return null;
+
+        var reason = unsafeObservation
+            ? "Implementer workflow or claim state could not be verified unchanged; automatic retry is unsafe."
+            : "Implementer changed guarded workflow or claim state before outcome classification.";
+        var current = await stages.ReadRequestedStateAsync(session.Repository, session.BeadId,
+            cancellationToken, allowConflictingPauseLabels: true).ConfigureAwait(false);
+        AgentStageCoordinator.EnsureExpectedClaim(current, expectedAssignee, requireInProgress: false);
+        if (current.State.Planned)
+            throw new AgentStageInputException($"Cannot escalate Bead '{session.BeadId}' after attempt {attempts}: it is planned.");
+        var cleanupPurpose = current.State.IssueType switch
+        {
+            "feature" or "bug" => WorktreePurpose.Planning,
+            "task" => WorktreePurpose.Delivery,
+            _ => throw new AgentStageInputException($"Cannot safely escalate Bead '{session.BeadId}' with unsupported type '{current.State.IssueType}'.")
+        };
+        var findings = new[]
+        {
+            $"Lifecycle attempts completed: {attempts}.",
+            $"Latest failure: {invocation.Failure.Kind}: {Limit(invocation.Failure.Reason)}",
+            $"Latest invocation: {invocation.InvocationId}; log: {invocation.LogFilePath}.",
+            Limit(reason)
+        };
+        return await EscalateAsync(session, expectedAssignee, invocation, attempts,
+            NeedsHumanCause.ImplementerOutcomeFailure, findings, null, cleanupPurpose, cancellationToken,
+            expectedWorkflowState: current.State).ConfigureAwait(false);
     }
 
     private async Task<RetryStateObservation> ReadAndValidateRetryStateAsync(
@@ -364,6 +431,101 @@ internal sealed class OperationalRetryCoordinator
             .ConfigureAwait(false);
     }
 
+    private async Task<OperationalRetryOutcome> FinalizeSuccessfulStageAsync(
+        AgentStageSession session,
+        AgentStageResult invocation,
+        string expectedAssignee,
+        bool releaseClaim,
+        long attempts,
+        CancellationToken cancellationToken)
+    {
+        if (session.Role != AgentRole.Implementer)
+            return Success(invocation, attempts);
+
+        AgentOutcomeClassificationResult classification;
+        try
+        {
+            var comments = await beadsReader.ReadCommentsAsync(session.Repository, session.BeadId, cancellationToken)
+                .ConfigureAwait(false);
+            classification = await outcomeClassifier.ClassifyAsync(session.HostPaths, session.Project,
+                session.DispatchContext, session.Worktree.Path, invocation, comments, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
+        {
+            classification = new(null, "classification", $"Outcome classification could not complete ({exception.GetType().Name}).");
+        }
+
+        invocation = invocation with { OutcomeClassification = classification };
+        var classifierMutation = await outcomeVerifier.VerifyNoClassifierMutationAsync(session.Repository,
+            session.Worktree.Path, invocation, expectedAssignee, cancellationToken).ConfigureAwait(false);
+        if (classifierMutation is not null)
+            return await EscalateImplementerOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                classifierMutation, classification, cancellationToken).ConfigureAwait(false);
+
+        if (classification.Outcome is null)
+            return await EscalateImplementerOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                classification.Diagnostic, classification, cancellationToken).ConfigureAwait(false);
+
+        if (classification.Outcome is AgentOutcomeChoice.TechnicalBlocker or AgentOutcomeChoice.IncompleteOrUnclear)
+            return await EscalateImplementerOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                $"Implementer outcome '{classification.Outcome}' requires human review: {classification.Diagnostic}",
+                classification, cancellationToken).ConfigureAwait(false);
+
+        if (classification.Outcome == AgentOutcomeChoice.ReadyForReview)
+        {
+            var verificationFailure = await outcomeVerifier.VerifyReadyForReviewAsync(session.Repository,
+                session.Worktree.Path, invocation, expectedAssignee, session.Project.TargetRepository.DefaultBranch,
+                cancellationToken).ConfigureAwait(false);
+            if (verificationFailure is not null)
+                return await EscalateImplementerOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                    verificationFailure, classification, cancellationToken).ConfigureAwait(false);
+        }
+
+        var published = await outcomePublisher.PublishAsync(session, invocation, classification,
+            releaseClaim, cancellationToken).ConfigureAwait(false);
+        return Success(published, attempts);
+    }
+
+    private async Task<OperationalRetryOutcome> EscalateImplementerOutcomeAsync(
+        AgentStageSession session,
+        AgentStageResult invocation,
+        string expectedAssignee,
+        long attempts,
+        string reason,
+        AgentOutcomeClassificationResult? classification,
+        CancellationToken cancellationToken)
+    {
+        var failure = new AgentOperationalFailure(AgentOperationalFailureKind.OutcomeVerificationFailed, reason);
+        var withFailure = invocation with
+        {
+            Failure = failure,
+            OutcomeClassification = classification,
+            Diagnostics = invocation.Diagnostics.Append(reason).ToArray()
+        };
+        var findings = new[]
+        {
+            $"Implementer invocation: {invocation.InvocationId}; log: {invocation.LogFilePath}.",
+            $"Outcome classifier: {classification?.Provider ?? "unavailable"}; outcome: {classification?.Outcome?.ToString() ?? "unavailable"}.",
+            reason
+        };
+        var current = await stages.ReadRequestedStateAsync(session.Repository, session.BeadId,
+            cancellationToken, allowConflictingPauseLabels: true).ConfigureAwait(false);
+        AgentStageCoordinator.EnsureExpectedClaim(current, expectedAssignee, requireInProgress: false);
+        if (current.State.Planned)
+            throw new AgentStageInputException($"Cannot escalate Bead '{session.BeadId}' after attempt {attempts}: it is planned.");
+        var cleanupPurpose = current.State.IssueType switch
+        {
+            "feature" or "bug" => WorktreePurpose.Planning,
+            "task" => WorktreePurpose.Delivery,
+            _ => throw new AgentStageInputException($"Cannot safely escalate Bead '{session.BeadId}' with unsupported type '{current.State.IssueType}'.")
+        };
+        return await EscalateAsync(session, expectedAssignee, withFailure, attempts,
+            NeedsHumanCause.ImplementerOutcomeFailure, findings, null, cleanupPurpose,
+            cancellationToken, expectedWorkflowState: current.State).ConfigureAwait(false);
+    }
+
     private async Task<WorktreePurpose> ReadCurrentCleanupPurposeAsync(
         AgentStageSession session,
         string expectedAssignee,
@@ -394,7 +556,8 @@ internal sealed class OperationalRetryCoordinator
         IReadOnlyList<string> findings,
         DuplicateFailureClassificationResult? classification,
         WorktreePurpose cleanupPurpose,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        BeadWorkflowState? expectedWorkflowState = null)
     {
         var failure = latest.Failure!;
         var logPaths = new[]
@@ -409,10 +572,12 @@ internal sealed class OperationalRetryCoordinator
             NeedsHumanCause.OperationalRetriesExhausted => $"Operational retries exhausted after {attempts} attempt(s): {failure.Kind}.",
             NeedsHumanCause.DuplicateFailure => $"Duplicate operational failure detected after {attempts} attempt(s): {failure.Kind}.",
             NeedsHumanCause.EnvironmentBlocked => $"Operational retry environment is blocked after {attempts} attempt(s): {failure.Kind}.",
+            NeedsHumanCause.ImplementerOutcomeFailure => $"Implementer outcome was not verified after {attempts} completed attempt(s): {failure.Reason}.",
             _ => throw new ArgumentOutOfRangeException(nameof(cause), cause, "Unsupported retry escalation cause")
         };
         var request = new NeedsHumanRequest(session.BeadId, expectedAssignee, cause, session.Role,
-            reason, findings, latest.InvocationId, logPaths, cleanupPurpose);
+            reason, findings, latest.InvocationId, logPaths, cleanupPurpose,
+            expectedWorkflowState ?? session.InitialState);
         NeedsHumanEscalationResult progress;
         try
         {
