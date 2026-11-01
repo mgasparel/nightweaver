@@ -25,8 +25,13 @@ internal static class NightweaverApp
             if (options.Dispatch is not null)
                 return await DispatchApplication.RunAsync(options, environment, processRunner, cancellationToken);
 
-            await DryRunApplication.RunAsync(options, environment, processRunner, cancellationToken);
-            return ExitCodes.Success;
+            if (options.DryRun)
+            {
+                await DryRunApplication.RunAsync(options, environment, processRunner, cancellationToken);
+                return ExitCodes.Success;
+            }
+
+            return await ContinuousApplication.RunAsync(options, environment, processRunner, cancellationToken);
         }
         catch (UsageException exception)
         {

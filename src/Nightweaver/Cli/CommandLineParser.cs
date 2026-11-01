@@ -85,9 +85,7 @@ internal static class CommandLineParser
             throw new UsageException("one of '--project <project-slug>' or '--config <path-to-project-json>' is required");
 
         var selector = ParseSelector(project, config, hasProject);
-        if (!hasDryRun)
-            throw new UsageException("live orchestration is not implemented yet; only '--dry-run' is supported");
-        return new CliOptions(selector, DryRun: true, Help: false);
+        return new CliOptions(selector, DryRun: hasDryRun, Help: false);
     }
 
     private static CliOptions ParseDispatch(IReadOnlyList<string> args)

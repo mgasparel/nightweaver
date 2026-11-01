@@ -27,7 +27,7 @@ public sealed class DeliveryPoolCoordinatorTests
         {
             var snapshot = await reader.ReadSnapshotWithReadinessAsync(repository, actor, CancellationToken.None);
             return new DeliveryPoolSnapshot(snapshot.Inventory, snapshot.Readiness);
-        }, (_, _, _, _, _, _) =>
+        }, (_, _, _, _, _) =>
         {
             Interlocked.Increment(ref launches);
             return Task.FromResult(SlotOutcome(DeliverySlotDisposition.StoppedAtUnsupportedOutcome));
@@ -71,9 +71,8 @@ public sealed class DeliveryPoolCoordinatorTests
             "assigned", "closed", "blocked", "deferred", "product" };
         var entered = new ConcurrentDictionary<string, TaskCompletionSource<bool>>(StringComparer.Ordinal);
         var release = NewSignal();
-        var pool = CreatePool(10, () => Task.FromResult(Snapshot(rows, ready)), async (_, _, _, beadId, _, agentAttemptStarted) =>
+        var pool = CreatePool(10, () => Task.FromResult(Snapshot(rows, ready)), async (_, _, _, beadId, _) =>
         {
-            agentAttemptStarted();
             entered.GetOrAdd(beadId, _ => NewSignal()).TrySetResult(true);
             await release.Task;
             return SlotOutcome(DeliverySlotDisposition.StoppedAtUnsupportedOutcome);
@@ -114,9 +113,8 @@ public sealed class DeliveryPoolCoordinatorTests
         var release = NewSignal();
         var entered = NewSignal();
         var enteredCount = 0;
-        var pool = CreatePool(capacity, () => Task.FromResult(Snapshot(rows, rows.Select(Id))), async (_, _, _, _, _, agentAttemptStarted) =>
+        var pool = CreatePool(capacity, () => Task.FromResult(Snapshot(rows, rows.Select(Id))), async (_, _, _, _, _) =>
         {
-            agentAttemptStarted();
             if (Interlocked.Increment(ref enteredCount) == capacity) entered.TrySetResult(true);
             await release.Task;
             return SlotOutcome(DeliverySlotDisposition.Refused);
@@ -137,7 +135,7 @@ public sealed class DeliveryPoolCoordinatorTests
     }
 
     [Fact]
-    public async Task PreLaunchRefusalFreesCapacityForNextCandidateInSameEvaluation()
+    public async Task SlowPreparationDoesNotBlockAdmissionAndNextCandidateUsesLaterFreshPass()
     {
         var rows = new[]
         {
@@ -148,7 +146,8 @@ public sealed class DeliveryPoolCoordinatorTests
         var releaseFirstRefusal = NewSignal();
         var secondAttemptStarted = NewSignal();
         var calls = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
-        var pool = CreatePool(1, () => Task.FromResult(Snapshot(rows, ["first", "second"])), async (_, _, _, beadId, _, agentAttemptStarted) =>
+        var current = Snapshot(rows, ["first", "second"]);
+        var pool = CreatePool(1, () => Task.FromResult(current), async (_, _, _, beadId, _) =>
         {
             calls.AddOrUpdate(beadId, 1, static (_, count) => count + 1);
             if (beadId == "first")
@@ -158,32 +157,34 @@ public sealed class DeliveryPoolCoordinatorTests
                 return SlotOutcome(DeliverySlotDisposition.Refused);
             }
 
-            agentAttemptStarted();
             secondAttemptStarted.TrySetResult(true);
             return SlotOutcome(DeliverySlotDisposition.StoppedAtUnsupportedOutcome);
         });
 
         var evaluationTask = pool.EvaluateAsync(TestContext.Current.CancellationToken);
         await firstRunnerEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        Assert.False(evaluationTask.IsCompleted);
+        var evaluation = await evaluationTask.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal(["first"], evaluation.Admitted.Select(admission => admission.BeadId));
+        Assert.Contains(evaluation.Diagnostics, item => item.BeadId == "second"
+            && item.Code == DeliveryPoolDiagnosticCode.CapacityReached);
+        Assert.Single(pool.ActiveReservations);
 
         releaseFirstRefusal.TrySetResult(true);
-        var evaluation = await evaluationTask.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var firstCompletion = await evaluation.Admitted[0].Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal(DeliverySlotDisposition.Refused, firstCompletion.Outcome?.Disposition);
+        current = Snapshot([Row("first", labels: ["stage:merge"]), rows[1]], ["second"]);
+        var nextEvaluation = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
         await secondAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
-        Assert.Equal(["first", "second"], evaluation.Admitted.Select(admission => admission.BeadId));
+        Assert.Equal(["second"], nextEvaluation.Admitted.Select(admission => admission.BeadId));
         Assert.Equal(1, calls["first"]);
         Assert.Equal(1, calls["second"]);
-        Assert.Contains(evaluation.Diagnostics, item => item.BeadId == "first"
-            && item.Code == DeliveryPoolDiagnosticCode.SlotRefusedBeforeLaunch);
-        Assert.Equal(DeliverySlotDisposition.Refused,
-            (await evaluation.Admitted.Single(admission => admission.BeadId == "first").Completion).Outcome?.Disposition);
-        await evaluation.Admitted.Single(admission => admission.BeadId == "second").Completion;
+        await nextEvaluation.Admitted.Single().Completion;
         Assert.Empty(pool.ActiveReservations);
     }
 
     [Fact]
-    public async Task ActiveSlotCompletionWakesEvaluationWaitingForSlowAdmission()
+    public async Task FullCapacityPassReturnsAndCompletionAllowsLaterFreshPass()
     {
         var rows = new[]
         {
@@ -196,51 +197,58 @@ public sealed class DeliveryPoolCoordinatorTests
         var releaseA = NewSignal();
         var bStarted = NewSignal();
         var releaseB = NewSignal();
-        var cStarted = NewSignal();
         var releaseC = NewSignal();
-        var pool = CreatePool(2, () => Task.FromResult(Snapshot(rows, ["a-slow-admission", "b-fast-slot", "c-waiting"])),
-            async (_, _, _, beadId, _, agentAttemptStarted) =>
+        var current = Snapshot(rows, ["a-slow-admission", "b-fast-slot", "c-waiting"]);
+        var pool = CreatePool(2, () => Task.FromResult(current),
+            async (_, _, _, beadId, _) =>
             {
                 if (beadId == "a-slow-admission")
                 {
                     aRunnerEntered.TrySetResult(true);
                     await allowAStart.Task;
-                    agentAttemptStarted();
                     await releaseA.Task;
                 }
                 else if (beadId == "b-fast-slot")
                 {
-                    agentAttemptStarted();
                     bStarted.TrySetResult(true);
                     await releaseB.Task;
                 }
                 else
                 {
-                    agentAttemptStarted();
-                    cStarted.TrySetResult(true);
                     await releaseC.Task;
                 }
 
                 return SlotOutcome(DeliverySlotDisposition.StoppedAtUnsupportedOutcome);
             });
 
-        var evaluationTask = pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        var evaluation = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
         await aRunnerEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await bStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        Assert.False(evaluationTask.IsCompleted);
-        Assert.False(cStarted.Task.IsCompleted);
+        Assert.Equal(["a-slow-admission", "b-fast-slot"], evaluation.Admitted.Select(admission => admission.BeadId));
 
+        var whileFull = await pool.EvaluateAsync(TestContext.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Empty(whileFull.Admitted);
+        Assert.Contains(whileFull.Diagnostics, item => item.BeadId == "c-waiting"
+            && item.Code == DeliveryPoolDiagnosticCode.CapacityReached);
+
+        current = Snapshot(
+        [
+            Row("a-slow-admission", priority: 0, labels: []),
+            Row("b-fast-slot", priority: 1, labels: ["stage:merge"]),
+            Row("c-waiting", priority: 2, labels: [])
+        ], ["a-slow-admission", "c-waiting"]);
         releaseB.TrySetResult(true);
-        await cStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        var evaluation = await evaluationTask.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-
-        Assert.Equal(["a-slow-admission", "b-fast-slot", "c-waiting"], evaluation.Admitted.Select(admission => admission.BeadId));
+        await evaluation.Admitted.Single(admission => admission.BeadId == "b-fast-slot").Completion
+            .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var next = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(["c-waiting"], next.Admitted.Select(admission => admission.BeadId));
         Assert.Equal(["a-slow-admission", "c-waiting"], pool.ActiveReservations.Select(reservation => reservation.BeadId));
 
         allowAStart.TrySetResult(true);
         releaseA.TrySetResult(true);
         releaseC.TrySetResult(true);
-        await Task.WhenAll(evaluation.Admitted.Select(admission => admission.Completion));
+        await Task.WhenAll(evaluation.Admitted.Concat(next.Admitted).Select(admission => admission.Completion));
         Assert.Empty(pool.ActiveReservations);
     }
 
@@ -264,9 +272,8 @@ public sealed class DeliveryPoolCoordinatorTests
                 await allowFirstRead.Task;
             }
             return snapshot;
-        }, async (_, _, _, _, token, agentAttemptStarted) =>
+        }, async (_, _, _, _, token) =>
         {
-            agentAttemptStarted();
             Interlocked.Increment(ref runnerCount);
             runnerStarted.TrySetResult(true);
             await releaseRunner.Task;
@@ -300,9 +307,8 @@ public sealed class DeliveryPoolCoordinatorTests
             Row("c", priority: 2, labels: ["stage:implement"])
         ], ["a", "b", "c"]);
         var gates = new ConcurrentDictionary<string, (TaskCompletionSource<bool> Started, TaskCompletionSource<bool> Release)>(StringComparer.Ordinal);
-        var pool = CreatePool(2, () => Task.FromResult(current), async (_, _, _, beadId, _, agentAttemptStarted) =>
+        var pool = CreatePool(2, () => Task.FromResult(current), async (_, _, _, beadId, _) =>
         {
-            agentAttemptStarted();
             var gate = gates.GetOrAdd(beadId, _ => (NewSignal(), NewSignal()));
             gate.Started.TrySetResult(true);
             await gate.Release.Task;
@@ -352,9 +358,8 @@ public sealed class DeliveryPoolCoordinatorTests
         var current = Snapshot([Row("a", labels: ["stage:implement"]), Row("b", priority: 1, labels: [])], ["a", "b"]);
         var enteredNextStage = NewSignal();
         var finishSlot = NewSignal();
-        var pool = CreatePool(1, () => Task.FromResult(current), async (_, _, _, beadId, _, agentAttemptStarted) =>
+        var pool = CreatePool(1, () => Task.FromResult(current), async (_, _, _, beadId, _) =>
         {
-            agentAttemptStarted();
             if (beadId == "a")
             {
                 enteredNextStage.TrySetResult(true);
@@ -394,9 +399,8 @@ public sealed class DeliveryPoolCoordinatorTests
             ["failed"] = SlotOutcome(DeliverySlotDisposition.Failed),
             ["unsupported"] = SlotOutcome(DeliverySlotDisposition.StoppedAtUnsupportedOutcome)
         };
-        var pool = CreatePool(ids.Length, () => Task.FromResult(Snapshot(rows, ids)), (_, _, _, beadId, _, agentAttemptStarted) =>
+        var pool = CreatePool(ids.Length, () => Task.FromResult(Snapshot(rows, ids)), (_, _, _, beadId, _) =>
         {
-            agentAttemptStarted();
             return beadId switch
             {
                 "fault" => throw new InvalidOperationException("controlled slot failure"),
@@ -437,9 +441,8 @@ public sealed class DeliveryPoolCoordinatorTests
         using var lifetime = new CancellationTokenSource();
         using var evaluationCancellation = new CancellationTokenSource();
         var runnerEntered = NewSignal();
-        var pool = CreatePool(1, () => Task.FromResult(Snapshot([Row("long", labels: [])], ["long"])), async (_, _, _, _, token, agentAttemptStarted) =>
+        var pool = CreatePool(1, () => Task.FromResult(Snapshot([Row("long", labels: [])], ["long"])), async (_, _, _, _, token) =>
         {
-            agentAttemptStarted();
             runnerEntered.TrySetResult(true);
             await Task.Delay(Timeout.InfiniteTimeSpan, token);
             return SlotOutcome(DeliverySlotDisposition.Refused);

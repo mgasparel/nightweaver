@@ -3,13 +3,14 @@ namespace Nightweaver.Cli;
 internal static class HelpText
 {
     internal const string Usage =
-        "Usage: nightweaver (--project <project-slug> | --config <path-to-project-json>) --dry-run\n" +
+        "Usage: nightweaver (--project <project-slug> | --config <path-to-project-json>) [--dry-run]\n" +
         "       nightweaver dispatch <bead-id> [--role <role>] (--project <project-slug> | --config <path-to-project-json>)\n" +
         "       nightweaver --help\n\n" +
         "Options:\n" +
         "  --project <project-slug>       Load <nightweaver-root>/projects/<project-slug>.json.\n" +
         "  --config <path-to-project-json> Load a Project configuration file.\n" +
-        "  --dry-run                      Validate and print a hypothetical startup snapshot.\n" +
+        "  --dry-run                      Validate and print a hypothetical startup snapshot, then exit.\n" +
+        "  (default)                      Run the continuous Delivery Orchestrator until Ctrl+C.\n" +
         "  dispatch <bead-id>             Run exactly one eligible lifecycle stage.\n" +
         "  --role <role>                  Override role inference (planner, plan_challenger, implementer, reviewer, qa, merger).\n" +
         "  --help, -h                     Print this help.\n\n" +

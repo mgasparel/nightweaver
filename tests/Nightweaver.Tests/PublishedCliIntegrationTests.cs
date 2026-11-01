@@ -14,6 +14,32 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
     [ "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES" ];
 
     [Fact]
+    public async Task PublishedSelectorOnlyCliStaysAliveWhileDeliveryIsIdleForBothSelectors()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var fixture = new StartupSweepFixture(published.PublishDirectory);
+        var environment = published.EnvironmentWithAgentTraps(fixture.Target.Environment);
+
+        async Task AssertLiveUntilStopped(IReadOnlyList<string> arguments)
+        {
+            using var process = ProcessTool.Start(
+                Path.Combine(fixture.Host, "nightweaver.exe"), arguments, fixture.Caller, environment);
+            await process.WaitForOutputContainsAsync("Continuous Delivery runtime starting", TimeSpan.FromSeconds(60));
+            await Task.Delay(TimeSpan.FromSeconds(1));
+            Assert.False(process.HasExited, "Selector-only runtime must remain alive after startup while Delivery has no eligible work.");
+            process.KillTree();
+            var result = await process.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Contains("Continuous Delivery runtime starting", result.StandardOutputText, StringComparison.Ordinal);
+            Assert.Contains("periodic discovery: 30 seconds", result.StandardOutputText, StringComparison.Ordinal);
+            published.AssertNoAgentInvocations();
+        }
+
+        await AssertLiveUntilStopped(["--project", "demo"]);
+        await AssertLiveUntilStopped(["--config", fixture.Config]);
+    }
+
+    [Fact]
     public async Task PublishedApphostSelectorsAreDeterministicAndPreserveCompleteTargetAndHostState()
     {
         using var fixture = new StartupSweepFixture(published.PublishDirectory);

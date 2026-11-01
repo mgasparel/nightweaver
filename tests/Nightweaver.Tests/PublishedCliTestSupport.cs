@@ -211,19 +211,54 @@ internal static class ProcessTool
 internal sealed class RunningProcess : IDisposable
 {
     private readonly Process process;
-    private readonly Task<string> standardOutput;
-    private readonly Task<string> standardError;
+    private readonly MemoryStream standardOutput = new();
+    private readonly MemoryStream standardError = new();
+    private readonly object outputGate = new();
+    private TaskCompletionSource<bool> outputChanged = NewSignal();
+    private readonly Task standardOutputReader;
+    private readonly Task standardErrorReader;
     private bool disposed;
 
     internal RunningProcess(Process process)
     {
         this.process = process;
-        standardOutput = process.StandardOutput.ReadToEndAsync();
-        standardError = process.StandardError.ReadToEndAsync();
+        standardOutputReader = PumpAsync(process.StandardOutput.BaseStream, standardOutput, notifyOutput: true);
+        standardErrorReader = PumpAsync(process.StandardError.BaseStream, standardError, notifyOutput: false);
     }
 
     internal int Id => process.Id;
     internal bool HasExited => process.HasExited;
+
+    internal async Task WaitForOutputContainsAsync(string expected, TimeSpan timeout)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(expected);
+        using var cancellation = new CancellationTokenSource(timeout);
+        while (true)
+        {
+            Task changed;
+            lock (outputGate)
+            {
+                if (Encoding.UTF8.GetString(standardOutput.ToArray()).Contains(expected, StringComparison.Ordinal))
+                    return;
+                changed = outputChanged.Task;
+            }
+
+            if (process.HasExited)
+            {
+                await Task.WhenAll(standardOutputReader, standardErrorReader).ConfigureAwait(false);
+                throw new InvalidOperationException($"Process {process.Id} exited before writing '{expected}' (exit {process.ExitCode}): {StandardErrorText()}");
+            }
+
+            try
+            {
+                await changed.WaitAsync(cancellation.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                throw new TimeoutException($"Process {process.Id} did not write '{expected}' within {timeout}.");
+            }
+        }
+    }
 
     internal async Task WaitForFileAsync(string path, TimeSpan timeout)
     {
@@ -255,11 +290,55 @@ internal sealed class RunningProcess : IDisposable
             KillTree();
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
         }
-        await Task.WhenAll(standardOutput, standardError).ConfigureAwait(false);
+        await Task.WhenAll(standardOutputReader, standardErrorReader).ConfigureAwait(false);
         if (timedOut) throw new TimeoutException($"Process {process.Id} exceeded its {timeout} timeout");
-        return new(process.ExitCode, Encoding.UTF8.GetBytes(await standardOutput.ConfigureAwait(false)),
-            Encoding.UTF8.GetBytes(await standardError.ConfigureAwait(false)));
+        return new(process.ExitCode, standardOutput.ToArray(), standardError.ToArray());
     }
+
+    private async Task PumpAsync(Stream source, MemoryStream destination, bool notifyOutput)
+    {
+        var buffer = new byte[8192];
+        try
+        {
+            while (true)
+            {
+                var count = await source.ReadAsync(buffer.AsMemory()).ConfigureAwait(false);
+                if (count == 0) return;
+                TaskCompletionSource<bool>? changed = null;
+                lock (outputGate)
+                {
+                    destination.Write(buffer, 0, count);
+                    if (notifyOutput)
+                    {
+                        changed = outputChanged;
+                        outputChanged = NewSignal();
+                    }
+                }
+                changed?.TrySetResult(true);
+            }
+        }
+        finally
+        {
+            if (notifyOutput)
+            {
+                TaskCompletionSource<bool> changed;
+                lock (outputGate)
+                {
+                    changed = outputChanged;
+                    outputChanged = NewSignal();
+                }
+                changed.TrySetResult(true);
+            }
+        }
+    }
+
+    private string StandardErrorText()
+    {
+        lock (outputGate) return Encoding.UTF8.GetString(standardError.ToArray());
+    }
+
+    private static TaskCompletionSource<bool> NewSignal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     internal void KillTree()
     {

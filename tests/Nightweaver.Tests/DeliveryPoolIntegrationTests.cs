@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Threading.Channels;
+using Nightweaver.Application;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
@@ -34,6 +37,12 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         var invocationIdentities = new ConcurrentDictionary<string, (string BeadId, AgentRole Role)>(StringComparer.Ordinal);
         var observations = new ConcurrentQueue<PoolStageObservation>();
         var pidFiles = new ConcurrentBag<string>();
+        var preparationAttempts = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+        var executionAttempts = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+        var preparationReturned = new TaskCompletionSource<PreparedAgentInvocation>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePreparation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mergerEvaluations = Channel.CreateUnbounded<int>();
+        var mergerCompletions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
         long pidSequence = 0;
 
         async Task<PreparedAgentInvocation> Prepare(HostPaths hostPaths, ProjectConfig config, AgentRole role,
@@ -44,6 +53,14 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
             Assert.Equal(canonical, worktreePath);
             Assert.Equal(canonical, invocation.WorkingDirectory);
             Assert.True(invocationIdentities.TryAdd(invocation.InvocationId, (context.BeadId, role)));
+            if (role == AgentRole.Implementer && context.BeadId == beads[0])
+            {
+                preparationAttempts.AddOrUpdate(context.BeadId, 1, static (_, count) => count + 1);
+                preparationReturned.TrySetResult(invocation);
+                // Hold the real prepared invocation before AgentStageCoordinator can hand it to
+                // the pool's Execute delegate (and before an Agent process can be launched).
+                await releasePreparation.Task.WaitAsync(cancellationToken);
+            }
             return invocation;
         }
 
@@ -51,6 +68,7 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
             PreparedAgentInvocation invocation, CancellationToken cancellationToken)
         {
             var identity = invocationIdentities[invocation.InvocationId];
+            executionAttempts.AddOrUpdate(identity.BeadId, 1, static (_, count) => count + 1);
             var bead = target.ReadBead(identity.BeadId);
             var worktree = invocation.WorkingDirectory;
             var stage = BeadWorkflowState.Parse(bead).Stage;
@@ -85,15 +103,47 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
             outcomeClassifier: FixtureOutcomeClassifier.Create());
         DeliveryRoleRunner roleRunner = (hostPaths, config, repository, beadId, role, actor, expectedState, token, progress) =>
             retries.RunAsync(hostPaths, config, repository, beadId, role, actor, token, progress, expectedState);
-        DeliveryPoolSlotRunner slotRunner = (hostPaths, config, repository, beadId, token, agentAttemptStarted) =>
-            new DeliverySlotCoordinator(processRunner, roleRunner).RunAsync(hostPaths, config, repository, beadId, token,
-                progress: DeliveryPoolCoordinator.ObserveFirstAgentAttempt(agentAttemptStarted));
+        DeliveryPoolSlotRunner slotRunner = (hostPaths, config, repository, beadId, token) =>
+            new DeliverySlotCoordinator(processRunner, roleRunner).RunAsync(hostPaths, config, repository, beadId, token);
+        using var runtimeLifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var pool = new DeliveryPoolCoordinator(target.Host, project, new(target.Path, "main"), processRunner,
-            runSlot: slotRunner, slotLifetimeToken: TestContext.Current.CancellationToken);
+            runSlot: slotRunner, slotLifetimeToken: runtimeLifetime.Token);
+        var evaluations = Channel.CreateUnbounded<DeliveryPoolEvaluation>();
+        var noTimerTicks = Channel.CreateUnbounded<bool>();
+        var runtime = new ContinuousDiscoveryCoordinator(
+            [
+                new ContinuousPoolRegistration(
+                    ContinuousPoolKind.Delivery,
+                    async token =>
+                    {
+                        var evaluation = await pool.EvaluateAsync(token);
+                        evaluations.Writer.TryWrite(evaluation);
+                        return evaluation.Diagnostics;
+                    },
+                    pool.CompletionReader,
+                    runtimeLifetime.Cancel,
+                    async token => { await pool.WaitForActiveSlotsAsync(token); }),
+                new ContinuousPoolRegistration(
+                    ContinuousPoolKind.Merger,
+                    _ =>
+                    {
+                        mergerEvaluations.Writer.TryWrite(1);
+                        return Task.FromResult<IReadOnlyList<DeliveryPoolDiagnostic>>([]);
+                    },
+                    mergerCompletions.Reader,
+                    static () => { },
+                    static _ => Task.CompletedTask)
+            ],
+            _ => Task.CompletedTask,
+            TextWriter.Null,
+            TextWriter.Null,
+            token => ReadTimerTicksAsync(noTimerTicks.Reader, token));
+        var runtimeTask = runtime.RunAsync(runtimeLifetime.Token);
 
         try
         {
-        var first = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        var first = await evaluations.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         var completedBeforeAttempt = first.Admitted.Where(admission => admission.Completion.IsCompletedSuccessfully)
             .Select(admission =>
             {
@@ -105,30 +155,46 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
             + string.Join(" | ", first.Diagnostics.Select(diagnostic => $"{diagnostic.BeadId}:{diagnostic.Code}:{diagnostic.Message}"))
             + "; completed-before-attempt=" + string.Join(" | ", completedBeforeAttempt));
         Assert.Equal(beads.Take(2).Order(StringComparer.Ordinal), first.Admitted.Select(admission => admission.BeadId).Order(StringComparer.Ordinal));
-        var startSignals = first.Admitted.ToDictionary(admission => admission.BeadId,
-            admission => WaitForFileAsync(gates[admission.BeadId].Started), StringComparer.Ordinal);
+        var preparation = await preparationReturned.Task.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+        Assert.True(Directory.Exists(preparation.WorkingDirectory), $"The real preparer did not create A's worktree: {preparation.WorkingDirectory}");
+        Assert.Equal($"nightweaver/{beads[0]}", RunGit(preparation.WorkingDirectory, "branch", "--show-current"));
+        Assert.Equal(beads[0], invocationIdentities[preparation.InvocationId].BeadId);
+        Assert.DoesNotContain(beads[0], executionAttempts.Keys);
+        var bStarted = WaitForFileAsync(gates[beads[1]].Started);
+        var mergerFirstEvaluation = mergerEvaluations.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask();
         try
         {
-            await Task.WhenAll(startSignals.Values);
+            await Task.WhenAll(bStarted, mergerFirstEvaluation).WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
         }
         catch (TimeoutException exception)
         {
-            var slotDetails = string.Join("; ", first.Admitted.Select(admission =>
-            {
-                var started = File.Exists(gates[admission.BeadId].Started);
-                var result = admission.Completion.IsCompletedSuccessfully
-                    ? $"completed: {admission.Completion.Result.Diagnostic ?? admission.Completion.Result.Outcome?.Disposition.ToString() ?? "no outcome"}"
-                    : "still active";
-                return $"{admission.BeadId}: started={started}, {result}";
-            }));
-            throw new TimeoutException($"Timed out waiting for both Delivery slots to launch. {slotDetails}", exception);
+            var aReachedExecute = executionAttempts.ContainsKey(beads[0]);
+            throw new TimeoutException($"Timed out waiting for real A preparation and later Merger evaluation. A reached Execute={aReachedExecute}; B started={File.Exists(gates[beads[1]].Started)}; {exception.Message}", exception);
         }
+        Assert.False(releasePreparation.Task.IsCompleted, "A's preparation gate must still be holding before any A agent launch.");
+        Assert.Equal(1, preparationAttempts[beads[0]]);
+        Assert.Equal(2, pool.ActiveReservations.Count);
+        Assert.Contains(pool.ActiveReservations, reservation => reservation.BeadId == beads[0]);
+        Assert.Contains(pool.ActiveReservations, reservation => reservation.BeadId == beads[1]);
         foreach (var beadId in beads.Take(2))
         {
             var claimed = target.ReadBead(beadId);
             Assert.Equal("in_progress", claimed.Status);
             Assert.Equal(project.RecoveryActor, claimed.Assignee);
         }
+
+        // Repeated discovery ticks must preserve A's reservation and must not prepare or launch
+        // a duplicate A slot while the already-prepared invocation remains gated.
+        noTimerTicks.Writer.TryWrite(true);
+        var repeatedEvaluation = await evaluations.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+        Assert.Empty(repeatedEvaluation.Admitted);
+        Assert.Equal(2, repeatedEvaluation.ActiveReservations.Count);
+        Assert.Equal(1, preparationAttempts[beads[0]]);
+        Assert.DoesNotContain(beads[0], executionAttempts.Keys);
+        await mergerEvaluations.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+        Assert.False(releasePreparation.Task.IsCompleted, "The later Merger pool must evaluate while A preparation remains gated.");
 
         File.WriteAllText(gates[beads[1]].Release, "release B", new System.Text.UTF8Encoding(false));
         var bCompletion = await first.Admitted.Single(admission => admission.BeadId == beads[1]).Completion
@@ -138,12 +204,18 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         Assert.Equal("in_progress", target.ReadBead(beads[0]).Status);
         Assert.Equal(project.RecoveryActor, target.ReadBead(beads[0]).Assignee);
 
-        var next = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        var next = await ReadUntilAdmittedAsync(beads[2]);
         Assert.Equal([beads[2]], next.Admitted.Select(admission => admission.BeadId));
         var cCompletion = await next.Admitted[0].Completion.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
         Assert.True(cCompletion.Outcome?.MergeReady, cCompletion.Diagnostic);
         Assert.Equal("in_progress", target.ReadBead(beads[0]).Status);
+        Assert.Equal(1, preparationAttempts[beads[0]]);
+        Assert.DoesNotContain(beads[0], executionAttempts.Keys);
+        Assert.Contains(pool.ActiveReservations, reservation => reservation.BeadId == beads[0]);
 
+        releasePreparation.TrySetResult();
+        await WaitForFileAsync(gates[beads[0]].Started).WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+        Assert.Equal(1, executionAttempts[beads[0]]);
         File.WriteAllText(gates[beads[0]].Release, "release A", new System.Text.UTF8Encoding(false));
         var aCompletion = await first.Admitted.Single(admission => admission.BeadId == beads[0]).Completion
             .WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
@@ -199,6 +271,7 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         }
         finally
         {
+            releasePreparation.TrySetResult();
             foreach (var gate in gates.Values)
                 File.WriteAllText(gate.Release, "cleanup release", new System.Text.UTF8Encoding(false));
 
@@ -209,10 +282,79 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
                 await Task.WhenAny(allCompleted, Task.Delay(TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken));
             }
 
+            runtimeLifetime.Cancel();
+            try { await runtimeTask.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None); }
+            catch (Exception exception) when (exception is OperationCanceledException or TimeoutException) { }
+
             foreach (var pidFile in pidFiles)
             {
                 if (File.Exists(pidFile)) AssertFixtureExited(pidFile);
             }
+        }
+
+        async Task<DeliveryPoolEvaluation> ReadUntilAdmittedAsync(string beadId)
+        {
+            while (true)
+            {
+                var evaluation = await evaluations.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+                    .WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+                if (evaluation.Admitted.Any(admission => admission.BeadId == beadId)) return evaluation;
+            }
+        }
+    }
+
+    [Fact]
+    public async Task NativeRuntimeRetriesEligibilityReadOutageOnLaterTimerWithFreshInventory()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge"]);
+        var project = target.CreateProject(AgentCli.Codex, maxConcurrentDelivery: 1);
+        var processRunner = new ConcurrentRecordingProcessRunner(new SystemProcessRunner(), target,
+            failFirstInventoryRead: true);
+        using var runtimeLifetime = new CancellationTokenSource();
+        var slotStarted = NewSignal();
+        var ticks = Channel.CreateUnbounded<bool>();
+        var error = new StringWriter();
+        var pool = new DeliveryPoolCoordinator(target.Host, project, new(target.Path, "main"), processRunner,
+            runSlot: async (_, _, _, _, cancellationToken) =>
+            {
+                slotStarted.TrySetResult(true);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return new DeliverySlotOutcome(DeliverySlotDisposition.StoppedAtUnsupportedOutcome,
+                    null, null, null, ClaimHandoffCompleted: false, Diagnostic: null);
+            },
+            slotLifetimeToken: runtimeLifetime.Token);
+        var runtime = new ContinuousDiscoveryCoordinator(
+            [new ContinuousPoolRegistration(
+                ContinuousPoolKind.Delivery,
+                async cancellationToken => (await pool.EvaluateAsync(cancellationToken)).Diagnostics,
+                pool.CompletionReader,
+                runtimeLifetime.Cancel,
+                async cancellationToken => { await pool.WaitForActiveSlotsAsync(cancellationToken); })],
+            _ => Task.CompletedTask,
+            TextWriter.Null,
+            error,
+            token => ReadTimerTicksAsync(ticks.Reader, token));
+        var runtimeTask = runtime.RunAsync(runtimeLifetime.Token);
+
+        try
+        {
+            await processRunner.FirstInventoryReadFailure.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            var beadId = target.CreateBead("Created during a tracker read outage", "task", "stage:implement");
+            ticks.Writer.TryWrite(true);
+            await slotStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            Assert.Equal(beadId, Assert.Single(pool.ActiveReservations).BeadId);
+            Assert.Equal(2, processRunner.Requests.Count(request => request.FileName == "bd"
+                && request.Arguments.Contains("--all", StringComparer.Ordinal)));
+            Assert.Contains("Delivery discovery failed; a later trigger will reread current tracker state", error.ToString(), StringComparison.Ordinal);
+            Assert.Equal("open", target.ReadBead(beadId).Status);
+        }
+        finally
+        {
+            runtimeLifetime.Cancel();
+            await runtimeTask.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
         }
     }
 
@@ -245,7 +387,7 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
                 }
                 return new DeliveryPoolSnapshot(inventory, readiness);
             },
-            async (hostPaths, config, repository, requestedBead, token, agentAttemptStarted) =>
+            async (hostPaths, config, repository, requestedBead, token) =>
             {
                 var slotInventory = await slotReader.ReadSnapshotAsync(repository, token);
                 slotObservedAssignee = slotInventory.ById[requestedBead].Assignee;
@@ -255,8 +397,7 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
                     throw new InvalidOperationException("A role launch must not occur after a competing claim.");
                 });
                 return await new DeliverySlotCoordinator(processRunner, roleRunner)
-                    .RunAsync(hostPaths, config, repository, requestedBead, token,
-                        progress: DeliveryPoolCoordinator.ObserveFirstAgentAttempt(agentAttemptStarted));
+                    .RunAsync(hostPaths, config, repository, requestedBead, token);
             },
             TestContext.Current.CancellationToken);
 
@@ -292,14 +433,27 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
     private sealed record PoolStageObservation(string BeadId, AgentRole Role, string? Stage, string Status,
         string? Assignee, string WorktreePath, string Branch, string Head);
 
-    private sealed class ConcurrentRecordingProcessRunner(IProcessRunner inner, AgentStageTargetFixture? target = null) : IProcessRunner
+    private sealed class ConcurrentRecordingProcessRunner(
+        IProcessRunner inner,
+        AgentStageTargetFixture? target = null,
+        bool failFirstInventoryRead = false) : IProcessRunner
     {
         private readonly ConcurrentQueue<ProcessRequest> requests = new();
+        private readonly TaskCompletionSource<bool> firstInventoryReadFailure = NewSignal();
+        private int failureInjected;
         internal IReadOnlyList<ProcessRequest> Requests => requests.ToArray();
+        internal Task FirstInventoryReadFailure => firstInventoryReadFailure.Task;
 
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
             requests.Enqueue(request);
+            if (failFirstInventoryRead && request.FileName == "bd"
+                && request.Arguments.Contains("--all", StringComparer.Ordinal)
+                && Interlocked.CompareExchange(ref failureInjected, 1, 0) == 0)
+            {
+                firstInventoryReadFailure.TrySetResult(true);
+                return Task.FromResult(new ProcessResult(1, "", "controlled temporary inventory read outage"));
+            }
             return target is null
                 ? inner.RunAsync(request, cancellationToken)
                 : target.RunWithFixturePullRequestAsync(inner, request, cancellationToken);
@@ -307,6 +461,13 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
     }
 
     private static TaskCompletionSource<bool> NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static async IAsyncEnumerable<bool> ReadTimerTicksAsync(ChannelReader<bool> ticks,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var tick in ticks.ReadAllAsync(cancellationToken))
+            yield return tick;
+    }
 
     private static async Task WaitForFileAsync(string path)
     {

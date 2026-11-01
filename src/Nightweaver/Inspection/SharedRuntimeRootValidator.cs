@@ -28,6 +28,25 @@ internal static class SharedRuntimeRootValidator
         }
     }
 
+    internal static void EnsureExistingUsable(string root)
+    {
+        var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        try
+        {
+            EnsureExistingSafe(fullRoot);
+            ProbeWritable(fullRoot);
+        }
+        catch (ToolExecutionException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or ArgumentException or NotSupportedException)
+        {
+            throw new ToolExecutionException($"shared runtime root '{fullRoot}' is unusable: {exception.Message}");
+        }
+    }
+
     internal static void EnsureUsable(string root)
     {
         var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));

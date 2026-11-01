@@ -204,9 +204,11 @@ stateDiagram-v2
 
 ---
 
-## 5. Orchestrator Concurrency, Event-Driven Discovery, and Worktree Isolation
+## 5. Orchestrator Concurrency, Continuous Discovery, and Worktree Isolation
 
-### 5.1 Event-Driven Discovery via `bd events tail --follow`
+### 5.1 Continuous Discovery and the Current Delivery Runtime
+
+The selector-only CLI is a live continuous runtime; `--dry-run` remains a separate one-shot inspection. This implementation slice wires Delivery after startup recovery and cleanup. Planning and Merger execution are future pool integrations.
 
 **Repository Exclusion and Startup Recovery for Live Dispatch**:
 Before any Beads inventory/readiness query, recovery, dispatch write, Project runtime-directory creation, worktree operation, or Agent launch, a live Orchestrator performs read-only configuration and Git validation, then acquires an OS-managed mutex keyed to the physical Git common-directory identity. The mutex is shared by every Project name and Nightweaver host root that targets the same local repository, is outside the Target Repository, and remains owned for the process lifetime. A competing process exits with a diagnostic before tracker or runtime mutations. Process exit or death releases ownership; no lease database, heartbeat, or PID proof is used.
@@ -221,7 +223,7 @@ Before that fresh admission snapshot, live startup performs a separate conservat
 
 ```mermaid
 flowchart TD
-    Dispatch[Live dispatch] --> Validate[Read-only config and Git validation]
+    Live[Selector-only live runtime] --> Validate[Read-only config and Git validation]
     Validate --> Mutex{Repository mutex acquired?}
     Mutex -- no --> Loser[Exit before tracker or runtime mutation]
     Mutex -- yes --> Roots[Validate or create current Project runtime roots]
@@ -229,21 +231,20 @@ flowchart TD
     Recovery --> Sweep[Revalidate and remove only completed managed worktrees]
     Sweep --> Tmp[Delete owned tmp only after checking actual survivors]
     Tmp --> Actual[Read fresh inventory and actual bd ready state]
-    Actual --> Admit[Ordinary guarded dispatch admission]
+    Actual --> Discover[Fresh Delivery discovery]
+    Discover --> Reserve[Reserve local capacity and queue slot]
+    Reserve --> Slot[Prepare and run slot independently]
+    Slot --> Complete[Release local capacity and publish completion]
+    Complete --> Discover
+    Timer[Always-on 30-second timer] --> Discover
     DryRun[Dry-run] --> Inspect[Read-only inspection and projection]
     Inspect --> Report[Report without a mutex or recovery]
 ```
-1. **Durable Events Journal Initialization**:
-   - Nightweaver does not use fixed-interval polling. On startup for a **Project**, the **Orchestrator** ensures `bd`'s built-in durable events journal is enabled on the **Target Repository** (`bd config set events-journal true` / `BD_EVENTS_JOURNAL=1`), captures the current head sequence number, performs the startup crash sweep (Section 5.4), and runs an initial discovery pass (`bd ready` and paused-Bead activity check).
-2. **Reactive Scheduling Loop**:
-   - The **Orchestrator** maintains a persistent `bd events tail --follow --since <head>` child stream against the **Target Repository**.
-   - Every committed tracker mutation (`create`, `update`, `close`, `delete`, `dep_add`, `dep_remove`, `comment`)—as well as every internal pool slot completion—triggers a scheduling evaluation across:
-     - Paused Beads (`product-decision-required` / `needs-human`) for new human activity resumption.
-     - Active **Plan Bead** count for **Planning** backpressure.
-     - Unblocked **Product Beads** for the **Planning Pool**.
-     - Unblocked **Plan Beads** (`stage:implement`, `stage:review`, `stage:qa`, or unlabeled) for the **Delivery Pool**.
-     - Unblocked `stage:merge` **Plan Beads** for the **Singleton Merger Slot**.
-   - If the `bd events tail --follow` stream exits unexpectedly or emits `events_journal_truncated`, the **Orchestrator** automatically re-baselines with a full query pass and restarts the tail stream.
+1. Startup recovery and environment cleanup complete before the initial Delivery discovery pass. A competing runtime exits before tracker or runtime mutation.
+2. Startup, an always-on 30-second timer, and every Delivery completion after local capacity release enter one bounded, coalescing signal. A single reader serializes passes. It consumes the current signal before evaluation, so a request that arrives during a pass remains pending for one subsequent pass. Bursts while a signal is already pending coalesce.
+3. Every pass reads fresh inventory and native readiness. A failed tracker read admits no work from a prior snapshot and waits for a later timer or completion trigger; it does not retry in a tight loop. Discovery does not perform no-op tracker writes.
+4. The durable `bd` events journal and `bd events tail --follow` transport are not prerequisites and are not wired in this slice. If added later, journal activity must request discovery through this same coalescing path. Periodic discovery keeps work moving through journal outages.
+5. Ordinary comments and description edits do not resume paused Beads. Paused work stays ineligible until an explicit supported state change.
 
 ### 5.2 Three Concurrency Pools & Planning Backpressure
 
@@ -253,12 +254,15 @@ flowchart TD
    - To prevent **Planning** from building a large queue of pre-planned **Plan Beads** that go stale as `<default_branch>` evolves, the **Orchestrator** counts all active (non-closed, non-paused) **Plan Beads** (`--type task` with status `open` or `in_progress` that do not carry `product-decision-required` or `needs-human`).
    - When `active_plan_beads >= max_active_plan_beads`, the **Orchestrator** pauses claiming *new* **Product Beads** for **Planning** until `active_plan_beads < max_active_plan_beads`. Any **Product Bead** already mid-Planning in an active slot finishes its current Planning loop cleanly.
 3. **Delivery Pool (`max_concurrent_delivery`, default `3`)**:
-   - Claims eligible **Plan Beads** (`bd update <id> --claim`) that are unlabeled or in `stage:implement`, `stage:review`, or `stage:qa`.
+   - The current continuous runtime claims eligible **Plan Beads** (`bd update <id> --claim`) that are unlabeled or in `stage:implement`, `stage:review`, or `stage:qa`.
+   - Discovery reserves local capacity before queuing slot preparation and returns without waiting for preparation, Agent execution, retries, or completion. Reservations bound capacity for the whole slot lifetime. When full, candidates remain queued for a later fresh pass.
+   - Delivery candidates are admitted in ascending priority, creation-time, then ordinal-ID order.
    - A Delivery slot holds the claim and persistent worktree continuously across Orchestrator-verified `stage:implement` -> `stage:review` -> `stage:qa` outcomes (including immediate `-> stage:implement` repair cycles). QA approval atomically publishes `stage:merge`, opens the Bead, and clears the assignee; a pause also publishes and releases the claim atomically. Once the publication receipt or one verifying reread confirms the handoff, the slot returns immediately without further Bead reads, writes, or worktree operations, leaving the retained worktree for the Singleton Merger Slot.
 4. **Singleton Merger Slot (concurrency = `1`)**:
    - Dedicated to `stage:merge` **Plan Beads** (`bd ready --type task --label stage:merge --unassigned`).
    - Claims and processes one `stage:merge` **Plan Bead** at a time in priority/FIFO order so rebase, conflict resolution, and remote CI waits never block **Delivery Pool** slots.
    - If a `stage:merge` **Plan Bead** is returned to `stage:implement` (conflict/CI failure), the **Merger** releases the claim so the **Delivery Pool** picks it back up on `nightweaver/<bead-id>`.
+   - Planning and Merger slot admission/completion/lifecycle wiring are not implemented by the current runtime.
 
 ### 5.3 Worktree & Runtime Environment Isolation
 
@@ -422,21 +426,16 @@ Each **Project** configuration binds one **Target Repository** to the **Orchestr
 }
 ```
 
-### 7.2 CLI Entrypoints & Shutdown Modes
+### 7.2 CLI Entrypoints & Shutdown
 
 1. **CLI Invocation**:
-   - `nightweaver --project <project-slug>` (loads `<nightweaver-root>/projects/<project-slug>.json`)
-   - `nightweaver --config <path-to-project-json>`
-   - `--dry-run`: Runs startup recovery inspection and initial discovery against the **Target Repository** and prints the actions that *would* be taken across the **Planning**, **Delivery**, and **Merger** pools without acquiring recovery authority, mutating `bd`, creating/removing worktrees, or launching **Agents**, then exits.
+   - `nightweaver --project <project-slug>` (loads `<nightweaver-root>/projects/<project-slug>.json`) starts the continuous Delivery runtime.
+   - `nightweaver --config <path-to-project-json>` starts the same runtime from an explicit config path.
+   - `--dry-run`: Runs read-only startup recovery inspection and initial discovery projection without acquiring recovery authority, mutating `bd`, creating/removing worktrees, or launching **Agents**, then exits.
+   - `dispatch <bead-id>` continues to run exactly one explicitly selected lifecycle stage.
 2. **Two-Mode Shutdown**:
-   - **Graceful Shutdown (Default — first `Ctrl+C` / `SIGINT` / stop signal)**:
-     - Immediately stops claiming new Beads and stops advancing active Beads to subsequent stages in their pool loop.
-     - Waits for currently running **Agent CLI** processes to finish their invocation and post-exit `bd` verification.
-     - Releases all active `in_progress` `bd` claims (`bd update <id> --status open --assignee ""`), cleans up any completed/paused worktrees per Section 5.4, and exits cleanly.
-   - **Immediate Force Shutdown (Second `Ctrl+C` / force-stop signal)**:
-     - Immediately closes all active **Win32 Job Objects** (terminating all running **Agent CLI** processes and child process trees).
-     - Resets any mid-invocation worktrees (`git reset --hard HEAD && git clean -fd`).
-     - Releases all active `in_progress` `bd` claims (`bd update <id> --status open --assignee ""`) and exits immediately.
+   - The current Delivery runtime handles `Ctrl+C` by stopping new discovery, canceling active slots, and waiting up to two minutes for local slot completion before exit. An unsuccessful drain is reported; it does not assume tracker claim release succeeded. Startup recovery handles exact Nightweaver-owned claims on the next run.
+   - A distinct second-signal force-shutdown policy and equivalent Unix process-tree containment are future work.
 
 ---
 
