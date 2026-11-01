@@ -12,6 +12,7 @@ var executable = Path.GetFileNameWithoutExtension(Environment.ProcessPath ?? "un
 var invocation = JsonSerializer.Serialize(new
 {
     executable,
+    beadId = Environment.GetEnvironmentVariable("NIGHTWEAVER_BEAD_ID"),
     arguments = Environment.GetCommandLineArgs().Skip(1).ToArray()
 });
 await File.AppendAllTextAsync(recordPath, invocation + "\n", new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));

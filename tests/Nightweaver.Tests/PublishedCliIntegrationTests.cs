@@ -26,7 +26,7 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
             using var process = ProcessTool.Start(
                 Path.Combine(fixture.Host, "nightweaver.exe"), arguments, fixture.Caller, environment);
             await process.WaitForOutputContainsAsync("Continuous Delivery runtime starting", TimeSpan.FromSeconds(60));
-            await Task.Delay(TimeSpan.FromSeconds(1));
+            await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
             Assert.False(process.HasExited, "Selector-only runtime must remain alive after startup while Delivery has no eligible work.");
             process.KillTree();
             var result = await process.WaitAsync(TimeSpan.FromSeconds(15));
@@ -37,6 +37,148 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
 
         await AssertLiveUntilStopped(["--project", "demo"]);
         await AssertLiveUntilStopped(["--config", fixture.Config]);
+    }
+
+    [Fact]
+    public async Task PublishedProjectSelectorUsesThirtySecondTimerForUnjournaledDelivery()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var fixture = new StartupSweepFixture(published.PublishDirectory);
+        var target = fixture.Target;
+        ConfigureLocalDeliveryOrigin(target);
+        target.Run("bd", ["update", target.ControlBeadId, "--add-label", "needs-human"]);
+        var environment = published.EnvironmentWithAgentTraps(target.Environment);
+        var timerTrapRecordPath = Path.Combine(Path.GetTempPath(), $"nightweaver-{Guid.NewGuid():N}-agent-invocations.jsonl");
+        environment["NIGHTWEAVER_AGENT_TRAP_RECORD"] = timerTrapRecordPath;
+        using var process = ProcessTool.Start(
+            Path.Combine(fixture.Host, "nightweaver.exe"), ["--project", "demo"], fixture.Caller, environment);
+        try
+        {
+            await process.WaitForOutputContainsAsync("Continuous Delivery runtime starting", TimeSpan.FromSeconds(60));
+            await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+            Assert.False(process.HasExited, "The published selector-only runtime should remain active while Delivery is idle.");
+            published.AssertNoAgentInvocations();
+
+            await WaitForJournalEnablementAsync(target);
+            target.Run("bd", ["config", "set", "events-journal", "false"]);
+            Assert.Equal("false", target.Run("bd", ["--readonly", "--sandbox", "config", "get", "events-journal"]).Trim());
+
+            var headBeforeWrite = ReadTargetJournalHead(target);
+            var candidate = target.Create("Published timer-only Delivery candidate", labels: ["stage:implement"]);
+            var inventory = BeadsReader.Parse(target.Run("bd", BeadsCommand.Create(target.Path).Arguments));
+            var candidateSnapshot = inventory.ById[candidate];
+            Assert.Equal("task", candidateSnapshot.IssueType);
+            Assert.Equal("open", candidateSnapshot.Status);
+            Assert.Null(candidateSnapshot.Assignee);
+            Assert.Contains("stage:implement", candidateSnapshot.Labels);
+            using (var readiness = JsonDocument.Parse(target.Run("bd", BeadsCommand.CreateUnassignedReadiness(target.Path).Arguments)))
+                Assert.Contains(candidate, readiness.RootElement.EnumerateArray()
+                    .Select(row => row.GetProperty("id").GetString()!), StringComparer.Ordinal);
+            Assert.Equal(headBeforeWrite, ReadTargetJournalHead(target));
+            var candidateCreatedAt = DateTime.UtcNow;
+
+            var timeout = TimeSpan.FromSeconds(50);
+            var reservationText = $"Delivery reserved Plan Bead '{candidate}'";
+            var reservation = process.WaitForOutputContainsAsync(reservationText, timeout);
+            var invocationTask = WaitForPublishedInvocationAsync(timerTrapRecordPath, candidate, process, timeout);
+            JsonElement invocation;
+            try
+            {
+                await Task.WhenAll(reservation, invocationTask);
+                invocation = await invocationTask;
+            }
+            catch (Exception exception) when (exception is TimeoutException or InvalidOperationException)
+            {
+                throw new InvalidOperationException(
+                    $"Timed discovery diagnostics for '{candidate}': reservation observed={reservation.IsCompletedSuccessfully}; "
+                    + $"trap invocation observed={invocationTask.IsCompletedSuccessfully}; stdout={process.StandardOutputSnapshot}; "
+                    + $"stderr={process.StandardErrorSnapshot}", exception);
+            }
+
+            Assert.True(DateTime.UtcNow - candidateCreatedAt >= TimeSpan.FromSeconds(20),
+                "The published selector should discover the change on its production 30-second timer, not an immediate journal wakeup.");
+            Assert.Equal("claude", invocation.GetProperty("executable").GetString());
+            Assert.Equal(candidate, invocation.GetProperty("beadId").GetString());
+            Assert.Equal(headBeforeWrite, ReadTargetJournalHead(target));
+        }
+        finally
+        {
+            try
+            {
+                if (!process.HasExited) process.KillTree();
+                await process.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+            finally
+            {
+                if (File.Exists(timerTrapRecordPath)) File.Delete(timerTrapRecordPath);
+            }
+        }
+    }
+
+    private static async Task WaitForJournalEnablementAsync(BeadsFixture target)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (target.Run("bd", ["--readonly", "--sandbox", "config", "get", "events-journal"]).Trim() == "true")
+                return;
+            await Task.Delay(100);
+        }
+        throw new TimeoutException("The published selector-only runtime did not enable its target events journal.");
+    }
+
+    private static void ConfigureLocalDeliveryOrigin(BeadsFixture target)
+    {
+        var originPath = Path.Combine(target.Root, "origin.git");
+        target.Run("git", ["init", "--bare", originPath]);
+        target.Run("git", ["remote", "add", "origin", originPath]);
+        target.Run("git", ["push", "--set-upstream", "origin", "main"]);
+    }
+
+    private static long ReadTargetJournalHead(BeadsFixture target)
+    {
+        var output = target.Run("bd", ["--readonly", "--sandbox", "events", "tail", "--json"]);
+        var head = 0L;
+        foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            using var record = JsonDocument.Parse(line);
+            head = Math.Max(head, record.RootElement.GetProperty("seq").GetInt64());
+        }
+        return head;
+    }
+
+    private static async Task<JsonElement> WaitForPublishedInvocationAsync(
+        string recordPath, string beadId, RunningProcess process, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (File.Exists(recordPath))
+            {
+                foreach (var line in File.ReadAllLines(recordPath))
+                {
+                    try
+                    {
+                        using var record = JsonDocument.Parse(line);
+                        if (record.RootElement.TryGetProperty("beadId", out var observedBeadId)
+                            && observedBeadId.GetString() == beadId)
+                            return record.RootElement.Clone();
+                    }
+                    catch (JsonException)
+                    {
+                        // The trap appends one JSON line; retry if the read overlaps that write.
+                    }
+                }
+            }
+            if (process.HasExited)
+            {
+                var result = await process.WaitAsync(TimeSpan.FromSeconds(5));
+                throw new InvalidOperationException($"Published runtime exited before timer admission (exit {result.ExitCode}): {result.StandardErrorText}");
+            }
+            await Task.Delay(100);
+        }
+        throw new TimeoutException($"The production 30-second timer did not admit '{beadId}' from the target tracker without a journal event.");
     }
 
     [Fact]

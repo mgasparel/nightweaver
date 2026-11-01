@@ -228,6 +228,14 @@ internal sealed class RunningProcess : IDisposable
 
     internal int Id => process.Id;
     internal bool HasExited => process.HasExited;
+    internal string StandardOutputSnapshot
+    {
+        get { lock (outputGate) return Encoding.UTF8.GetString(standardOutput.ToArray()); }
+    }
+    internal string StandardErrorSnapshot
+    {
+        get { lock (outputGate) return Encoding.UTF8.GetString(standardError.ToArray()); }
+    }
 
     internal async Task WaitForOutputContainsAsync(string expected, TimeSpan timeout)
     {

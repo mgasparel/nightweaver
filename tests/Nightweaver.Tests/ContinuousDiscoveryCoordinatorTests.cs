@@ -130,43 +130,65 @@ public sealed class ContinuousDiscoveryCoordinatorTests
         var ticks = Channel.CreateUnbounded<bool>();
         var error = new StringWriter();
         var watcherStopped = NewSignal();
-        var thirdPass = NewSignal();
-        var calls = 0;
+        var passGates = Channel.CreateUnbounded<TaskCompletionSource<bool>>();
         var coordinator = new ContinuousDiscoveryCoordinator(
-            [Registration(ContinuousPoolKind.Delivery, _ =>
+            [Registration(ContinuousPoolKind.Delivery, token =>
             {
-                if (Interlocked.Increment(ref calls) == 3) thirdPass.TrySetResult(true);
-                return EmptyDiagnostics();
+                var gate = NewSignal();
+                passGates.Writer.TryWrite(gate);
+                return WaitForPassReleaseAsync(gate, token);
             }, completions.Reader)],
             _ => Task.CompletedTask,
             TextWriter.Null,
             error,
             token => ReadTicksAsync(ticks.Reader, token),
-            (requestDiscovery, _) =>
+            (_, _) =>
             {
-                requestDiscovery();
                 watcherStopped.TrySetResult(true);
                 throw new IOException("tail transport exited");
             });
 
         var run = coordinator.RunAsync(lifetime.Token);
-        await watcherStopped.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        await WaitForCallsAsync(1);
-        Assert.Contains("periodic and completion discovery remain active", error.ToString(), StringComparison.Ordinal);
-
-        completions.Writer.TryWrite(new DeliveryPoolCompletion("completed", null, null, false, true));
-        await WaitForCallsAsync(2);
-        ticks.Writer.TryWrite(true);
-        await thirdPass.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        Assert.Equal(3, Volatile.Read(ref calls));
-
-        lifetime.Cancel();
-        await run.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-
-        async Task WaitForCallsAsync(int desired)
+        try
         {
-            while (Volatile.Read(ref calls) < desired)
+            var startupPass = await ReadPassGateAsync();
+            await watcherStopped.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            await WaitForWatcherFailureAsync();
+            Assert.Contains("periodic and completion discovery remain active", error.ToString(), StringComparison.Ordinal);
+
+            startupPass.TrySetResult(true);
+            var watcherFailurePass = await ReadPassGateAsync();
+            watcherFailurePass.TrySetResult(true);
+
+            completions.Writer.TryWrite(new DeliveryPoolCompletion("completed", null, null, false, true));
+            var completionPass = await ReadPassGateAsync();
+            completionPass.TrySetResult(true);
+
+            ticks.Writer.TryWrite(true);
+            var timerPass = await ReadPassGateAsync();
+            timerPass.TrySetResult(true);
+        }
+        finally
+        {
+            lifetime.Cancel();
+            await run.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+        }
+
+        async Task<TaskCompletionSource<bool>> ReadPassGateAsync() =>
+            await passGates.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        async Task WaitForWatcherFailureAsync()
+        {
+            while (!error.ToString().Contains("tracker journal watcher stopped", StringComparison.Ordinal))
                 await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        static async Task<IReadOnlyList<DeliveryPoolDiagnostic>> WaitForPassReleaseAsync(
+            TaskCompletionSource<bool> release, CancellationToken cancellationToken)
+        {
+            await release.Task.WaitAsync(cancellationToken);
+            return await EmptyDiagnostics();
         }
     }
 
