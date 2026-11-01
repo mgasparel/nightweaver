@@ -1452,6 +1452,7 @@ public abstract class AgentStageIntegrationTestSupport
             {
                 File.Copy(source, System.IO.Path.Combine(FakeCliRoot, "claude.exe"), overwrite: true);
                 File.Copy(source, System.IO.Path.Combine(FakeCliRoot, "codex.exe"), overwrite: true);
+                File.Copy(source, System.IO.Path.Combine(FakeCliRoot, "gh.exe"), overwrite: true);
             }
         }
 

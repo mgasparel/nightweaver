@@ -18,7 +18,7 @@ internal static class Program
         if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "bd", StringComparison.OrdinalIgnoreCase))
             return RunBdShim(args);
         if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "gh", StringComparison.OrdinalIgnoreCase))
-            return RunGhShim();
+            return RunGhShim(args);
 
         if (Environment.GetEnvironmentVariable("NIGHTWEAVER_INVOCATION_PURPOSE") == "outcome-classifier")
             return RunOutcomeClassifier();
@@ -123,17 +123,43 @@ internal static class Program
         return 0;
     }
 
-    private static int RunGhShim()
+    private static int RunGhShim(string[] args)
     {
+        var logPath = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_GH_LOG");
+        if (!string.IsNullOrWhiteSpace(logPath))
+            File.AppendAllText(logPath, JsonSerializer.Serialize(args) + Environment.NewLine, new UTF8Encoding(false));
+
         var branch = Run("git", ["branch", "--show-current"]);
         var head = Run("git", ["rev-parse", "HEAD"]);
+        if (args.Length >= 2 && args[0] == "pr" && args[1] == "checks")
+        {
+            Console.WriteLine($"All required fixture checks passed for {head.Trim()}.");
+            return Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CI_RESULT") == "fail" ? 1 : 0;
+        }
+
+        if (args.Length >= 2 && args[0] == "pr" && args[1] == "merge")
+        {
+            if (!args.Contains("--squash", StringComparer.Ordinal)
+                || !args.Contains("--delete-branch", StringComparer.Ordinal))
+                throw new InvalidOperationException("Fixture merge requires --squash and --delete-branch.");
+            Run("git", ["push", "origin", "HEAD:refs/heads/main"]);
+            if (args.Contains("--delete-branch", StringComparer.Ordinal))
+                Run("git", ["push", "origin", "--delete", branch.Trim()]);
+            Console.WriteLine("Fixture pull request merged.");
+            return 0;
+        }
+
+        var remoteMain = Run("git", ["ls-remote", "origin", "refs/heads/main"])
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        var state = string.Equals(remoteMain, head.Trim(), StringComparison.OrdinalIgnoreCase) ? "MERGED" : "OPEN";
         var response = JsonSerializer.Serialize(new
         {
-            state = "OPEN",
+            state,
             baseRefName = "main",
             headRefName = branch.Trim(),
             headRefOid = head.Trim(),
-            url = "https://example.invalid/pull/fixture"
+            url = "https://example.invalid/pull/fixture",
+            mergeCommit = state == "MERGED" ? new { oid = head.Trim() } : null
         });
         Console.OpenStandardOutput().Write(Encoding.UTF8.GetBytes(response));
         Console.OpenStandardOutput().Flush();
@@ -531,6 +557,42 @@ internal static class Program
                 Run("git", ["commit", "--allow-empty", "-m", "fixture Merger commit"]);
                 Run("bd", ["close", beadId]);
                 break;
+            case "merger-verified-merge":
+            {
+                var defaultBranch = Environment.GetEnvironmentVariable("NIGHTWEAVER_DEFAULT_BRANCH") ?? "main";
+                var branch = Run("git", ["branch", "--show-current"]).Trim();
+                Run("git", ["fetch", "origin", defaultBranch]);
+                var head = Run("git", ["rev-parse", "HEAD"]).Trim();
+                var defaultHead = Run("git", ["rev-parse", $"origin/{defaultBranch}"]).Trim();
+                if (!IsAncestor(defaultHead, head))
+                    throw new InvalidOperationException("Fixture branch is not synchronized with its configured default branch.");
+
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "merger-verified.txt"),
+                    "fixture merge after synchronized current-head checks\n", new UTF8Encoding(false));
+                Run("git", ["add", "merger-verified.txt"]);
+                Run("git", ["commit", "-m", "fixture verified Merger change"]);
+                head = Run("git", ["rev-parse", "HEAD"]).Trim();
+                Run("git", ["push", "--force-with-lease", "origin", $"HEAD:refs/heads/{branch}"]);
+                var pullRequest = "https://example.invalid/pull/fixture";
+                var beforeChecks = ReadPullRequest(pullRequest);
+                if (beforeChecks.GetProperty("state").GetString() != "OPEN"
+                    || beforeChecks.GetProperty("headRefOid").GetString() != head)
+                    throw new InvalidOperationException("Fixture pull request did not identify the synchronized current HEAD.");
+                Run("gh", ["pr", "checks", pullRequest, "--watch"]);
+                var afterChecks = ReadPullRequest(pullRequest);
+                if (afterChecks.GetProperty("headRefOid").GetString() != head)
+                    throw new InvalidOperationException("Fixture pull request head changed while checks were running.");
+                Run("gh", ["pr", "merge", pullRequest, "--squash", "--delete-branch"]);
+                var merged = ReadPullRequest(pullRequest);
+                if (merged.GetProperty("state").GetString() != "MERGED")
+                    throw new InvalidOperationException("Fixture pull request was not confirmed merged.");
+
+                var mergeCommit = merged.GetProperty("mergeCommit").GetProperty("oid").GetString();
+                Run("bd", ["comments", "add", beadId,
+                    $"nightweaver-merge-v1 pull_request={pullRequest} checked_head={head} required_checks=passed merge_method=squash merge_commit={mergeCommit}"]);
+                Run("bd", ["close", beadId]);
+                break;
+            }
             default:
                 throw new InvalidOperationException($"Unknown fixture Agent action '{action}'.");
         }
@@ -541,6 +603,40 @@ internal static class Program
 
     private static void UpdateLabels(string beadId, string oldLabel, string newLabel) =>
         Run("bd", ["update", beadId, "--remove-label", oldLabel, "--add-label", newLabel]);
+
+    private static bool IsAncestor(string ancestor, string descendant)
+    {
+        var result = RunAllowFailure("git", ["merge-base", "--is-ancestor", ancestor, descendant]);
+        return result.ExitCode == 0;
+    }
+
+    private static JsonElement ReadPullRequest(string pullRequest)
+    {
+        var json = Run("gh", ["pr", "view", pullRequest, "--json", "state,baseRefName,headRefName,headRefOid,url"]);
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
+
+    private static (int ExitCode, string StandardOutput, string StandardError) RunAllowFailure(
+        string fileName, IReadOnlyList<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            WorkingDirectory = Environment.CurrentDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start '{fileName}'.");
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        process.WaitForExit();
+        Task.WaitAll(stdoutTask, stderrTask);
+        return (process.ExitCode, stdoutTask.Result, stderrTask.Result);
+    }
 
     private static void RejectToImplement(string beadId, string stage, int repairCycles, string finding)
     {
