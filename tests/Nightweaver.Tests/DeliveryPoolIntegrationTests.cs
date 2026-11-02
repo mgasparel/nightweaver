@@ -784,6 +784,72 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         }
     }
 
+    [Fact]
+    public async Task FirstStopDuringPostAcquireReadinessFailsDrainWhenOwnedClaimFinalizationFails()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge"]);
+        var beadId = target.CreateBead("Post-acquire validation finalization failure", "task", "stage:implement");
+        var project = target.CreateProject(AgentCli.Codex, maxConcurrentDelivery: 1, timeoutMinutes: 5);
+        target.FailDeliveryReleaseForBeadBeforeCommitOnce = beadId;
+        var processRunner = new PostAcquireReadinessBarrierProcessRunner(
+            new ConcurrentRecordingProcessRunner(new SystemProcessRunner(), target), beadId);
+        var roleLaunches = 0;
+        DeliveryRoleRunner mustNotLaunch = (_, _, _, _, _, _, _, _, _) =>
+        {
+            Interlocked.Increment(ref roleLaunches);
+            return Task.FromException<OperationalRetryOutcome>(
+                new InvalidOperationException("No Agent role may run after the first stop."));
+        };
+        DeliveryPoolSlotRunner slotRunner = (paths, config, repository, requestedBead, token) =>
+            new DeliverySlotCoordinator(processRunner, mustNotLaunch).RunAsync(paths, config, repository, requestedBead, token);
+        using var gracefulStop = new CancellationTokenSource();
+        using var forceStop = new CancellationTokenSource();
+        var stopGate = new ContinuousStopGate();
+        var pool = new DeliveryPoolCoordinator(target.Host, project, new(target.Path, "main"), processRunner,
+            runSlot: slotRunner, stopGate: stopGate, slotLifetimeToken: forceStop.Token);
+        var noTicks = Channel.CreateUnbounded<bool>();
+        var runtime = new ContinuousDiscoveryCoordinator(
+            [new ContinuousPoolRegistration(
+                ContinuousPoolKind.Delivery,
+                async token => (await pool.EvaluateAsync(token).ConfigureAwait(false)).Diagnostics,
+                pool.CompletionReader,
+                () => { },
+                async token => { await pool.WaitForActiveSlotsAsync(token).ConfigureAwait(false); },
+                pool.WaitForCompletionAccountingAsync)],
+            _ => Task.CompletedTask,
+            TextWriter.Null,
+            TextWriter.Null,
+            token => ReadTimerTicksAsync(noTicks.Reader, token),
+            stopGate: stopGate);
+        var runtimeTask = runtime.RunAsync(gracefulStop.Token, forceStop.Token);
+
+        try
+        {
+            await processRunner.RecoverableReadinessBlocked.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+            target.RunTarget("bd", ["update", beadId, "--add-label", "needs-human", "--json"]);
+            gracefulStop.Cancel();
+            processRunner.ContinueReadinessQuery();
+
+            Assert.False(await runtimeTask.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken));
+            Assert.Empty(pool.ActiveReservations);
+            Assert.Equal(0, Volatile.Read(ref roleLaunches));
+            Assert.Null(target.FailDeliveryReleaseForBeadBeforeCommitOnce);
+            var final = target.ReadBead(beadId);
+            Assert.Equal("in_progress", final.Status);
+            Assert.Equal(project.RecoveryActor, final.Assignee);
+            Assert.True(BeadWorkflowState.Parse(final).NeedsHuman);
+            Assert.Equal("stage:implement", BeadWorkflowState.Parse(final).Stage);
+        }
+        finally
+        {
+            processRunner.ContinueReadinessQuery();
+            if (!runtimeTask.IsCompleted) gracefulStop.Cancel();
+            await runtimeTask.WaitAsync(TimeSpan.FromSeconds(90), CancellationToken.None);
+        }
+    }
+
     private static ContinuousDiscoveryCoordinator CreateClaimBoundaryRuntime(
         AgentStageTargetFixture target,
         ProjectConfig project,
@@ -1277,6 +1343,63 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
             var quiet = Task.Delay(quietPeriod, cancellationToken);
             if (await Task.WhenAny(available, quiet) == quiet) return;
             if (!await available) return;
+        }
+    }
+
+    private sealed class PostAcquireReadinessBarrierProcessRunner(IProcessRunner inner, string beadId) : IProcessRunner
+    {
+        private readonly TaskCompletionSource<bool> recoverableReadinessBlocked = NewSignal();
+        private readonly TaskCompletionSource<bool> continueReadinessQuery = NewSignal();
+        private int deliveryClaimAcquired;
+        private int readinessBarrierUsed;
+
+        internal Task RecoverableReadinessBlocked => recoverableReadinessBlocked.Task;
+
+        internal void ContinueReadinessQuery() => continueReadinessQuery.TrySetResult(true);
+
+        public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        {
+            if (request.FileName == "bd" && IsDeliveryClaimAcquire(request, beadId))
+            {
+                var result = await inner.RunAsync(request, cancellationToken).ConfigureAwait(false);
+                if (result.ExitCode == 0)
+                    Volatile.Write(ref deliveryClaimAcquired, 1);
+                return result;
+            }
+
+            if (Volatile.Read(ref deliveryClaimAcquired) != 0
+                && IsRecoverableReadiness(request)
+                && Interlocked.CompareExchange(ref readinessBarrierUsed, 1, 0) == 0)
+            {
+                recoverableReadinessBlocked.TrySetResult(true);
+                await continueReadinessQuery.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            return await inner.RunAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+
+        private static bool IsDeliveryClaimAcquire(ProcessRequest request, string expectedBeadId)
+        {
+            var updateIndex = request.Arguments.ToList().IndexOf("update");
+            return updateIndex >= 0 && updateIndex + 1 < request.Arguments.Count
+                && request.Arguments[updateIndex + 1] == expectedBeadId
+                && ArgumentAfter(request, "--if-status") == "open"
+                && ArgumentAfter(request, "--if-assignee") == string.Empty
+                && ArgumentAfter(request, "--status") == "in_progress"
+                && request.Arguments.Contains("--assignee", StringComparer.Ordinal);
+        }
+
+        private static bool IsRecoverableReadiness(ProcessRequest request) =>
+            request.FileName == "bd"
+            && request.Arguments.Contains("list", StringComparer.Ordinal)
+            && request.Arguments.Contains("--ready", StringComparer.Ordinal)
+            && ArgumentAfter(request, "--status") == "in_progress"
+            && request.Arguments.Contains("--assignee", StringComparer.Ordinal);
+
+        private static string? ArgumentAfter(ProcessRequest request, string option)
+        {
+            var index = request.Arguments.ToList().IndexOf(option);
+            return index >= 0 && index + 1 < request.Arguments.Count ? request.Arguments[index + 1] : null;
         }
     }
 

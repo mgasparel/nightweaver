@@ -204,29 +204,32 @@ internal sealed class DeliverySlotCoordinator
             var claimedReadiness = claimedSnapshot.Readiness;
             if (!claimedInventory.ById.TryGetValue(beadId, out claimed))
                 return await RefuseAfterClaimAsync(project, repository, beadId, null,
-                    "Bead disappeared after guarded claim acquisition.", null).ConfigureAwait(false);
+                    "Bead disappeared after guarded claim acquisition.", null,
+                    requiredFinalization: ContinuousAgentLaunchContext.StopRequested).ConfigureAwait(false);
 
             BeadWorkflowState claimedState;
             try { claimedState = BeadWorkflowState.Parse(claimed); }
             catch (FormatException exception)
             {
                 return await RefuseAfterClaimAsync(project, repository, beadId, claimed,
-                    $"Bead workflow became invalid after claim acquisition: {exception.Message}", null).ConfigureAwait(false);
+                    $"Bead workflow became invalid after claim acquisition: {exception.Message}", null,
+                    requiredFinalization: ContinuousAgentLaunchContext.StopRequested).ConfigureAwait(false);
             }
 
             if (claimed.Status != "in_progress"
                 || !string.Equals(claimed.Assignee, project.RecoveryActor, StringComparison.Ordinal))
                 return await RefuseAfterClaimAsync(project, repository, beadId, claimed,
                     $"Guarded claim verification failed: observed status '{claimed.Status}' and assignee '{claimed.Assignee ?? "(none)"}'.",
-                    claimedState).ConfigureAwait(false);
+                    claimedState, requiredFinalization: ContinuousAgentLaunchContext.StopRequested).ConfigureAwait(false);
             if (claimedState != (initial with { Status = "in_progress" }))
                 return await RefuseAfterClaimAsync(project, repository, beadId, claimed,
-                    "Bead type, stage, pause labels, or repair_cycles changed during claim acquisition.", claimedState)
+                    "Bead type, stage, pause labels, or repair_cycles changed during claim acquisition.", claimedState,
+                    requiredFinalization: ContinuousAgentLaunchContext.StopRequested)
                     .ConfigureAwait(false);
             if (!claimedReadiness.RecoverableOwnedReady.Contains(beadId))
                 return await RefuseAfterClaimAsync(project, repository, beadId, claimed,
                     "Bead is no longer in bd's recoverable-ready set after claim acquisition; it may have become blocked or deferred.",
-                    claimedState).ConfigureAwait(false);
+                    claimedState, requiredFinalization: ContinuousAgentLaunchContext.StopRequested).ConfigureAwait(false);
 
             var currentState = claimedState;
             if (currentState.RepairCycles > project.Limits.MaxRepairCycles)
@@ -778,7 +781,8 @@ internal sealed class DeliverySlotCoordinator
             releaseFailure = $"claim is no longer owned by '{project.RecoveryActor}' (observed '{claimed?.Assignee ?? "(none)"}'); it was left untouched";
         }
 
-        return Result(releaseFailure is not null && requiredFinalization
+        var finalizationRequired = requiredFinalization || ContinuousAgentLaunchContext.StopRequested;
+        return Result(releaseFailure is not null && finalizationRequired
                 ? DeliverySlotDisposition.Failed : DeliverySlotDisposition.Refused, state, null, null, handoff,
             releaseFailure is null ? reason : $"{reason} Claim release: {releaseFailure}.");
     }
