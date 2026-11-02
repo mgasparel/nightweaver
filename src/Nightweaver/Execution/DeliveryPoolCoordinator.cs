@@ -40,10 +40,12 @@ internal sealed record DeliveryPoolCompletion(
     DeliverySlotOutcome? Outcome,
     Exception? Exception,
     bool IsCanceled,
-    bool LocalCapacityReleased)
+    bool LocalCapacityReleased,
+    TaskCompletionSource<bool>? AccountingBarrier = null)
 {
     internal bool ClaimHandoffCompleted => Outcome?.ClaimHandoffCompleted ?? false;
     internal string? Diagnostic => Outcome?.Diagnostic ?? Exception?.Message;
+    internal bool IsAccountingBarrier => AccountingBarrier is not null;
 }
 
 internal sealed record DeliveryPoolAdmission(string BeadId, Task<DeliveryPoolCompletion> Completion);
@@ -214,6 +216,17 @@ internal sealed class DeliveryPoolCoordinator
         return await Task.WhenAll(active).WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Waits until the single completion reader has processed every completion published before this call.</summary>
+    internal async Task WaitForCompletionAccountingAsync(CancellationToken cancellationToken)
+    {
+        var accounted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var barrier = new DeliveryPoolCompletion(string.Empty, null, null, false,
+            LocalCapacityReleased: true, AccountingBarrier: accounted);
+        if (!completions.Writer.TryWrite(barrier))
+            throw new InvalidOperationException("Delivery completion channel closed before its drain accounting barrier was published.");
+        await accounted.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static List<BeadSnapshot> SelectEligible(DeliveryPoolSnapshot snapshot, List<DeliveryPoolDiagnostic> diagnostics)
     {
         var eligible = new List<BeadSnapshot>();
@@ -350,16 +363,16 @@ internal sealed class DeliveryPoolCoordinator
             failure = exception;
         }
 
+        var completion = new DeliveryPoolCompletion(reservation.BeadId, outcome, failure, canceled, LocalCapacityReleased: true);
         lock (stateGate)
         {
             reservations.Remove(reservation.BeadId);
+            // Capacity is released before notification. Keep that transition and publication under
+            // one lock so a drain cannot observe an empty reservation set before this result exists.
+            // The channel is unbounded and remains open for the pool lifetime.
+            if (!completions.Writer.TryWrite(completion))
+                throw new InvalidOperationException("Delivery completion channel closed before slot completion publication.");
+            reservation.Completion.TrySetResult(completion);
         }
-
-        var completion = new DeliveryPoolCompletion(reservation.BeadId, outcome, failure, canceled, LocalCapacityReleased: true);
-        reservation.Completion.TrySetResult(completion);
-        // The channel is intentionally unbounded and remains open for the pool lifetime. A failed
-        // write would violate the single-runtime-consumer completion contract.
-        if (!completions.Writer.TryWrite(completion))
-            throw new InvalidOperationException("Delivery completion channel closed before slot completion publication.");
     }
 }

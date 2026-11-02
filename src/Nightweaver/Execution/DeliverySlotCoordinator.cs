@@ -137,11 +137,65 @@ internal sealed class DeliverySlotCoordinator
             cancellationToken.ThrowIfCancellationRequested();
             claimAcquisitionAttempted = true;
             if (!ContinuousAgentLaunchContext.TryBeginExternalOperation(
-                    () => writer.AcquireDispatchClaimAsync(repository, beadId, project.RecoveryActor, cancellationToken),
+                    () => writer.AcquireDeliveryDispatchClaimAsync(repository, beadId, project.RecoveryActor, cancellationToken),
                     out var claimAcquisition))
                 return Result(DeliverySlotDisposition.Refused, initial, null, null, false,
                     "The continuous runtime stopped before guarded claim acquisition began; the candidate remains unclaimed.");
-            await claimAcquisition.ConfigureAwait(false);
+
+            Exception? acquisitionFailure = null;
+            try
+            {
+                await claimAcquisition.ConfigureAwait(false);
+            }
+            catch (BeadsGuardConflictException exception)
+            {
+                // Exit 13 is an authoritative no-write result. In particular, do not treat a
+                // same-actor claim as ours or release a same-actor competitor after this guard.
+                return Result(DeliverySlotDisposition.Refused, initial, null, null, false, exception.Message);
+            }
+            catch (Exception exception)
+            {
+                acquisitionFailure = exception;
+            }
+
+            if (acquisitionFailure is not null)
+            {
+                using var reconciliation = new CancellationTokenSource(ClaimFinalizationTimeout);
+                BeadSnapshot? observed;
+                try
+                {
+                    var fresh = await reader.ReadSnapshotAsync(repository, reconciliation.Token).ConfigureAwait(false);
+                    fresh.ById.TryGetValue(beadId, out observed);
+                }
+                catch (Exception exception)
+                {
+                    return Result(DeliverySlotDisposition.Failed, initial, null, null, false,
+                        $"Guarded claim acquisition returned an uncertain result ({acquisitionFailure.Message}); bounded ownership reread failed: {exception.Message}. No release was attempted.");
+                }
+
+                if (observed is null)
+                    return Result(DeliverySlotDisposition.Refused, initial, null, null, false,
+                        $"Guarded claim acquisition returned an uncertain result ({acquisitionFailure.Message}); the Bead was absent during bounded ownership reconciliation, so no claim is currently owned by this runtime. No release was attempted.");
+
+                if (observed.Status != "in_progress"
+                    || !string.Equals(observed.Assignee, project.RecoveryActor, StringComparison.Ordinal))
+                    return Result(DeliverySlotDisposition.Refused, initial, null, null, false,
+                        $"Guarded claim acquisition returned an uncertain result ({acquisitionFailure.Message}); bounded reread found no claim owned by this runtime (status '{observed.Status}', assignee '{observed.Assignee ?? "(none)"}'). No release was attempted.");
+
+                BeadWorkflowState observedState;
+                try { observedState = BeadWorkflowState.Parse(observed); }
+                catch (FormatException exception)
+                {
+                    return Result(DeliverySlotDisposition.Failed, initial, null, null, false,
+                        $"Guarded claim acquisition returned an uncertain result ({acquisitionFailure.Message}); ownership reread contained invalid workflow state: {exception.Message}. No release was attempted.");
+                }
+
+                if (observedState != (initial with { Status = "in_progress" }))
+                    return Result(DeliverySlotDisposition.Failed, observedState, null, null, false,
+                        $"Guarded claim acquisition returned an uncertain result ({acquisitionFailure.Message}); bounded reread found changed or unconfirmed ownership/workflow (status '{observed.Status}', assignee '{observed.Assignee ?? "(none)"}'). The claim was left untouched.");
+
+                claimed = observed;
+            }
             claimAcquired = true;
 
             var claimedSnapshot = await reader.ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor,
@@ -666,20 +720,54 @@ internal sealed class DeliverySlotCoordinator
             && string.Equals(claimed.Assignee, project.RecoveryActor, StringComparison.Ordinal)
             && claimed.Status is "open" or "in_progress" or "closed")
         {
-            try
+            var expectedStatus = claimed.Status;
+            var expectedReleasedStatus = expectedStatus == "in_progress" ? "open" : expectedStatus;
+            BeadWorkflowState? expectedReleasedState = null;
+            try { expectedReleasedState = BeadWorkflowState.Parse(claimed) with { Status = expectedReleasedStatus }; }
+            catch (FormatException exception) { releaseFailure = $"workflow state could not be verified before release: {exception.Message}"; }
+
+            if (releaseFailure is null)
             {
-                var expectedStatus = claimed.Status;
-                await writer.ReleaseDispatchClaimAsync(repository, beadId, project.RecoveryActor, expectedStatus, timeout.Token)
-                    .ConfigureAwait(false);
-                var released = await reader.ReadSnapshotAsync(repository, timeout.Token).ConfigureAwait(false);
-                var expectedReleasedStatus = expectedStatus == "in_progress" ? "open" : expectedStatus;
-                if (!released.ById.TryGetValue(beadId, out var finalBead) || finalBead.Assignee is not null
-                    || finalBead.Status != expectedReleasedStatus)
-                    releaseFailure = "guarded release did not verify against the fresh Beads inventory";
-                else
-                    handoff = true;
+                Exception? releaseException = null;
+                try
+                {
+                    await writer.ReleaseDispatchClaimAsync(repository, beadId, project.RecoveryActor, expectedStatus, timeout.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception exception) { releaseException = exception; }
+
+                try
+                {
+                    // A fresh read is required even when bd returned an error: the guarded write
+                    // may have committed before its process result was lost. Never replay it.
+                    var released = await reader.ReadSnapshotAsync(repository, timeout.Token).ConfigureAwait(false);
+                    if (!released.ById.TryGetValue(beadId, out var finalBead))
+                        releaseFailure = "the Bead disappeared during guarded release reconciliation";
+                    else
+                    {
+                        BeadWorkflowState? finalState = null;
+                        try { finalState = BeadWorkflowState.Parse(finalBead); }
+                        catch (FormatException exception)
+                        {
+                            releaseFailure = $"fresh release state could not be verified: {exception.Message}";
+                        }
+
+                        if (releaseFailure is null && finalBead.Status == expectedReleasedStatus && finalBead.Assignee is null
+                            && finalState == expectedReleasedState)
+                            handoff = true;
+                        else if (releaseFailure is null)
+                            releaseFailure = releaseException is null
+                                ? "guarded release did not verify against the fresh Beads inventory"
+                                : $"guarded release returned an uncertain result ({releaseException.Message}); fresh state remains status '{finalBead.Status}', assignee '{finalBead.Assignee ?? "(none)"}' and was left untouched";
+                    }
+                }
+                catch (Exception exception)
+                {
+                    releaseFailure = releaseException is null
+                        ? $"fresh ownership reread after guarded release failed: {exception.Message}"
+                        : $"guarded release returned an uncertain result ({releaseException.Message}) and fresh ownership reread failed: {exception.Message}";
+                }
             }
-            catch (Exception exception) { releaseFailure = exception.Message; }
         }
         else if (releaseFailure is null && claimed is null)
         {

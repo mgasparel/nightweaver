@@ -16,7 +16,8 @@ internal sealed record ContinuousPoolRegistration(
     Func<CancellationToken, Task<IReadOnlyList<DeliveryPoolDiagnostic>>> EvaluateAsync,
     ChannelReader<DeliveryPoolCompletion> Completions,
     Action Cancel,
-    Func<CancellationToken, Task> Drain)
+    Func<CancellationToken, Task> Drain,
+    Func<CancellationToken, Task>? WaitForCompletionAccountingAsync = null)
 {
     internal static IReadOnlyList<ContinuousPoolRegistration> Order(
         IReadOnlyList<ContinuousPoolRegistration> registrations)

@@ -424,6 +424,15 @@ public sealed class ContinuousDiscoveryCoordinatorTests
                 {
                     drainStarted.TrySetResult(true);
                     await releaseDrain.Task.WaitAsync(token);
+                    completions.Writer.TryWrite(new DeliveryPoolCompletion("failed-current-turn", null,
+                        new IOException("required finalization failed"), false, LocalCapacityReleased: true));
+                },
+                async token =>
+                {
+                    var accounted = NewSignal();
+                    completions.Writer.TryWrite(new DeliveryPoolCompletion(string.Empty, null, null, false,
+                        LocalCapacityReleased: true, AccountingBarrier: accounted));
+                    await accounted.Task.WaitAsync(token);
                 })],
             _ => Task.CompletedTask,
             output,
@@ -438,20 +447,11 @@ public sealed class ContinuousDiscoveryCoordinatorTests
         Assert.False(coordinator.RequestDiscovery());
         Assert.Equal(0, Volatile.Read(ref cancels));
 
-        completions.Writer.TryWrite(new DeliveryPoolCompletion("failed-current-turn", null,
-            new IOException("required finalization failed"), false, LocalCapacityReleased: true));
-        await WaitForCompletionReadAsync();
         releaseDrain.TrySetResult(true);
 
         Assert.False(await run.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
         Assert.Contains("failed-current-turn", output.ToString(), StringComparison.Ordinal);
         Assert.Equal(0, Volatile.Read(ref cancels));
-
-        async Task WaitForCompletionReadAsync()
-        {
-            while (!output.ToString().Contains("failed-current-turn", StringComparison.Ordinal))
-                await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
     }
 
     [Fact]

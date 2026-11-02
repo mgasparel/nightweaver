@@ -1080,14 +1080,89 @@ public abstract class AgentStageIntegrationTestSupport
         internal bool FailOutcomePublishResponseAfterCommitOnce { get; set; }
         internal bool ClaimMergerAfterQaHandoffResponseLostOnce { get; set; }
         internal bool MergerClaimedAfterQaHandoffResponseLost { get; private set; }
+        internal bool LoseDeliveryAcquireResponseAfterCommitOnce { get; set; }
+        internal bool LoseDeliveryReleaseResponseAfterCommitOnce { get; set; }
+        internal string? FailDeliveryReleaseForBeadBeforeCommitOnce { get; set; }
+        internal bool FailOwnershipRereadAfterLostDeliveryAcquireOnce { get; set; }
+        private bool failNextInventoryAfterLostDeliveryAcquire;
+        internal TaskCompletionSource<bool>? DeliveryAcquireCommitted { get; set; }
+        internal TaskCompletionSource<bool>? ContinueAfterDeliveryAcquireCommit { get; set; }
         internal string? ChangeOutcomeStateAfterEvidenceComment { get; set; }
 
         internal string Path => TargetPath;
         internal string RunTarget(string tool, IReadOnlyList<string> arguments, string? workingDirectory = null) =>
             Run(tool, arguments, workingDirectory ?? TargetPath, BeadsEnvironment);
+        internal string AgentFixtureExecutablePath => System.IO.Path.Combine(FakeCliRoot, "AgentInvocationFixture.exe");
+
+        internal IReadOnlyDictionary<string, string?> CreateRuntimeEnvironment(
+            IReadOnlyDictionary<string, string?>? overrides = null)
+        {
+            var environment = new Dictionary<string, string?>(BeadsEnvironment, StringComparer.OrdinalIgnoreCase)
+            {
+                ["PATH"] = FakeCliRoot + System.IO.Path.PathSeparator + InheritedPath
+            };
+            if (overrides is not null)
+                foreach (var (key, value) in overrides)
+                {
+                    if (value is null) environment.Remove(key);
+                    else environment[key] = value;
+                }
+            return environment;
+        }
+
+        internal void SendConsoleBreak(int processId)
+        {
+            var result = Run(AgentFixtureExecutablePath,
+                ["--nightweaver-send-control-break", processId.ToString(System.Globalization.CultureInfo.InvariantCulture)],
+                TargetPath, BeadsEnvironment);
+            if (result.Length > 0)
+                throw new InvalidOperationException($"Console Ctrl+Break helper failed for process {processId}: {result}");
+        }
+
         internal async Task<ProcessResult> RunWithFixturePullRequestAsync(IProcessRunner inner, ProcessRequest request,
             CancellationToken cancellationToken)
         {
+            if (request.FileName == "bd" && IsInventoryRead(request) && failNextInventoryAfterLostDeliveryAcquire)
+            {
+                failNextInventoryAfterLostDeliveryAcquire = false;
+                return new ProcessResult(1, string.Empty, "simulated unavailable ownership reread after lost acquire response");
+            }
+
+            if (request.FileName == "bd" && LoseDeliveryAcquireResponseAfterCommitOnce && IsDeliveryClaimAcquire(request))
+            {
+                var committed = await inner.RunAsync(request, cancellationToken);
+                if (committed.ExitCode == 0)
+                {
+                    LoseDeliveryAcquireResponseAfterCommitOnce = false;
+                    failNextInventoryAfterLostDeliveryAcquire = FailOwnershipRereadAfterLostDeliveryAcquireOnce;
+                    FailOwnershipRereadAfterLostDeliveryAcquireOnce = false;
+                    DeliveryAcquireCommitted?.TrySetResult(true);
+                    if (ContinueAfterDeliveryAcquireCommit is { } continueSignal)
+                        await continueSignal.Task.WaitAsync(cancellationToken);
+                    return new ProcessResult(1, string.Empty, "simulated lost Delivery acquire response after commit");
+                }
+                return committed;
+            }
+
+            if (request.FileName == "bd" && LoseDeliveryReleaseResponseAfterCommitOnce && IsDeliveryClaimRelease(request))
+            {
+                var committed = await inner.RunAsync(request, cancellationToken);
+                if (committed.ExitCode == 0)
+                {
+                    LoseDeliveryReleaseResponseAfterCommitOnce = false;
+                    return new ProcessResult(1, string.Empty, "simulated lost Delivery release response after commit");
+                }
+                return committed;
+            }
+
+            if (request.FileName == "bd" && FailDeliveryReleaseForBeadBeforeCommitOnce is { } failedBeadId
+                && IsDeliveryClaimRelease(request)
+                && request.Arguments.Contains(failedBeadId, StringComparer.Ordinal))
+            {
+                FailDeliveryReleaseForBeadBeforeCommitOnce = null;
+                return new ProcessResult(1, string.Empty, $"simulated required claim finalization failure for '{failedBeadId}'");
+            }
+
             if (request.FileName == "bd" && request.Arguments.Contains("comments", StringComparer.Ordinal)
                 && request.Arguments.Contains("add", StringComparer.Ordinal)
                 && request.Arguments[^1].Contains("nightweaver-delivery-outcome-v1", StringComparison.Ordinal))
@@ -1564,6 +1639,25 @@ public abstract class AgentStageIntegrationTestSupport
             var index = request.Arguments.ToList().IndexOf(option);
             return index >= 0 && index + 1 < request.Arguments.Count ? request.Arguments[index + 1] : null;
         }
+
+        private static bool IsInventoryRead(ProcessRequest request) =>
+            request.Arguments.Contains("list", StringComparer.Ordinal)
+            && request.Arguments.Contains("--all", StringComparer.Ordinal);
+
+        private static bool IsDeliveryClaimAcquire(ProcessRequest request) =>
+            request.Arguments.Contains("update", StringComparer.Ordinal)
+            && ArgumentAfter(request, "--if-status") == "open"
+            && ArgumentAfter(request, "--if-assignee") == string.Empty
+            && ArgumentAfter(request, "--status") == "in_progress"
+            && request.Arguments.Contains("--assignee", StringComparer.Ordinal)
+            && !request.Arguments.Contains("--add-label", StringComparer.Ordinal);
+
+        private static bool IsDeliveryClaimRelease(ProcessRequest request) =>
+            request.Arguments.Contains("update", StringComparer.Ordinal)
+            && ArgumentAfter(request, "--if-status") == "in_progress"
+            && ArgumentAfter(request, "--if-assignee") is not null
+            && ArgumentAfter(request, "--status") == "open"
+            && !request.Arguments.Contains("--add-label", StringComparer.Ordinal);
 
         internal string CaptureRootState()
         {

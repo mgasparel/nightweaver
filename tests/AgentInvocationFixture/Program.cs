@@ -12,9 +12,13 @@ internal static class Program
 {
     private const uint CreateNoWindow = 0x08000000;
     private const uint StartfUseStdHandles = 0x00000100;
+    private const uint ControlBreakEvent = 1;
 
     private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--nightweaver-send-control-break")
+            return SendConsoleBreak(args[1]);
+
         if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "bd", StringComparison.OrdinalIgnoreCase))
             return RunBdShim(args);
         if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "gh", StringComparison.OrdinalIgnoreCase))
@@ -110,6 +114,19 @@ internal static class Program
         using var stream = new MemoryStream();
         input.CopyTo(stream);
         var prompt = Encoding.UTF8.GetString(stream.ToArray());
+        var classifierPidPath = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_PID_FILE");
+        if (!string.IsNullOrWhiteSpace(classifierPidPath))
+        {
+            var startTime = Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks;
+            File.WriteAllText(classifierPidPath, $"{Environment.ProcessId}|{startTime}", new UTF8Encoding(false));
+        }
+        var classifierStartedFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_STARTED_FILE");
+        if (!string.IsNullOrWhiteSpace(classifierStartedFile))
+            File.WriteAllText(classifierStartedFile, Environment.GetEnvironmentVariable("NIGHTWEAVER_BEAD_ID") ?? string.Empty,
+                new UTF8Encoding(false));
+        var classifierReleaseFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_RELEASE_FILE");
+        if (!string.IsNullOrWhiteSpace(classifierReleaseFile))
+            WaitForFile(classifierReleaseFile, TimeSpan.FromMinutes(2));
         const string evidenceMarker = "Evidence JSON:\n";
         var evidenceStart = prompt.IndexOf(evidenceMarker, StringComparison.Ordinal);
         if (evidenceStart < 0) return 65;
@@ -400,6 +417,9 @@ internal static class Program
             var startTime = Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks;
             File.WriteAllText(pidPath, $"{Environment.ProcessId}|{startTime}");
         }
+        var launchLog = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_STAGE_LAUNCH_LOG");
+        if (!string.IsNullOrWhiteSpace(launchLog))
+            File.AppendAllText(launchLog, $"{beadId}|{Environment.ProcessId}{Environment.NewLine}", new UTF8Encoding(false));
 
         switch (action)
         {
@@ -644,6 +664,32 @@ internal static class Program
 
     private static void UpdateLabels(string beadId, string oldLabel, string newLabel) =>
         Run("bd", ["update", beadId, "--remove-label", oldLabel, "--add-label", newLabel]);
+
+    private static int SendConsoleBreak(string processIdText)
+    {
+        if (!OperatingSystem.IsWindows() || !uint.TryParse(processIdText, out var processId)) return 68;
+        // A console helper started under a test host may inherit its own console despite
+        // CREATE_NO_WINDOW. Detach first so it can attach to the isolated apphost console.
+        _ = FreeConsole();
+        if (!AttachConsole(processId)) return Marshal.GetLastWin32Error();
+        try
+        {
+            return GenerateConsoleCtrlEvent(ControlBreakEvent, processId) ? 0 : Marshal.GetLastWin32Error();
+        }
+        finally { _ = FreeConsole(); }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AttachConsole(uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GenerateConsoleCtrlEvent(uint controlEvent, uint processGroupId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool FreeConsole();
 
     private static bool IsAncestor(string ancestor, string descendant)
     {

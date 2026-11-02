@@ -68,7 +68,8 @@ internal static class ContinuousApplication
                 },
                 pool.CompletionReader,
                 slotLifetime.Cancel,
-                async token => { await pool.WaitForActiveSlotsAsync(token).ConfigureAwait(false); })
+                async token => { await pool.WaitForActiveSlotsAsync(token).ConfigureAwait(false); },
+                pool.WaitForCompletionAccountingAsync)
         };
         var runtime = new ContinuousDiscoveryCoordinator(
             configuredPools,

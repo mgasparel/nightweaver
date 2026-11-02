@@ -75,6 +75,24 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
         ["update", beadId, "--if-status", "open", "--if-assignee", "", "--status", "in_progress", "--assignee", actor, "--json"],
         $"acquire dispatch claim for Bead '{beadId}' as '{actor}'", cancellationToken, actor);
 
+    internal async Task AcquireDeliveryDispatchClaimAsync(ValidatedTargetRepository repository, string beadId,
+        string actor, CancellationToken cancellationToken)
+    {
+        var operation = $"acquire Delivery dispatch claim for Bead '{beadId}' as '{actor}'";
+        BeadsReader.EnsureMutationFreeBackend(repository);
+        var result = await processRunner.RunAsync(BeadsCommand.CreateWrite(repository.Path,
+            ["update", beadId, "--if-status", "open", "--if-assignee", "", "--status", "in_progress",
+                "--assignee", actor, "--json"], actor), cancellationToken).ConfigureAwait(false);
+        if (result.ExitCode == 13)
+            throw new BeadsGuardConflictException(
+                $"{operation} in Target Repository '{repository.Path}' was refused because the open/unassigned guard no longer matched (bd exited 13; no write was performed).");
+        if (result.ExitCode != 0)
+            throw new ToolExecutionException(
+                $"{operation} in Target Repository '{repository.Path}' did not return a confirmed result: bd exited {result.ExitCode}"
+                + (string.IsNullOrWhiteSpace(result.StandardError) ? string.Empty : $": {result.StandardError.TrimEnd()}"),
+                result.StandardError);
+    }
+
     internal Task ReleaseDispatchClaimAsync(ValidatedTargetRepository repository, string beadId, string actor,
         string expectedStatus, CancellationToken cancellationToken)
     {

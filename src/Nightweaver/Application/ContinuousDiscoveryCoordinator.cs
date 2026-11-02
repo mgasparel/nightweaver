@@ -121,6 +121,23 @@ internal sealed class ContinuousDiscoveryCoordinator(
             }).ToArray();
             await Task.WhenAll(drainTasks).ConfigureAwait(false);
 
+            var accountingTasks = pools
+                .Where(pool => pool.WaitForCompletionAccountingAsync is not null)
+                .Select(async pool =>
+                {
+                    try
+                    {
+                        await pool.WaitForCompletionAccountingAsync!(CancellationToken.None)
+                            .WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (Exception exception)
+                    {
+                        drained = false;
+                        error.WriteLine($"nightweaver: {pool.Kind} completion accounting did not finish after drain: {exception.Message}");
+                    }
+                }).ToArray();
+            await Task.WhenAll(accountingTasks).ConfigureAwait(false);
+
             completionReaderCancellation.Cancel();
             try
             {
@@ -188,6 +205,12 @@ internal sealed class ContinuousDiscoveryCoordinator(
     {
         await foreach (var completion in pool.Completions.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
+            if (completion.IsAccountingBarrier)
+            {
+                completion.AccountingBarrier!.TrySetResult(true);
+                continue;
+            }
+
             if (IsDrainFailure(completion))
                 Interlocked.Exchange(ref drainFailureObserved, 1);
             var result = completion.Exception is not null
