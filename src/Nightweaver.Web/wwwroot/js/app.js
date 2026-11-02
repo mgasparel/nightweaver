@@ -41,6 +41,7 @@ let attentionHasLoaded = false;
 const attentionDrafts = new Map();
 const attentionMessages = new Map();
 const attentionActions = new Set();
+const attentionActionBlocked = new Set();
 const abortConfirmations = new Set();
 
 function makeAttentionText(tagName, className, value) {
@@ -194,6 +195,7 @@ function renderAttention() {
     }
 
     const busy = attentionActions.has(item.beadId);
+    const blocked = busy || attentionActionBlocked.has(item.beadId);
     if (item.kind === "product-decision-required") {
       const form = document.createElement("div");
       form.className = "attention-guidance";
@@ -208,7 +210,7 @@ function renderAttention() {
       textarea.maxLength = 16384;
       textarea.placeholder = "Write the decision or clarification for the agent…";
       textarea.value = attentionDrafts.get(item.beadId) ?? "";
-      textarea.disabled = busy || !item.canDecide;
+      textarea.disabled = blocked || !item.canDecide;
       textarea.setAttribute("aria-describedby", `${inputId}-help`);
       textarea.addEventListener("input", () => attentionDrafts.set(item.beadId, textarea.value));
       const help = makeAttentionText("span", "field-help", "Outer whitespace is trimmed; maximum 16 KiB of UTF-8 text.");
@@ -217,9 +219,9 @@ function renderAttention() {
       actions.className = "attention-actions";
       actions.append(
         makeAttentionButton("Save Note", "secondary-action", () => void submitAttentionAction(item, "note_only", textarea.value),
-          busy || !item.canDecide),
+          blocked || !item.canDecide),
         makeAttentionButton("Send & Resume", "primary-action", () => void submitAttentionAction(item, "resume", textarea.value),
-          busy || !item.canDecide)
+          blocked || !item.canDecide)
       );
       form.append(label, textarea, help, actions);
       card.append(form);
@@ -227,12 +229,12 @@ function renderAttention() {
       const actions = document.createElement("div");
       actions.className = "attention-actions";
       actions.append(makeAttentionButton("Reset Budget & Retry", "primary-action",
-        () => void submitAttentionAction(item, "retry"), busy || !item.canRetry));
+        () => void submitAttentionAction(item, "retry"), blocked || !item.canRetry));
       const abortButton = makeAttentionButton("Abort & Close", "secondary-action", () => {
         abortConfirmations.add(item.beadId);
         renderAttention();
         cardById(item.beadId)?.querySelector(".attention-abort-cancel")?.focus();
-      }, busy || !item.canAbort);
+      }, blocked || !item.canAbort);
       actions.append(abortButton);
       card.append(actions);
 
@@ -254,11 +256,11 @@ function renderAttention() {
             abortConfirmations.delete(item.beadId);
             renderAttention();
             cardById(item.beadId)?.querySelector(".attention-abort-trigger")?.focus();
-          }, busy),
+          }, blocked),
           makeAttentionButton("Confirm Abort & Close", "danger-action", () => {
             abortConfirmations.delete(item.beadId);
             void submitAttentionAction(item, "abort");
-          }, busy)
+          }, blocked)
         );
         card.append(confirmation);
       }
@@ -308,7 +310,11 @@ async function loadAttention() {
     if (!Array.isArray(items)) throw new Error("The Attention Desk response was invalid.");
     attentionItems = items;
     attentionHasLoaded = true;
+    for (const beadId of attentionActionBlocked) {
+      if (!attentionActions.has(beadId)) attentionActionBlocked.delete(beadId);
+    }
     renderAttention();
+    if (workspaceData) renderWorkspaceGuidanceActions(workspaceData);
     if (attentionStatus) attentionStatus.textContent = items.length === 0
       ? "The Attention Desk is clear." : `${items.length} Bead${items.length === 1 ? "" : "s"} need human attention.`;
     return true;
@@ -335,12 +341,13 @@ function invalidateAttentionRead() {
 }
 
 async function submitAttentionAction(item, action, instruction = undefined) {
-  if (attentionActions.has(item.beadId)) return false;
+  if (attentionActions.has(item.beadId) || attentionActionBlocked.has(item.beadId)) return false;
   const focusedCardId = document.activeElement instanceof HTMLElement
     ? document.activeElement.closest(".attention-card")?.dataset.beadId : undefined;
   const actionStartedOnCard = focusedCardId === item.beadId;
   let focusAfterRender = null;
   let actionSucceeded = false;
+  attentionActionBlocked.add(item.beadId);
   attentionActions.add(item.beadId);
   invalidateAttentionRead();
   const card = cardById(item.beadId);
@@ -397,7 +404,8 @@ async function submitAttentionAction(item, action, instruction = undefined) {
       attentionMessages.delete(item.beadId);
       abortConfirmations.delete(item.beadId);
     }
-    await loadAttention();
+    const attentionRefreshed = await loadAttention();
+    if (attentionRefreshed) attentionActionBlocked.delete(item.beadId);
     await loadBeads();
     if (action === "note_only")
       focusAfterRender = "guidance";
@@ -407,11 +415,13 @@ async function submitAttentionAction(item, action, instruction = undefined) {
     attentionMessages.set(item.beadId, error instanceof Error ? error.message : "The action could not be confirmed. Refresh before retrying.");
     if (attentionStatus) attentionStatus.textContent = `Action for ${item.beadId} needs attention.`;
     focusAfterRender = "message";
-    await Promise.allSettled([
+    const refreshResults = await Promise.allSettled([
       loadAttention(),
       loadBeads(),
       workspaceCurrentId === item.beadId ? loadWorkspace(item.beadId, { manual: true }) : Promise.resolve(false)
     ]);
+    if (refreshResults[0]?.status === "fulfilled" && refreshResults[0].value === true)
+      attentionActionBlocked.delete(item.beadId);
   } finally {
     const activeElement = document.activeElement;
     const activeCardId = activeElement instanceof HTMLElement
@@ -1136,7 +1146,7 @@ function renderWorkspaceGuidanceActions(data) {
   const attention = data.attention;
   const beadId = data.bead.id;
   const busy = attentionActions.has(beadId);
-  const blocked = workspaceIsStale || workspaceActionBlocked || busy;
+  const blocked = workspaceIsStale || workspaceActionBlocked || attentionActionBlocked.has(beadId) || busy;
   const decision = attention?.kind === "product-decision-required";
   const needsHuman = attention?.kind === "needs-human";
   const guidanceLabel = document.querySelector('label[for="workspace-guidance-input"]');
@@ -1306,7 +1316,8 @@ async function loadWorkspace(id, { manual = false } = {}) {
 async function submitWorkspaceAction(action) {
   const data = workspaceData;
   if (!data || data.bead.id !== workspaceCurrentId || !data.attention
-    || workspaceIsStale || workspaceActionBlocked || attentionActions.has(data.bead.id)) return;
+    || workspaceIsStale || workspaceActionBlocked || attentionActionBlocked.has(data.bead.id)
+    || attentionActions.has(data.bead.id)) return;
   const beadId = data.bead.id;
   const item = data.attention;
   let instruction;

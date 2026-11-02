@@ -33,6 +33,7 @@ page.on('request', request => {
 
 let failDetailId = null;
 let failActionId = null;
+let failAttentionReads = 0;
 let delayedDetailId = null;
 let delayedActionId = null;
 let releaseDetail;
@@ -74,6 +75,15 @@ await page.route('**/api/beads/**', async route => {
     delayedActionSeen();
     await delayedActionGate;
     try { await route.fulfill({ response }); } catch { /* The page can move on while the real write is pending. */ }
+    return;
+  }
+  return route.continue();
+});
+
+await page.route('**/api/attention', async route => {
+  if (failAttentionReads > 0) {
+    failAttentionReads--;
+    await route.fulfill({ status: 503, contentType: 'application/problem+json', body: JSON.stringify({ title: 'Fixture unavailable', detail: 'The Attention Desk could not be refreshed. Retry to try again.' }) });
     return;
   }
   return route.continue();
@@ -185,6 +195,42 @@ try {
   await page.locator('a[href="#attention"]').first().click();
   const attentionCard = page.locator('#attention-cards .attention-card').filter({ hasText: 'QA product decision' });
   await attentionCard.waitFor({ timeout: 15000 });
+
+  // Failed action plus failed automatic/manual Attention reads keeps the stale Desk card blocked.
+  const attentionGuidance = attentionCard.locator('textarea');
+  await attentionGuidance.fill('Keep this Attention Desk draft.');
+  failActionId = decisionId;
+  interceptedActionCount = 0;
+  failAttentionReads = 1;
+  await attentionCard.getByRole('button', { name: 'Send & Resume' }).click();
+  await attentionCard.locator('.attention-card-message').getByText('The QA action could not be confirmed.', { exact: true }).waitFor();
+  await page.locator('#attention-error').waitFor({ state: 'visible' });
+  check(interceptedActionCount === 1 && await attentionGuidance.inputValue() === 'Keep this Attention Desk draft.'
+    && await attentionGuidance.isDisabled()
+    && await attentionCard.getByRole('button', { name: 'Send & Resume' }).isDisabled()
+    && await attentionCard.getByRole('button', { name: 'Save Note' }).isDisabled(),
+  'The Attention Desk left stale actions enabled or lost the draft/message after its automatic refresh failed.');
+
+  failAttentionReads = 1;
+  await page.locator('#attention-refresh').click();
+  await page.locator('#attention-error').waitFor({ state: 'visible' });
+  check(await attentionGuidance.isDisabled() && await attentionCard.getByRole('button', { name: 'Send & Resume' }).isDisabled()
+    && interceptedActionCount === 1, 'A failed manual Attention refresh re-enabled a stale action or reposted it.');
+
+  await page.locator('#attention-refresh').click();
+  await page.waitForFunction(id => {
+    const card = Array.from(document.querySelectorAll('#attention-cards .attention-card'))
+      .find(element => element.dataset.beadId === id);
+    return card && !card.querySelector('textarea')?.disabled
+      && Array.from(card.querySelectorAll('button')).every(button => !button.disabled);
+  }, decisionId);
+  check(await attentionGuidance.inputValue() === 'Keep this Attention Desk draft.'
+    && await attentionCard.locator('.attention-card-message').getByText('The QA action could not be confirmed.', { exact: true }).isVisible()
+    && interceptedActionCount === 1,
+  'A successful Attention refresh did not preserve the draft/failure message or the failed action was reposted.');
+  failActionId = null;
+  console.log('PASS: Attention Desk actions stay blocked across failed automatic/manual refreshes and unblock after a successful current read without reposting or losing draft/message.');
+
   await attentionCard.getByRole('link', { name: 'Open Full Bead Workspace' }).click();
   await waitForTitle('QA product decision');
 
@@ -365,6 +411,9 @@ try {
   check(failures.length === 0, `Browser reported page exceptions:\n${failures.join('\n')}`);
   const expectedBrowserErrors = [
     { method: 'POST', path: `/api/beads/${decisionId}/decide`, status: 503 },
+    { method: 'POST', path: `/api/beads/${decisionId}/decide`, status: 503 },
+    { method: 'GET', path: '/api/attention', status: 503 },
+    { method: 'GET', path: '/api/attention', status: 503 },
     { method: 'GET', path: `/api/beads/${decisionId}-again`, status: 404 },
     { method: 'GET', path: '/api/beads/qa-missing-workspace-fixture', status: 404 },
     { method: 'GET', path: `/api/beads/${secondDecisionId}`, status: 503 }
@@ -377,7 +426,7 @@ try {
     `Unexpected browser console errors (the expected 404/503 responses are retained as evidence): ${JSON.stringify(consoleFailures)}.`);
   check(externalRequests.length === 0, `Browser attempted unexpected remote requests: ${externalRequests.join(', ')}.`);
   console.log(`Expected browser error evidence: ${JSON.stringify({ responses: browserErrorResponses, console: consoleFailures })}.`);
-  console.log(`Workspace Playwright QA passed: Explorer/Attention/direct/back-forward navigation, desktop/mobile layout, active history/source controls, Markdown security and no remote loads, route/action race guards, route metadata clearing, stale/error recovery, draft/chip handling, note/resume/retry/confirmed-abort. Geometry: ${JSON.stringify(geometryEvidence)}. IDs: ${JSON.stringify({ decisionId, secondDecisionId, markdownId, needsHumanId, abortId })}.`);
+  console.log(`Workspace Playwright QA passed: Explorer/Attention/direct/back-forward navigation, stale Attention action blocking/recovery, desktop/mobile layout, active history/source controls, Markdown security and no remote loads, route/action race guards, route metadata clearing, stale/error recovery, draft/chip handling, note/resume/retry/confirmed-abort. Geometry: ${JSON.stringify(geometryEvidence)}. IDs: ${JSON.stringify({ decisionId, secondDecisionId, markdownId, needsHumanId, abortId })}.`);
 } finally {
   releaseDetail();
   releaseAction();
