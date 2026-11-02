@@ -12,6 +12,7 @@ internal static class ContinuousApplication
         CliOptions options,
         AppEnvironment environment,
         IProcessRunner processRunner,
+        RuntimeShutdownSignals? shutdownSignals,
         CancellationToken cancellationToken)
     {
         var selector = options.Selector ?? throw new InvalidOperationException("A Project selector is required");
@@ -47,9 +48,13 @@ internal static class ContinuousApplication
         foreach (var diagnostic in cleanupDiagnostics)
             environment.Err.WriteLine($"nightweaver: startup cleanup retained '{diagnostic.BeadId}' at '{diagnostic.Path}': {diagnostic.Reason}");
 
-        using var slotLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var slotLifetime = new CancellationTokenSource();
+        var forceStopToken = shutdownSignals?.ForceStopToken ?? CancellationToken.None;
+        using var forceStopRegistration = forceStopToken.Register(slotLifetime.Cancel);
+        var stopGate = shutdownSignals?.StopGate ?? new ContinuousStopGate();
         var pool = new DeliveryPoolCoordinator(hostPaths, project, repository, processRunner,
-            slotLifetimeToken: slotLifetime.Token);
+            slotLifetimeToken: slotLifetime.Token,
+            stopGate: stopGate);
         var configuredPools = new[]
         {
             new ContinuousPoolRegistration(
@@ -76,11 +81,12 @@ internal static class ContinuousApplication
             environment.Err,
             journalWatcher: (requestDiscovery, token) => new BeadsJournalWatcher(
                 new BeadsJournalClient(processRunner), requestDiscovery, environment.Err)
-                .RunAsync(repository, token));
+                .RunAsync(repository, token),
+            stopGate: stopGate);
 
         environment.Out.WriteLine($"Continuous Delivery runtime starting for Project '{project.Name.Value}' and Target Repository '{repository.Path}'.");
         environment.Out.WriteLine($"Delivery capacity: {pool.CapacityLimit}; periodic discovery: 30 seconds; press Ctrl+C to stop.");
-        var drained = await runtime.RunAsync(cancellationToken).ConfigureAwait(false);
+        var drained = await runtime.RunAsync(cancellationToken, forceStopToken).ConfigureAwait(false);
         return drained ? ExitCodes.Success : ExitCodes.InspectionFailure;
     }
 

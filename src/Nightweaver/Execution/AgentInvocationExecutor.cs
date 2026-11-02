@@ -91,6 +91,7 @@ internal sealed class AgentInvocationExecutor
         AgentExecutionStatus? status = null;
         int? exitCode = null;
         var cancelled = false;
+        var launchDenied = false;
 
         try
         {
@@ -106,14 +107,19 @@ internal sealed class AgentInvocationExecutor
 
             // The role wall-clock budget starts immediately before native launch and includes prompt delivery.
             var launchStarted = Stopwatch.GetTimestamp();
-            child = processLauncher is null
-                ? WindowsProcessLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment)
-                : processLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment);
-            rootExit = child.WaitForRootExitAsync();
+            if (!ContinuousAgentLaunchContext.TryLaunch(() =>
+                {
+                    child = processLauncher is null
+                        ? WindowsProcessLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment)
+                        : processLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment);
+                }))
+                throw new AgentLaunchDeniedException();
+            var launchedChild = child ?? throw new InvalidOperationException("Native Agent launch completed without returning its process handle.");
+            rootExit = launchedChild.WaitForRootExitAsync();
             logGate = new SemaphoreSlim(1, 1);
-            stdoutPump = PumpOutputAsync(child.StandardOutput, runtimeFiles.LogStream, logGate, stdoutCapture);
-            stderrPump = PumpOutputAsync(child.StandardError, runtimeFiles.LogStream, logGate);
-            stdinWrite = WriteInputAndCloseAsync(child.StandardInput, Encoding.UTF8.GetBytes(invocation.StandardInput));
+            stdoutPump = PumpOutputAsync(launchedChild.StandardOutput, runtimeFiles.LogStream, logGate, stdoutCapture);
+            stderrPump = PumpOutputAsync(launchedChild.StandardError, runtimeFiles.LogStream, logGate);
+            stdinWrite = WriteInputAndCloseAsync(launchedChild.StandardInput, Encoding.UTF8.GetBytes(invocation.StandardInput));
 
             var outcome = await WaitForOutcomeAsync(rootExit, stdinWrite, stdoutPump, stderrPump,
                 invocation.Timeout, launchStarted, cancellationToken).ConfigureAwait(false);
@@ -123,6 +129,10 @@ internal sealed class AgentInvocationExecutor
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             cancelled = true;
+        }
+        catch (AgentLaunchDeniedException)
+        {
+            launchDenied = true;
         }
         catch (Exception exception)
         {
@@ -179,6 +189,9 @@ internal sealed class AgentInvocationExecutor
 
         if (primaryFailure is not null)
             throw CreateDiagnostic(invocation, primaryFailure, Describe(primaryFailure));
+
+        if (launchDenied)
+            throw new AgentLaunchDeniedException();
 
         if (cancellationToken.IsCancellationRequested) cancelled = true;
         if (cancelled) throw new OperationCanceledException("Agent invocation was cancelled after its process tree was terminated.", cancellationToken);

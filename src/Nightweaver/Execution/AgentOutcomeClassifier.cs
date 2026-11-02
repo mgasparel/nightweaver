@@ -263,6 +263,7 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
             Exception? executionFailure = null;
             try
             {
+                using var classifierLaunch = ContinuousAgentLaunchContext.PermitOutcomeClassifier();
                 captured = await executeFallback(hostPaths, project.Name, invocation,
                     MaximumFallbackOutputBytes, cancellationToken).ConfigureAwait(false);
             }

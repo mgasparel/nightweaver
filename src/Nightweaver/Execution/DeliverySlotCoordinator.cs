@@ -136,8 +136,12 @@ internal sealed class DeliverySlotCoordinator
 
             cancellationToken.ThrowIfCancellationRequested();
             claimAcquisitionAttempted = true;
-            await writer.AcquireDispatchClaimAsync(repository, beadId, project.RecoveryActor, cancellationToken)
-                .ConfigureAwait(false);
+            if (!ContinuousAgentLaunchContext.TryBeginExternalOperation(
+                    () => writer.AcquireDispatchClaimAsync(repository, beadId, project.RecoveryActor, cancellationToken),
+                    out var claimAcquisition))
+                return Result(DeliverySlotDisposition.Refused, initial, null, null, false,
+                    "The continuous runtime stopped before guarded claim acquisition began; the candidate remains unclaimed.");
+            await claimAcquisition.ConfigureAwait(false);
             claimAcquired = true;
 
             var claimedSnapshot = await reader.ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor,
@@ -179,17 +183,24 @@ internal sealed class DeliverySlotCoordinator
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (ContinuousAgentLaunchContext.StopRequested && !executionStarted)
+                    return await RefuseAfterClaimAsync(project, repository, beadId, null,
+                        "The continuous runtime stopped before an Agent launched; unfinished work was retained.", currentState,
+                        requiredFinalization: true)
+                        .ConfigureAwait(false);
                 if (!TrySelectRole(currentState, out var role))
                     return Result(DeliverySlotDisposition.StoppedAtUnsupportedOutcome, currentState, lastRole, lastStage,
                         false, $"Delivery slot cannot continue from verified stage '{currentState.Stage ?? "(none)"}'.");
 
                 lastRole = role;
-                executionStarted = true;
                 lastStage = null;
+                if (!ContinuousAgentLaunchContext.IsActive)
+                    executionStarted = true;
                 try
                 {
                     lastStage = await runRole(paths, project, repository, beadId, role, project.RecoveryActor,
                         currentState, cancellationToken, progress).ConfigureAwait(false);
+                    executionStarted = ContinuousAgentLaunchContext.HasCurrentSlotLaunchedAgent || !ContinuousAgentLaunchContext.IsActive;
                 }
                 catch (OperationalRetryEscalationIncompleteException exception)
                 {
@@ -218,6 +229,18 @@ internal sealed class DeliverySlotCoordinator
                     var handoff = escalation is { Succeeded: true, ClaimReleased: true };
                     return Result(DeliverySlotDisposition.Escalated, null, role, lastStage, handoff,
                         handoff ? null : "Operational retry escalation returned without a verified claim handoff.");
+                }
+
+                if (ContinuousAgentLaunchContext.StopRequested
+                    && lastStage.StageResult.PublicationReceipt?.ClaimReleased != true)
+                {
+                    var finalized = await RefuseAfterClaimAsync(project, repository, beadId, null,
+                        "The continuous runtime stopped after the current turn settled; no next role or retry was started and unfinished work was retained.",
+                        lastStage.StageResult.VerifiedState ?? currentState, requiredFinalization: true).ConfigureAwait(false);
+                    return lastStage.Status == OperationalRetryStatus.StoppedForDrain
+                        || !lastStage.StageResult.Succeeded
+                        ? finalized with { Disposition = DeliverySlotDisposition.Failed }
+                        : finalized;
                 }
 
                 if (lastStage.StageResult.Role != role || lastStage.StageResult.BeadId != beadId)
@@ -363,6 +386,7 @@ internal sealed class DeliverySlotCoordinator
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            executionStarted |= ContinuousAgentLaunchContext.HasCurrentSlotLaunchedAgent;
             if (claimAcquired && !executionStarted)
                 return await RefuseAfterClaimAsync(project, repository, beadId, claimed,
                     "Delivery slot was cancelled before role execution.", null).ConfigureAwait(false);
@@ -374,8 +398,28 @@ internal sealed class DeliverySlotCoordinator
                     ? "Delivery slot was cancelled after role execution began; no follow-on role or blind claim release was attempted."
                     : "Delivery slot was cancelled before guarded claim acquisition completed; inspect claim ownership before retrying.");
         }
+        catch (AgentLaunchDeniedException exception)
+        {
+            executionStarted = ContinuousAgentLaunchContext.HasCurrentSlotLaunchedAgent;
+            if (claimAcquired)
+                return await RefuseAfterClaimAsync(project, repository, beadId, null,
+                    $"The continuous runtime stopped before the next Agent launch; unfinished work was retained. {exception.Message}",
+                    initial, requiredFinalization: true).ConfigureAwait(false);
+            if (claimAcquisitionAttempted)
+                return Result(DeliverySlotDisposition.Refused, initial, lastRole, lastStage, false,
+                    "The continuous runtime stopped before guarded claim acquisition was confirmed; ownership remains uncertain.");
+            return Result(DeliverySlotDisposition.Refused, initial, lastRole, lastStage, false, exception.Message);
+        }
         catch (Exception exception)
         {
+            if (claimAcquired && ContinuousAgentLaunchContext.StopRequested)
+            {
+                var finalized = await RefuseAfterClaimAsync(project, repository, beadId, null,
+                    $"The continuous runtime stopped while the current turn failed: {exception.Message}", initial,
+                    requiredFinalization: true)
+                    .ConfigureAwait(false);
+                return finalized with { Disposition = DeliverySlotDisposition.Failed };
+            }
             if (claimAcquired && !executionStarted)
                 return await RefuseAfterClaimAsync(project, repository, beadId, claimed,
                     $"Delivery admission failed: {exception.Message}", null).ConfigureAwait(false);
@@ -602,7 +646,8 @@ internal sealed class DeliverySlotCoordinator
         string beadId,
         BeadSnapshot? claimed,
         string reason,
-        BeadWorkflowState? state)
+        BeadWorkflowState? state,
+        bool requiredFinalization = false)
     {
         string? releaseFailure = null;
         using var timeout = new CancellationTokenSource(ClaimFinalizationTimeout);
@@ -645,7 +690,8 @@ internal sealed class DeliverySlotCoordinator
             releaseFailure = $"claim is no longer owned by '{project.RecoveryActor}' (observed '{claimed?.Assignee ?? "(none)"}'); it was left untouched";
         }
 
-        return Result(DeliverySlotDisposition.Refused, state, null, null, handoff,
+        return Result(releaseFailure is not null && requiredFinalization
+                ? DeliverySlotDisposition.Failed : DeliverySlotDisposition.Refused, state, null, null, handoff,
             releaseFailure is null ? reason : $"{reason} Claim release: {releaseFailure}.");
     }
 

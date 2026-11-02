@@ -1,4 +1,5 @@
 using Nightweaver.Inspection;
+using Nightweaver.Application;
 
 namespace Nightweaver;
 
@@ -6,11 +7,11 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
-        using var cancellation = new CancellationTokenSource();
+        using var shutdownSignals = new RuntimeShutdownSignals();
         ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
         {
             eventArgs.Cancel = true;
-            cancellation.Cancel();
+            shutdownSignals.RequestStop();
         };
 
         Console.CancelKeyPress += cancelHandler;
@@ -22,11 +23,13 @@ internal static class Program
                 Console.Out,
                 Console.Error);
 
-            return await NightweaverApp.RunAsync(args, environment, new SystemProcessRunner(), cancellation.Token);
+            return await NightweaverApp.RunAsync(args, environment, new SystemProcessRunner(),
+                shutdownSignals, shutdownSignals.FirstStopToken);
         }
         finally
         {
             Console.CancelKeyPress -= cancelHandler;
         }
     }
+
 }

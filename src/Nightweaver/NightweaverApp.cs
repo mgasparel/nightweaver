@@ -6,10 +6,18 @@ namespace Nightweaver;
 
 internal static class NightweaverApp
 {
+    internal static Task<int> RunAsync(
+        IReadOnlyList<string> args,
+        AppEnvironment environment,
+        IProcessRunner processRunner,
+        CancellationToken cancellationToken) =>
+        RunAsync(args, environment, processRunner, null, cancellationToken);
+
     internal static async Task<int> RunAsync(
         IReadOnlyList<string> args,
         AppEnvironment environment,
         IProcessRunner processRunner,
+        RuntimeShutdownSignals? shutdownSignals,
         CancellationToken cancellationToken)
     {
         var dispatchCommand = args.Count > 0 && args[0] == "dispatch";
@@ -31,7 +39,7 @@ internal static class NightweaverApp
                 return ExitCodes.Success;
             }
 
-            return await ContinuousApplication.RunAsync(options, environment, processRunner, cancellationToken);
+            return await ContinuousApplication.RunAsync(options, environment, processRunner, shutdownSignals, cancellationToken);
         }
         catch (UsageException exception)
         {

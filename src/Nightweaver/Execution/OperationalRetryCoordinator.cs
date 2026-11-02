@@ -6,7 +6,8 @@ namespace Nightweaver.Execution;
 internal enum OperationalRetryStatus
 {
     Succeeded,
-    Escalated
+    Escalated,
+    StoppedForDrain
 }
 
 internal enum OperationalRetryProgressKind
@@ -171,11 +172,16 @@ internal sealed class OperationalRetryCoordinator
             expectedAssignee, attemptCount, cancellationToken).ConfigureAwait(false);
         if (unsafeDeliveryAttempt is not null) return unsafeDeliveryAttempt;
 
+        if (ContinuousAgentLaunchContext.StopRequested)
+            return StoppedForDrain(latest, attemptCount);
+
         AgentStageResult previous = latest;
         DuplicateFailureClassificationResult? lastClassification = null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (ContinuousAgentLaunchContext.StopRequested)
+                return StoppedForDrain(latest, attemptCount, lastClassification);
             if (attemptCount >= maximumAttempts)
             {
                 var findings = RetryFindings(attemptCount, retries, latest, lastClassification,
@@ -195,6 +201,8 @@ internal sealed class OperationalRetryCoordinator
 
             if (attemptCount >= 2)
             {
+                if (ContinuousAgentLaunchContext.StopRequested)
+                    return StoppedForDrain(latest, attemptCount, lastClassification);
                 // Compare adjacent failures with the original stage identity. The current failed
                 // worktree and settled logs are still present at this point.
                 progress?.Invoke(new(OperationalRetryProgressKind.ClassifierStarted, attemptCount, maximumAttempts,
@@ -229,14 +237,16 @@ internal sealed class OperationalRetryCoordinator
             ProvisionedWorktree resetWorktree;
             try
             {
+                if (!ContinuousAgentLaunchContext.TryBeginExternalOperation(
+                        () => session.PreserveInheritedChanges
+                            ? resetter.PreserveAsync(paths, project.Name, repository, beadId, session.Purpose, cancellationToken)
+                            : reset(paths, project.Name, repository, beadId, session.Purpose, cancellationToken),
+                        out var resetTask))
+                    return StoppedForDrain(latest, attemptCount, lastClassification);
                 progress?.Invoke(new(OperationalRetryProgressKind.RetryPreparing, attemptCount + 1, maximumAttempts,
                     latest.Failure!.Kind, latest.Failure.Reason, InvocationId: latest.InvocationId,
                     LogFilePath: latest.LogFilePath));
-                resetWorktree = session.PreserveInheritedChanges
-                    ? await resetter.PreserveAsync(paths, project.Name, repository, beadId, session.Purpose, cancellationToken)
-                        .ConfigureAwait(false)
-                    : await reset(paths, project.Name, repository, beadId, session.Purpose, cancellationToken)
-                        .ConfigureAwait(false);
+                resetWorktree = await resetTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException) { throw; }
             catch (ToolExecutionException exception)
@@ -279,6 +289,12 @@ internal sealed class OperationalRetryCoordinator
             if (unsafeDeliveryAttempt is not null) return unsafeDeliveryAttempt;
         }
     }
+
+    private static OperationalRetryOutcome StoppedForDrain(
+        AgentStageResult latest,
+        long attempts,
+        DuplicateFailureClassificationResult? classification = null) =>
+        new(OperationalRetryStatus.StoppedForDrain, latest, attempts, null, null, classification);
 
     private async Task<OperationalRetryOutcome?> EscalateUnsafeDeliveryAttemptAsync(
         AgentStageSession session,

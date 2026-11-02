@@ -336,7 +336,11 @@ public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTe
         var outcome = await target.RunDeliverySlotAsync(bead, [(role, action)], observations,
             maxRepairCycles: int.MaxValue);
 
-        Assert.Equal(DeliverySlotDisposition.Escalated, outcome.Disposition);
+        Assert.True(outcome.Disposition == DeliverySlotDisposition.Escalated,
+            $"Expected Escalated; actual {outcome.Disposition}. Diagnostic: {outcome.Diagnostic ?? "(none)"}; escalation failures: "
+            + $"{(outcome.EscalationProgress is { } escalation ? string.Join("; ", escalation.Failures) : "(none)")}; "
+            + $"last stage: {outcome.LastStage?.Status}; "
+            + $"last stage failure: {outcome.LastStage?.StageResult.Failure?.Reason ?? "(none)"}");
         Assert.Equal(NeedsHumanCause.DeliveryOutcomeFailure, outcome.LastStage?.EscalationCause);
         Assert.True(outcome.ClaimReleased);
         Assert.Equal([role], target.LastSlotRoles);

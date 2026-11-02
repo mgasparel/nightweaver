@@ -52,6 +52,22 @@ public sealed class AgentInvocationExecutorTests
     }
 
     [Fact]
+    public async Task GracefulStopDeniesNativeLaunchAfterPreparingInvocationFiles()
+    {
+        using var fixture = new ExecutionFixture();
+        var invocation = fixture.Invocation("inspect", "payload");
+        var launcher = new CountingProcessLauncher();
+        var gate = new ContinuousStopGate();
+        using var slot = ContinuousAgentLaunchContext.Enter(gate);
+        gate.RequestStop();
+
+        await Assert.ThrowsAsync<AgentLaunchDeniedException>(() => AgentInvocationExecutor.ExecuteAsync(
+            fixture.Paths, fixture.Project, invocation, launcher, TestContext.Current.CancellationToken));
+
+        Assert.Equal(0, launcher.LaunchCount);
+    }
+
+    [Fact]
     public async Task DeliversExactUtf8ClosesStdinSetsCwdAndOverlaysOnlyRuntimeEnvironment()
     {
         using var fixture = new ExecutionFixture();
@@ -539,6 +555,22 @@ public sealed class AgentInvocationExecutorTests
             .ToString("yyyyMMdd'T'HHmmssfffffff'Z'", CultureInfo.InvariantCulture) + "-implementer";
 
         public void Dispose() => Temp.Dispose();
+    }
+
+    private sealed class CountingProcessLauncher : IAgentProcessLauncher
+    {
+        private int launchCount;
+
+        internal int LaunchCount => Volatile.Read(ref launchCount);
+
+        public string ResolveExecutable(string name, IReadOnlyDictionary<string, string> environment) => name;
+
+        public WindowsProcessLauncher.WindowsAgentProcess Launch(string executable, IReadOnlyList<string> arguments,
+            string workingDirectory, IReadOnlyDictionary<string, string> environment)
+        {
+            Interlocked.Increment(ref launchCount);
+            throw new InvalidOperationException("The gated test must not invoke the process launcher.");
+        }
     }
 
     [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode,

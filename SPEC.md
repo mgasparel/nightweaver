@@ -241,6 +241,14 @@ flowchart TD
     Reserve --> Slot[Prepare and run slot independently]
     Slot --> Complete[Release local capacity and publish completion]
     Complete --> Discover
+    FirstStop[First Ctrl+C] --> StopGate[Atomically close admission and Agent launch]
+    StopGate -. rejects .-> Reserve
+    StopGate -. rejects .-> Slot
+    Slot --> Drain[Settle preparation and drain launched turns]
+    Drain --> Record[Verify, classify current outcome, and record guarded result]
+    Record -->|no completed handoff| Finalize[Release only confirmed owned claim; retain unfinished work]
+    Record -->|handoff confirmed| Complete
+    SecondStop[Second Ctrl+C] --> ForceCancel[Cancel active invocations and interrupt drain]
     JournalTail[Best-effort Target Repository journal tail] -. event hint .-> Discover
     JournalTail -->|termination or truncation| Reconnect[Request discovery and reconnect with capped backoff]
     Reconnect --> JournalTail
@@ -253,6 +261,7 @@ flowchart TD
 3. Every pass reads fresh inventory and native readiness. A failed tracker read admits no work from a prior snapshot and waits for a later timer or completion trigger; it does not retry in a tight loop. Discovery does not perform no-op tracker writes.
 4. The watcher follows the configured Project's actual Target Repository. Journal records, including Orchestrator-authored events, are wake-up hints only; duplicate or old records are harmless, and fresh tracker reads—not event payloads or counts—establish eligibility. Unexpected tail termination or truncation requests discovery and reconnects with exponential backoff capped at 30 seconds. Truncation discards the obsolete in-memory sequence and resumes after the reported head. Timer and completion triggers stay active throughout reconnect, and stream failure alone does not stop admission or running Agents. No durable cursor or replay ledger is kept.
 5. Ordinary comments, notes, description edits, and audit history do not resume paused Beads. Only a successful guarded Attention Desk Resume or Retry state update makes the persisted Bead eligible for ordinary scheduling.
+6. The first `Ctrl+C` closes reservation and synchronous native-launch boundaries under one stop gate, then stops discovery helpers. Work already preparing settles without launching; an Agent already launched can finish deterministic verification, bounded outcome classification including its permitted fallback, and guarded result recording under its normal role timeout. The runtime starts no next role, operational retry, duplicate-failure classifier, or retry-only environment reset. It finalizes claims only after rereading confirmed current ownership, retains unfinished work and pauses, and drains all slots independently. There is no fixed two-minute cutoff. A failed current turn or required finalization/reread returns an unsuccessful shutdown after the other slots drain. A second signal cancels active invocations and interrupts graceful drain; direct Job Object closure with no cleanup wait remains a later integration.
 
 ### 5.2 Three Concurrency Pools & Planning Backpressure
 
@@ -442,8 +451,8 @@ Each **Project** configuration binds one **Target Repository** to the **Orchestr
    - `--dry-run`: Runs read-only startup recovery inspection and initial discovery projection without acquiring recovery authority, mutating `bd`, creating/removing worktrees, or launching **Agents**, then exits.
    - `dispatch <bead-id>` continues to run exactly one explicitly selected lifecycle stage.
 2. **Two-Mode Shutdown**:
-   - The current Delivery runtime handles `Ctrl+C` by stopping new discovery, canceling active slots, and waiting up to two minutes for local slot completion before exit. An unsuccessful drain is reported; it does not assume tracker claim release succeeded. Startup recovery handles exact Nightweaver-owned claims on the next run.
-   - A distinct second-signal force-shutdown policy and equivalent Unix process-tree containment are future work.
+   - The first `Ctrl+C` closes new slot reservations and actual native Agent-launch boundaries before stopping discovery helpers. Preparation already in flight settles without launching. Running Agent invocations keep their normal per-role timeout and can finish verification, bounded outcome classification/fallback, and guarded result recording. No next role, operational retry, duplicate-failure classifier, or retry-only reset starts. The Orchestrator finalizes each slot through one responsibility path, rereads uncertain ownership writes, releases only confirmed owned claims, retains unfinished and paused work, and waits for all slots without a fixed two-minute cutoff. Individual failures are reported while other slots drain; failed turns and required tracker-write/reread or unresolved finalization failures make shutdown unsuccessful.
+   - A second `Ctrl+C` cancels active invocation tokens and interrupts graceful drain. Direct Job Object closure and prompt process exit without cleanup waits remain the separate `ns-jbp.10` integration. Startup recovery handles exact Nightweaver-owned claims after a process interruption.
 
 ---
 

@@ -55,6 +55,10 @@ public sealed class AgentOutcomeClassifierTests
     public async Task InvalidPrimaryUsesExactlyOneFallbackWithTheSameNamedQuestionChoicesAndEvidence()
     {
         using var fixture = new OutcomeFixture();
+        var stopGate = new ContinuousStopGate();
+        using var launchContext = ContinuousAgentLaunchContext.Enter(stopGate);
+        Assert.True(ContinuousAgentLaunchContext.TryLaunch(static () => { }));
+        stopGate.RequestStop();
         var primaryCalls = 0;
         var fallbackCalls = 0;
         string? primaryEvidence = null;
@@ -75,6 +79,8 @@ public sealed class AgentOutcomeClassifierTests
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 fallbackCalls++;
+                Assert.True(ContinuousAgentLaunchContext.TryLaunch(static () => { }),
+                    "The current launched turn may start its bounded outcome fallback during drain.");
                 Assert.NotEmpty(invocation.Arguments);
                 Assert.Equal(AgentOutcomeClassifier.MaximumFallbackOutputBytes, maximumBytes);
                 Assert.EndsWith("-outcome-classifier", invocation.InvocationId, StringComparison.Ordinal);

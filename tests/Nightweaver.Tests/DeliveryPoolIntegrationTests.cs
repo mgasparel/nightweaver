@@ -353,6 +353,343 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
     }
 
     [Fact]
+    public async Task FirstStopKeepsNativeCurrentTurnAliveAndDoesNotLaunchNextRole()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge"]);
+        var beadId = target.CreateBead("Graceful stop current turn", "task", "stage:implement");
+        var project = target.CreateProject(AgentCli.Codex, maxConcurrentDelivery: 1, timeoutMinutes: 5);
+        var processRunner = new ConcurrentRecordingProcessRunner(new SystemProcessRunner(), target);
+        var gateDirectory = Path.Combine(target.RootPath, "graceful-stop-gates");
+        Directory.CreateDirectory(gateDirectory);
+        var startedFile = Path.Combine(gateDirectory, "agent.started");
+        var releaseFile = Path.Combine(gateDirectory, "agent.release");
+        var pidFile = Path.Combine(gateDirectory, "agent.pid");
+        var prepare = new AgentInvocationPreparer();
+        var identities = new ConcurrentDictionary<string, AgentRole>(StringComparer.Ordinal);
+        var executionCount = 0;
+        using var gracefulStop = new CancellationTokenSource();
+        using var forceStop = new CancellationTokenSource();
+        var stopGate = new ContinuousStopGate();
+
+        async Task<PreparedAgentInvocation> Prepare(HostPaths paths, ProjectConfig config, AgentRole role,
+            AgentDispatchContext context, string worktreePath, CancellationToken token)
+        {
+            var invocation = await prepare.PrepareAsync(paths, config, role, context, worktreePath, token);
+            identities[invocation.InvocationId] = role;
+            return invocation;
+        }
+
+        Task<AgentExecutionResult> Execute(HostPaths paths, ProjectSlug slug, PreparedAgentInvocation invocation,
+            CancellationToken token)
+        {
+            Interlocked.Increment(ref executionCount);
+            var role = identities[invocation.InvocationId];
+            var overrides = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["BD_ACTOR"] = project.RecoveryActor,
+                ["NIGHTWEAVER_FIXTURE_ACTION"] = "pool-implement-gated",
+                ["NIGHTWEAVER_FIXTURE_PID_FILE"] = pidFile,
+                ["NIGHTWEAVER_FIXTURE_STARTED_FILE"] = role == AgentRole.Implementer ? startedFile : null,
+                ["NIGHTWEAVER_FIXTURE_RELEASE_FILE"] = role == AgentRole.Implementer ? releaseFile : null
+            };
+            return AgentInvocationExecutor.ExecuteAsync(paths, slug, invocation,
+                target.CreateProcessLauncher(overrides), token);
+        }
+
+        var stages = new AgentStageCoordinator(processRunner, prepare: Prepare, execute: Execute);
+        var retries = new OperationalRetryCoordinator(processRunner, stages: stages,
+            outcomeClassifier: FixtureOutcomeClassifier.Create());
+        DeliveryRoleRunner runRole = (paths, config, repository, id, role, actor, expectedState, token, progress) =>
+            retries.RunAsync(paths, config, repository, id, role, actor, token, progress, expectedState);
+        DeliveryPoolSlotRunner slotRunner = (paths, config, repository, id, token) =>
+            new DeliverySlotCoordinator(processRunner, runRole).RunAsync(paths, config, repository, id, token);
+        var pool = new DeliveryPoolCoordinator(target.Host, project, new(target.Path, "main"), processRunner,
+            runSlot: slotRunner,
+            stopGate: stopGate,
+            slotLifetimeToken: forceStop.Token);
+        var evaluations = Channel.CreateUnbounded<DeliveryPoolEvaluation>();
+        var noTicks = Channel.CreateUnbounded<bool>();
+        var runtime = new ContinuousDiscoveryCoordinator(
+            [new ContinuousPoolRegistration(
+                ContinuousPoolKind.Delivery,
+                async token =>
+                {
+                    var evaluation = await pool.EvaluateAsync(token);
+                    evaluations.Writer.TryWrite(evaluation);
+                    return evaluation.Diagnostics;
+                },
+                pool.CompletionReader,
+                forceStop.Cancel,
+                async token => { await pool.WaitForActiveSlotsAsync(token); })],
+            _ => Task.CompletedTask,
+            TextWriter.Null,
+            TextWriter.Null,
+            token => ReadTimerTicksAsync(noTicks.Reader, token),
+            stopGate: stopGate);
+        var runtimeTask = runtime.RunAsync(gracefulStop.Token, forceStop.Token);
+
+        try
+        {
+            var first = await evaluations.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            Assert.Equal(beadId, Assert.Single(first.Admitted).BeadId);
+            await WaitForFileAsync(startedFile).WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+            var pidParts = (await File.ReadAllTextAsync(pidFile, TestContext.Current.CancellationToken)).Split('|');
+            using var agent = Process.GetProcessById(int.Parse(pidParts[0], System.Globalization.CultureInfo.InvariantCulture));
+            Assert.False(agent.HasExited);
+
+            gracefulStop.Cancel();
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+            Assert.False(agent.HasExited, "The first stop must leave the launched current turn alive to finish.");
+            Assert.False(runtimeTask.IsCompleted);
+
+            File.WriteAllText(releaseFile, "complete current turn", new UTF8Encoding(false));
+            Assert.True(await runtimeTask.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken));
+            Assert.True(agent.HasExited);
+            Assert.Equal(1, Volatile.Read(ref executionCount));
+            Assert.Empty(pool.ActiveReservations);
+
+            var final = target.ReadBead(beadId);
+            var state = BeadWorkflowState.Parse(final);
+            Assert.Equal("open", final.Status);
+            Assert.Null(final.Assignee);
+            Assert.Equal("stage:review", state.Stage);
+            Assert.True(File.Exists(Path.Combine(target.WorktreePath(beadId), "delivery-slot.txt")));
+            Assert.True(File.Exists(Path.Combine(target.WorktreePath(beadId), ".nightweaver-ignored", "slot-sentinel.bin")));
+            AssertFixtureExited(pidFile);
+        }
+        finally
+        {
+            File.WriteAllText(releaseFile, "test cleanup", new UTF8Encoding(false));
+            if (!runtimeTask.IsCompleted) gracefulStop.Cancel();
+            await runtimeTask.WaitAsync(TimeSpan.FromSeconds(90), CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task FirstStopDuringPreparationReleasesClaimWithoutLaunchingNativeAgent()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge"]);
+        var beadId = target.CreateBead("Graceful stop during preparation", "task", "stage:implement");
+        var project = target.CreateProject(AgentCli.Codex, maxConcurrentDelivery: 1, timeoutMinutes: 5);
+        var processRunner = new ConcurrentRecordingProcessRunner(new SystemProcessRunner(), target);
+        var preparationStarted = NewSignal();
+        var releasePreparation = NewSignal();
+        var fixtureStartedFile = Path.Combine(target.RootPath, "prepared-agent.pid");
+        var prepare = new AgentInvocationPreparer();
+        var invocationIdentities = new ConcurrentDictionary<string, AgentRole>(StringComparer.Ordinal);
+        var executeCalls = 0;
+        using var gracefulStop = new CancellationTokenSource();
+        using var forceStop = new CancellationTokenSource();
+        var stopGate = new ContinuousStopGate();
+
+        async Task<PreparedAgentInvocation> Prepare(HostPaths paths, ProjectConfig config, AgentRole role,
+            AgentDispatchContext context, string worktreePath, CancellationToken token)
+        {
+            var invocation = await prepare.PrepareAsync(paths, config, role, context, worktreePath, token);
+            invocationIdentities[invocation.InvocationId] = role;
+            if (role == AgentRole.Implementer)
+            {
+                preparationStarted.TrySetResult(true);
+                await releasePreparation.Task.WaitAsync(token);
+            }
+            return invocation;
+        }
+
+        Task<AgentExecutionResult> Execute(HostPaths paths, ProjectSlug slug, PreparedAgentInvocation invocation,
+            CancellationToken token)
+        {
+            Interlocked.Increment(ref executeCalls);
+            var role = invocationIdentities[invocation.InvocationId];
+            return AgentInvocationExecutor.ExecuteAsync(paths, slug, invocation,
+                target.CreateProcessLauncher(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["BD_ACTOR"] = project.RecoveryActor,
+                    ["NIGHTWEAVER_FIXTURE_ACTION"] = "slot-implement-push",
+                    ["NIGHTWEAVER_FIXTURE_PID_FILE"] = role == AgentRole.Implementer ? fixtureStartedFile : null
+                }), token);
+        }
+
+        var stages = new AgentStageCoordinator(processRunner, prepare: Prepare, execute: Execute);
+        var retries = new OperationalRetryCoordinator(processRunner, stages: stages,
+            outcomeClassifier: FixtureOutcomeClassifier.Create());
+        DeliveryRoleRunner runRole = (paths, config, repository, id, role, actor, expectedState, token, progress) =>
+            retries.RunAsync(paths, config, repository, id, role, actor, token, progress, expectedState);
+        DeliveryPoolSlotRunner slotRunner = (paths, config, repository, id, token) =>
+            new DeliverySlotCoordinator(processRunner, runRole).RunAsync(paths, config, repository, id, token);
+        var pool = new DeliveryPoolCoordinator(target.Host, project, new(target.Path, "main"), processRunner,
+            runSlot: slotRunner,
+            stopGate: stopGate,
+            slotLifetimeToken: forceStop.Token);
+        var evaluations = Channel.CreateUnbounded<DeliveryPoolEvaluation>();
+        var noTicks = Channel.CreateUnbounded<bool>();
+        var runtime = new ContinuousDiscoveryCoordinator(
+            [new ContinuousPoolRegistration(
+                ContinuousPoolKind.Delivery,
+                async token =>
+                {
+                    var evaluation = await pool.EvaluateAsync(token);
+                    evaluations.Writer.TryWrite(evaluation);
+                    return evaluation.Diagnostics;
+                },
+                pool.CompletionReader,
+                forceStop.Cancel,
+                async token => { await pool.WaitForActiveSlotsAsync(token); })],
+            _ => Task.CompletedTask,
+            TextWriter.Null,
+            TextWriter.Null,
+            token => ReadTimerTicksAsync(noTicks.Reader, token),
+            stopGate: stopGate);
+        var runtimeTask = runtime.RunAsync(gracefulStop.Token, forceStop.Token);
+
+        try
+        {
+            var first = await evaluations.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            Assert.Equal(beadId, Assert.Single(first.Admitted).BeadId);
+            await preparationStarted.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+
+            gracefulStop.Cancel();
+            releasePreparation.TrySetResult(true);
+            Assert.True(await runtimeTask.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken));
+
+            Assert.Equal(1, Volatile.Read(ref executeCalls));
+            Assert.False(File.Exists(fixtureStartedFile), "The prepared invocation must be denied before native process launch.");
+            Assert.Empty(pool.ActiveReservations);
+            var final = target.ReadBead(beadId);
+            Assert.Equal("open", final.Status);
+            Assert.Null(final.Assignee);
+            Assert.Equal("stage:implement", BeadWorkflowState.Parse(final).Stage);
+            Assert.True(Directory.Exists(target.WorktreePath(beadId)), "The unfinished prepared worktree must remain available.");
+        }
+        finally
+        {
+            releasePreparation.TrySetResult(true);
+            if (!runtimeTask.IsCompleted) gracefulStop.Cancel();
+            await runtimeTask.WaitAsync(TimeSpan.FromSeconds(90), CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task FirstStopAfterFailedNativeTurnDoesNotResetOrRetryAndRetainsUnfinishedFiles()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge"]);
+        var beadId = target.CreateBead("Graceful stop failed current turn", "task", "stage:implement");
+        var project = target.CreateProject(AgentCli.Codex, maxConcurrentDelivery: 1, timeoutMinutes: 5);
+        var processRunner = new ConcurrentRecordingProcessRunner(new SystemProcessRunner(), target);
+        var gateDirectory = Path.Combine(target.RootPath, "graceful-stop-failure-gates");
+        Directory.CreateDirectory(gateDirectory);
+        var startedFile = Path.Combine(gateDirectory, "agent.started");
+        var releaseFile = Path.Combine(gateDirectory, "agent.release");
+        var pidFile = Path.Combine(gateDirectory, "agent.pid");
+        var identities = new ConcurrentDictionary<string, AgentRole>(StringComparer.Ordinal);
+        var executionCount = 0;
+        var prepare = new AgentInvocationPreparer();
+        using var gracefulStop = new CancellationTokenSource();
+        using var forceStop = new CancellationTokenSource();
+        var stopGate = new ContinuousStopGate();
+
+        async Task<PreparedAgentInvocation> Prepare(HostPaths paths, ProjectConfig config, AgentRole role,
+            AgentDispatchContext context, string worktreePath, CancellationToken token)
+        {
+            var invocation = await prepare.PrepareAsync(paths, config, role, context, worktreePath, token);
+            identities[invocation.InvocationId] = role;
+            return invocation;
+        }
+
+        Task<AgentExecutionResult> Execute(HostPaths paths, ProjectSlug slug, PreparedAgentInvocation invocation,
+            CancellationToken token)
+        {
+            Interlocked.Increment(ref executionCount);
+            var role = identities[invocation.InvocationId];
+            var overrides = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["BD_ACTOR"] = project.RecoveryActor,
+                ["NIGHTWEAVER_FIXTURE_ACTION"] = "pool-implement-fail-gated",
+                ["NIGHTWEAVER_FIXTURE_PID_FILE"] = pidFile,
+                ["NIGHTWEAVER_FIXTURE_STARTED_FILE"] = role == AgentRole.Implementer ? startedFile : null,
+                ["NIGHTWEAVER_FIXTURE_RELEASE_FILE"] = role == AgentRole.Implementer ? releaseFile : null
+            };
+            return AgentInvocationExecutor.ExecuteAsync(paths, slug, invocation,
+                target.CreateProcessLauncher(overrides), token);
+        }
+
+        var stages = new AgentStageCoordinator(processRunner, prepare: Prepare, execute: Execute);
+        var retries = new OperationalRetryCoordinator(processRunner, stages: stages);
+        DeliveryRoleRunner runRole = (paths, config, repository, id, role, actor, expectedState, token, progress) =>
+            retries.RunAsync(paths, config, repository, id, role, actor, token, progress, expectedState);
+        DeliveryPoolSlotRunner slotRunner = (paths, config, repository, id, token) =>
+            new DeliverySlotCoordinator(processRunner, runRole).RunAsync(paths, config, repository, id, token);
+        var pool = new DeliveryPoolCoordinator(target.Host, project, new(target.Path, "main"), processRunner,
+            runSlot: slotRunner,
+            stopGate: stopGate,
+            slotLifetimeToken: forceStop.Token);
+        var evaluations = Channel.CreateUnbounded<DeliveryPoolEvaluation>();
+        var noTicks = Channel.CreateUnbounded<bool>();
+        var runtime = new ContinuousDiscoveryCoordinator(
+            [new ContinuousPoolRegistration(
+                ContinuousPoolKind.Delivery,
+                async token =>
+                {
+                    var evaluation = await pool.EvaluateAsync(token);
+                    evaluations.Writer.TryWrite(evaluation);
+                    return evaluation.Diagnostics;
+                },
+                pool.CompletionReader,
+                forceStop.Cancel,
+                async token => { await pool.WaitForActiveSlotsAsync(token); })],
+            _ => Task.CompletedTask,
+            TextWriter.Null,
+            TextWriter.Null,
+            token => ReadTimerTicksAsync(noTicks.Reader, token),
+            stopGate: stopGate);
+        var runtimeTask = runtime.RunAsync(gracefulStop.Token, forceStop.Token);
+
+        try
+        {
+            var first = await evaluations.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            Assert.Equal(beadId, Assert.Single(first.Admitted).BeadId);
+            await WaitForFileAsync(startedFile).WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+            var pidParts = (await File.ReadAllTextAsync(pidFile, TestContext.Current.CancellationToken)).Split('|');
+            using var agent = Process.GetProcessById(int.Parse(pidParts[0], System.Globalization.CultureInfo.InvariantCulture));
+            Assert.False(agent.HasExited);
+
+            gracefulStop.Cancel();
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+            Assert.False(agent.HasExited, "The first stop must not cancel the current Agent process.");
+            File.WriteAllText(releaseFile, "finish with a failed result", new UTF8Encoding(false));
+
+            Assert.False(await runtimeTask.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken));
+            Assert.True(agent.HasExited);
+            Assert.Equal(1, Volatile.Read(ref executionCount));
+            Assert.Empty(pool.ActiveReservations);
+
+            var final = target.ReadBead(beadId);
+            var state = BeadWorkflowState.Parse(final);
+            Assert.Equal("open", final.Status);
+            Assert.Null(final.Assignee);
+            Assert.Equal("stage:implement", state.Stage);
+            Assert.True(File.Exists(Path.Combine(target.WorktreePath(beadId), "unfinished-after-stop.txt")));
+            Assert.DoesNotContain(processRunner.Requests, request => request.FileName == "git"
+                && request.Arguments.Contains("reset", StringComparer.Ordinal));
+            AssertFixtureExited(pidFile);
+        }
+        finally
+        {
+            File.WriteAllText(releaseFile, "test cleanup", new UTF8Encoding(false));
+            if (!runtimeTask.IsCompleted) gracefulStop.Cancel();
+            await runtimeTask.WaitAsync(TimeSpan.FromSeconds(90), CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task NativeRuntimeRetriesEligibilityReadOutageOnLaterTimerWithFreshInventory()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
@@ -557,7 +894,7 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
                 return await new DeliverySlotCoordinator(processRunner, roleRunner)
                     .RunAsync(hostPaths, config, repository, requestedBead, token);
             },
-            TestContext.Current.CancellationToken);
+            slotLifetimeToken: TestContext.Current.CancellationToken);
 
         var evaluationTask = pool.EvaluateAsync(TestContext.Current.CancellationToken);
         await snapshotReady.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);

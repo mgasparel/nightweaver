@@ -476,6 +476,18 @@ internal static class Program
                 Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
                 break;
             }
+            case "pool-implement-fail-gated":
+            {
+                var startedFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_STARTED_FILE")
+                    ?? throw new InvalidOperationException("Pool fixture started-file path is missing.");
+                var releaseFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_RELEASE_FILE")
+                    ?? throw new InvalidOperationException("Pool fixture release-file path is missing.");
+                File.WriteAllText(startedFile, beadId, new UTF8Encoding(false));
+                WaitForFile(releaseFile, TimeSpan.FromMinutes(2));
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "unfinished-after-stop.txt"),
+                    "preserve this failed current turn\n", new UTF8Encoding(false));
+                return 23;
+            }
             case "slot-implement-repair":
                 File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "delivery-repair.txt"), "repair committed\n");
                 Run("git", ["add", "delivery-repair.txt"]);

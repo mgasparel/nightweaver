@@ -13,12 +13,15 @@ internal sealed class ContinuousDiscoveryCoordinator(
     TextWriter output,
     TextWriter error,
     DiscoveryTimerTicks? timerTicks = null,
-    Func<Action, CancellationToken, Task>? journalWatcher = null)
+    Func<Action, CancellationToken, Task>? journalWatcher = null,
+    ContinuousStopGate? stopGate = null)
 {
     internal static readonly TimeSpan DiscoveryInterval = TimeSpan.FromSeconds(30);
 
     private readonly IReadOnlyList<ContinuousPoolRegistration> pools =
         ContinuousPoolRegistration.Order(configuredPools);
+    private readonly ContinuousStopGate? stopGate = stopGate;
+    private int drainFailureObserved;
 
     private readonly Channel<bool> requests = Channel.CreateBounded<bool>(new BoundedChannelOptions(1)
     {
@@ -28,18 +31,33 @@ internal sealed class ContinuousDiscoveryCoordinator(
         FullMode = BoundedChannelFullMode.Wait
     });
 
-    internal bool RequestDiscovery() => requests.Writer.TryWrite(true);
+    internal bool RequestDiscovery() => stopGate?.IsStopRequested != true && requests.Writer.TryWrite(true);
 
-    internal async Task<bool> RunAsync(CancellationToken cancellationToken)
+    internal async Task<bool> RunAsync(CancellationToken cancellationToken, CancellationToken forceStopToken = default)
     {
+        using var stopRequest = cancellationToken.Register(() => stopGate?.RequestStop());
         using var runtimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var completionReaderCancellation = new CancellationTokenSource();
         var worker = DiscoveryLoopAsync(runtimeCancellation.Token);
         var timer = TimerLoopAsync(runtimeCancellation.Token);
         var poolCompletionReaders = pools
-            .Select(pool => ReadPoolCompletionsAsync(pool, runtimeCancellation.Token))
+            .Select(pool => ReadPoolCompletionsAsync(pool, completionReaderCancellation.Token))
             .ToArray();
-        var completionMonitor = MonitorPoolCompletionReadersAsync(poolCompletionReaders);
+        var completionMonitor = MonitorPoolCompletionReadersAsync(poolCompletionReaders, completionReaderCancellation.Token);
         var drained = true;
+        var forceCancelFailed = 0;
+        using var forceCancellation = forceStopToken.Register(() =>
+        {
+            foreach (var pool in pools)
+            {
+                try { pool.Cancel(); }
+                catch (Exception exception)
+                {
+                    Interlocked.Exchange(ref forceCancelFailed, 1);
+                    error.WriteLine($"nightweaver: {pool.Kind} force stop could not cancel local work: {exception.Message}");
+                }
+            }
+        });
         RequestDiscovery();
         var journalTask = journalWatcher is null
             ? Task.CompletedTask
@@ -60,22 +78,12 @@ internal sealed class ContinuousDiscoveryCoordinator(
         }
         finally
         {
-            foreach (var pool in pools)
-            {
-                try
-                {
-                    pool.Cancel();
-                }
-                catch (Exception exception)
-                {
-                    drained = false;
-                    error.WriteLine($"nightweaver: {pool.Kind} shutdown could not cancel local work: {exception.Message}");
-                }
-            }
+            // This closes reservation and native-launch boundaries before helper cancellation.
+            stopGate?.RequestStop();
             runtimeCancellation.Cancel();
             try
             {
-            await Task.WhenAll(poolCompletionReaders.Append(worker).Append(timer).Append(completionMonitor).Append(journalTask))
+                await Task.WhenAll(worker, timer, journalTask)
                     .WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is OperationCanceledException or TimeoutException)
@@ -91,19 +99,48 @@ internal sealed class ContinuousDiscoveryCoordinator(
                 error.WriteLine($"nightweaver: runtime helper task failed during shutdown: {exception.Message}");
             }
 
-            using var drainTimeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-            foreach (var pool in pools)
+            if (forceStopToken.IsCancellationRequested)
+                drained = false;
+
+            var drainTasks = pools.Select(async pool =>
             {
                 try
                 {
-                    await pool.Drain(drainTimeout.Token).ConfigureAwait(false);
+                    await pool.Drain(forceStopToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (forceStopToken.IsCancellationRequested)
+                {
+                    drained = false;
+                    error.WriteLine($"nightweaver: {pool.Kind} drain was interrupted by a subsequent stop signal.");
                 }
                 catch (Exception exception)
                 {
                     drained = false;
                     error.WriteLine($"nightweaver: {pool.Kind} shutdown could not confirm local work stopped: {exception.Message}");
                 }
+            }).ToArray();
+            await Task.WhenAll(drainTasks).ConfigureAwait(false);
+
+            completionReaderCancellation.Cancel();
+            try
+            {
+                await Task.WhenAll(poolCompletionReaders.Append(completionMonitor))
+                    .WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) { }
+            catch (TimeoutException)
+            {
+                drained = false;
+                error.WriteLine("nightweaver: completion readers did not stop within 30 seconds after slot drain.");
+            }
+            catch (Exception exception)
+            {
+                drained = false;
+                error.WriteLine($"nightweaver: completion reader failed during drain: {exception.Message}");
+            }
+
+            if (Volatile.Read(ref drainFailureObserved) != 0 || Volatile.Read(ref forceCancelFailed) != 0)
+                drained = false;
             output.WriteLine("Continuous Delivery runtime stopped.");
         }
         return drained;
@@ -151,6 +188,8 @@ internal sealed class ContinuousDiscoveryCoordinator(
     {
         await foreach (var completion in pool.Completions.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
+            if (IsDrainFailure(completion))
+                Interlocked.Exchange(ref drainFailureObserved, 1);
             var result = completion.Exception is not null
                 ? $"failed: {completion.Exception.Message}"
                 : completion.IsCanceled
@@ -162,11 +201,22 @@ internal sealed class ContinuousDiscoveryCoordinator(
     }
 
     private static async Task MonitorPoolCompletionReadersAsync(Task[] readers)
+        => await MonitorPoolCompletionReadersAsync(readers, CancellationToken.None).ConfigureAwait(false);
+
+    private static async Task MonitorPoolCompletionReadersAsync(Task[] readers, CancellationToken cancellationToken)
     {
         var first = await Task.WhenAny(readers).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         await first.ConfigureAwait(false);
         throw new InvalidOperationException("A configured pool completion stream stopped unexpectedly.");
     }
+
+    private static bool IsDrainFailure(DeliveryPoolCompletion completion) =>
+        completion.Exception is not null
+        || completion.IsCanceled
+        || completion.Outcome?.Disposition is DeliverySlotDisposition.Failed or DeliverySlotDisposition.IncompletePauseDisposition
+        || completion.Outcome?.Disposition == DeliverySlotDisposition.Escalated && !completion.ClaimHandoffCompleted
+        || completion.Outcome?.Disposition == DeliverySlotDisposition.PausedForProductDecision && !completion.ClaimHandoffCompleted;
 
     private async Task ObserveJournalWatcherAsync(
         Func<Action, CancellationToken, Task> journalWatcher,

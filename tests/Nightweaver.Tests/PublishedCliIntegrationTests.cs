@@ -156,19 +156,26 @@ public sealed class PublishedCliIntegrationTests(PublishedCliArtifactFixture pub
         {
             if (File.Exists(recordPath))
             {
-                foreach (var line in File.ReadAllLines(recordPath))
+                try
                 {
-                    try
+                    foreach (var line in File.ReadAllLines(recordPath))
                     {
-                        using var record = JsonDocument.Parse(line);
-                        if (record.RootElement.TryGetProperty("beadId", out var observedBeadId)
-                            && observedBeadId.GetString() == beadId)
-                            return record.RootElement.Clone();
+                        try
+                        {
+                            using var record = JsonDocument.Parse(line);
+                            if (record.RootElement.TryGetProperty("beadId", out var observedBeadId)
+                                && observedBeadId.GetString() == beadId)
+                                return record.RootElement.Clone();
+                        }
+                        catch (JsonException)
+                        {
+                            // The trap appends one JSON line; retry if the read overlaps that write.
+                        }
                     }
-                    catch (JsonException)
-                    {
-                        // The trap appends one JSON line; retry if the read overlaps that write.
-                    }
+                }
+                catch (IOException exception) when ((exception.HResult & 0xFFFF) is 32 or 33)
+                {
+                    // Retry the bounded poll when the trap temporarily holds the record file open.
                 }
             }
             if (process.HasExited)

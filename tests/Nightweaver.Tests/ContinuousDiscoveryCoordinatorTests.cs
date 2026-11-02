@@ -263,7 +263,7 @@ public sealed class ContinuousDiscoveryCoordinatorTests
     }
 
     [Fact]
-    public async Task AdmissionInfrastructureFailureStopsFurtherPassesAndCancelsAndDrainsEveryPool()
+    public async Task AdmissionInfrastructureFailureStopsFurtherPassesWithoutCancellingSlotsAndDrainsEveryPool()
     {
         using var lifetime = new CancellationTokenSource();
         var planningCompletions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
@@ -318,8 +318,8 @@ public sealed class ContinuousDiscoveryCoordinatorTests
         Assert.Equal(2, Volatile.Read(ref validationCount));
         Assert.Equal(1, Volatile.Read(ref planningPasses));
         Assert.Equal(1, Volatile.Read(ref deliveryPasses));
-        Assert.Equal(1, Volatile.Read(ref planningCancels));
-        Assert.Equal(1, Volatile.Read(ref deliveryCancels));
+        Assert.Equal(0, Volatile.Read(ref planningCancels));
+        Assert.Equal(0, Volatile.Read(ref deliveryCancels));
         Assert.Equal(1, Volatile.Read(ref planningDrains));
         Assert.Equal(1, Volatile.Read(ref deliveryDrains));
     }
@@ -365,7 +365,7 @@ public sealed class ContinuousDiscoveryCoordinatorTests
     }
 
     [Fact]
-    public async Task ConfiguredPoolCompletionStreamTerminationCancelsAndDrainsEveryPool()
+    public async Task ConfiguredPoolCompletionStreamTerminationDrainsEveryPoolWithoutCancellingSlots()
     {
         using var lifetime = new CancellationTokenSource();
         var deliveryCompletions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
@@ -394,10 +394,117 @@ public sealed class ContinuousDiscoveryCoordinatorTests
             coordinator.RunAsync(lifetime.Token).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
 
         Assert.Contains("completion stream stopped unexpectedly", failure.Message, StringComparison.Ordinal);
-        Assert.Equal(1, Volatile.Read(ref cancels[(int)ContinuousPoolKind.Delivery]));
-        Assert.Equal(1, Volatile.Read(ref cancels[(int)ContinuousPoolKind.Merger]));
+        Assert.Equal(0, Volatile.Read(ref cancels[(int)ContinuousPoolKind.Delivery]));
+        Assert.Equal(0, Volatile.Read(ref cancels[(int)ContinuousPoolKind.Merger]));
         Assert.Equal(1, Volatile.Read(ref drains[(int)ContinuousPoolKind.Delivery]));
         Assert.Equal(1, Volatile.Read(ref drains[(int)ContinuousPoolKind.Merger]));
+    }
+
+    [Fact]
+    public async Task GracefulStopClosesAdmissionAndKeepsCompletionAccountingAliveThroughDrain()
+    {
+        using var gracefulStop = new CancellationTokenSource();
+        using var forceStop = new CancellationTokenSource();
+        var gate = new ContinuousStopGate();
+        var completions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
+        var ticks = Channel.CreateUnbounded<bool>();
+        var drainStarted = NewSignal();
+        var releaseDrain = NewSignal();
+        var firstPass = NewSignal();
+        var error = new StringWriter();
+        var output = new StringWriter();
+        var cancels = 0;
+        var coordinator = new ContinuousDiscoveryCoordinator(
+            [new ContinuousPoolRegistration(
+                ContinuousPoolKind.Delivery,
+                _ => { firstPass.TrySetResult(true); return EmptyDiagnostics(); },
+                completions.Reader,
+                () => Interlocked.Increment(ref cancels),
+                async token =>
+                {
+                    drainStarted.TrySetResult(true);
+                    await releaseDrain.Task.WaitAsync(token);
+                })],
+            _ => Task.CompletedTask,
+            output,
+            error,
+            token => ReadTicksAsync(ticks.Reader, token),
+            stopGate: gate);
+
+        var run = coordinator.RunAsync(gracefulStop.Token, forceStop.Token);
+        await firstPass.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        gracefulStop.Cancel();
+        await drainStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.False(coordinator.RequestDiscovery());
+        Assert.Equal(0, Volatile.Read(ref cancels));
+
+        completions.Writer.TryWrite(new DeliveryPoolCompletion("failed-current-turn", null,
+            new IOException("required finalization failed"), false, LocalCapacityReleased: true));
+        await WaitForCompletionReadAsync();
+        releaseDrain.TrySetResult(true);
+
+        Assert.False(await run.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.Contains("failed-current-turn", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, Volatile.Read(ref cancels));
+
+        async Task WaitForCompletionReadAsync()
+        {
+            while (!output.ToString().Contains("failed-current-turn", StringComparison.Ordinal))
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task OnePoolFinalizationFailureDoesNotPreventOtherPoolsFromDraining()
+    {
+        using var gracefulStop = new CancellationTokenSource();
+        var completions = new[]
+        {
+            Channel.CreateUnbounded<DeliveryPoolCompletion>(),
+            Channel.CreateUnbounded<DeliveryPoolCompletion>()
+        };
+        var firstDrainStarted = NewSignal();
+        var secondDrainStarted = NewSignal();
+        var releaseSecondDrain = NewSignal();
+        var error = new StringWriter();
+        var pools = new[]
+            {
+                (ContinuousPoolKind.Delivery, completions[0].Reader),
+                (ContinuousPoolKind.Merger, completions[1].Reader)
+            }
+            .Select((entry, index) => new ContinuousPoolRegistration(
+                entry.Item1,
+                _ => EmptyDiagnostics(),
+                entry.Item2,
+                static () => { },
+                async token =>
+                {
+                    if (index == 0)
+                    {
+                        firstDrainStarted.TrySetResult(true);
+                        throw new IOException("Delivery ownership finalization failed.");
+                    }
+
+                    secondDrainStarted.TrySetResult(true);
+                    await releaseSecondDrain.Task.WaitAsync(token);
+                }))
+            .ToArray();
+        var coordinator = new ContinuousDiscoveryCoordinator(
+            pools,
+            _ => Task.CompletedTask,
+            TextWriter.Null,
+            error);
+
+        var run = coordinator.RunAsync(gracefulStop.Token);
+        gracefulStop.Cancel();
+        await Task.WhenAll(
+            firstDrainStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken),
+            secondDrainStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.False(run.IsCompleted, "A local failure must not skip or finish the other pool's drain.");
+
+        releaseSecondDrain.TrySetResult(true);
+        Assert.False(await run.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.Contains("Delivery ownership finalization failed", error.ToString(), StringComparison.Ordinal);
     }
 
     private static ContinuousDiscoveryCoordinator CreateCoordinator(

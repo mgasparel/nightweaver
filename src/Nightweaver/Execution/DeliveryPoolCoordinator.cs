@@ -26,7 +26,8 @@ internal enum DeliveryPoolDiagnosticCode
     NotEligible,
     InvalidWorkflowState,
     AlreadyReserved,
-    CapacityReached
+    CapacityReached,
+    Stopping
 }
 
 internal sealed record DeliveryPoolDiagnostic(
@@ -88,6 +89,7 @@ internal sealed class DeliveryPoolCoordinator
     private readonly ValidatedTargetRepository repository;
     private readonly int capacityLimit;
     private readonly CancellationToken slotLifetimeToken;
+    private readonly ContinuousStopGate? stopGate;
     private readonly DeliveryPoolSnapshotReader readSnapshot;
     private readonly DeliveryPoolSlotRunner runSlot;
     private readonly object admissionSync = new();
@@ -104,6 +106,7 @@ internal sealed class DeliveryPoolCoordinator
         IProcessRunner processRunner,
         DeliveryPoolSnapshotReader? readSnapshot = null,
         DeliveryPoolSlotRunner? runSlot = null,
+        ContinuousStopGate? stopGate = null,
         CancellationToken slotLifetimeToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
@@ -115,6 +118,7 @@ internal sealed class DeliveryPoolCoordinator
         this.project = project;
         this.repository = repository;
         this.slotLifetimeToken = slotLifetimeToken;
+        this.stopGate = stopGate;
         capacityLimit = project.Concurrency.MaxConcurrentDelivery;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacityLimit);
 
@@ -251,27 +255,46 @@ internal sealed class DeliveryPoolCoordinator
 
     private ReservationState? TryReserve(string beadId, out DeliveryPoolDiagnostic? diagnostic)
     {
-        lock (stateGate)
+        ReservationState? reservation = null;
+        DeliveryPoolDiagnostic? refusal = null;
+        bool TryReserveLocal()
         {
-            if (reservations.ContainsKey(beadId))
+            lock (stateGate)
             {
-                diagnostic = new DeliveryPoolDiagnostic(beadId, DeliveryPoolDiagnosticCode.AlreadyReserved,
-                    "This Plan Bead already has a reservation in this Delivery Pool instance.");
-                return null;
-            }
+                if (reservations.ContainsKey(beadId))
+                {
+                    refusal = new DeliveryPoolDiagnostic(beadId, DeliveryPoolDiagnosticCode.AlreadyReserved,
+                        "This Plan Bead already has a reservation in this Delivery Pool instance.");
+                    return false;
+                }
 
-            if (reservations.Count >= capacityLimit)
-            {
-                diagnostic = new DeliveryPoolDiagnostic(beadId, DeliveryPoolDiagnosticCode.CapacityReached,
-                    $"Delivery capacity ({capacityLimit}) is reserved; this candidate remains queued for a later evaluation.");
-                return null;
-            }
+                if (reservations.Count >= capacityLimit)
+                {
+                    refusal = new DeliveryPoolDiagnostic(beadId, DeliveryPoolDiagnosticCode.CapacityReached,
+                        $"Delivery capacity ({capacityLimit}) is reserved; this candidate remains queued for a later evaluation.");
+                    return false;
+                }
 
-            var reservation = new ReservationState(beadId);
-            reservations.Add(beadId, reservation);
-            diagnostic = null;
-            return reservation;
+                reservation = new ReservationState(beadId);
+                reservations.Add(beadId, reservation);
+                return true;
+            }
         }
+
+        var gateOpen = true;
+        if (stopGate is null)
+            _ = TryReserveLocal();
+        else
+            gateOpen = stopGate.TryReserve(TryReserveLocal, out _);
+        if (!gateOpen)
+        {
+            diagnostic = new DeliveryPoolDiagnostic(beadId, DeliveryPoolDiagnosticCode.Stopping,
+                "The continuous runtime is stopping; this candidate remains unclaimed.");
+            return null;
+        }
+
+        diagnostic = refusal;
+        return reservation;
     }
 
     private async Task<IDisposable> EnterAdmissionAsync(CancellationToken cancellationToken)
@@ -307,10 +330,15 @@ internal sealed class DeliveryPoolCoordinator
         DeliverySlotOutcome? outcome = null;
         Exception? failure = null;
         var canceled = false;
+        using var launchContext = ContinuousAgentLaunchContext.Enter(stopGate);
         try
         {
-            outcome = await runSlot(paths, project, repository, reservation.BeadId, slotLifetimeToken)
-                .ConfigureAwait(false);
+            if (stopGate?.IsStopRequested == true)
+                outcome = new DeliverySlotOutcome(DeliverySlotDisposition.Refused, null, null, null, false,
+                    "The continuous runtime stopped before this reserved slot began claim acquisition.");
+            else
+                outcome = await runSlot(paths, project, repository, reservation.BeadId, slotLifetimeToken)
+                    .ConfigureAwait(false);
         }
         catch (OperationCanceledException exception)
         {

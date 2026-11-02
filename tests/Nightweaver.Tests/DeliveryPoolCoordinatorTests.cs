@@ -473,7 +473,7 @@ public sealed class DeliveryPoolCoordinatorTests
             new RoleSettings(roles));
         var processRunner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(0, "", "")));
         return new DeliveryPoolCoordinator(host, project, target, processRunner,
-            (_, _, _) => snapshotReader(), slotRunner, lifetime?.Token ?? CancellationToken.None);
+            (_, _, _) => snapshotReader(), slotRunner, slotLifetimeToken: lifetime?.Token ?? CancellationToken.None);
     }
 
     private static DeliveryPoolSnapshot Snapshot(IEnumerable<string> rows, IEnumerable<string> nativeReady)
