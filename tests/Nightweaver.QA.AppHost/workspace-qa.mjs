@@ -9,6 +9,7 @@ const failures = [];
 const consoleFailures = [];
 const browserErrorResponses = [];
 const externalRequests = [];
+const actionRequests = [];
 const geometryEvidence = {};
 page.on('pageerror', error => failures.push(`pageerror: ${error.message}`));
 page.on('console', message => { if (message.type() === 'error') consoleFailures.push({ text: message.text(), location: message.location().url }); });
@@ -22,6 +23,12 @@ page.on('response', response => {
 page.on('request', request => {
   const url = new URL(request.url());
   if (url.hostname === 'example.invalid') externalRequests.push(url.href);
+  const match = url.pathname.match(/^\/api\/beads\/([^/]+)\/(decide|retry|abort)$/);
+  if (request.method() === 'POST' && match) {
+    let body = null;
+    try { body = request.postDataJSON(); } catch { /* Abort has no semantic body. */ }
+    actionRequests.push({ beadId: decodeURIComponent(match[1]), action: match[2], body });
+  }
 });
 
 let failDetailId = null;
@@ -231,7 +238,8 @@ try {
   await page.getByRole('button', { name: 'Refresh' }).click();
   await page.getByText('The QA action could not be confirmed.', { exact: true }).waitFor().catch(() => {});
   await page.waitForFunction(() => document.querySelector('#workspace-guidance-input')?.disabled === false);
-  check(await guidance.inputValue() === 'Failure draft must stay.', 'A successful refresh did not preserve the decision draft.');
+  check(await guidance.inputValue() === 'Failure draft must stay.' && interceptedActionCount === 1,
+    'A successful refresh did not preserve the decision draft or the failed action was reposted.');
 
   // A delayed real action response cannot overwrite a different Bead's draft.
   delayedActionId = decisionId;
@@ -314,6 +322,11 @@ try {
     'Send & Resume did not resolve only the product decision pause.');
   check(decisionDetail.comments.some(comment => comment.kind === 'human-guidance' && comment.body.includes('Resume with the existing endpoint')),
     'Send & Resume guidance was not retained in history.');
+  const resumeRequest = actionRequests.findLast(request => request.beadId === decisionId
+    && request.action === 'decide' && request.body?.action === 'resume');
+  check(JSON.stringify(resumeRequest?.body?.expected) === JSON.stringify({
+    stage: null, pauseLabels: ['product-decision-required'], repairCycles: 0
+  }), `Send & Resume did not submit the displayed workflow snapshot: ${JSON.stringify(resumeRequest)}.`);
   console.log('PASS: caret template insertion, note-only pause retention, and Send & Resume state/history refresh.');
 
   await routeTo(needsHumanId);
@@ -326,6 +339,10 @@ try {
     `Retry did not remove the needs-human pause and reset its repair budget: ${JSON.stringify({ labels: retryDetail.bead.labels, repairCycles: retryDetail.bead.repairCycles, status: retryDetail.bead.status })}.`);
   check(retryDetail.comments.some(comment => comment.kind === 'human-action' && comment.body.includes('retry')),
     'Retry action was not retained in history.');
+  const retryRequest = actionRequests.findLast(request => request.beadId === needsHumanId && request.action === 'retry');
+  check(JSON.stringify(retryRequest?.body?.expected) === JSON.stringify({
+    stage: 'stage:qa', pauseLabels: ['needs-human'], repairCycles: 2
+  }), `Retry did not submit the displayed workflow snapshot: ${JSON.stringify(retryRequest)}.`);
   console.log('PASS: Reset Budget & Retry removes the active pause, resets repairCycles, and records the action.');
 
   await routeTo(abortId);

@@ -73,7 +73,7 @@ public sealed class WebBeadWorkspaceIntegrationTests
         using var factory = CreateFactory(target);
         using var client = factory.CreateClient();
 
-        using (var noteRequest = CreateGuidanceRequest(client, beadId, "Save this context.", "note_only"))
+        using (var noteRequest = await CreateGuidanceRequestAsync(client, beadId, "Save this context.", "note_only"))
         using (var noteResponse = await client.SendAsync(noteRequest, TestContext.Current.CancellationToken))
         {
             Assert.Equal(HttpStatusCode.OK, noteResponse.StatusCode);
@@ -96,7 +96,7 @@ public sealed class WebBeadWorkspaceIntegrationTests
             Assert.Equal(comments.Select(comment => comment.GetProperty("id").GetString()), recent);
         }
 
-        using (var resumeRequest = CreateGuidanceRequest(client, beadId, "Use the safer option and continue.", "resume"))
+        using (var resumeRequest = await CreateGuidanceRequestAsync(client, beadId, "Use the safer option and continue.", "resume"))
         using (var resumeResponse = await client.SendAsync(resumeRequest, TestContext.Current.CancellationToken))
         {
             Assert.Equal(HttpStatusCode.OK, resumeResponse.StatusCode);
@@ -131,11 +131,36 @@ public sealed class WebBeadWorkspaceIntegrationTests
         Assert.Equal(HttpStatusCode.BadRequest, unsupportedQuery.StatusCode);
     }
 
-    private static HttpRequestMessage CreateGuidanceRequest(HttpClient client, string beadId, string instruction, string action)
+    private static async Task<HttpRequestMessage> CreateGuidanceRequestAsync(HttpClient client, string beadId, string instruction, string action)
     {
+        object payload;
+        if (action == "resume")
+        {
+            using var workspaceResponse = await client.GetAsync($"/api/beads/{Uri.EscapeDataString(beadId)}",
+                TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.OK, workspaceResponse.StatusCode);
+            using var workspace = JsonDocument.Parse(await workspaceResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            var attention = workspace.RootElement.GetProperty("attention");
+            var expected = new
+            {
+                stage = attention.GetProperty("stage").ValueKind == JsonValueKind.Null
+                    ? null : attention.GetProperty("stage").GetString(),
+                pauseLabels = attention.GetProperty("labels").EnumerateArray()
+                    .Select(label => label.GetString()!)
+                    .Where(label => label is "needs-human" or "product-decision-required").ToArray(),
+                repairCycles = attention.GetProperty("repairCycles").ValueKind == JsonValueKind.Null
+                    ? 0 : attention.GetProperty("repairCycles").GetInt32()
+            };
+            payload = new { instruction, action, expected };
+        }
+        else
+        {
+            payload = new { instruction, action };
+        }
+
         var request = new HttpRequestMessage(HttpMethod.Post, $"/api/beads/{Uri.EscapeDataString(beadId)}/decide")
         {
-            Content = new StringContent(JsonSerializer.Serialize(new { instruction, action }), Encoding.UTF8, "application/json")
+            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
         };
         request.Headers.TryAddWithoutValidation("X-Nightweaver-Request", "console-v1");
         request.Headers.TryAddWithoutValidation("Origin", client.BaseAddress!.GetLeftPart(UriPartial.Authority));

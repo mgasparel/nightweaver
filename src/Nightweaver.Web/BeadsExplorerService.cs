@@ -148,21 +148,25 @@ internal sealed class TrackerBridge(
     }
 
     internal Task<AttentionMutationResult> DecideAsync(string beadId, string instruction, string action,
-        CancellationToken cancellationToken)
+        AttentionWorkflowSnapshot? expected, CancellationToken cancellationToken)
     {
         if (action is not ("resume" or "note_only"))
             throw new AttentionActionException(400, "Invalid action", "Action must be resume or note_only.");
+        if ((action == "resume") != (expected is not null))
+            throw new AttentionActionException(400, "Invalid action snapshot",
+                action == "resume" ? "Resume requires an expected workflow snapshot." : "Save Note does not accept a workflow snapshot.");
         return MutateAsync(beadId, action, "product-decision-required",
-            BeadsWriter.CreateHumanGuidanceComment(action, instruction), cancellationToken);
+            BeadsWriter.CreateHumanGuidanceComment(action, instruction), expected, cancellationToken);
     }
 
-    internal Task<AttentionMutationResult> RetryAsync(string beadId, CancellationToken cancellationToken)
+    internal Task<AttentionMutationResult> RetryAsync(string beadId, AttentionWorkflowSnapshot expected,
+        CancellationToken cancellationToken)
         => MutateAsync(beadId, "retry", "needs-human",
-            BeadsWriter.CreateHumanActionComment("retry"), cancellationToken);
+            BeadsWriter.CreateHumanActionComment("retry"), expected, cancellationToken);
 
     internal Task<AttentionMutationResult> AbortAsync(string beadId, CancellationToken cancellationToken)
         => MutateAsync(beadId, "abort", "needs-human",
-            BeadsWriter.CreateHumanActionComment("abort"), cancellationToken);
+            BeadsWriter.CreateHumanActionComment("abort"), null, cancellationToken);
 
     internal async Task<BeadExplorerItem> CreateProductBeadAsync(ProductBeadIntakeSubmission submission,
         CancellationToken cancellationToken)
@@ -182,7 +186,7 @@ internal sealed class TrackerBridge(
     }
 
     private async Task<AttentionMutationResult> MutateAsync(string beadId, string action, string pauseLabel,
-        string expectedComment, CancellationToken cancellationToken)
+        string expectedComment, AttentionWorkflowSnapshot? expected, CancellationToken cancellationToken)
     {
         if (!BeadIdSafety.IsSafe(beadId))
             throw new AttentionActionException(400, "Invalid Bead ID", "The Bead ID is not a safe exact tracker ID.");
@@ -195,6 +199,12 @@ internal sealed class TrackerBridge(
             var initial = await ReadExactBeadAsync(target, beadId, cancellationToken);
             EnsureActionable(initial, beadId, action, pauseLabel);
             var initialIdentity = AttentionMutationIdentity.Capture(initial!);
+            if (expected is not null && !expected.Matches(initialIdentity))
+                throw new AttentionActionException(409, "Bead changed",
+                    "The Bead workflow changed since this action was displayed. Refresh the Attention Desk before retrying.");
+            if ((action is "resume" or "retry") != (expected is not null))
+                throw new AttentionActionException(400, "Invalid action snapshot",
+                    "Resume and Retry require an expected workflow snapshot.");
 
             cancellationToken.ThrowIfCancellationRequested();
             try
@@ -270,7 +280,7 @@ internal sealed class TrackerBridge(
             }
 
             var finalIdentity = finalRead.Bead is null ? null : AttentionMutationIdentity.Capture(finalRead.Bead);
-            var verified = finalIdentity is not null && initialIdentity.MatchesResolution(finalIdentity, action, pauseLabel);
+            var verified = finalIdentity is not null && initialIdentity.MatchesResolution(finalIdentity, action);
             if (updateFailure is not null)
             {
                 var statusCode = updateFailure is BeadsGuardConflictException ? 409 : 503;

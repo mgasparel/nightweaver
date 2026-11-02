@@ -242,16 +242,18 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
     });
 
     internal Task ResolveProductDecisionAsync(ValidatedTargetRepository repository, string beadId,
-        CancellationToken cancellationToken) => RunGuardedAsync(repository,
-        ["update", beadId, "--if-status", "open", "--if-assignee", "", "--remove-label", "product-decision-required",
-            "--unset-metadata", "repair_cycles", "--json"],
-        $"resolve product decision for Bead '{beadId}'", cancellationToken);
+        CancellationToken cancellationToken) => ResumePausedBeadAsync(repository, beadId,
+        "resolve product decision", cancellationToken);
 
     internal Task RetryNeedsHumanAsync(ValidatedTargetRepository repository, string beadId,
+        CancellationToken cancellationToken) => ResumePausedBeadAsync(repository, beadId,
+        "reset the repair budget and retry", cancellationToken);
+
+    private Task ResumePausedBeadAsync(ValidatedTargetRepository repository, string beadId, string operation,
         CancellationToken cancellationToken) => RunGuardedAsync(repository,
         ["update", beadId, "--if-status", "open", "--if-assignee", "", "--remove-label", "needs-human",
-            "--unset-metadata", "repair_cycles", "--json"],
-        $"reset the repair budget and retry Bead '{beadId}'", cancellationToken);
+            "--remove-label", "product-decision-required", "--unset-metadata", "repair_cycles", "--json"],
+        $"{operation} Bead '{beadId}'", cancellationToken);
 
     internal Task AbortNeedsHumanAsync(ValidatedTargetRepository repository, string beadId,
         CancellationToken cancellationToken) => RunGuardedAsync(repository,

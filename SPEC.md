@@ -52,7 +52,7 @@ stateDiagram-v2
     Closed: closed
 
     StagePlan --> ProductDecision: Under-specified / ambiguity
-    ProductDecision --> StagePlan: Human comment/edit or label removed
+    ProductDecision --> StagePlan: Explicit Attention Desk Resume (guarded; stage preserved)
     StagePlan --> StagePlanChallenge: Draft decomposition posted in comments
     StagePlanChallenge --> StagePlan: Revision findings (repair_cycles++)
     StagePlanChallenge --> NeedsHuman: repair_cycles > max_repair_cycles
@@ -106,8 +106,14 @@ stateDiagram-v2
     StageReview --> NeedsHuman: repair_cycles > max_repair_cycles
     StageQA --> NeedsHuman: repair_cycles > max_repair_cycles
     StageMerge --> NeedsHuman: repair_cycles > max_repair_cycles
-    ProductDecision --> StageImplement: Human comment/edit or label removed
-    NeedsHuman --> StageImplement: Human comment/edit or label removed (resumes at current stage:*)
+    ProductDecision --> StageImplement: Explicit Attention Desk Resume at persisted stage
+    ProductDecision --> StageReview: Explicit Attention Desk Resume at persisted stage
+    ProductDecision --> StageQA: Explicit Attention Desk Resume at persisted stage
+    ProductDecision --> StageMerge: Explicit Attention Desk Resume at persisted stage
+    NeedsHuman --> StageImplement: Explicit Attention Desk Retry at persisted stage
+    NeedsHuman --> StageReview: Explicit Attention Desk Retry at persisted stage
+    NeedsHuman --> StageQA: Explicit Attention Desk Retry at persisted stage
+    NeedsHuman --> StageMerge: Explicit Attention Desk Retry at persisted stage
 ```
 
 1. **Discovery & Eligibility**:
@@ -187,7 +193,7 @@ stateDiagram-v2
    - The Orchestrator publishes stage changes and `repair_cycles` together under current status and assignee guards. QA approval and claim release are atomic. If publication reports an ambiguous result, the Orchestrator rereads state once and treats the handoff as confirmed only if the expected stage and released ownership match; it does not repeat the write. A confirmed QA handoff returns immediately without subsequent Bead or worktree operations.
    - Classification or outcome-verification failure preserves the completed work, invocation log, and evidence; stage and repair count remain unchanged before `needs-human` escalation. It is a finalization outcome, not an operational work retry, and the completed Delivery role is not rerun.
 
-### 4.3 Human Escalation (`product-decision-required` and `needs-human`) & Auto-Resumption
+### 4.3 Human Escalation (`product-decision-required` and `needs-human`) & Explicit Resumption
 
 1. **Escalation Labels**:
    - `product-decision-required`: Applied by the **Orchestrator** after classifying a concrete product ambiguity, contradiction, trade-off, or reported human question. Agents report the question in evidence and never apply the pause label.
@@ -195,12 +201,11 @@ stateDiagram-v2
 2. **Worktree, Branch, and PR Disposition on Pause**:
    - When a Product Bead or Plan Bead pauses with `product-decision-required` or `needs-human`, the Orchestrator retains its local worktree, current HEAD, staged and unstaged changes, untracked and ignored files, branch refs, Pull Request, logs, and all Bead temporary files. It records a diagnostic and releases only its still-owned claim. Pause labels override planned or closed cleanup candidates; closed Beads are never reopened to record a pause.
    - Its parent `planned` **Product Bead** remains `planned`, unrelated sibling **Plan Beads** continue executing normally, and `blocks`-dependent sibling **Plan Beads** remain naturally blocked by `bd ready`.
-3. **Automatic Resumption**:
-   - The **Orchestrator** skips any Bead carrying `product-decision-required` or `needs-human` until it detects either:
-     - A new ordinary human comment or description update timestamped after the escalation comment/event.
-     - Manual removal of the `product-decision-required` / `needs-human` label.
-   - Structured Web guidance tagged `nightweaver-human-guidance-v1` with action `note_only` and abort audit comments tagged `nightweaver-human-action-v1` are not auto-resume signals. Web `resume` and `retry` actions explicitly remove their pause label and reset `repair_cycles` under guarded tracker updates; they do not wait for a later automatic-resumption check.
-   - Upon detection, the **Orchestrator** removes the escalation label (if present), resets the repair budget (`bd update <id> --unset-metadata repair_cycles`), and schedules the Bead at its current stage. A validated retained worktree resumes at its current HEAD; fetching or incorporating remote changes requires an explicit operation.
+3. **Explicit Resume and Retry**:
+   - A human resumes a pause through the Attention Desk's explicit **Resume** or **Retry** action. The request includes the displayed stage, complete pause-label set, and semantic `repair_cycles` value. Under the shared Beads operation gate, the Web host rereads the exact target and rejects stale, closed, terminal, non-open, or assigned Beads before writing an audit comment.
+   - After recording the audit comment, the host rereads and compares the observed workflow identity. One guarded `bd update` requires status `open` and an empty assignee, removes both `product-decision-required` and `needs-human`, and unsets `repair_cycles`. It preserves the persisted stage and every unrelated Bead field. A guard mismatch returns a conflict and requires a fresh user action; the system does not force or blindly retry the write. Arbitrary external workflow-field changes between the identity read and native update remain a residual race because Beads has no revision token.
+   - Comments, `note_only` guidance, description edits, and audit/history records provide context only. They never authorize execution. A failed state update remains a failed action even when its audit comment persisted; uncertain writes are resolved from current tracker state, never by interpreting a comment as a command. Abort closes with its pause labels and repair budget intact.
+   - After a successful persisted Resume or Retry, the Bead becomes eligible for ordinary dependency, capacity, stage, and claim scheduling. The action does not launch an Agent or create a duplicate dispatch. Fresh discovery after restart follows the same eligibility rules. A validated retained worktree resumes at its current HEAD; fetching or incorporating remote changes requires an explicit operation.
 
 ---
 
@@ -247,7 +252,7 @@ flowchart TD
 2. Startup, best-effort journal event hints, an always-on 30-second timer, and every Delivery completion after local capacity release enter one bounded, coalescing signal. A single reader serializes passes. It consumes the current signal before evaluation, so a request that arrives during a pass remains pending for one subsequent pass. Bursts while a signal is already pending coalesce.
 3. Every pass reads fresh inventory and native readiness. A failed tracker read admits no work from a prior snapshot and waits for a later timer or completion trigger; it does not retry in a tight loop. Discovery does not perform no-op tracker writes.
 4. The watcher follows the configured Project's actual Target Repository. Journal records, including Orchestrator-authored events, are wake-up hints only; duplicate or old records are harmless, and fresh tracker reads—not event payloads or counts—establish eligibility. Unexpected tail termination or truncation requests discovery and reconnects with exponential backoff capped at 30 seconds. Truncation discards the obsolete in-memory sequence and resumes after the reported head. Timer and completion triggers stay active throughout reconnect, and stream failure alone does not stop admission or running Agents. No durable cursor or replay ledger is kept.
-5. Ordinary comments and description edits do not resume paused Beads. Paused work stays ineligible until an explicit supported state change.
+5. Ordinary comments, notes, description edits, and audit history do not resume paused Beads. Only a successful guarded Attention Desk Resume or Retry state update makes the persisted Bead eligible for ordinary scheduling.
 
 ### 5.2 Three Concurrency Pools & Planning Backpressure
 

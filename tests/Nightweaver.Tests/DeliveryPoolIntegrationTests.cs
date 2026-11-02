@@ -408,6 +408,115 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
     }
 
     [Fact]
+    public async Task ResumedBeadWaitsForDependencyAndCapacityThenStartsOnceAfterPoolRestart()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge"]);
+        var capacityBead = target.CreateBead("Delivery capacity holder", "task", "stage:implement");
+        var dependency = target.CreateBead("Resumed dependency", "task");
+        var resumedBead = target.CreateBead("Resumed delivery plan", "task", "stage:implement", "needs-human");
+        target.RunTarget("bd", ["update", resumedBead, "--set-metadata", "repair_cycles=2"]);
+        target.RunTarget("bd", ["dep", "add", resumedBead, dependency]);
+
+        var project = target.CreateProject(AgentCli.Codex, maxConcurrentDelivery: 1);
+        var processRunner = new ConcurrentRecordingProcessRunner(new SystemProcessRunner(), target);
+        var repository = new ValidatedTargetRepository(target.Path, "main");
+        using var slotLifetime = new CancellationTokenSource();
+        var firstSlotStarted = NewSignal();
+        var releaseFirstSlot = NewSignal();
+        var firstPoolSlotInvocations = 0;
+        var firstPool = new DeliveryPoolCoordinator(target.Host, project, repository, processRunner,
+            runSlot: async (_, _, _, beadId, cancellationToken) =>
+            {
+                Assert.Equal(capacityBead, beadId);
+                Interlocked.Increment(ref firstPoolSlotInvocations);
+                firstSlotStarted.TrySetResult(true);
+                await releaseFirstSlot.Task.WaitAsync(cancellationToken);
+                return new DeliverySlotOutcome(DeliverySlotDisposition.StoppedAtUnsupportedOutcome,
+                    null, null, null, ClaimHandoffCompleted: false, Diagnostic: null);
+            },
+            slotLifetimeToken: slotLifetime.Token);
+
+        try
+        {
+            var initial = await firstPool.EvaluateAsync(TestContext.Current.CancellationToken);
+            var heldAdmission = Assert.Single(initial.Admitted);
+            Assert.Equal(capacityBead, heldAdmission.BeadId);
+            await firstSlotStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            var beforeResume = target.ReadBead(resumedBead);
+            Assert.Equal("open", beforeResume.Status);
+            Assert.Contains("needs-human", beforeResume.Labels);
+            Assert.Equal(2, BeadWorkflowState.Parse(beforeResume).RepairCycles);
+            Assert.Empty((await firstPool.EvaluateAsync(TestContext.Current.CancellationToken)).Admitted);
+            Assert.Equal(1, firstPoolSlotInvocations);
+
+            await new BeadsWriter(processRunner).RetryNeedsHumanAsync(repository, resumedBead,
+                TestContext.Current.CancellationToken);
+            var afterResume = target.ReadBead(resumedBead);
+            Assert.Equal("open", afterResume.Status);
+            Assert.Contains("stage:implement", afterResume.Labels);
+            Assert.DoesNotContain("needs-human", afterResume.Labels);
+            Assert.DoesNotContain("product-decision-required", afterResume.Labels);
+            Assert.Equal(0, BeadWorkflowState.Parse(afterResume).RepairCycles);
+            Assert.False(afterResume.Payload.TryGetProperty("metadata", out var afterResumeMetadata)
+                && afterResumeMetadata.TryGetProperty("repair_cycles", out _));
+
+            var dependencyWait = await firstPool.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Empty(dependencyWait.Admitted);
+            Assert.Contains(dependencyWait.Diagnostics, diagnostic => diagnostic.BeadId == resumedBead
+                && diagnostic.Code == DeliveryPoolDiagnosticCode.NotEligible);
+            Assert.Equal(1, firstPoolSlotInvocations);
+
+            target.RunTarget("bd", ["update", dependency, "--status", "closed"]);
+            var capacityWait = await firstPool.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Empty(capacityWait.Admitted);
+            Assert.Contains(capacityWait.Diagnostics, diagnostic => diagnostic.BeadId == resumedBead
+                && diagnostic.Code == DeliveryPoolDiagnosticCode.CapacityReached);
+            Assert.Equal(capacityBead, Assert.Single(firstPool.ActiveReservations).BeadId);
+
+            releaseFirstSlot.TrySetResult(true);
+            await heldAdmission.Completion.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            Assert.Empty(firstPool.ActiveReservations);
+            target.RunTarget("bd", ["update", capacityBead, "--status", "closed"]);
+
+            // A fresh pool represents runtime restart: it rereads the persisted resumed state,
+            // passes the ordinary guarded claim, and does not replay the same open Bead twice.
+            var launchCount = 0;
+            var restartedPool = new DeliveryPoolCoordinator(target.Host, project, repository, processRunner,
+                runSlot: async (_, config, targetRepository, beadId, cancellationToken) =>
+                {
+                    await new BeadsWriter(processRunner).AcquireDispatchClaimAsync(targetRepository, beadId,
+                        config.RecoveryActor, cancellationToken);
+                    Interlocked.Increment(ref launchCount);
+                    return new DeliverySlotOutcome(DeliverySlotDisposition.StoppedAtUnsupportedOutcome,
+                        null, null, null, ClaimHandoffCompleted: false, Diagnostic: null);
+                },
+                slotLifetimeToken: slotLifetime.Token);
+
+            var resumedAdmission = await restartedPool.EvaluateAsync(TestContext.Current.CancellationToken);
+            var admission = Assert.Single(resumedAdmission.Admitted);
+            Assert.Equal(resumedBead, admission.BeadId);
+            await admission.Completion.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            var claimed = target.ReadBead(resumedBead);
+            Assert.Equal("in_progress", claimed.Status);
+            Assert.Equal(project.RecoveryActor, claimed.Assignee);
+            Assert.Equal(1, launchCount);
+
+            var duplicateEvaluation = await restartedPool.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Empty(duplicateEvaluation.Admitted);
+            Assert.Equal(1, launchCount);
+        }
+        finally
+        {
+            releaseFirstSlot.TrySetResult(true);
+            await firstPool.WaitForActiveSlotsAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task RealCompetingGuardedClaimAfterEvaluationPreventsTheLoserFromLaunchingAnAgent()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");

@@ -2,7 +2,7 @@
 
 ## Startup recovery and claims
 
-Treat only the current dispatch as work authority. Inspect retained files and evidence before acting. The Orchestrator owns repository exclusion and startup claim recovery, plus conservative completed-environment cleanup. Do not sweep or prune worktree registrations or delete startup worktrees, branches, or associated tmp. Leave changed or foreign status/assignee state untouched. Comments provide context, not resume authority.
+Treat only the current dispatch as work authority. Inspect retained files and evidence before acting. The Orchestrator owns repository exclusion and startup claim recovery, plus conservative completed-environment cleanup. Do not sweep or prune worktree registrations or delete startup worktrees, branches, and associated tmp. Leave changed or foreign status/assignee state untouched. Comments provide context, not resume authority. Only a successful Attention Desk Resume or Retry against the displayed stage, full pause-label set, and repair count makes a pause eligible for ordinary dependency, capacity, stage, and claim scheduling; comments, Save Note, description edits, and audit history supply context only, while Abort retains pause state and repair budget.
 
 Exercise the dispatched Plan Bead in its isolated worktree. Start with `bd show <bead-id>` and `bd comments <bead-id>`, then read the Target Repository's `AGENTS.md` or `CLAUDE.md`, `SPEC.md`, `GLOSSARY.md`, relevant ADRs, and repository skills.
 

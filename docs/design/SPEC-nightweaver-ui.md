@@ -46,7 +46,7 @@ The solution integrates:
 21. As a reader, I want to click the collapsed history banner to expand all previous iterations, so that I can inspect previous revisions when needed.
 22. As a reader, I want the active decision prompt or latest failure diagnostic to remain prominently expanded and accented at the bottom of the history stream, so that I immediately see the current problem.
 23. As a product owner, I want a spacious response textarea in the Full Bead Workspace with pre-filled template chips, so that I can draft detailed guidance comfortably.
-24. As a product owner, I want submitting guidance in the workspace to automatically post a comment to `bd comments` and remove the `product-decision-required` label, so that the agent resumes without manual CLI intervention.
+24. As a product owner, I want separate **Save Note** and explicit **Resume**/**Retry** actions in the workspace, so that guidance supplies context while only a guarded state change makes paused work eligible for normal scheduling.
 25. As a developer, I want a sidebar in the Full Bead Workspace displaying worktree path, git branch, git cleanliness status, and Win32 Job Object PID, so that execution context is always transparent.
 26. As a product owner, I want a `+ New Feature / Bug` button in the header, so that I can submit new work directly from the UI.
 27. As a product owner, I want an intake modal allowing me to select type (`feature` or `bug`), priority (`P0`–`P3`), title, and acceptance criteria, so that I can capture requirements completely.
@@ -114,9 +114,16 @@ The solution integrates:
 POST /api/beads/{id}/decide
 {
   "instruction": "Option 1. Use DPAPI Bearer JWT with 12h rotation. Proceed with planning.",
-  "action": "resume" // "resume" removes product-decision-required, "note_only" preserves label
+  "action": "resume",
+  "expected": {
+    "stage": "stage:plan",
+    "pauseLabels": ["product-decision-required"],
+    "repairCycles": 0
+  }
 }
 ```
+
+`note_only` accepts only `instruction` and `action`; it appends context and preserves the pause. `resume` and `POST /api/beads/{id}/retry` require the displayed stage, full pause-label set, and repair count. The host compares that snapshot with current state before recording a comment, then performs one guarded update that clears both pause labels and `repair_cycles` while preserving the current stage and unrelated Bead fields. A mismatch, closed Bead, or active claim returns a refreshable conflict. Comments, edits, and audit history never authorize execution. Successful Resume/Retry makes the Bead eligible for normal dependency, capacity, stage, and claim scheduling; it does not launch an Agent directly. Abort closes without clearing its pause or repair budget.
 
 ## Testing Decisions
 
@@ -126,7 +133,7 @@ POST /api/beads/{id}/decide
   - Tests verify **external behavior only**: sending HTTP requests and asserting on response payloads and verifiable side effects in the `bd` tracker and Git worktrees.
   - No coupling to internal controller classes, in-memory collection implementations, or private service methods.
   - Validates that `POST /api/beads` creates a genuine issue in `.beads` discoverable by `bd list`.
-  - Validates that `POST /api/beads/{id}/decide` records a comment in `bd comments` and removes the `product-decision-required` label.
+  - Validates that `POST /api/beads/{id}/decide` carries the displayed snapshot, rejects stale state before adding a comment, and performs a guarded resume that clears both pause labels and the repair budget while preserving stage and unrelated fields.
   - Validates that `GET /api/digest` correctly groups child Plan Beads into their parent Product Bead milestones based on `discovered-from` relations.
 - **Prior Art**:
   - `PublishedCliIntegrationTests.cs` and `BeadsIntegrationTests.cs` in `tests/Nightweaver.Tests/`, which execute against real disposable Git repositories and verify external tool behavior under `TestSupport.cs`.

@@ -3,7 +3,7 @@
 Based on our design evaluation:
 * **Variant C (Assembly Graph)** has been ruled out.
 * The UI is designed as a **synthesis of Variant A (Factory Mission Control) and Variant B (Human Triage & Catch-Up Digest)**.
-* **Core Mandate**: The UI serves as the **only human-friendly window into Beads (`bd`)**, the primary intake for submitting new Feature Requests, the intervention desk for unblocking agents (`product-decision-required`), and the monitoring station for the autonomous factory.
+* **Core Mandate**: The UI serves as the **only human-friendly window into Beads (`bd`)**, the primary intake for submitting new Feature Requests, the intervention desk for resolving human pauses with explicit guarded actions, and the monitoring station for the autonomous factory.
 
 ---
 
@@ -33,11 +33,9 @@ flowchart TD
 ### 1. The Human Attention Desk (`product-decision-required` & `needs-human`)
 * **Purpose**: Step in where human judgment is strictly required.
 * **Inline Resolution Studio**:
-  * For `product-decision-required`: Reads the Planner or Implementer Agent's question directly, provides an input box for guidance, and upon submission executes:
-    1. `bd comments add <id> "<human-guidance>"`
-    2. `bd update <id> --remove-label product-decision-required`
-    3. Notifies the Orchestrator to auto-resume the agent in the appropriate pool slot.
-  * For `needs-human`: Displays diagnostic logs, repair cycle count (`3/3`), and provides one-click actions (*Reset Budget & Retry*, *Copy Checkout Command*, *Abort & Close Bead*).
+  * For `product-decision-required`: Reads the Planner or Implementer Agent's question, provides separate **Save Note** and **Send & Resume** actions, and sends the displayed stage, pause labels, and repair count with Resume. The host compares that snapshot with current tracker state and performs one guarded update to clear both pause labels and `repair_cycles` while preserving stage and unrelated fields.
+  * For `needs-human`: Displays diagnostics and the repair cycle count (`3/3`), then offers **Save Note**, **Reset Budget & Retry**, and **Abort & Close Bead**. Retry uses the same snapshot check and guarded update; Abort closes while retaining pause labels and repair budget.
+  * Notes, comments, description edits, and audit history provide context only. A successful Resume or Retry makes work eligible for the ordinary dependency, capacity, stage, and claim scheduler; the action does not directly launch an Agent. Stale, closed, or claimed work returns a conflict and refreshes the view without reposting.
   * **Direct Deep Link**: Includes an explicit **"Open Full Bead Workspace ↗"** link to transition from shorthand triage into deep context analysis.
 
 ### 2. Product Bead Intake Composer (`+ New Feature / Bug`)

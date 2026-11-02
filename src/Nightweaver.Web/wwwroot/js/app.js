@@ -353,9 +353,17 @@ async function submitAttentionAction(item, action, instruction = undefined) {
     "X-Nightweaver-Request": "console-v1"
   };
   const options = { method: "POST", headers, cache: "no-store" };
+  const expected = {
+    stage: item.stage ?? null,
+    pauseLabels: item.labels.filter(label => label === "needs-human" || label === "product-decision-required"),
+    repairCycles: item.repairCycles ?? 0
+  };
   if (action === "resume" || action === "note_only") {
     headers["Content-Type"] = "application/json";
-    options.body = JSON.stringify({ instruction, action });
+    options.body = JSON.stringify(action === "resume" ? { instruction, action, expected } : { instruction, action });
+  } else if (action === "retry") {
+    headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify({ expected });
   }
 
   try {
@@ -399,6 +407,11 @@ async function submitAttentionAction(item, action, instruction = undefined) {
     attentionMessages.set(item.beadId, error instanceof Error ? error.message : "The action could not be confirmed. Refresh before retrying.");
     if (attentionStatus) attentionStatus.textContent = `Action for ${item.beadId} needs attention.`;
     focusAfterRender = "message";
+    await Promise.allSettled([
+      loadAttention(),
+      loadBeads(),
+      workspaceCurrentId === item.beadId ? loadWorkspace(item.beadId, { manual: true }) : Promise.resolve(false)
+    ]);
   } finally {
     const activeElement = document.activeElement;
     const activeCardId = activeElement instanceof HTMLElement

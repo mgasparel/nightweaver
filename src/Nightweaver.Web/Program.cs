@@ -189,7 +189,7 @@ public sealed class Program
                     title: "Invalid Attention Desk request", detail: exception.Message);
             }
             return await ExecuteAttentionActionAsync(context, id,
-                () => tracker.DecideAsync(id, request.Instruction, request.Action, context.RequestAborted), logger);
+                () => tracker.DecideAsync(id, request.Instruction, request.Action, request.Expected, context.RequestAborted), logger);
         });
         app.MapPost("/api/beads/{id}/retry", async (HttpContext context, string id, TrackerBridge tracker,
             LocalMutationRequestPolicy policy, ILogger<Program> logger) =>
@@ -201,11 +201,17 @@ public sealed class Program
             if (!policy.Allows(context.Request))
                 return Results.Problem(statusCode: StatusCodes.Status403Forbidden,
                     title: "Request origin rejected", detail: "Use the local Nightweaver console to submit this action.");
-            var body = await ReadEmptyActionBodyAsync(context.Request, context.RequestAborted);
-            if (body.Error is not null) return body.Error;
+            if (!IsJsonContentType(context.Request.ContentType))
+                return Results.Problem(statusCode: StatusCodes.Status415UnsupportedMediaType,
+                    title: "Unsupported media type", detail: "Submit the retry snapshot as application/json.");
+            var body = await BoundedRequestBody.ReadAsync(context.Request, context.RequestAborted, 32 * 1024);
+            if (body is null)
+                return Results.Problem(statusCode: StatusCodes.Status413PayloadTooLarge,
+                    title: "Request body too large", detail: "The request body cannot exceed 32 KiB.");
+            RetryAttentionRequest request;
             try
             {
-                AttentionMutationRequest.ParseEmptyAction(body.Bytes!);
+                request = AttentionMutationRequest.ParseRetry(body);
             }
             catch (AttentionRequestValidationException exception)
             {
@@ -213,7 +219,7 @@ public sealed class Program
                     title: "Invalid Attention Desk request", detail: exception.Message);
             }
             return await ExecuteAttentionActionAsync(context, id,
-                () => tracker.RetryAsync(id, context.RequestAborted), logger);
+                () => tracker.RetryAsync(id, request.Expected, context.RequestAborted), logger);
         });
         app.MapPost("/api/beads/{id}/abort", async (HttpContext context, string id, TrackerBridge tracker,
             LocalMutationRequestPolicy policy, ILogger<Program> logger) =>

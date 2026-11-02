@@ -175,7 +175,7 @@
           </div>
         </div>
         <div class="text-xs text-[var(--muted-foreground)] font-mono">
-          Auto-resumes upon submission
+          Explicit guarded Resume / Retry
         </div>
       </div>
 
@@ -654,7 +654,7 @@
             </div>
 
             <p class="text-xs text-[var(--muted-foreground)]">
-              This response will be piped directly into the next invocation of the active agent inside its isolated worktree. Submitting clears the pause label and releases the claim back to the factory queue.
+              Save Note adds context while the Bead stays paused. Resume checks this displayed stage, pause labels, and repair count before a guarded update. The ordinary scheduler decides when eligible work can run.
             </p>
 
             <textarea id="wsGuidanceInput" rows="4" class="w-full bg-[var(--background)] border border-[var(--border)] focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] rounded-xl p-4 text-sm text-[var(--foreground)] placeholder-[var(--placeholder)] outline-none resize-none leading-relaxed" placeholder="Type your architectural decision, instructions, or clarifications here..."></textarea>
@@ -675,7 +675,7 @@
                 </button>
                 <button onclick="submitWorkspaceDecision()" class="px-5 py-2 rounded-xl bg-[var(--primary)] hover:opacity-90 text-[var(--primary-foreground)] text-xs font-bold transition-all shadow-sm flex items-center gap-2">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                  Post Guidance &amp; Resume Agent
+                  Send &amp; Resume
                 </button>
               </div>
             </div>
@@ -1337,14 +1337,14 @@
         return;
       }
 
-      alert(`Decision Recorded for ${currentBeadId}!\n\nExecuting Orchestrator Actions:\n1. bd comments add ${currentBeadId} "${text}"\n2. bd update ${currentBeadId} --remove-label product-decision-required\n\nThe Planner Agent has been re-dispatched into Planning Pool Slot 1.`);
+      alert(`Decision recorded for ${currentBeadId}.\n\nThe host compares the displayed workflow snapshot, then attempts one guarded update that clears both pause labels and repair_cycles while preserving stage and unrelated fields. Ordinary scheduling checks eligibility afterward; this action does not start an Agent.`);
 
       input.value = '';
       
       // Update bead state in memory
       if (BEADS_DB[currentBeadId]) {
         BEADS_DB[currentBeadId].label = 'active';
-        BEADS_DB[currentBeadId].status = 'in_progress';
+        BEADS_DB[currentBeadId].status = 'open';
         BEADS_DB[currentBeadId].comments.push({
           id: 'c' + Date.now(),
           author: 'mgasp (Human Operator)',
@@ -1384,7 +1384,7 @@
     function resolveProductDecision(cardId, beadId) {
       const input = document.getElementById('decisionInput1');
       const val = input.value.trim() || "Use DPAPI Bearer JWT with 12h rotation. Proceed with planning.";
-      alert('Decision submitted for ' + beadId + ':\n"' + val + '"\n\nNightweaver Orchestrator:\n1. Added comment to bd comments\n2. Removed product-decision-required label\n3. Resumed Planner Agent in Planning Pool slot.');
+      alert('Resume requested for ' + beadId + ':\n"' + val + '"\n\nThe host checks the displayed workflow snapshot and performs a guarded tracker update. A normal scheduler pass handles any later dispatch.');
       
       const card = document.getElementById(cardId);
       if (card) {
@@ -1396,11 +1396,11 @@
     // Resolve Needs Human from card
     function resolveNeedsHuman(cardId, action) {
       if (action === 'retry') {
-        alert('Resetting repair_cycles metadata in bd. Worktree reset to clean HEAD. Rescheduling QA Agent.');
+        alert('Retry clears both pause labels and repair_cycles in one guarded update. The retained worktree is preserved; ordinary scheduling checks the resumed Bead.');
       } else if (action === 'takeover') {
         alert('Copied to clipboard:\ngit checkout nightweaver/ns-du2.1\n\nBranch and PR #43 are preserved for manual fixes.');
       } else if (action === 'abort') {
-        alert('Closing bead ns-du2.1 as deferred/closed. Worktree cleaned up.');
+        alert('Closing bead ns-du2.1. Pause labels, repair budget, worktree, and pull request are retained.');
       }
       const card = document.getElementById(cardId);
       if (card) {
