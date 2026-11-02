@@ -340,8 +340,8 @@ function invalidateAttentionRead() {
   setAttentionLoading(false);
 }
 
-async function submitAttentionAction(item, action, instruction = undefined) {
-  if (attentionActions.has(item.beadId) || attentionActionBlocked.has(item.beadId)) return false;
+async function submitAttentionAction(item, action, instruction = undefined, { workspaceReadConfirmed = false } = {}) {
+  if (attentionActions.has(item.beadId) || (!workspaceReadConfirmed && attentionActionBlocked.has(item.beadId))) return false;
   const focusedCardId = document.activeElement instanceof HTMLElement
     ? document.activeElement.closest(".attention-card")?.dataset.beadId : undefined;
   const actionStartedOnCard = focusedCardId === item.beadId;
@@ -1146,7 +1146,7 @@ function renderWorkspaceGuidanceActions(data) {
   const attention = data.attention;
   const beadId = data.bead.id;
   const busy = attentionActions.has(beadId);
-  const blocked = workspaceIsStale || workspaceActionBlocked || attentionActionBlocked.has(beadId) || busy;
+  const blocked = workspaceIsStale || workspaceActionBlocked || busy;
   const decision = attention?.kind === "product-decision-required";
   const needsHuman = attention?.kind === "needs-human";
   const guidanceLabel = document.querySelector('label[for="workspace-guidance-input"]');
@@ -1316,8 +1316,7 @@ async function loadWorkspace(id, { manual = false } = {}) {
 async function submitWorkspaceAction(action) {
   const data = workspaceData;
   if (!data || data.bead.id !== workspaceCurrentId || !data.attention
-    || workspaceIsStale || workspaceActionBlocked || attentionActionBlocked.has(data.bead.id)
-    || attentionActions.has(data.bead.id)) return;
+    || workspaceIsStale || workspaceActionBlocked || attentionActions.has(data.bead.id)) return;
   const beadId = data.bead.id;
   const item = data.attention;
   let instruction;
@@ -1328,7 +1327,7 @@ async function submitWorkspaceAction(action) {
   workspaceGuidanceActions.setAttribute("aria-busy", "true");
   workspaceGuidanceActions.querySelectorAll("button").forEach(button => { button.disabled = true; });
   workspaceGuidanceInput.disabled = true;
-  const accepted = await submitAttentionAction(item, action, instruction);
+  const accepted = await submitAttentionAction(item, action, instruction, { workspaceReadConfirmed: true });
   if (workspaceCurrentId !== beadId) return;
   workspaceGuidanceActions.removeAttribute("aria-busy");
   if (!accepted) {

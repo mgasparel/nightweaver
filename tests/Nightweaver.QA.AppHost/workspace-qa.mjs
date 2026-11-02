@@ -276,6 +276,7 @@ try {
   await guidance.fill('Failure draft must stay.');
   failActionId = decisionId;
   interceptedActionCount = 0;
+  failAttentionReads = 1;
   await page.getByRole('button', { name: 'Save Note' }).click();
   await page.locator('#workspace-action-message').getByText('The QA action could not be confirmed.', { exact: true }).waitFor();
   check(interceptedActionCount === 1 && await guidance.inputValue() === 'Failure draft must stay.', 'A failed action lost its draft or was submitted more than once.');
@@ -286,6 +287,22 @@ try {
   await page.waitForFunction(() => document.querySelector('#workspace-guidance-input')?.disabled === false);
   check(await guidance.inputValue() === 'Failure draft must stay.' && interceptedActionCount === 1,
     'A successful refresh did not preserve the decision draft or the failed action was reposted.');
+
+  await page.locator('a[href="#attention"]').first().click();
+  const retainedDeskCard = page.locator('#attention-cards .attention-card').filter({ hasText: 'QA product decision' });
+  await retainedDeskCard.waitFor({ timeout: 15000 });
+  check(await retainedDeskCard.getByRole('button', { name: 'Send & Resume' }).isDisabled(),
+    'A successful Workspace refresh incorrectly cleared the pinned Desk stale-snapshot block.');
+  await page.locator('#attention-refresh').click();
+  await page.waitForFunction(id => {
+    const card = Array.from(document.querySelectorAll('#attention-cards .attention-card'))
+      .find(element => element.dataset.beadId === id);
+    return card && !card.querySelector('button.primary-action')?.disabled;
+  }, decisionId);
+  check(interceptedActionCount === 1, 'Refreshing the Attention Desk reposted the failed Workspace action.');
+  console.log('PASS: Workspace Refresh recovers workspace controls after an Attention read failure while the pinned Desk stays blocked until its own successful read.');
+  await routeTo(decisionId);
+  await waitForTitle('QA product decision');
 
   // A delayed real action response cannot overwrite a different Bead's draft.
   delayedActionId = decisionId;
@@ -412,6 +429,7 @@ try {
   const expectedBrowserErrors = [
     { method: 'POST', path: `/api/beads/${decisionId}/decide`, status: 503 },
     { method: 'POST', path: `/api/beads/${decisionId}/decide`, status: 503 },
+    { method: 'GET', path: '/api/attention', status: 503 },
     { method: 'GET', path: '/api/attention', status: 503 },
     { method: 'GET', path: '/api/attention', status: 503 },
     { method: 'GET', path: `/api/beads/${decisionId}-again`, status: 404 },
