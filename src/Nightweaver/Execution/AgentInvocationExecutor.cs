@@ -107,12 +107,10 @@ internal sealed class AgentInvocationExecutor
 
             // The role wall-clock budget starts immediately before native launch and includes prompt delivery.
             var launchStarted = Stopwatch.GetTimestamp();
-            if (!ContinuousAgentLaunchContext.TryLaunch(() =>
-                {
-                    child = processLauncher is null
-                        ? WindowsProcessLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment)
-                        : processLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment);
-                }))
+            if (!ContinuousAgentLaunchContext.TryLaunchAgent(() => processLauncher is null
+                    ? WindowsProcessLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment)
+                    : processLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment),
+                    out child))
                 throw new AgentLaunchDeniedException();
             var launchedChild = child ?? throw new InvalidOperationException("Native Agent launch completed without returning its process handle.");
             rootExit = launchedChild.WaitForRootExitAsync();

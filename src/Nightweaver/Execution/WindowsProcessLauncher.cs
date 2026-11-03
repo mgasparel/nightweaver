@@ -430,10 +430,11 @@ internal static class WindowsProcessLauncher
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetExitCodeProcess(SafeKernelHandle process, out uint exitCode);
 
-    internal sealed class WindowsAgentProcess : IDisposable
+    internal sealed class WindowsAgentProcess : IDisposable, IForceCloseAgentJob
     {
         private SafeKernelHandle? job;
         private SafeKernelHandle? process;
+        private Action<IForceCloseAgentJob>? jobClosedCallback;
         private bool disposed;
 
         internal WindowsAgentProcess(SafeKernelHandle job, SafeKernelHandle process,
@@ -449,6 +450,15 @@ internal static class WindowsProcessLauncher
         internal FileStream StandardInput { get; }
         internal FileStream StandardOutput { get; }
         internal FileStream StandardError { get; }
+
+        internal void SetJobClosedCallback(Action<IForceCloseAgentJob> callback)
+        {
+            ArgumentNullException.ThrowIfNull(callback);
+            if (Interlocked.CompareExchange(ref jobClosedCallback, callback, null) is not null)
+                throw new InvalidOperationException("An Agent Job Object already has a close callback.");
+            if (Volatile.Read(ref job) is null)
+                Interlocked.Exchange(ref jobClosedCallback, null)?.Invoke(this);
+        }
 
         internal Task<uint> WaitForRootExitAsync() => Task.Run(() =>
         {
@@ -500,9 +510,12 @@ internal static class WindowsProcessLauncher
         internal bool CloseJob()
         {
             var current = Interlocked.Exchange(ref job, null);
-            current?.Dispose();
+            try { current?.Dispose(); }
+            finally { Interlocked.Exchange(ref jobClosedCallback, null)?.Invoke(this); }
             return current is not null;
         }
+
+        public void CloseForForceStop() => CloseJob();
 
         public void Dispose()
         {

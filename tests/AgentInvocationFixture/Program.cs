@@ -21,6 +21,8 @@ internal static class Program
 
         if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "bd", StringComparison.OrdinalIgnoreCase))
             return RunBdShim(args);
+        if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "git", StringComparison.OrdinalIgnoreCase))
+            return RunGitShim(args);
         if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "gh", StringComparison.OrdinalIgnoreCase))
             return RunGhShim(args);
 
@@ -102,6 +104,9 @@ internal static class Program
                 return 0;
             case "hold":
                 File.WriteAllText(args[1], Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                while (true) Thread.Sleep(1000);
+            case "hold-identity":
+                File.WriteAllText(args[1], $"{Environment.ProcessId}|{Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks}", new UTF8Encoding(false));
                 while (true) Thread.Sleep(1000);
             default:
                 return 66;
@@ -295,10 +300,85 @@ internal static class Program
             return 74;
         }
 
+        if (mode == "force-stop-finalization-gate" && isRecoveryRelease)
+        {
+            var startedFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_BD_SHIM_STARTED_FILE")
+                ?? throw new InvalidOperationException("The native bd finalization gate requires a started-file path.");
+            var releaseFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_BD_SHIM_RELEASE_FILE")
+                ?? throw new InvalidOperationException("The native bd finalization gate requires a release-file path.");
+            WriteProcessIdentity(startedFile);
+            WaitForFile(releaseFile, TimeSpan.FromMinutes(2));
+            if (Environment.GetEnvironmentVariable("NIGHTWEAVER_BD_SHIM_COMMIT_AFTER_RELEASE") == "false")
+            {
+                Console.Error.WriteLine("fixture guarded release did not commit before force stop");
+                return 75;
+            }
+        }
+
         var result = RunRealBd(realBd, args);
         WriteResult(result);
         if (mode == "recovery-uncertain-write" && isRecoveryRelease && result.ExitCode == 0) return 73;
         return result.ExitCode;
+    }
+
+    private static int RunGitShim(string[] args)
+    {
+        var realGit = Environment.GetEnvironmentVariable("NIGHTWEAVER_GIT_REAL_PATH")
+            ?? throw new InvalidOperationException("The native git shim real executable path is missing.");
+        var mode = Environment.GetEnvironmentVariable("NIGHTWEAVER_GIT_SHIM_MODE");
+        var targetWorktree = Environment.GetEnvironmentVariable("NIGHTWEAVER_GIT_SHIM_TARGET_WORKTREE");
+        if (mode == "force-stop-status-gate" && targetWorktree is not null
+            && string.Equals(Path.GetFullPath(Environment.CurrentDirectory), Path.GetFullPath(targetWorktree), StringComparison.OrdinalIgnoreCase)
+            && args.SequenceEqual(["status", "--porcelain"], StringComparer.Ordinal))
+        {
+            var startedFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_GIT_SHIM_STARTED_FILE")
+                ?? throw new InvalidOperationException("The native git verification gate requires a started-file path.");
+            var releaseFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_GIT_SHIM_RELEASE_FILE")
+                ?? throw new InvalidOperationException("The native git verification gate requires a release-file path.");
+            AppendShimLog($"gate-start pid={Environment.ProcessId} cwd={Environment.CurrentDirectory} release={releaseFile} release_exists={File.Exists(releaseFile)}");
+            WriteProcessIdentity(startedFile);
+            WaitForFile(releaseFile, TimeSpan.FromMinutes(2));
+            AppendShimLog($"gate-released pid={Environment.ProcessId}");
+        }
+
+        var exitCode = RunRealGit(realGit, args);
+        AppendShimLog($"git-exit pid={Environment.ProcessId} code={exitCode}");
+        return exitCode;
+    }
+
+    private static void AppendShimLog(string line)
+    {
+        var path = Environment.GetEnvironmentVariable("NIGHTWEAVER_GIT_SHIM_LOG");
+        if (!string.IsNullOrWhiteSpace(path))
+            File.AppendAllText(path, line + Environment.NewLine, new UTF8Encoding(false));
+    }
+
+    private static void WriteProcessIdentity(string path) =>
+        File.WriteAllText(path,
+            $"{Environment.ProcessId}|{Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks}",
+            new UTF8Encoding(false));
+
+    private static int RunRealGit(string executable, string[] args)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executable,
+            WorkingDirectory = Environment.CurrentDirectory,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var argument in args) startInfo.ArgumentList.Add(argument);
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start the real git executable.");
+        process.StandardInput.Close();
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        try { Console.Out.Write(stdout); Console.Error.Write(stderr); }
+        catch (IOException) { }
+        return process.ExitCode;
     }
 
     private static bool HasOptionValue(string[] args, string option, string value)
@@ -412,6 +492,9 @@ internal static class Program
         var beadId = Environment.GetEnvironmentVariable("NIGHTWEAVER_BEAD_ID")
             ?? throw new InvalidOperationException("NIGHTWEAVER_BEAD_ID is missing.");
         var pidPath = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE");
+        var pidDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_DIRECTORY");
+        if (!string.IsNullOrWhiteSpace(pidDirectory))
+            pidPath = Path.Combine(pidDirectory, beadId + ".pid");
         if (!string.IsNullOrWhiteSpace(pidPath))
         {
             var startTime = Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks;
@@ -419,7 +502,9 @@ internal static class Program
         }
         var launchLog = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_STAGE_LAUNCH_LOG");
         if (!string.IsNullOrWhiteSpace(launchLog))
-            File.AppendAllText(launchLog, $"{beadId}|{Environment.ProcessId}{Environment.NewLine}", new UTF8Encoding(false));
+            File.AppendAllText(launchLog,
+                $"{beadId}|{Environment.ProcessId}|{Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks}{Environment.NewLine}",
+                new UTF8Encoding(false));
 
         switch (action)
         {
@@ -486,7 +571,42 @@ internal static class Program
                     ?? throw new InvalidOperationException("Pool fixture started-file path is missing.");
                 var releaseFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_RELEASE_FILE")
                     ?? throw new InvalidOperationException("Pool fixture release-file path is missing.");
+                var releaseDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_RELEASE_DIRECTORY");
+                if (!string.IsNullOrWhiteSpace(releaseDirectory))
+                    releaseFile = Path.Combine(releaseDirectory, beadId + ".release");
+                var worktreeMarker = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_WORKTREE_MARKER_FILE");
+                var worktreeMarkerDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_WORKTREE_MARKER_DIRECTORY");
+                if (!string.IsNullOrWhiteSpace(worktreeMarkerDirectory))
+                    worktreeMarker = Path.Combine(worktreeMarkerDirectory, beadId + ".path");
+                if (!string.IsNullOrWhiteSpace(worktreeMarker))
+                {
+                    File.WriteAllText(worktreeMarker, Environment.CurrentDirectory, new UTF8Encoding(false));
+                    var retainedWorkFile = Path.Combine(Environment.CurrentDirectory, "force-stop-retained.txt");
+                    File.WriteAllText(retainedWorkFile,
+                        "uncommitted work must survive force stop\n", new UTF8Encoding(false));
+                    if (Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_COMMIT_WORKTREE_MARKER") == "true")
+                    {
+                        Run("git", ["add", "force-stop-retained.txt"]);
+                        Run("git", ["commit", "-m", "fixture retained work seed"]);
+                        Run("git", ["push", "origin", $"HEAD:nightweaver/{beadId}"]);
+                    }
+                }
+                var descendantPidFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_DESCENDANT_PID_FILE");
+                var descendantPidDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_DESCENDANT_PID_DIRECTORY");
+                if (!string.IsNullOrWhiteSpace(descendantPidDirectory))
+                    descendantPidFile = Path.Combine(descendantPidDirectory, beadId + ".pid");
+                if (!string.IsNullOrWhiteSpace(descendantPidFile))
+                {
+                    var fixtureAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION");
+                    Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION", null);
+                    try { SpawnProcess("hold-identity", descendantPidFile); }
+                    finally { Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION", fixtureAction); }
+                    WaitForFile(descendantPidFile);
+                }
                 File.WriteAllText(startedFile, beadId, new UTF8Encoding(false));
+                var readyDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_READY_DIRECTORY");
+                if (!string.IsNullOrWhiteSpace(readyDirectory))
+                    File.WriteAllText(Path.Combine(readyDirectory, beadId + ".ready"), "waiting for release", new UTF8Encoding(false));
                 WaitForFile(releaseFile, TimeSpan.FromMinutes(2));
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-slot.txt"), "slot implementation\n");
                 Directory.CreateDirectory(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored"));
@@ -507,6 +627,21 @@ internal static class Program
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "unfinished-after-stop.txt"),
                     "preserve this failed current turn\n", new UTF8Encoding(false));
                 return 23;
+            }
+            case "pool-implement-restart-observe":
+            {
+                var startedFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_STARTED_FILE")
+                    ?? throw new InvalidOperationException("Restart observer started-file path is missing.");
+                var markerDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_WORKTREE_MARKER_DIRECTORY")
+                    ?? throw new InvalidOperationException("Restart observer marker directory is missing.");
+                var retainedFile = Path.Combine(Environment.CurrentDirectory, "force-stop-retained.txt");
+                File.WriteAllText(Path.Combine(markerDirectory, beadId + ".restart"),
+                    $"{Environment.CurrentDirectory}|retained={File.Exists(retainedFile)}", new UTF8Encoding(false));
+                File.WriteAllText(startedFile, beadId, new UTF8Encoding(false));
+                var releaseDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_RELEASE_DIRECTORY")
+                    ?? throw new InvalidOperationException("Restart observer release directory is missing.");
+                WaitForFile(Path.Combine(releaseDirectory, beadId + ".release"), TimeSpan.FromMinutes(2));
+                break;
             }
             case "slot-implement-repair":
                 File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "delivery-repair.txt"), "repair committed\n");

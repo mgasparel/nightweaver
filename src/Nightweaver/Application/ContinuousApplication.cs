@@ -49,8 +49,6 @@ internal static class ContinuousApplication
             environment.Err.WriteLine($"nightweaver: startup cleanup retained '{diagnostic.BeadId}' at '{diagnostic.Path}': {diagnostic.Reason}");
 
         using var slotLifetime = new CancellationTokenSource();
-        var forceStopToken = shutdownSignals?.ForceStopToken ?? CancellationToken.None;
-        using var forceStopRegistration = forceStopToken.Register(slotLifetime.Cancel);
         var stopGate = shutdownSignals?.StopGate ?? new ContinuousStopGate();
         var pool = new DeliveryPoolCoordinator(hostPaths, project, repository, processRunner,
             slotLifetimeToken: slotLifetime.Token,
@@ -87,7 +85,7 @@ internal static class ContinuousApplication
 
         environment.Out.WriteLine($"Continuous Delivery runtime starting for Project '{project.Name.Value}' and Target Repository '{repository.Path}'.");
         environment.Out.WriteLine($"Delivery capacity: {pool.CapacityLimit}; periodic discovery: 30 seconds; press Ctrl+C to stop.");
-        var drained = await runtime.RunAsync(cancellationToken, forceStopToken).ConfigureAwait(false);
+        var drained = await runtime.RunAsync(cancellationToken).ConfigureAwait(false);
         return drained ? ExitCodes.Success : ExitCodes.InspectionFailure;
     }
 
