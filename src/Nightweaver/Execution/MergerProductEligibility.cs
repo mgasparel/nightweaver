@@ -8,6 +8,7 @@ internal enum MergerProductCheck
     MultipleCandidates,
     MissingProduct,
     NotPlannedProduct,
+    PausedProduct,
     AlreadyClosed,
     NotOpenOrUnassigned,
     NeedLinkedTasks,
@@ -33,6 +34,9 @@ internal static class MergerProductEligibility
         if (product.IssueType is not ("feature" or "bug")
             || !product.Labels.Contains("planned", StringComparer.Ordinal))
             return (MergerProductCheck.NotPlannedProduct, productId);
+        if (product.Labels.Contains("needs-human", StringComparer.Ordinal)
+            || product.Labels.Contains("product-decision-required", StringComparer.Ordinal))
+            return (MergerProductCheck.PausedProduct, productId);
         if (product.Status == "closed" && product.Assignee is null)
             return (MergerProductCheck.AlreadyClosed, productId);
         if (product.Status != "open" || product.Assignee is not null)

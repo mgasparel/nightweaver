@@ -31,7 +31,7 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
         Assert.Contains("if it changed, synchronize, push, and rerun the required local and pull request checks", merger, StringComparison.Ordinal);
         Assert.Contains("gh pr merge <number-or-url> --squash --delete-branch", merger, StringComparison.Ordinal);
         Assert.Contains("confirm it is `MERGED`", merger, StringComparison.Ordinal);
-        Assert.Contains("synchronized and checked head SHA", merger, StringComparison.Ordinal);
+        Assert.Contains("`checked_head` with the synchronized head SHA that passed required checks", merger, StringComparison.Ordinal);
         Assert.Contains("abort any active rebase with `git rebase --abort` before recording the finding", merger, StringComparison.Ordinal);
         Assert.Contains("Add one actionable JSON Bead comment", merger, StringComparison.Ordinal);
         Assert.Contains("nightweaver-merger-rejection-v1", merger, StringComparison.Ordinal);
@@ -46,12 +46,28 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
         Assert.Contains("then publishes the shared repair counter and guarded lifecycle handoff", merger, StringComparison.Ordinal);
         Assert.Contains("Agents never write stage labels, repair counters, pause/closure state, status, or assignee", merger, StringComparison.Ordinal);
         Assert.Contains("Leave every Bead lifecycle field unchanged.", merger, StringComparison.Ordinal);
-        Assert.Contains("The completion owner independently verifies the comment, pull request identity, checks, and fetched default-branch merge commit", merger, StringComparison.Ordinal);
+        Assert.Contains("The completion owner independently verifies this exact current-invocation comment, pull request identity, checks, and fetched default-branch merge commit", merger, StringComparison.Ordinal);
         Assert.DoesNotContain("Run `bd update`", merger, StringComparison.Ordinal);
         Assert.DoesNotContain("Run `bd close`", merger, StringComparison.Ordinal);
         Assert.Contains("established branch and worktree, inherited files, and temporary build artifacts", merger, StringComparison.Ordinal);
         Assert.Contains("A process failure, timeout, cancellation, authority mismatch", merger, StringComparison.Ordinal);
         Assert.Contains("is not semantic rejection", merger, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ShippedMergerSuccessSchemaIsAcceptedByTheProductionEvidenceParser()
+    {
+        var root = FindRepositoryRoot();
+        var merger = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "merger.md"), TestContext.Current.CancellationToken);
+        var schemaLines = merger.Split('\n', StringSplitOptions.TrimEntries)
+            .Where(line => line.StartsWith("nightweaver-merge-v1 ", StringComparison.Ordinal)).ToArray();
+
+        var schema = Assert.Single(schemaLines);
+        var parsed = Assert.NotNull(MergerOutcomeVerifier.ParseMergeEvidence(schema));
+        Assert.Equal("https://github.com/example/repository/pull/123", parsed.PullRequest);
+        Assert.Equal("0123456789abcdef0123456789abcdef01234567", parsed.CheckedHead);
+        Assert.Equal("squash", parsed.MergeMethod);
+        Assert.Equal("89abcdef0123456789abcdef0123456789abcdef", parsed.MergeCommit);
     }
 
     [Fact]

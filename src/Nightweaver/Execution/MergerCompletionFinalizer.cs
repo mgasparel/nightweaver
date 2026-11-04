@@ -13,7 +13,8 @@ internal sealed record MergerCompletionReceipt(
     bool CleanupSucceeded,
     bool ProductCompletionSucceeded,
     string? CleanupDiagnostic,
-    string? ProductDiagnostic);
+    string? ProductDiagnostic,
+    string? DiagnosticPersistenceDiagnostic);
 
 internal sealed record MergerCompletionResult(bool Succeeded, BeadWorkflowState? FinalState,
     MergerCompletionReceipt? Receipt, string? Diagnostic);
@@ -97,17 +98,19 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner)
         catch (OperationCanceledException) { throw; }
         catch (Exception exception) { productDiagnostic = Limit(exception.Message); }
 
+        string? diagnosticPersistenceDiagnostic = null;
         if (cleanupDiagnostic is not null || productDiagnostic is not null)
         {
             var diagnostic = $"Verified merge closure completed; cleanup={(cleanupDiagnostic is null ? "completed" : "failed: " + cleanupDiagnostic)}; Product completion={(productDiagnostic is null ? productSucceeded ? "completed or safely ineligible" : "safely ineligible" : "failed: " + productDiagnostic)}.";
             try { await AddCommentVerifiedAsync(session.Repository, session.BeadId, $"nightweaver-finalization-v1 {diagnostic}", CancellationToken.None).ConfigureAwait(false); }
-            catch (Exception exception) { diagnostic += $" Required housekeeping diagnostic could not be persisted: {Limit(exception.Message)}"; }
+            catch (Exception exception) { diagnosticPersistenceDiagnostic = Limit($"Required housekeeping diagnostic could not be persisted: {exception.Message}"); }
         }
 
         var receipt = new MergerCompletionReceipt(closedState, evidence.PullRequest, evidence.CheckedHead,
-            evidence.MergeCommit, cleanupDiagnostic is null, productDiagnostic is null, cleanupDiagnostic, productDiagnostic);
-        var resultDiagnostic = cleanupDiagnostic is null && productDiagnostic is null ? null
-            : $"Verified task closure succeeded; post-merge housekeeping needs attention. Cleanup: {cleanupDiagnostic ?? "completed"}; Product: {productDiagnostic ?? (productSucceeded ? "closed" : "safely ineligible or already complete")}.";
+            evidence.MergeCommit, cleanupDiagnostic is null, productDiagnostic is null, cleanupDiagnostic, productDiagnostic,
+            diagnosticPersistenceDiagnostic);
+        var resultDiagnostic = cleanupDiagnostic is null && productDiagnostic is null && diagnosticPersistenceDiagnostic is null ? null
+            : $"Verified task closure succeeded; post-merge housekeeping needs attention. Cleanup: {cleanupDiagnostic ?? "completed"}; Product: {productDiagnostic ?? (productSucceeded ? "completed or safely ineligible" : "safely ineligible or already complete")}; diagnostic persistence: {diagnosticPersistenceDiagnostic ?? (cleanupDiagnostic is null && productDiagnostic is null ? "not required" : "recorded")}.";
         return new(true, closedState, receipt, resultDiagnostic);
     }
 
@@ -193,7 +196,10 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner)
             if (branchRegistrations.Any(item => !item.Main && !item.Bare && item.Branch == branchRef))
                 throw new ToolExecutionException("verified local branch is still checked out elsewhere; it was retained");
             await EnsureClosedUnpausedTaskAsync(repository, beadId, cancellationToken).ConfigureAwait(false);
-            await RunGitAsync(["branch", "-D", branchName], repository.Path, cancellationToken).ConfigureAwait(false);
+            var deleteLocal = await RunGitAllowFailureAsync(["update-ref", "-d", branchRef, evidence.CheckedHead], repository.Path, cancellationToken)
+                .ConfigureAwait(false);
+            if (deleteLocal.ExitCode != 0)
+                throw new ToolExecutionException($"local branch changed since validation or conditional deletion failed; it was retained: {deleteLocal.StandardError.Trim()}");
             if ((await RunGitAllowFailureAsync(["show-ref", "--verify", "--quiet", branchRef], repository.Path, cancellationToken).ConfigureAwait(false)).ExitCode == 0)
                 throw new ToolExecutionException("local branch still exists after targeted deletion");
         }
@@ -276,13 +282,29 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner)
                 if (result.Status == "closed" && result.Assignee is null) return true;
             }
             catch (System.Text.Json.JsonException) { }
+            catch (FormatException) { }
         }
-        var after = await reader.ReadSnapshotAsync(repository, CancellationToken.None).ConfigureAwait(false);
+        var attemptFailure = writeFailure is not null
+            ? $"command error: {Limit(writeFailure.Message)}"
+            : write is null
+                ? "command returned no result"
+                : write.ExitCode == 13
+                    ? $"guard refused the update (exit 13): {Limit(write.StandardError)}"
+                    : write.ExitCode != 0
+                        ? $"bd update exited {write.ExitCode}: {Limit(write.StandardError)}"
+                        : $"bd returned an unconfirmed or malformed success response (exit 0): {Limit(write.StandardOutput)}";
+        BeadsInventory after;
+        try { after = await reader.ReadSnapshotAsync(repository, CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new ToolExecutionException($"Planned Product close was attempted but could not be confirmed after one fresh read; {attemptFailure}; reread failed: {Limit(exception.Message)}");
+        }
         var afterCheck = MergerProductEligibility.Evaluate(taskId, taskEdgesAgain, after, linkedAgain);
         if (afterCheck.Check == MergerProductCheck.AlreadyClosed) return true;
-        if (writeFailure is not null)
-            throw new ToolExecutionException($"Product close result could not be confirmed after a fresh read: {writeFailure.Message}");
-        return false;
+        var observed = after.ById.TryGetValue(productId, out var observedProduct)
+            ? $"observed status={observedProduct.Status}, assignee={observedProduct.Assignee ?? "(none)"}, labels=[{string.Join(',', observedProduct.Labels)}]"
+            : "Product was absent from the fresh inventory";
+        throw new ToolExecutionException($"Planned Product close was attempted but not confirmed after one fresh read; {attemptFailure}; {observed}.");
     }
 
     private async Task<BeadSnapshot> ReadTaskAsync(ValidatedTargetRepository repository, string beadId,

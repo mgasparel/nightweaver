@@ -234,8 +234,9 @@ internal sealed class MergerSlotCoordinator
                 && stage.StageResult.MergerCompletion is { } completion
                 && verified == completion.ClosedState && completion.ClosedState.Status == "closed")
             {
-                var diagnostic = completion.CleanupDiagnostic is null && completion.ProductDiagnostic is null ? null
-                    : $"Verified merge and task closure completed; post-merge housekeeping needs attention. Cleanup: {completion.CleanupDiagnostic ?? "completed"}; Product: {completion.ProductDiagnostic ?? "completed or safely ineligible"}.";
+                var diagnostic = completion.CleanupDiagnostic is null && completion.ProductDiagnostic is null
+                    && completion.DiagnosticPersistenceDiagnostic is null ? null
+                    : $"Verified merge and task closure completed; post-merge housekeeping needs attention. Cleanup: {completion.CleanupDiagnostic ?? "completed"}; Product: {completion.ProductDiagnostic ?? "completed or safely ineligible"}; diagnostic persistence: {completion.DiagnosticPersistenceDiagnostic ?? (completion.CleanupDiagnostic is null && completion.ProductDiagnostic is null ? "not required" : "recorded")}.";
                 return Result(MergerSlotDisposition.Merged, completion.ClosedState, stage, true, diagnostic);
             }
 

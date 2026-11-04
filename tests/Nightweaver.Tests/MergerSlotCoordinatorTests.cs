@@ -294,6 +294,29 @@ public sealed class MergerSlotCoordinatorTests
     }
 
     [Fact]
+    public async Task MergedSlotReturnsRequiredDiagnosticPersistenceFailure()
+    {
+        var runner = new MergerSlotProcessRunner();
+        var closed = new BeadWorkflowState("candidate", "task", "closed", "stage:merge", false, false, false, 0);
+        var completion = new MergerCompletionReceipt(closed, "https://example.invalid/pull/123", new string('a', 40),
+            new string('b', 40), CleanupSucceeded: false, ProductCompletionSucceeded: true,
+            CleanupDiagnostic: "cleanup needs retry", ProductDiagnostic: null,
+            DiagnosticPersistenceDiagnostic: "Required housekeeping diagnostic could not be persisted: injected write failure");
+        var stageResult = new AgentStageResult(AgentRole.Merger, "candidate", "fixture-invocation", string.Empty,
+            null, [], closed, OutcomeClassification: new(AgentOutcomeChoice.Approved, "fixture", "merged"),
+            MergerCompletion: completion);
+        var slot = CreateSlot(runner, (_, _, _, _, _, _, _, _, _) => Task.FromResult(
+            new OperationalRetryOutcome(OperationalRetryStatus.Succeeded, stageResult, 1, null, null, null)));
+
+        var result = await slot.RunAsync(CreateHost(), CreateProject(), CreateRepository(), "candidate",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MergerSlotDisposition.Merged, result.Disposition);
+        Assert.True(result.MergeCompleted);
+        Assert.Contains("Required housekeeping diagnostic could not be persisted", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task MissingVerifiedStateIsFailedAndLeavesTheClaimUntouched()
     {
         var runner = new MergerSlotProcessRunner();

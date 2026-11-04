@@ -200,7 +200,7 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         && !string.IsNullOrWhiteSpace(pullRequest.MergedAt)
         && string.Equals(pullRequest.MergeCommit, expectedMergeCommit, StringComparison.OrdinalIgnoreCase);
 
-    private static (string PullRequest, string CheckedHead, string MergeMethod, string MergeCommit)? ParseMergeEvidence(string text)
+    internal static (string PullRequest, string CheckedHead, string MergeMethod, string MergeCommit)? ParseMergeEvidence(string text)
     {
         var fields = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (fields.Length != 6 || fields[0] != "nightweaver-merge-v1") return null;
