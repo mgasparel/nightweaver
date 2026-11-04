@@ -182,8 +182,21 @@ internal static class Program
         var head = Run("git", ["rev-parse", "HEAD"]);
         if (args.Length >= 2 && args[0] == "pr" && args[1] == "checks")
         {
-            Console.WriteLine($"All required fixture checks passed for {head.Trim()}.");
-            return Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CI_RESULT") == "fail" ? 1 : 0;
+            var failed = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CI_RESULT") == "fail";
+            if (args.Contains("--json", StringComparer.Ordinal))
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new[]
+                {
+                    new { name = "fixture checks", state = failed ? "FAILURE" : "SUCCESS", bucket = failed ? "fail" : "pass" }
+                }));
+            }
+            else
+            {
+                Console.WriteLine(failed
+                    ? $"Required check fixture checks failed for synchronized HEAD {head.Trim()}."
+                    : $"All required fixture checks passed for {head.Trim()}.");
+            }
+            return failed ? 1 : 0;
         }
 
         if (args.Length >= 2 && args[0] == "pr" && args[1] == "merge")
@@ -769,7 +782,7 @@ internal static class Program
                 Run("git", ["commit", "-m", "fixture verified Merger change"]);
                 head = Run("git", ["rev-parse", "HEAD"]).Trim();
                 Run("git", ["push", "--force-with-lease", "origin", $"HEAD:refs/heads/{branch}"]);
-                var pullRequest = "https://example.invalid/pull/fixture";
+                var pullRequest = $"https://example.invalid/pull/{Uri.EscapeDataString(branch)}";
                 var beforeChecks = ReadPullRequest(pullRequest);
                 if (beforeChecks.GetProperty("state").GetString() != "OPEN"
                     || beforeChecks.GetProperty("headRefOid").GetString() != head)
@@ -786,7 +799,111 @@ internal static class Program
                 var mergeCommit = merged.GetProperty("mergeCommit").GetProperty("oid").GetString();
                 Run("bd", ["comments", "add", beadId,
                     $"nightweaver-merge-v1 pull_request={pullRequest} checked_head={head} required_checks=passed merge_method=squash merge_commit={mergeCommit}"]);
-                Run("bd", ["close", beadId]);
+                break;
+            }
+            case "merger-reject-checks":
+            {
+                var defaultBranch = Environment.GetEnvironmentVariable("NIGHTWEAVER_DEFAULT_BRANCH") ?? "main";
+                var branch = Run("git", ["branch", "--show-current"]).Trim();
+                Run("git", ["fetch", "origin", defaultBranch]);
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "merger-rejected.txt"),
+                    "fixture change rejected by required CI checks\n", new UTF8Encoding(false));
+                Run("git", ["add", "merger-rejected.txt"]);
+                Run("git", ["commit", "-m", "fixture Merger change rejected by checks"]);
+                var head = Run("git", ["rev-parse", "HEAD"]).Trim();
+                Run("git", ["push", "--force-with-lease", "origin", $"HEAD:refs/heads/{branch}"]);
+                var pullRequest = $"https://example.invalid/pull/{Uri.EscapeDataString(branch)}";
+                var beforeChecks = ReadPullRequest(pullRequest);
+                if (beforeChecks.GetProperty("state").GetString() != "OPEN"
+                    || beforeChecks.GetProperty("headRefOid").GetString() != head)
+                    throw new InvalidOperationException("Fixture pull request did not identify the synchronized current HEAD before rejection.");
+
+                try
+                {
+                    Run("gh", ["pr", "checks", pullRequest, "--watch"]);
+                    throw new InvalidOperationException("The controlled fixture check was expected to fail.");
+                }
+                catch (InvalidOperationException exception) when (exception.Message.Contains("exited 1", StringComparison.Ordinal))
+                {
+                    AbortRebaseIfActive();
+                    const string subject = "fixture checks";
+                    var details = $"Required check '{subject}' failed for synchronized HEAD {head}; inspect merger-rejected.txt and fix the reported behavior.";
+                    var finding = JsonSerializer.Serialize(new
+                    {
+                        schema = "nightweaver-merger-rejection-v1",
+                        kind = "checks",
+                        pull_request = pullRequest,
+                        checked_head = head,
+                        subject,
+                        summary = "Required CI rejected the synchronized Merger branch.",
+                        details
+                    });
+                    Run("bd", ["comments", "add", beadId, finding]);
+                    Console.WriteLine($"Merger rejection evidence: {subject}; {details}");
+                    var persisted = ReadFixtureBead(beadId);
+                    var metadata = persisted.GetProperty("metadata");
+                    var cycles = metadata.TryGetProperty("repair_cycles", out var count) ? count.GetInt32() : 0;
+                    if (cycles != 0)
+                        throw new InvalidOperationException($"Expected repair_cycles=0 before rejection, observed {cycles}.");
+                    var unchanged = ReadFixtureBead(beadId);
+                    var labels = unchanged.GetProperty("labels").EnumerateArray().Select(label => label.GetString()).ToArray();
+                    var state = unchanged.GetProperty("metadata");
+                    var unchangedCycles = state.TryGetProperty("repair_cycles", out var unchangedCounter)
+                        ? unchangedCounter.GetInt32()
+                        : 0;
+                    if (unchanged.GetProperty("status").GetString() != "in_progress"
+                        || unchanged.GetProperty("assignee").GetString() != Environment.GetEnvironmentVariable("BD_ACTOR")
+                        || !labels.Contains("stage:merge", StringComparer.Ordinal)
+                        || labels.Contains("stage:implement", StringComparer.Ordinal)
+                        || !labels.Contains("keep:label", StringComparer.Ordinal)
+                        || unchangedCycles != 0
+                        || state.GetProperty("retained").GetString() != "fixture")
+                        throw new InvalidOperationException("Merger agent changed lifecycle state while recording rejection evidence.");
+                    break;
+                }
+            }
+            case "merger-resumed-implement":
+            {
+                var bead = ReadFixtureBead(beadId);
+                var labels = bead.GetProperty("labels").EnumerateArray().Select(label => label.GetString()).ToArray();
+                var metadata = bead.GetProperty("metadata");
+                var expectedCycles = int.Parse(Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_EXPECTED_REPAIR_CYCLES") ?? "1",
+                    System.Globalization.CultureInfo.InvariantCulture);
+                var expectedFinding = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_EXPECTED_FINDING")
+                    ?? throw new InvalidOperationException("Expected Merger finding is missing.");
+                var comments = JsonDocument.Parse(Run("bd", ["comments", beadId, "--json"]));
+                var foundFinding = comments.RootElement.EnumerateArray().Any(comment =>
+                    comment.GetProperty("text").GetString()?.Contains(expectedFinding, StringComparison.Ordinal) == true);
+                var warmSentinel = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_WARM_SENTINEL")
+                    ?? throw new InvalidOperationException("Warm artifact path is missing.");
+                var tmpSentinel = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_TMP_SENTINEL")
+                    ?? throw new InvalidOperationException("Temporary artifact path is missing.");
+                if (bead.GetProperty("status").GetString() != "in_progress"
+                    || !string.Equals(bead.GetProperty("assignee").GetString(), Environment.GetEnvironmentVariable("BD_ACTOR"), StringComparison.Ordinal)
+                    || !labels.Contains("stage:implement", StringComparer.Ordinal)
+                    || !labels.Contains("keep:label", StringComparer.Ordinal)
+                    || metadata.GetProperty("repair_cycles").GetInt32() != expectedCycles
+                    || metadata.GetProperty("retained").GetString() != "fixture"
+                    || !foundFinding || !File.Exists(warmSentinel) || !File.Exists(tmpSentinel))
+                    throw new InvalidOperationException("Delivery Implementer could not observe the rejection finding, repair budget, or retained worktree/tmp resources.");
+
+                var evidencePath = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_RESUME_EVIDENCE")
+                    ?? throw new InvalidOperationException("Delivery resume evidence path is missing.");
+                File.WriteAllText(evidencePath, JsonSerializer.Serialize(new
+                {
+                    beadId,
+                    role = "implementer",
+                    repairCycles = expectedCycles,
+                    finding = expectedFinding,
+                    warmArtifactPresent = true,
+                    tmpArtifactPresent = true
+                }), new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-repair.txt"),
+                    "Delivery resumed from the verified Merger rejection.\n", new UTF8Encoding(false));
+                Run("git", ["add", "delivery-repair.txt"]);
+                Run("git", ["commit", "-m", "fixture Delivery repair after Merger rejection"]);
+                var branch = Run("git", ["branch", "--show-current"]).Trim();
+                Run("git", ["push", "origin", $"HEAD:refs/heads/{branch}"]);
                 break;
             }
             default:
@@ -865,6 +982,23 @@ internal static class Program
         Run("bd", ["comments", "add", beadId, finding]);
         Run("bd", ["update", beadId, "--remove-label", stage, "--add-label", "stage:implement",
             "--set-metadata", $"repair_cycles={repairCycles}"]);
+    }
+
+    private static JsonElement ReadFixtureBead(string beadId)
+    {
+        using var document = JsonDocument.Parse(Run("bd", ["show", beadId, "--json"]));
+        var root = document.RootElement;
+        return (root.ValueKind == JsonValueKind.Array ? root[0] : root).Clone();
+    }
+
+    private static void AbortRebaseIfActive()
+    {
+        foreach (var state in new[] { "rebase-merge", "rebase-apply" })
+        {
+            var path = Run("git", ["rev-parse", "--git-path", state]).Trim();
+            if (Directory.Exists(path) || File.Exists(path))
+                Run("git", ["rebase", "--abort"]);
+        }
     }
 
     private static string Run(string fileName, IReadOnlyList<string> arguments)

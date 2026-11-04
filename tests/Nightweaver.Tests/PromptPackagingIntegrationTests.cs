@@ -18,7 +18,7 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
     ];
 
     [Fact]
-    public async Task MergerPromptRequiresCurrentHeadChecksAndConfirmedMergeBeforeClosure()
+    public async Task MergerPromptRequiresCurrentHeadChecksAndEvidenceOnlyLifecycleAuthority()
     {
         var root = FindRepositoryRoot();
         var merger = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "merger.md"), TestContext.Current.CancellationToken);
@@ -30,8 +30,20 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
         Assert.Contains("gh pr checks <number-or-url> --watch", merger, StringComparison.Ordinal);
         Assert.Contains("if it changed, synchronize, push, and rerun the required local and pull request checks", merger, StringComparison.Ordinal);
         Assert.Contains("gh pr merge <number-or-url> --squash --delete-branch", merger, StringComparison.Ordinal);
-        Assert.Contains("confirm it is `MERGED` before closing the Plan Bead", merger, StringComparison.Ordinal);
+        Assert.Contains("confirm it is `MERGED`", merger, StringComparison.Ordinal);
         Assert.Contains("synchronized and checked head SHA", merger, StringComparison.Ordinal);
+        Assert.Contains("abort any active rebase with `git rebase --abort` before recording the finding", merger, StringComparison.Ordinal);
+        Assert.Contains("Add one actionable JSON Bead comment", merger, StringComparison.Ordinal);
+        Assert.Contains("nightweaver-merger-rejection-v1", merger, StringComparison.Ordinal);
+        Assert.Contains("The Orchestrator accepts only evidence added during this invocation, independently verifies the retained Bead owner/state", merger, StringComparison.Ordinal);
+        Assert.Contains("then publishes the shared repair counter and guarded lifecycle handoff", merger, StringComparison.Ordinal);
+        Assert.Contains("Agents never write stage labels, repair counters, pause/closure state, status, or assignee", merger, StringComparison.Ordinal);
+        Assert.Contains("Leave all Bead lifecycle fields unchanged after recording this evidence.", merger, StringComparison.Ordinal);
+        Assert.DoesNotContain("Run `bd update`", merger, StringComparison.Ordinal);
+        Assert.DoesNotContain("Run `bd close`", merger, StringComparison.Ordinal);
+        Assert.Contains("established branch and worktree, inherited files, and temporary build artifacts", merger, StringComparison.Ordinal);
+        Assert.Contains("A process failure, timeout, cancellation, authority mismatch", merger, StringComparison.Ordinal);
+        Assert.Contains("is not semantic rejection", merger, StringComparison.Ordinal);
     }
 
     [Fact]

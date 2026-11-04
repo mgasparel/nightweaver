@@ -873,8 +873,8 @@ public sealed class AgentStageIntegrationTests : AgentStageIntegrationTestSuppor
 
         var merger = beads["Merger closure"];
         var merged = await target.RunAgentAsync(merger, AgentRole.Merger, "close-commit", AgentCli.Codex);
-        AssertSuccess(merged, "close-commit");
-        Assert.Equal("closed", merged.VerifiedState?.Status);
+        AssertFailure(merged, AgentOperationalFailureKind.IllegalBeadTransition);
+        Assert.Null(merged.VerifiedState);
 
         var rejectionId = beads["Correct repair increment"];
         var rejection = await target.RunAgentAsync(rejectionId, AgentRole.Reviewer, "reject-with-increment", AgentCli.Claude);
@@ -947,7 +947,9 @@ public abstract class AgentStageIntegrationTestSupport
 {
     private protected static void AssertSuccess(AgentStageResult result, string action)
     {
-        Assert.True(result.Succeeded, result.Failure?.Reason);
+        Assert.True(result.Succeeded,
+            $"{action}: {result.Failure?.Reason}; before={result.Observations?.BeforeState}; observed={result.Observations?.ObservedState}; "
+            + $"beforeAssignee={result.Observations?.BeforeAssignee ?? "(none)"}; observedAssignee={result.Observations?.ObservedAssignee ?? "(none)"}");
         Assert.True(File.Exists(result.LogFilePath), result.LogFilePath);
         Assert.Contains($"fixture action completed: {action}", File.ReadAllText(result.LogFilePath), StringComparison.Ordinal);
     }
@@ -1078,6 +1080,7 @@ public abstract class AgentStageIntegrationTestSupport
         internal IReadOnlyList<ProcessRequest> LastSlotRequests { get; private set; } = [];
         internal AgentRole[] LastSlotRoles { get; private set; } = [];
         internal bool FailOutcomePublishResponseAfterCommitOnce { get; set; }
+        internal bool FixtureRequiredCheckFails { get; set; }
         internal bool ClaimMergerAfterQaHandoffResponseLostOnce { get; set; }
         internal bool MergerClaimedAfterQaHandoffResponseLost { get; private set; }
         internal bool LoseDeliveryAcquireResponseAfterCommitOnce { get; set; }
@@ -1221,6 +1224,15 @@ public abstract class AgentStageIntegrationTestSupport
             cancellationToken.ThrowIfCancellationRequested();
             var branch = Run("git", ["branch", "--show-current"], request.WorkingDirectory, BeadsEnvironment).Trim();
             var head = Run("git", ["rev-parse", "HEAD"], request.WorkingDirectory, BeadsEnvironment).Trim();
+            if (request.Arguments.Count >= 2 && request.Arguments[0] == "pr" && request.Arguments[1] == "checks")
+            {
+                var failed = FixtureRequiredCheckFails;
+                var checks = JsonSerializer.Serialize(new[]
+                {
+                    new { name = "fixture checks", state = failed ? "FAILURE" : "SUCCESS", bucket = failed ? "fail" : "pass" }
+                });
+                return new ProcessResult(0, checks, string.Empty);
+            }
             var response = JsonSerializer.Serialize(new
             {
                 state = "OPEN",

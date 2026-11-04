@@ -111,9 +111,9 @@ internal static class AuthorityMatrix
     {
         if (before != after)
             return AuthorityMatrixResult.Illegal(
-                "Delivery agents may report evidence but cannot mutate Bead status, type, stage, pause labels, planned state, or repair_cycles.");
+                "Lifecycle agents may report evidence but cannot mutate Bead status, type, stage, pause labels, planned state, or repair_cycles.");
         if (!string.Equals(beforeAssignee, afterAssignee, StringComparison.Ordinal))
-            return AuthorityMatrixResult.Illegal("Delivery agents cannot change Bead claim ownership.");
+            return AuthorityMatrixResult.Illegal("Lifecycle agents cannot change Bead claim ownership.");
         return AuthorityMatrixResult.Legal;
     }
 
@@ -172,13 +172,12 @@ internal static class AuthorityMatrix
 
     private static AuthorityMatrixResult ValidateMerger(BeadWorkflowState before, BeadWorkflowState after)
     {
-        if (after.Status == "closed" && (after.Stage is null or "stage:merge")
-            && !after.Planned && !after.ProductDecisionRequired)
-            return after.RepairCycles == before.RepairCycles ? AuthorityMatrixResult.Legal : CounterUnchanged(before, after);
-        if (after.Stage == "stage:implement" && after.Status is "open" or "in_progress"
-            && !after.Planned && !after.ProductDecisionRequired)
-            return IncrementCounter(before, after);
-        return AuthorityMatrixResult.Illegal("Merger must close the stage:merge Plan Bead or reject it to stage:implement.");
+        if (before.Stage != "stage:merge")
+            return AuthorityMatrixResult.Illegal("Merger evidence must originate from stage:merge.");
+        if (before != after)
+            return AuthorityMatrixResult.Illegal(
+                "Merger agents may report evidence but cannot mutate Bead status, type, stage, pause labels, planned state, or repair_cycles.");
+        return AuthorityMatrixResult.Legal;
     }
 
     private static AuthorityMatrixResult UnchangedCounter(BeadWorkflowState before, BeadWorkflowState after) =>

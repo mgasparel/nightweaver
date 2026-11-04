@@ -15,6 +15,13 @@ internal delegate Task<OperationalRetryOutcome> MergerRoleRunner(
     CancellationToken cancellationToken,
     Action<OperationalRetryProgress>? progress);
 
+internal delegate Task<NeedsHumanEscalationResult> MergerRepairBudgetEscalator(
+    HostPaths paths,
+    ProjectConfig project,
+    ValidatedTargetRepository repository,
+    NeedsHumanRequest request,
+    CancellationToken cancellationToken);
+
 internal enum MergerSlotDisposition
 {
     Merged,
@@ -22,6 +29,8 @@ internal enum MergerSlotDisposition
     Refused,
     Failed,
     Canceled,
+    RepairHandedOff,
+    PausedForProductDecision,
     StoppedAtUnsupportedOutcome
 }
 
@@ -30,9 +39,11 @@ internal sealed record MergerSlotOutcome(
     BeadWorkflowState? FinalState,
     OperationalRetryOutcome? Stage,
     bool ClaimHandoffCompleted,
-    string? Diagnostic)
+    string? Diagnostic,
+    NeedsHumanEscalationResult? EscalationProgress = null)
 {
     internal bool MergeCompleted => Disposition == MergerSlotDisposition.Merged && ClaimHandoffCompleted;
+    internal bool RepairHandoffCompleted => Disposition == MergerSlotDisposition.RepairHandedOff && ClaimHandoffCompleted;
 }
 
 /// <summary>Claims and runs one stage:merge Plan Bead, then accepts only verified closure.</summary>
@@ -43,12 +54,16 @@ internal sealed class MergerSlotCoordinator
     private readonly BeadsReader reader;
     private readonly BeadsWriter writer;
     private readonly MergerRoleRunner runRole;
+    private readonly MergerRepairBudgetEscalator escalateRepairBudget;
 
-    internal MergerSlotCoordinator(IProcessRunner processRunner, MergerRoleRunner? runRole = null)
+    internal MergerSlotCoordinator(IProcessRunner processRunner, MergerRoleRunner? runRole = null,
+        MergerRepairBudgetEscalator? escalateRepairBudget = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         reader = new BeadsReader(processRunner);
         writer = new BeadsWriter(processRunner);
+        var escalator = new NeedsHumanEscalator(processRunner);
+        this.escalateRepairBudget = escalateRepairBudget ?? escalator.EscalateAsync;
         if (runRole is null)
         {
             var retries = new OperationalRetryCoordinator(processRunner);
@@ -146,6 +161,16 @@ internal sealed class MergerSlotCoordinator
                     "Bead is no longer in bd's recoverable-owned ready set after Merger admission; it may have become blocked or deferred.")
                     .ConfigureAwait(false);
 
+            if (claimedState.RepairCycles > project.Limits.MaxRepairCycles)
+            {
+                var findings = await ReadLatestFindingsAsync(repository, beadId, null,
+                    $"Persisted repair_cycles={claimedState.RepairCycles} at Merger admission; max_repair_cycles={project.Limits.MaxRepairCycles}; no Merger invocation was started.",
+                    cancellationToken).ConfigureAwait(false);
+                return await EscalateRepairBudgetAsync(paths, project, repository, beadId, claimedState,
+                    AgentRole.Merger, null, persistedAtAdmission: true, cancellationToken, findings,
+                    rejectingStage: claimedState.Stage).ConfigureAwait(false);
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             executionStarted = true;
             OperationalRetryOutcome stage;
@@ -173,48 +198,44 @@ internal sealed class MergerSlotCoordinator
                 var completed = stage.Escalation is { Succeeded: true, ClaimReleased: true };
                 return Result(completed ? MergerSlotDisposition.Escalated : MergerSlotDisposition.Failed,
                     null, stage, completed,
-                    completed ? null : "Operational retry escalation returned without a verified claim handoff.");
+                    completed ? null : "Operational retry escalation returned without a verified claim handoff.",
+                    stage.Escalation);
             }
 
             if (stage.StageResult.Role != AgentRole.Merger || stage.StageResult.BeadId != beadId)
                 return Result(MergerSlotDisposition.Failed, claimedState, stage, false,
                     "The operational retry coordinator returned a result for a different role or Bead.");
-            var verified = stage.StageResult.VerifiedState;
-            if (!stage.Succeeded || !stage.StageResult.Succeeded || verified is null)
+            if (!stage.Succeeded || !stage.StageResult.Succeeded)
                 return Result(MergerSlotDisposition.Failed, claimedState, stage, false,
-                    "Merger returned no verified successful workflow state.");
+                    "Merger returned without a verified successful outcome.");
 
-            if (verified.Stage == "stage:implement" && verified.Status is "open" or "in_progress")
+            var receipt = stage.StageResult.PublicationReceipt;
+            if (receipt is { Role: AgentRole.Merger, Outcome: AgentOutcomeChoice.ChangesRequired })
             {
-                var rejectionSnapshot = await reader.ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor,
-                    cancellationToken).ConfigureAwait(false);
-                if (!rejectionSnapshot.Inventory.ById.TryGetValue(beadId, out var rejectedBead))
-                    return Result(MergerSlotDisposition.Failed, verified, stage, false,
-                        "Rejected Plan Bead disappeared after post-exit verification; its claim and worktree were left untouched.");
-                BeadWorkflowState rejectedState;
-                try { rejectedState = BeadWorkflowState.Parse(rejectedBead); }
-                catch (FormatException exception)
-                {
-                    return Result(MergerSlotDisposition.Failed, null, stage, false,
-                        $"Rejected Bead workflow became invalid after post-exit verification: {exception.Message}");
-                }
-                if (rejectedState != verified || rejectedBead.Status != "in_progress"
-                    || !string.Equals(rejectedBead.Assignee, project.RecoveryActor, StringComparison.Ordinal)
-                    || !rejectionSnapshot.Readiness.RecoverableOwnedReady.Contains(beadId))
-                    return Result(MergerSlotDisposition.Failed, rejectedState, stage, false,
-                        "Semantic rejection changed or lost its owned ready state after verification; claim and worktree were left untouched.");
-                return Result(MergerSlotDisposition.StoppedAtUnsupportedOutcome, rejectedState, stage, false,
-                    "Merger reported a semantic rejection. Repair handoff is not implemented in this slot; its claim and Delivery worktree are retained.");
+                if (!IsValidRepairReceipt(receipt, claimedState))
+                    return Result(MergerSlotDisposition.Failed, receipt.PublishedState, stage, false,
+                        "Merger repair publication receipt did not confirm exactly one guarded counter increment and Delivery claim release.");
+                // A matching publication receipt is the final outgoing operation. Do not
+                // query Beads, Git, readiness, comments, or worktree state after this point.
+                return Result(MergerSlotDisposition.RepairHandedOff, receipt.PublishedState, stage, true, null);
+            }
+            if (receipt is { Role: AgentRole.Merger, Outcome: AgentOutcomeChoice.ProductDecisionRequired })
+            {
+                var expectedPause = claimedState with { ProductDecisionRequired = true, Status = "open" };
+                if (receipt.PublishedState != expectedPause || receipt.PublishedAssignee is not null
+                    || !receipt.ClaimReleased || receipt.HandoffToMerger)
+                    return Result(MergerSlotDisposition.Failed, receipt.PublishedState, stage, false,
+                        "Merger product-decision receipt did not confirm the guarded pause and claim release.");
+                return Result(MergerSlotDisposition.PausedForProductDecision, receipt.PublishedState, stage, true, null);
             }
 
-            if (verified.Status != "closed" || verified.Stage is not (null or "stage:merge")
-                || verified.Planned || verified.ProductDecisionRequired || verified.NeedsHuman
-                || verified.RepairCycles != claimedState.RepairCycles)
-                return Result(MergerSlotDisposition.Failed, verified, stage, false,
-                    "Verified Merger state was not a closed stage:merge Plan Bead with unchanged repair_cycles.");
+            var verified = stage.StageResult.VerifiedState;
+            if (verified == claimedState && stage.StageResult.OutcomeClassification?.Outcome == AgentOutcomeChoice.Approved)
+                return Result(MergerSlotDisposition.StoppedAtUnsupportedOutcome, verified, stage, false,
+                    "Merger success evidence is retained for the completion owner; no Agent-written closure was accepted.");
 
-            return await ReleaseClosedClaimAsync(repository, beadId, project.RecoveryActor, verified, stage,
-                cancellationToken).ConfigureAwait(false);
+            return Result(MergerSlotDisposition.Failed, verified ?? claimedState, stage, false,
+                "Merger did not return a supported verified rejection or completion publication.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -271,39 +292,145 @@ internal sealed class MergerSlotCoordinator
         };
     }
 
-    private async Task<MergerSlotOutcome> ReleaseClosedClaimAsync(ValidatedTargetRepository repository, string beadId,
-        string actor, BeadWorkflowState verifiedState, OperationalRetryOutcome stage, CancellationToken cancellationToken)
+    private static bool IsValidRepairReceipt(DeliveryOutcomePublicationReceipt receipt,
+        BeadWorkflowState claimedState)
+    {
+        int nextRepairCycles;
+        try { nextRepairCycles = checked(claimedState.RepairCycles + 1); }
+        catch (OverflowException) { return false; }
+        var expected = claimedState with
+        {
+            Stage = "stage:implement",
+            RepairCycles = nextRepairCycles
+        };
+        var releasedOpen = receipt.PublishedState == (expected with { Status = "open" })
+            && receipt.PublishedAssignee is null;
+        var receiverClaimed = receipt.PublishedState == (expected with { Status = "in_progress" })
+            && !string.IsNullOrWhiteSpace(receipt.PublishedAssignee);
+        return (releasedOpen || receiverClaimed) && receipt.ClaimReleased && !receipt.HandoffToMerger;
+    }
+
+    private async Task<MergerSlotOutcome> EscalateRepairBudgetAsync(HostPaths paths, ProjectConfig project,
+        ValidatedTargetRepository repository, string beadId, BeadWorkflowState expectedState, AgentRole role,
+        OperationalRetryOutcome? stage, bool persistedAtAdmission, CancellationToken cancellationToken,
+        IReadOnlyList<string>? latestFindings = null, string? rejectingStage = null)
+    {
+        var findings = latestFindings ?? await ReadLatestFindingsAsync(repository, beadId, stage?.StageResult,
+            $"Persisted repair_cycles={expectedState.RepairCycles}; max_repair_cycles={project.Limits.MaxRepairCycles}; current Merger lifecycle state is {expectedState.Stage ?? "(none)"}.",
+            cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            var inventory = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
+            if (!inventory.ById.TryGetValue(beadId, out var bead))
+                return Result(MergerSlotDisposition.Failed, expectedState, stage, false,
+                    "Repair-budget escalation was refused because the Bead disappeared before pause handling.");
+            var current = BeadWorkflowState.Parse(bead);
+            if (current != expectedState || bead.Status != "in_progress"
+                || !string.Equals(bead.Assignee, project.RecoveryActor, StringComparison.Ordinal))
+                return Result(MergerSlotDisposition.Failed, current, stage, false,
+                    "Repair-budget escalation was refused because workflow state or claim ownership changed before pause handling.");
+            var readiness = await reader.ReadReadinessAsync(repository, inventory, project.RecoveryActor, cancellationToken)
+                .ConfigureAwait(false);
+            if (!readiness.RecoverableOwnedReady.Contains(beadId))
+                return Result(MergerSlotDisposition.Failed, current, stage, false,
+                    "Repair-budget escalation was refused because the owned Bead is no longer in the recoverable-ready set.");
+
+            // Do not adopt a new baseline if status, owner, or metadata changes during readiness.
+            var verifiedInventory = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
+            if (!verifiedInventory.ById.TryGetValue(beadId, out var verifiedBead))
+                return Result(MergerSlotDisposition.Failed, current, stage, false,
+                    "Repair-budget escalation was refused because the Bead disappeared after readiness verification.");
+            current = BeadWorkflowState.Parse(verifiedBead);
+            if (current != expectedState || verifiedBead.Status != "in_progress"
+                || !string.Equals(verifiedBead.Assignee, project.RecoveryActor, StringComparison.Ordinal))
+                return Result(MergerSlotDisposition.Failed, current, stage, false,
+                    "Repair-budget escalation was refused because workflow state or claim ownership changed during readiness verification.");
+
+            var limit = project.Limits.MaxRepairCycles;
+            var stageName = (rejectingStage ?? expectedState.Stage) ?? "(none)";
+            var reason = persistedAtAdmission
+                ? $"Persisted repair_cycles={expectedState.RepairCycles} at Merger admission exceeds max_repair_cycles={limit}; no Merger invocation was started."
+                : $"Verified Merger rejection at {stageName} raised repair_cycles to {expectedState.RepairCycles}, exceeding max_repair_cycles={limit}.";
+            var stageResult = stage?.StageResult;
+            var request = new NeedsHumanRequest(beadId, project.RecoveryActor, NeedsHumanCause.RepairBudgetExhausted,
+                role, reason, findings,
+                string.IsNullOrWhiteSpace(stageResult?.InvocationId) ? null : stageResult.InvocationId,
+                string.IsNullOrWhiteSpace(stageResult?.LogFilePath) ? null : [stageResult.LogFilePath],
+                WorktreePurpose.Delivery, expectedState);
+            var progress = await escalateRepairBudget(paths, project, repository, request, cancellationToken)
+                .ConfigureAwait(false);
+            return BuildEscalationOutcome(expectedState, stage, progress,
+                progress.Succeeded ? null : "Repair-budget needs-human escalation did not complete.");
+        }
+        catch (NeedsHumanEscalationException exception)
+        {
+            return BuildEscalationOutcome(expectedState, stage, exception.Progress, exception.Message);
+        }
+        catch (OperationCanceledException exception) when (TryGetEscalationProgress(exception, out var progress))
+        {
+            return Result(MergerSlotDisposition.Canceled, StateAfterEscalation(expectedState, progress), stage,
+                false, exception.Message, progress);
+        }
+        catch (OperationCanceledException)
+        {
+            return Result(MergerSlotDisposition.Canceled, expectedState, stage, false,
+                "Repair-budget escalation was canceled before completion.");
+        }
+        catch (Exception exception)
+        {
+            return Result(MergerSlotDisposition.Failed, expectedState, stage, false,
+                $"Repair-budget escalation failed: {exception.Message}");
+        }
+    }
+
+    private async Task<IReadOnlyList<string>> ReadLatestFindingsAsync(ValidatedTargetRepository repository,
+        string beadId, AgentStageResult? stageResult, string evidenceContext, CancellationToken cancellationToken)
     {
         try
         {
-            var current = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
-            if (!current.ById.TryGetValue(beadId, out var bead))
-                return Result(MergerSlotDisposition.Failed, verifiedState, stage, false,
-                    "Closed Plan Bead disappeared before claim handoff; its execution evidence was retained.");
-            var state = BeadWorkflowState.Parse(bead);
-            if (state != verifiedState || bead.Status != "closed"
-                || !string.Equals(bead.Assignee, actor, StringComparison.Ordinal))
-                return Result(MergerSlotDisposition.Failed, state, stage, false,
-                    "Closed claim handoff preflight found stale workflow state or changed ownership; the claim was left untouched.");
-
-            await writer.ReleaseDispatchClaimAsync(repository, beadId, actor, "closed", cancellationToken)
-                .ConfigureAwait(false);
-            var released = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
-            if (!released.ById.TryGetValue(beadId, out var finalBead))
-                return Result(MergerSlotDisposition.Failed, verifiedState, stage, false,
-                    "Closed Plan Bead disappeared after guarded claim handoff.");
-            var finalState = BeadWorkflowState.Parse(finalBead);
-            if (finalBead.Status != "closed" || finalBead.Assignee is not null
-                || finalState != verifiedState)
-                return Result(MergerSlotDisposition.Failed, finalState, stage, false,
-                    "Guarded Merger claim handoff did not verify as closed, unassigned, and unchanged.");
-            return Result(MergerSlotDisposition.Merged, finalState, stage, true, null);
+            var comments = await reader.ReadCommentsAsync(repository, beadId, cancellationToken).ConfigureAwait(false);
+            if (comments.Count == 0) return [$"No Bead comments were available. {evidenceContext}"];
+            var invocationComments = stageResult?.PreInvocationCommentIds is { } priorIds
+                ? comments.Where(comment => !priorIds.Contains(comment.Id)).ToArray()
+                : comments.ToArray();
+            return [invocationComments.Length == 0 ? comments[^1].Text : invocationComments[^1].Text];
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
-            return Result(MergerSlotDisposition.Failed, verifiedState, stage, false,
-                $"Verified merge closure claim handoff failed: {exception.Message}");
+            var invocation = string.IsNullOrWhiteSpace(stageResult?.InvocationId) ? "unavailable" : stageResult.InvocationId;
+            var log = string.IsNullOrWhiteSpace(stageResult?.LogFilePath) ? "unavailable" : stageResult.LogFilePath;
+            return [$"Latest Bead comments could not be read ({exception.Message}). {evidenceContext} invocation={invocation}, log={log}."];
         }
+    }
+
+    private static MergerSlotOutcome BuildEscalationOutcome(BeadWorkflowState expectedState,
+        OperationalRetryOutcome? stage, NeedsHumanEscalationResult progress, string? failure)
+    {
+        var state = StateAfterEscalation(expectedState, progress);
+        return Result(progress.Succeeded ? MergerSlotDisposition.Escalated : MergerSlotDisposition.Failed,
+            state, stage, progress.Succeeded,
+            progress.Succeeded ? null : $"{failure ?? "Repair-budget needs-human escalation did not complete."} {string.Join("; ", progress.Failures)}".Trim(),
+            progress);
+    }
+
+    private static BeadWorkflowState StateAfterEscalation(BeadWorkflowState state, NeedsHumanEscalationResult progress) =>
+        state with
+        {
+            NeedsHuman = progress.PauseRecorded || state.NeedsHuman,
+            Status = progress.ClaimReleased && state.Status == "in_progress" ? "open" : state.Status
+        };
+
+    private static bool TryGetEscalationProgress(OperationCanceledException exception,
+        out NeedsHumanEscalationResult progress)
+    {
+        if (exception.Data[nameof(NeedsHumanEscalationResult)] is NeedsHumanEscalationResult observed)
+        {
+            progress = observed;
+            return true;
+        }
+        progress = null!;
+        return false;
     }
 
     private async Task<MergerSlotOutcome> RefuseAfterClaimAsync(ProjectConfig project,
@@ -357,6 +484,7 @@ internal sealed class MergerSlotCoordinator
     }
 
     private static MergerSlotOutcome Result(MergerSlotDisposition disposition, BeadWorkflowState? state,
-        OperationalRetryOutcome? stage, bool handoff, string? diagnostic) =>
-        new(disposition, state, stage, handoff, diagnostic);
+        OperationalRetryOutcome? stage, bool handoff, string? diagnostic,
+        NeedsHumanEscalationResult? escalationProgress = null) =>
+        new(disposition, state, stage, handoff, diagnostic, escalationProgress);
 }

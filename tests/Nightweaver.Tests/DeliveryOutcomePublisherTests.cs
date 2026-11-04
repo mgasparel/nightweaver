@@ -47,6 +47,91 @@ public sealed class DeliveryOutcomePublisherTests
     }
 
     [Fact]
+    public async Task MergerRejectionAtomicallyPublishesOneRepairIncrementAndReleasesToDelivery()
+    {
+        using var fixture = new PublisherFixture(AgentRole.Merger, "stage:merge", AgentOutcomeChoice.ChangesRequired);
+
+        var result = await fixture.Publisher.PublishAsync(fixture.Session, fixture.Invocation,
+            fixture.Classification, releaseClaim: true, TestContext.Current.CancellationToken);
+
+        Assert.Equal("stage:implement", fixture.State.Stage);
+        Assert.Equal(1, fixture.State.RepairCycles);
+        Assert.Equal("open", fixture.State.Status);
+        Assert.Null(fixture.State.Assignee);
+        Assert.Contains("keep:label", fixture.State.Labels);
+        Assert.Equal(1, fixture.Runner.PublishWriteCount);
+        Assert.Equal(3, fixture.Runner.InventoryReadCount);
+        Assert.Equal("stage:implement", ValueAfter(fixture.Runner.PublishArguments!, "--add-label"));
+        Assert.Equal("stage:merge", ValueAfter(fixture.Runner.PublishArguments!, "--remove-label"));
+        Assert.Equal("repair_cycles=1", ValueAfter(fixture.Runner.PublishArguments!, "--set-metadata"));
+        Assert.Equal("open", ValueAfter(fixture.Runner.PublishArguments!, "--status"));
+        Assert.Equal(string.Empty, ValueAfter(fixture.Runner.PublishArguments!, "--assignee"));
+        Assert.Equal("in_progress", ValueAfter(fixture.Runner.PublishArguments!, "--if-status"));
+        Assert.Equal(PublisherFixture.Owner, ValueAfter(fixture.Runner.PublishArguments!, "--if-assignee"));
+        Assert.Equal("bd", fixture.Runner.Requests[^1].FileName);
+        Assert.Contains("update", fixture.Runner.Requests[^1].Arguments);
+        Assert.Equal(AgentOutcomeChoice.ChangesRequired, result.PublicationReceipt!.Outcome);
+        Assert.Equal(1, result.PublicationReceipt.PublishedState.RepairCycles);
+        Assert.True(result.PublicationReceipt.ClaimReleased);
+        Assert.False(result.PublicationReceipt.HandoffToMerger);
+        Assert.Null(result.PublicationReceipt.PublishedAssignee);
+    }
+
+    [Fact]
+    public async Task LostMergerHandoffResponseAcceptsAlreadyClaimedReceiverWithoutASecondWrite()
+    {
+        using var fixture = new PublisherFixture(AgentRole.Merger, "stage:merge", AgentOutcomeChoice.ChangesRequired)
+        {
+            FailAfterCommittedHandoffWithReceiver = true
+        };
+
+        var result = await fixture.Publisher.PublishAsync(fixture.Session, fixture.Invocation,
+            fixture.Classification, releaseClaim: true, TestContext.Current.CancellationToken);
+
+        Assert.Equal("stage:implement", fixture.State.Stage);
+        Assert.Equal(1, fixture.State.RepairCycles);
+        Assert.Equal("in_progress", fixture.State.Status);
+        Assert.Equal("nightweaver:merger", fixture.State.Assignee);
+        Assert.True(result.PublicationReceipt is { ClaimReleased: true, Outcome: AgentOutcomeChoice.ChangesRequired });
+        Assert.Equal(4, fixture.Runner.InventoryReadCount);
+        Assert.Equal(1, fixture.Runner.PublishWriteCount);
+    }
+
+    [Theory]
+    [InlineData("owner")]
+    [InlineData("workflow")]
+    public async Task MergerRefusesAtomicPublicationWhenOwnerOrWorkflowChangesAfterEvidence(string changeKind)
+    {
+        using var fixture = new PublisherFixture(AgentRole.Merger, "stage:merge", AgentOutcomeChoice.ChangesRequired)
+        {
+            ChangeAfterEvidenceComment = changeKind
+        };
+
+        await Assert.ThrowsAsync<AgentStageInputException>(() => fixture.Publisher.PublishAsync(
+            fixture.Session, fixture.Invocation, fixture.Classification,
+            releaseClaim: true, TestContext.Current.CancellationToken));
+
+        Assert.Equal(0, fixture.Runner.PublishWriteCount);
+        if (changeKind == "owner") Assert.Equal("human@example.invalid", fixture.State.Assignee);
+        else Assert.Equal("stage:review", fixture.State.Stage);
+    }
+
+    [Fact]
+    public async Task MergerOverflowDoesNotPublishAnIncrement()
+    {
+        using var fixture = new PublisherFixture(AgentRole.Merger, "stage:merge",
+            AgentOutcomeChoice.ChangesRequired, initialRepairCycles: int.MaxValue);
+
+        await Assert.ThrowsAsync<DeliveryRepairCounterOverflowException>(() => fixture.Publisher.PublishAsync(
+            fixture.Session, fixture.Invocation, fixture.Classification,
+            releaseClaim: true, TestContext.Current.CancellationToken));
+
+        Assert.Equal("stage:merge", fixture.State.Stage);
+        Assert.Equal(int.MaxValue, fixture.State.RepairCycles);
+        Assert.Equal(0, fixture.Runner.PublishWriteCount);
+    }
+
+    [Fact]
     public async Task LostQaHandoffResponseRereadsAndAcceptsAlreadyTransferredOwnershipWithoutAnotherWrite()
     {
         using var fixture = new PublisherFixture(AgentRole.Qa, "stage:qa", AgentOutcomeChoice.Approved)
@@ -100,7 +185,7 @@ public sealed class DeliveryOutcomePublisherTests
         internal const string BeadId = "ns-pub.1";
         internal const string Owner = "nightweaver:demo";
 
-        internal PublisherFixture(AgentRole role, string stage, AgentOutcomeChoice outcome)
+        internal PublisherFixture(AgentRole role, string stage, AgentOutcomeChoice outcome, int initialRepairCycles = 0)
         {
             var target = temp.CreateDirectory("target");
             var host = new HostPaths(temp.CreateDirectory("host"));
@@ -110,6 +195,7 @@ public sealed class DeliveryOutcomePublisherTests
             var project = new ProjectConfig(ProjectSlug.Parse("demo"), "fixture.json", new("target", "main"),
                 new(1, 1, 1), new(3, 1), new(AgentCli.Claude, null, "low", 1), new RoleSettings(settings));
             State = new MutableBeadState(stage);
+            State.RepairCycles = initialRepairCycles;
             Runner = new MutableBeadsRunner(State);
             Publisher = new DeliveryOutcomePublisher(Runner);
             var expected = new BeadWorkflowState(BeadId, "task", "in_progress", stage,
@@ -144,6 +230,7 @@ public sealed class DeliveryOutcomePublisherTests
         internal string Stage { get; set; } = stage;
         internal int RepairCycles { get; set; }
         internal List<string> Comments { get; } = [];
+        internal string[] Labels => [Stage, "keep:label"];
     }
 
     private sealed class MutableBeadsRunner(MutableBeadState state) : IProcessRunner
@@ -153,10 +240,12 @@ public sealed class DeliveryOutcomePublisherTests
         internal int PublishWriteCount { get; private set; }
         internal int InventoryReadCount { get; private set; }
         internal IReadOnlyList<string>? PublishArguments { get; private set; }
+        internal List<ProcessRequest> Requests { get; } = [];
 
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
             if (request.FileName != "bd") throw new InvalidOperationException($"Unexpected process {request.FileName}.");
             var args = request.Arguments;
             if (Contains(args, "comments") && Contains(args, "add"))
@@ -206,6 +295,15 @@ public sealed class DeliveryOutcomePublisherTests
                 }
                 return Task.FromResult(new ProcessResult(0, JsonSerializer.Serialize(new[] { Row() }), string.Empty));
             }
+            if (Contains(args, "ready") || Contains(args, "--ready"))
+            {
+                var readinessBead = Row();
+                var ready = Contains(args, "list")
+                    ? state.Status == "in_progress" && state.Assignee == PublisherFixture.Owner
+                    : state.Status == "open" && state.Assignee is null;
+                return Task.FromResult(new ProcessResult(0,
+                    JsonSerializer.Serialize(ready ? new[] { readinessBead } : Array.Empty<object>()), string.Empty));
+            }
             if (Contains(args, "list"))
             {
                 InventoryReadCount++;
@@ -218,7 +316,7 @@ public sealed class DeliveryOutcomePublisherTests
         {
             id = PublisherFixture.BeadId, status = state.Status, issue_type = "task", priority = 2,
             created_at = "2026-01-01T00:00:00Z", assignee = state.Assignee,
-            labels = new[] { state.Stage }.Where(label => !string.IsNullOrEmpty(label)).ToArray(),
+            labels = state.Labels,
             metadata = new { repair_cycles = state.RepairCycles }
         };
 

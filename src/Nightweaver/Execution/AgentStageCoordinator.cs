@@ -123,7 +123,7 @@ internal sealed class AgentStageCoordinator
             session.Worktree.Path, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         IReadOnlySet<string>? preInvocationCommentIds = null;
-        if (AgentRoles.IsDeliveryRole(session.Role))
+        if (AgentRoles.IsDeliveryRole(session.Role) || session.Role == AgentRole.Merger)
         {
             var comments = await beadsReader.ReadCommentsAsync(session.Repository, session.BeadId, cancellationToken)
                 .ConfigureAwait(false);

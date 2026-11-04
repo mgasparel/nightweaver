@@ -601,13 +601,33 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
-            if (File.Exists(path) && File.ReadAllLines(path).Length >= expectedCount)
+            if (File.Exists(path)
+                && (await ReadStageLaunchLinesAsync(path, TestContext.Current.CancellationToken)).Length >= expectedCount)
                 return;
             if (runtime.HasExited)
                 throw new InvalidOperationException($"Published Nightweaver exited before {expectedCount} Agents launched (exit {await runtime.WaitAsync(TimeSpan.FromSeconds(1))}). Output: {ReadRuntimeLog(runtime)}");
             await Task.Delay(50, TestContext.Current.CancellationToken);
         }
         throw new TimeoutException($"Published Nightweaver did not launch {expectedCount} Agents within {timeout}.");
+    }
+
+    private static async Task<string[]> ReadStageLaunchLinesAsync(string path, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return File.ReadAllLines(path);
+            }
+            catch (IOException exception) when (OperatingSystem.IsWindows()
+                && (exception.HResult & 0xFFFF) == 32
+                && attempt < 5)
+            {
+                // Native Agents append launch records while the runtime starts the pool.
+                // Retry only bounded sharing violations; persistent I/O errors still fail.
+                await Task.Delay(TimeSpan.FromMilliseconds(50 << attempt), cancellationToken);
+            }
+        }
     }
 
     private static void AssertFixtureProcessExited(string path)

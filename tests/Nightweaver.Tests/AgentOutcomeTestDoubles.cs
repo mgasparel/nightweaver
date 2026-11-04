@@ -33,6 +33,9 @@ internal static class FixtureOutcomeClassifier
                     "reviewer" => "approved",
                     "qa" when sources.Contains("qa failure:", StringComparison.OrdinalIgnoreCase) => "changes_required",
                     "qa" => "approved",
+                "merger" when sources.Contains("nightweaver-merger-rejection-v1", StringComparison.Ordinal) => "changes_required",
+                "merger" when sources.Contains("nightweaver-merge-v1", StringComparison.Ordinal) => "approved",
+                "merger" => "incomplete_or_unclear",
                     _ => throw new InvalidOperationException($"Unexpected outcome role '{role}'.")
                 };
             var question = role switch
@@ -40,6 +43,7 @@ internal static class FixtureOutcomeClassifier
                 "implementer" => AgentOutcomeClassifier.QuestionName,
                 "reviewer" => "reviewer_outcome",
                 "qa" => "qa_outcome",
+                "merger" => "merger_outcome",
                 _ => throw new InvalidOperationException($"Unexpected outcome role '{role}'.")
             };
             return new HttpResponseMessage(HttpStatusCode.OK)

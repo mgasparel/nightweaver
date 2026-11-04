@@ -12,6 +12,22 @@ Read the Target Repository's merge instructions before choosing a merge method. 
 
 Push the synchronized branch with `git push --force-with-lease origin HEAD:nightweaver/<bead-id>`. Read the pull request's current `headRefOid` with `gh pr view <number-or-url> --json state,baseRefName,headRefName,headRefOid,url` and require it to match the synchronized local `git rev-parse HEAD`. Run `gh pr checks <number-or-url> --watch` and require all required checks to pass for that same head. Read `headRefOid` again after the checks; if it changed, synchronize, push, and rerun the required local and pull request checks. A passing check from an older commit never authorizes merging the new head.
 
-Use the merge method documented by the Target Repository. If its instructions do not specify a method, use `gh pr merge <number-or-url> --squash --delete-branch`. Then read the pull request state and confirm it is `MERGED` before closing the Plan Bead. Before `bd close`, add a Bead comment recording the pull request, synchronized and checked head SHA, required check result, merge method, and confirmed merge commit. Leave the worktree clean after the merge; preserve inherited contents and report them if they prevent required checks or a clean result.
+Use the merge method documented by the Target Repository. If its instructions do not specify a method, use `gh pr merge <number-or-url> --squash --delete-branch`. Then read the pull request state and confirm it is `MERGED`. Add a Bead comment recording the pull request, synchronized and checked head SHA, required check result, merge method, and confirmed merge commit. Leave all Bead lifecycle fields unchanged after recording this evidence. The Orchestrator independently verifies merge completion and owns closure and environment cleanup.
 
-If a conflict, failed check, or changed design requires implementation work, stop the merge, preserve diagnostic details, increment `repair_cycles` by exactly one, and transition to `stage:implement`. Do not claim a successful merge or close the Bead before the merge is confirmed. Do not make legal determinations or resolve product ambiguity; request a human decision with `product-decision-required` when the SPEC permits. Follow the SPEC's escalation rules for an unresolvable technical blocker or exhausted repair budget.
+If an unresolved conflict, semantic design invalidation, or local or remote check failure after synchronization requires implementation work, abort any active rebase with `git rebase --abort` before recording the finding. Add one actionable JSON Bead comment with this shape, filling the fields from the current invocation:
+
+```json
+{
+  "schema": "nightweaver-merger-rejection-v1",
+  "kind": "checks",
+  "pull_request": "https://example.invalid/pull/123",
+  "checked_head": "<current synchronized HEAD SHA>",
+  "subject": "<exact required check name>",
+  "summary": "<short actionable finding>",
+  "details": "<surviving diagnostic tied to this path, requirement, or check>"
+}
+```
+
+Use `kind` `conflict`, `design`, or `checks`. For conflicts, set `subject` to a conflicting file path and include the conflict diagnostic. For design invalidation, set `subject` to the changed requirement and explain the concrete mismatch. For check failures, set `subject` to the exact failing required check name and tie the finding to `checked_head`. The Orchestrator accepts only evidence added during this invocation, independently verifies the retained Bead owner/state, branch, HEAD, rebase status, and rejection evidence, then publishes the shared repair counter and guarded lifecycle handoff. Preserve every unrelated label and metadata field, the established branch and worktree, inherited files, and temporary build artifacts. Agents never write stage labels, repair counters, pause/closure state, status, or assignee, and never use `bd update` or `bd close` as proof of success. A successful merge comment is evidence only; the completion owner publishes closure. Never apply another increment in a retry, repeated completion, or Orchestrator handoff.
+
+Semantic rejection is a successful, verified stage result. A process failure, timeout, cancellation, authority mismatch, malformed or illegal transition, or failed tracker operation is not semantic rejection; preserve the claim and evidence and let the Orchestrator apply the existing retry or escalation policy. Do not claim a successful merge or change lifecycle fields. Do not make legal determinations or resolve product ambiguity; record the concrete question and let the Orchestrator apply the established guarded human-pause flow. An exhausted repair budget is handled by the Orchestrator, which retains the execution environment and records `needs-human`.

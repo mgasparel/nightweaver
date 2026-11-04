@@ -84,6 +84,7 @@ internal sealed class OperationalRetryCoordinator
     private readonly IAgentOutcomeClassifier outcomeClassifier;
     private readonly IDeliveryOutcomePublisher outcomePublisher;
     private readonly IDeliveryOutcomeVerifier outcomeVerifier;
+    private readonly IMergerOutcomeVerifier mergerOutcomeVerifier;
 
     internal OperationalRetryCoordinator(
         IProcessRunner processRunner,
@@ -99,7 +100,8 @@ internal sealed class OperationalRetryCoordinator
             CancellationToken, Task<NeedsHumanEscalationResult>>? escalate = null,
         IAgentOutcomeClassifier? outcomeClassifier = null,
         IDeliveryOutcomePublisher? outcomePublisher = null,
-        IDeliveryOutcomeVerifier? outcomeVerifier = null)
+        IDeliveryOutcomeVerifier? outcomeVerifier = null,
+        IMergerOutcomeVerifier? mergerOutcomeVerifier = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         this.stages = stages ?? new AgentStageCoordinator(processRunner);
@@ -113,6 +115,7 @@ internal sealed class OperationalRetryCoordinator
         this.outcomeClassifier = outcomeClassifier ?? new AgentOutcomeClassifier();
         this.outcomePublisher = outcomePublisher ?? new DeliveryOutcomePublisher(processRunner);
         this.outcomeVerifier = outcomeVerifier ?? new DeliveryOutcomeVerifier(processRunner);
+        this.mergerOutcomeVerifier = mergerOutcomeVerifier ?? new MergerOutcomeVerifier(processRunner);
     }
 
     internal async Task<OperationalRetryOutcome> RunAsync(
@@ -457,6 +460,9 @@ internal sealed class OperationalRetryCoordinator
         long attempts,
         CancellationToken cancellationToken)
     {
+        if (session.Role == AgentRole.Merger)
+            return await FinalizeSuccessfulMergerStageAsync(session, invocation, expectedAssignee, attempts,
+                cancellationToken).ConfigureAwait(false);
         if (!AgentRoles.IsDeliveryRole(session.Role))
             return Success(invocation, attempts);
 
@@ -523,6 +529,197 @@ internal sealed class OperationalRetryCoordinator
                 exception.Message, classification, cancellationToken).ConfigureAwait(false);
         }
         return Success(published, attempts);
+    }
+
+    private async Task<OperationalRetryOutcome> FinalizeSuccessfulMergerStageAsync(
+        AgentStageSession session,
+        AgentStageResult invocation,
+        string expectedAssignee,
+        long attempts,
+        CancellationToken cancellationToken)
+    {
+        AgentOutcomeClassificationResult classification;
+        IReadOnlyList<BeadCommentSnapshot> comments;
+        try
+        {
+            comments = await beadsReader.ReadCommentsAsync(session.Repository, session.BeadId, cancellationToken)
+                .ConfigureAwait(false);
+            classification = await outcomeClassifier.ClassifyAsync(session.HostPaths, session.Project,
+                session.DispatchContext, session.Worktree.Path, invocation, comments, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
+        {
+            classification = new(null, "classification",
+                $"Merger outcome classification could not complete ({exception.GetType().Name}).");
+            comments = [];
+        }
+
+        invocation = invocation with { OutcomeClassification = classification };
+        var classifierMutation = await outcomeVerifier.VerifyNoClassifierMutationAsync(session.Repository,
+            session.Worktree.Path, invocation, expectedAssignee, cancellationToken).ConfigureAwait(false);
+        if (classifierMutation is not null)
+            return await EscalateMergerOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                classifierMutation, classification, NeedsHumanCause.DeliveryOutcomeFailure, cancellationToken)
+                .ConfigureAwait(false);
+
+        if (classification.Outcome is null)
+            return await EscalateMergerOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                classification.Diagnostic, classification, NeedsHumanCause.DeliveryOutcomeFailure, cancellationToken)
+                .ConfigureAwait(false);
+
+        if (classification.Outcome == AgentOutcomeChoice.Approved)
+        {
+            // Completion/finalization is owned by the completion slice. Keep the claim and
+            // retained environment until that owner can independently publish closure.
+            return Success(invocation with { VerifiedState = invocation.Observations!.BeforeState }, attempts);
+        }
+
+        if (classification.Outcome == AgentOutcomeChoice.ProductDecisionRequired)
+        {
+            try
+            {
+                var paused = await outcomePublisher.PublishAsync(session, invocation, classification,
+                    releaseClaim: true, cancellationToken).ConfigureAwait(false);
+                return Success(paused, attempts);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception exception)
+            {
+                return await EscalateMergerOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                    $"Guarded product-decision pause publication was not confirmed: {exception.Message}", classification,
+                    NeedsHumanCause.DeliveryOutcomeFailure, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        if (classification.Outcome != AgentOutcomeChoice.ChangesRequired)
+            return await EscalateMergerOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                $"Merger outcome '{classification.Outcome}' does not establish an actionable rejection: {classification.Diagnostic}",
+                classification, NeedsHumanCause.DeliveryOutcomeFailure, cancellationToken).ConfigureAwait(false);
+
+        var verification = await mergerOutcomeVerifier.VerifyRejectionAsync(session.HostPaths, session.Project,
+            session, invocation, classification, comments, expectedAssignee, cancellationToken).ConfigureAwait(false);
+        if (!verification.Succeeded)
+            return await EscalateMergerOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                verification.Diagnostic, classification, NeedsHumanCause.DeliveryOutcomeFailure, cancellationToken)
+                .ConfigureAwait(false);
+
+        int nextRepairCycles;
+        try { nextRepairCycles = checked(invocation.Observations!.BeforeState.RepairCycles + 1); }
+        catch (OverflowException)
+        {
+            return await EscalateMergerOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                "Verified Merger rejection cannot increment repair_cycles without overflowing a 32-bit integer.",
+                classification, NeedsHumanCause.RepairBudgetExhausted, cancellationToken).ConfigureAwait(false);
+        }
+
+        var releaseClaim = nextRepairCycles <= session.Project.Limits.MaxRepairCycles;
+        AgentStageResult published;
+        try
+        {
+            published = await outcomePublisher.PublishAsync(session, invocation, classification,
+                releaseClaim, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
+        {
+            return await EscalateMergerOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                $"Verified Merger rejection publication was not confirmed: {exception.Message}", classification,
+                NeedsHumanCause.DeliveryOutcomeFailure, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (releaseClaim) return Success(published, attempts);
+        return await EscalatePublishedMergerBudgetAsync(session, published, expectedAssignee, attempts,
+            verification.Finding, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<OperationalRetryOutcome> EscalateMergerOutcomeAsync(
+        AgentStageSession session,
+        AgentStageResult invocation,
+        string expectedAssignee,
+        long attempts,
+        string reason,
+        AgentOutcomeClassificationResult? classification,
+        NeedsHumanCause cause,
+        CancellationToken cancellationToken)
+    {
+        var current = await stages.ReadRequestedStateAsync(session.Repository, session.BeadId, cancellationToken,
+            allowConflictingPauseLabels: true).ConfigureAwait(false);
+        AgentStageCoordinator.EnsureExpectedClaim(current, expectedAssignee, requireInProgress: false);
+        var expected = invocation.Observations?.BeforeState ?? session.InitialState;
+        if (current.State != expected)
+            throw new AgentStageInputException(
+                $"Cannot escalate Merger outcome for '{session.BeadId}': workflow state changed after verification.");
+
+        var failure = new AgentOperationalFailure(AgentOperationalFailureKind.OutcomeVerificationFailed, reason);
+        var failed = invocation with
+        {
+            Failure = failure,
+            OutcomeClassification = classification,
+            Diagnostics = invocation.Diagnostics.Append(reason).ToArray()
+        };
+        var findings = new[]
+        {
+            $"Merger invocation: {invocation.InvocationId}; log: {invocation.LogFilePath}.",
+            $"Outcome classifier: {classification?.Provider ?? "unavailable"}; outcome: {classification?.Outcome?.ToString() ?? "unavailable"}.",
+            reason
+        };
+        var request = new NeedsHumanRequest(session.BeadId, expectedAssignee, cause, AgentRole.Merger,
+            reason, findings, invocation.InvocationId, [invocation.LogFilePath], WorktreePurpose.Delivery, expected);
+        return await RunMergerEscalationAsync(session, failed, attempts, cause, request, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<OperationalRetryOutcome> EscalatePublishedMergerBudgetAsync(
+        AgentStageSession session,
+        AgentStageResult published,
+        string expectedAssignee,
+        long attempts,
+        MergerRejectionFinding? finding,
+        CancellationToken cancellationToken)
+    {
+        var state = published.VerifiedState
+            ?? throw new AgentStageInputException("Budget escalation requires the verified Merger repair state.");
+        var reason = $"Verified Merger rejection raised repair_cycles to {state.RepairCycles}, exceeding max_repair_cycles={session.Project.Limits.MaxRepairCycles}.";
+        var findings = new List<string>
+        {
+            $"Merger invocation: {published.InvocationId}; log: {published.LogFilePath}.",
+            finding is null ? "Current actionable rejection evidence was verified." :
+                $"Rejection finding ({finding.Kind}) from comment {finding.SourceCommentId}: {finding.Subject}: {finding.Summary} {finding.Details}",
+            reason
+        };
+        var request = new NeedsHumanRequest(session.BeadId, expectedAssignee, NeedsHumanCause.RepairBudgetExhausted,
+            AgentRole.Merger, reason, findings, published.InvocationId, [published.LogFilePath],
+            WorktreePurpose.Delivery, state);
+        return await RunMergerEscalationAsync(session, published, attempts,
+            NeedsHumanCause.RepairBudgetExhausted, request, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<OperationalRetryOutcome> RunMergerEscalationAsync(
+        AgentStageSession session,
+        AgentStageResult invocation,
+        long attempts,
+        NeedsHumanCause cause,
+        NeedsHumanRequest request,
+        CancellationToken cancellationToken)
+    {
+        NeedsHumanEscalationResult progress;
+        try
+        {
+            progress = await escalate(session.HostPaths, session.Project, session.Repository, request, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (NeedsHumanEscalationException exception)
+        {
+            throw IncompleteEscalation(exception.Message, invocation, attempts, cause, exception.Progress,
+                classification: null, innerException: exception);
+        }
+        if (!progress.Succeeded)
+            throw IncompleteEscalation(
+                $"Merger needs-human escalation for '{session.BeadId}' was incomplete: {string.Join("; ", progress.Failures)}",
+                invocation, attempts, cause, progress, classification: null);
+        return new(OperationalRetryStatus.Escalated, invocation, attempts, cause, progress, null);
     }
 
     private async Task<OperationalRetryOutcome> EscalateDeliveryOutcomeAsync(

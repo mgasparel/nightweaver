@@ -33,15 +33,32 @@ public sealed class AuthorityMatrixTests
             (AgentRole.Implementer, State("t1", "task", "stage:implement"), State("t1", "task", "stage:implement"), Beads(), null),
             (AgentRole.Reviewer, State("t2", "task", "stage:review"), State("t2", "task", "stage:review"), Beads(), null),
             (AgentRole.Qa, State("t5", "task", "stage:qa"), State("t5", "task", "stage:qa"), Beads(), null),
-            (AgentRole.Merger, State("t8", "task", "stage:merge"), State("t8", "task", status: "closed"), Beads(), null),
-            (AgentRole.Merger, State("t9", "task", "stage:merge"), State("t9", "task", "stage:merge", status: "closed"), Beads(), null),
-            (AgentRole.Merger, State("t10", "task", "stage:merge"), State("t10", "task", "stage:implement", repairCycles: 1), Beads(), null)
+            (AgentRole.Merger, State("t8", "task", "stage:merge"), State("t8", "task", "stage:merge"), Beads(), null)
         };
 
         foreach (var item in cases)
         {
             var result = AuthorityMatrix.Validate(item.Role, item.Before, item.After, item.Beads, item.Dependencies);
             Assert.True(result.IsLegal, $"{item.Role}: {result.Reason}");
+        }
+    }
+
+    [Fact]
+    public void MergerMayObserveButCannotPublishLifecycleChanges()
+    {
+        var before = State("merger", "task", "stage:merge");
+        var changedStates = new[]
+        {
+            State("merger", "task", "stage:merge", status: "closed"),
+            State("merger", "task", "stage:implement", repairCycles: 1),
+            State("merger", "task", "stage:merge", labels: ["product-decision-required"]),
+            State("merger", "task", "stage:merge", labels: ["needs-human"])
+        };
+
+        foreach (var after in changedStates)
+        {
+            var result = AuthorityMatrix.Validate(AgentRole.Merger, before, after, Beads(), null);
+            Assert.False(result.IsLegal, $"Unexpectedly accepted Merger lifecycle mutation: {after}");
         }
     }
 

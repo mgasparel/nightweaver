@@ -48,7 +48,7 @@ internal sealed class TempDirectory : IDisposable
             if ((attributes & FileAttributes.ReparsePoint) != 0)
             {
                 if ((attributes & FileAttributes.Directory) != 0) Directory.Delete(entry);
-                else File.Delete(entry);
+                else DeleteFile(entry);
             }
             else
             {
@@ -57,10 +57,30 @@ internal sealed class TempDirectory : IDisposable
                 if ((attributes & FileAttributes.ReadOnly) != 0)
                     File.SetAttributes(entry, FileAttributes.Normal);
                 if ((attributes & FileAttributes.Directory) != 0) DeleteTree(entry);
-                else File.Delete(entry);
+                else DeleteFile(entry);
             }
         }
         DeleteDirectory(root);
+    }
+
+    private static void DeleteFile(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Delete(path);
+                return;
+            }
+            catch (UnauthorizedAccessException exception) when (OperatingSystem.IsWindows()
+                && (exception.HResult & 0xFFFF) == 5
+                && attempt < 5)
+            {
+                // A killed Windows CLI can release its loaded assembly just after its parent exits.
+                // Retry only the observed access-denied error; persistent permission failures still fail.
+                Thread.Sleep(TimeSpan.FromMilliseconds(50 << attempt));
+            }
+        }
     }
 
     private static void DeleteDirectory(string path)

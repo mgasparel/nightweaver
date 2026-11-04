@@ -15,7 +15,7 @@ internal interface IDeliveryOutcomePublisher
         CancellationToken cancellationToken);
 }
 
-/// <summary>Publishes Orchestrator-verified Delivery outcomes under the current Bead owner guard.</summary>
+/// <summary>Publishes Orchestrator-verified lifecycle outcomes under the current Bead owner guard.</summary>
 internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : IDeliveryOutcomePublisher
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -38,9 +38,9 @@ internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : I
         ArgumentNullException.ThrowIfNull(invocation);
         ArgumentNullException.ThrowIfNull(classification);
         cancellationToken.ThrowIfCancellationRequested();
-        if (!AgentRoles.IsDeliveryRole(session.Role) || invocation.Role != session.Role
+        if (!(AgentRoles.IsDeliveryRole(session.Role) || session.Role == AgentRole.Merger) || invocation.Role != session.Role
             || invocation.Observations is null || classification.Outcome is null)
-            throw new AgentStageInputException("Only a classified Delivery invocation can publish an outcome.");
+            throw new AgentStageInputException("Only a classified Delivery or Merger invocation can publish an outcome.");
 
         var expectedAssignee = session.InitialAssignee;
         if (string.IsNullOrWhiteSpace(expectedAssignee))
@@ -52,7 +52,7 @@ internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : I
         EnsureCurrent(initial, expectedState, expectedAssignee);
 
         var comment = JsonSerializer.Serialize(new OutcomeComment(
-            "nightweaver-delivery-outcome-v1",
+            session.Role == AgentRole.Merger ? "nightweaver-merger-outcome-v1" : "nightweaver-delivery-outcome-v1",
             session.BeadId,
             AgentRoles.ToConfigKey(session.Role),
             invocation.InvocationId,
@@ -63,6 +63,14 @@ internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : I
 
         await AddCommentVerifiedAsync(session.Repository, session.BeadId, comment, cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
+        if (session.Role == AgentRole.Merger)
+        {
+            var readiness = await reader.ReadSnapshotWithReadinessAsync(session.Repository, expectedAssignee,
+                cancellationToken).ConfigureAwait(false);
+            if (!readiness.Readiness.RecoverableOwnedReady.Contains(session.BeadId))
+                throw new AgentStageInputException(
+                    $"Merger outcome publication for Bead '{session.BeadId}' was refused because it is no longer in the native recoverable-owned ready set.");
+        }
         var preWrite = await ReadBeadAsync(session.Repository, session.BeadId, cancellationToken).ConfigureAwait(false);
         EnsureCurrent(preWrite, expectedState, expectedAssignee);
 
@@ -130,7 +138,10 @@ internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : I
                 new("stage:qa", expected.Stage, null, expected with { Stage = "stage:qa", Status = release ? "open" : expected.Status }, release, false),
             (AgentRole.Qa, AgentOutcomeChoice.Approved) =>
                 new("stage:merge", expected.Stage, null, expected with { Stage = "stage:merge", Status = "open" }, true, true),
-            (AgentRole.Reviewer or AgentRole.Qa, AgentOutcomeChoice.ChangesRequired) => BuildRepairTransition(expected, release),
+            (AgentRole.Reviewer or AgentRole.Qa or AgentRole.Merger, AgentOutcomeChoice.ChangesRequired) => BuildRepairTransition(expected, release),
+            (AgentRole.Merger, AgentOutcomeChoice.ProductDecisionRequired) =>
+                new("product-decision-required", null, null,
+                    expected with { ProductDecisionRequired = true, Status = "open" }, true, false),
             (AgentRole.Implementer or AgentRole.Reviewer or AgentRole.Qa, AgentOutcomeChoice.ProductDecisionRequired) =>
                 new("product-decision-required", null, null,
                     expected with { ProductDecisionRequired = true, Status = "open" }, true, false),
