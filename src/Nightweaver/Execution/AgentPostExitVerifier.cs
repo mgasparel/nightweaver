@@ -37,6 +37,7 @@ internal sealed record DeliveryOutcomePublicationReceipt(
     bool ClaimReleased,
     bool HandoffToMerger);
 
+
 internal sealed record AgentStageResult(
     AgentRole Role,
     string BeadId,
@@ -48,7 +49,8 @@ internal sealed record AgentStageResult(
     AgentStageObservations? Observations = null,
     AgentOutcomeClassificationResult? OutcomeClassification = null,
     IReadOnlySet<string>? PreInvocationCommentIds = null,
-    DeliveryOutcomePublicationReceipt? PublicationReceipt = null)
+    DeliveryOutcomePublicationReceipt? PublicationReceipt = null,
+    MergerCompletionReceipt? MergerCompletion = null)
 {
     internal bool Succeeded => Failure is null;
 }

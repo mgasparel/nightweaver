@@ -77,5 +77,5 @@ The Delivery Agent that boots and exercises the running software against a Plan 
 _Avoid_: Tester, verifier
 
 **Merger Agent**:
-The singleton Delivery Agent that processes `stage:merge` Plan Beads one at a time, synchronizing their Pull Request with `main` (resolving rebase conflicts when possible), verifying CI passes, and merging the approved change into the Target Repository (or returning unresolved conflict/CI failures to the Implementer Agent).
+The singleton Delivery Agent that processes `stage:merge` Plan Beads one at a time, synchronizing their Pull Request with the default branch (resolving rebase conflicts when possible), verifying CI passes, and merging the approved change into the Target Repository (or returning unresolved conflict/CI failures to the Implementer Agent). It reports merge evidence without changing Bead lifecycle fields; the Orchestrator independently verifies the merge, closes the claimed Plan Bead, and attempts exact environment cleanup and eligible Product completion.
 _Avoid_: Shipper, release agent, PR bot

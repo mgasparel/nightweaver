@@ -270,7 +270,7 @@ public sealed class MergerSlotCoordinatorTests
     }
 
     [Fact]
-    public async Task ConfirmedMergeEvidenceIsUnsupportedAndRetainsTheMergerClaim()
+    public async Task ApprovedOutcomeWithoutCompletionReceiptFailsAndRetainsTheMergerClaim()
     {
         var runner = new MergerSlotProcessRunner(initialRepairCycles: 7);
         var slot = CreateSlot(runner, (_, _, _, beadId, role, _, _, _, _) =>
@@ -283,9 +283,10 @@ public sealed class MergerSlotCoordinatorTests
         var result = await slot.RunAsync(CreateHost(), CreateProject(maxRepairCycles: 7), CreateRepository(), "candidate",
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(MergerSlotDisposition.StoppedAtUnsupportedOutcome, result.Disposition);
+        Assert.Equal(MergerSlotDisposition.Failed, result.Disposition);
         Assert.False(result.MergeCompleted);
         Assert.False(result.ClaimHandoffCompleted);
+        Assert.Contains("did not return a supported verified rejection or completion publication", result.Diagnostic, StringComparison.Ordinal);
         Assert.Equal(7, result.FinalState!.RepairCycles);
         Assert.Equal("in_progress", runner.Bead.Status);
         Assert.Equal("nightweaver:merger-slot-tests", runner.Bead.Assignee);

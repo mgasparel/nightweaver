@@ -45,7 +45,8 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
         Assert.Contains("The Orchestrator accepts only evidence added during this invocation, independently verifies the retained Bead owner/state", merger, StringComparison.Ordinal);
         Assert.Contains("then publishes the shared repair counter and guarded lifecycle handoff", merger, StringComparison.Ordinal);
         Assert.Contains("Agents never write stage labels, repair counters, pause/closure state, status, or assignee", merger, StringComparison.Ordinal);
-        Assert.Contains("Leave all Bead lifecycle fields unchanged after recording this evidence.", merger, StringComparison.Ordinal);
+        Assert.Contains("Leave every Bead lifecycle field unchanged.", merger, StringComparison.Ordinal);
+        Assert.Contains("The completion owner independently verifies the comment, pull request identity, checks, and fetched default-branch merge commit", merger, StringComparison.Ordinal);
         Assert.DoesNotContain("Run `bd update`", merger, StringComparison.Ordinal);
         Assert.DoesNotContain("Run `bd close`", merger, StringComparison.Ordinal);
         Assert.Contains("established branch and worktree, inherited files, and temporary build artifacts", merger, StringComparison.Ordinal);

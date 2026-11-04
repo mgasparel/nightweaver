@@ -14,12 +14,18 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
         var beadId = target.CreateBead("Native Merger pool closure", "task", "stage:merge");
+        var productId = target.CreateBead("Native planned Product completion", "feature", "planned");
+        target.RunTarget("bd", ["dep", "add", beadId, productId, "--type", "discovered-from"]);
         var project = target.CreateProject(AgentCli.Codex, maxConcurrentDelivery: 3, timeoutMinutes: 5)
             with { Limits = new LimitsConfig(3, 0) };
-        var repository = new ValidatedTargetRepository(target.Path, "main");
+        var repository = new ValidatedTargetRepository(target.Path, "main")
+        {
+            GitCommonDirectory = target.RunTarget("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"]).Trim()
+        };
         var systemRunner = new SystemProcessRunner();
         var processRunner = new RecordingProcessRunner((request, cancellationToken) =>
             target.RunWithFixturePullRequestAsync(systemRunner, request, cancellationToken));
+        target.LoseVerifiedTaskCloseResponseAfterCommitOnce = true;
         var provisioner = new WorktreeProvisioner(processRunner);
         var worktree = await provisioner.ProvisionAsync(target.Host, project.Name, repository, beadId,
             WorktreePurpose.Delivery, TestContext.Current.CancellationToken);
@@ -74,8 +80,8 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         var resultLog = completion.Outcome?.Stage?.StageResult.LogFilePath;
         var resultLogContents = resultLog is not null && File.Exists(resultLog) ? File.ReadAllText(resultLog) : "(no stage log)";
 
-        Assert.Equal(MergerSlotDisposition.StoppedAtUnsupportedOutcome, completion.Outcome?.Disposition);
-        Assert.False(completion.MergeCompleted,
+        Assert.Equal(MergerSlotDisposition.Merged, completion.Outcome?.Disposition);
+        Assert.True(completion.MergeCompleted,
             $"outcome={completion.Outcome?.Disposition}; diagnostic={completion.Diagnostic}; exception={completion.Exception}; "
             + $"retryFailure={completion.Outcome?.Stage?.StageResult.Failure?.Reason}; "
             + $"escalation={completion.Outcome?.Stage?.Escalation?.Failures.Count}; log={resultLogContents}");
@@ -83,17 +89,18 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         Assert.Empty(pool.ActiveReservations);
         var finalBead = target.ReadBead(beadId);
         var finalState = BeadWorkflowState.Parse(finalBead);
-        Assert.Equal("in_progress", finalBead.Status);
-        Assert.Equal(project.RecoveryActor, finalBead.Assignee);
+        Assert.Equal("closed", finalBead.Status);
+        Assert.Null(finalBead.Assignee);
         Assert.Equal("stage:merge", finalState.Stage);
         Assert.Equal(0, finalState.RepairCycles);
-        Assert.Equal(originalBranch, target.CurrentBranch(beadId));
-        Assert.NotEqual(originalHead, RunGit(worktree.Path, "rev-parse", "HEAD"));
-        Assert.True(File.Exists(sentinel), "The retained Delivery worktree lost its ignored build artifact.");
-        Assert.Empty(RunGit(worktree.Path, "status", "--porcelain"));
+        Assert.Equal("closed", target.ReadBead(productId).Status);
+        Assert.False(Directory.Exists(worktree.Path), completion.Diagnostic ?? "The owned completed worktree was not removed.");
+        Assert.Empty(target.RunTarget("git", ["branch", "--list", originalBranch]));
+        Assert.False(Directory.Exists(Path.Combine(target.Host.TmpRoot(project.Name), beadId)));
+        Assert.True(resultLog is not null && File.Exists(resultLog), "The invocation log was removed with the worktree.");
         var remoteMain = target.RunTarget("git", ["ls-remote", "origin", "refs/heads/main"])
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).First();
-        Assert.Equal(RunGit(worktree.Path, "rev-parse", "HEAD"), remoteMain);
+        Assert.NotEqual(originalHead, remoteMain);
         Assert.Empty(target.RunTarget("git", ["ls-remote", "origin", $"refs/heads/nightweaver/{beadId}"]));
 
         using (var comments = JsonDocument.Parse(target.ReadComments(beadId)))
@@ -112,8 +119,12 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         Assert.True(File.Exists(pidFile));
         AssertFixtureExited(pidFile);
         var claimWrites = AgentStageTargetFixture.ClaimWrites(processRunner.Requests, beadId);
-        Assert.Single(claimWrites);
+        Assert.Equal(2, claimWrites.Length);
         Assert.Equal("open", AgentStageTargetFixture.ClaimWriteStatus(claimWrites[0]));
+        Assert.Equal("in_progress", AgentStageTargetFixture.ClaimWriteStatus(claimWrites[1]));
+        Assert.Contains("closed", claimWrites[1].Arguments);
+        Assert.False(target.LoseVerifiedTaskCloseResponseAfterCommitOnce,
+            "The fixture did not exercise a lost guarded-close response after the tracker committed it.");
     }
 
     [Fact]

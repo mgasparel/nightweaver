@@ -1081,6 +1081,7 @@ public abstract class AgentStageIntegrationTestSupport
         internal AgentRole[] LastSlotRoles { get; private set; } = [];
         internal bool FailOutcomePublishResponseAfterCommitOnce { get; set; }
         internal bool FixtureRequiredCheckFails { get; set; }
+        internal bool LoseVerifiedTaskCloseResponseAfterCommitOnce { get; set; }
         internal bool ClaimMergerAfterQaHandoffResponseLostOnce { get; set; }
         internal bool MergerClaimedAfterQaHandoffResponseLost { get; private set; }
         internal bool LoseDeliveryAcquireResponseAfterCommitOnce { get; set; }
@@ -1125,6 +1126,20 @@ public abstract class AgentStageIntegrationTestSupport
         internal async Task<ProcessResult> RunWithFixturePullRequestAsync(IProcessRunner inner, ProcessRequest request,
             CancellationToken cancellationToken)
         {
+            if (request.FileName == "bd" && LoseVerifiedTaskCloseResponseAfterCommitOnce
+                && request.Arguments.Contains("update", StringComparer.Ordinal)
+                && ArgumentAfter(request, "--status") == "closed"
+                && ArgumentAfter(request, "--if-status") == "in_progress")
+            {
+                var committed = await inner.RunAsync(request, cancellationToken);
+                if (committed.ExitCode == 0)
+                {
+                    LoseVerifiedTaskCloseResponseAfterCommitOnce = false;
+                    return new ProcessResult(1, string.Empty, "simulated lost verified-close response after commit");
+                }
+                return committed;
+            }
+
             if (request.FileName == "bd" && IsInventoryRead(request) && failNextInventoryAfterLostDeliveryAcquire)
             {
                 failNextInventoryAfterLostDeliveryAcquire = false;
@@ -1233,13 +1248,18 @@ public abstract class AgentStageIntegrationTestSupport
                 });
                 return new ProcessResult(0, checks, string.Empty);
             }
+            var remoteMainOutput = Run("git", ["ls-remote", "origin", "refs/heads/main"], request.WorkingDirectory, BeadsEnvironment);
+            var remoteMain = remoteMainOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            var merged = string.Equals(remoteMain, head, StringComparison.OrdinalIgnoreCase);
             var response = JsonSerializer.Serialize(new
             {
-                state = "OPEN",
+                state = merged ? "MERGED" : "OPEN",
                 baseRefName = "main",
                 headRefName = branch,
                 headRefOid = head,
-                url = $"https://example.invalid/pull/{Uri.EscapeDataString(branch)}"
+                url = $"https://example.invalid/pull/{Uri.EscapeDataString(branch)}",
+                mergedAt = merged ? "2026-11-04T20:00:00Z" : null,
+                mergeCommit = merged ? new { oid = remoteMain } : null
             });
             return new ProcessResult(0, response, string.Empty);
         }

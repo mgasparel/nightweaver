@@ -227,6 +227,107 @@ public sealed class MergerOutcomeVerifierTests
         Assert.Contains("retained branch", result.Diagnostic, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task AcceptsApprovalOnlyAfterCurrentMergeEvidencePassingChecksAndDefaultBranchReachability()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.Runner.ApprovalMode = true;
+        fixture.Runner.CheckFailed = false;
+        fixture.SetMergeEvidence();
+
+        var result = await fixture.VerifyApprovalAsync();
+
+        Assert.True(result.Succeeded, result.Diagnostic);
+        Assert.Equal(fixture.PullRequest, result.Evidence?.PullRequest);
+        Assert.Equal(fixture.Head, result.Evidence?.CheckedHead);
+        Assert.Equal(new string('b', 40), result.Evidence?.MergeCommit);
+        Assert.Equal("current", result.Evidence?.SourceCommentId);
+        Assert.Equal(2, fixture.Runner.PullRequestViewCount);
+        Assert.Equal(1, fixture.Runner.RequiredChecksCount);
+        Assert.True(fixture.Runner.FetchedDefaultBranch);
+    }
+
+    [Fact]
+    public async Task RejectsApprovalFromHistoricalEvidenceOrChangedClaim()
+    {
+        using (var fixture = new VerifierFixture())
+        {
+            fixture.Runner.ApprovalMode = true;
+            fixture.SetMergeEvidence();
+            fixture.Invocation = fixture.Invocation with
+            {
+                PreInvocationCommentIds = new HashSet<string>(["prior", "current"], StringComparer.Ordinal)
+            };
+            var result = await fixture.VerifyApprovalAsync();
+            Assert.False(result.Succeeded);
+            Assert.Contains("current invocation", result.Diagnostic, StringComparison.Ordinal);
+            Assert.Equal(0, fixture.Runner.PullRequestViewCount);
+        }
+
+        using (var fixture = new VerifierFixture())
+        {
+            fixture.Runner.ApprovalMode = true;
+            fixture.Runner.CheckFailed = false;
+            fixture.Runner.Assignee = "human:receiver";
+            fixture.SetMergeEvidence();
+            var result = await fixture.VerifyApprovalAsync();
+            Assert.False(result.Succeeded);
+            Assert.Contains("state or claim owner", result.Diagnostic, StringComparison.Ordinal);
+            Assert.Equal(0, fixture.Runner.PullRequestViewCount);
+        }
+    }
+
+    [Fact]
+    public async Task RejectsApprovalWhenPullRequestOrCurrentHeadChecksAreNotVerified()
+    {
+        using (var fixture = new VerifierFixture())
+        {
+            fixture.Runner.ApprovalMode = true;
+            fixture.Runner.CheckFailed = false;
+            fixture.Runner.BaseBranch = "release";
+            fixture.SetMergeEvidence();
+            var result = await fixture.VerifyApprovalAsync();
+            Assert.False(result.Succeeded);
+            Assert.Contains("identity, configured base", result.Diagnostic, StringComparison.Ordinal);
+        }
+
+        using (var fixture = new VerifierFixture())
+        {
+            fixture.Runner.ApprovalMode = true;
+            fixture.Runner.CheckFailed = false;
+            fixture.Runner.HeadAfterChecks = new string('d', 40);
+            fixture.SetMergeEvidence();
+            var result = await fixture.VerifyApprovalAsync();
+            Assert.False(result.Succeeded);
+            Assert.Contains("changed while required checks", result.Diagnostic, StringComparison.Ordinal);
+        }
+
+        using (var fixture = new VerifierFixture())
+        {
+            fixture.Runner.ApprovalMode = true;
+            fixture.Runner.CheckFailed = true;
+            fixture.SetMergeEvidence();
+            var result = await fixture.VerifyApprovalAsync();
+            Assert.False(result.Succeeded);
+            Assert.Contains("Required pull request checks", result.Diagnostic, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task RejectsMergeCommitThatIsNotReachableFromConfiguredDefaultBranch()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.Runner.ApprovalMode = true;
+        fixture.Runner.CheckFailed = false;
+        fixture.Runner.MergeCommitReachable = false;
+        fixture.SetMergeEvidence();
+
+        var result = await fixture.VerifyApprovalAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("not reachable", result.Diagnostic, StringComparison.Ordinal);
+    }
+
     private sealed class VerifierFixture : IDisposable
     {
         internal const string BeadId = "ns-ver.1";
@@ -324,10 +425,22 @@ public sealed class MergerOutcomeVerifierTests
             File.WriteAllText(Invocation.LogFilePath, LogText);
         }
 
+        internal void SetMergeEvidence(string? pullRequest = null, string? checkedHead = null,
+            string mergeMethod = "squash", string? mergeCommit = null)
+        {
+            var comment = $"nightweaver-merge-v1 pull_request={pullRequest ?? PullRequest} checked_head={checkedHead ?? Head} required_checks=passed merge_method={mergeMethod} merge_commit={mergeCommit ?? new string('b', 40)}";
+            Comments = [new("prior", comment, DateTimeOffset.UnixEpoch), new("current", comment, DateTimeOffset.UnixEpoch.AddSeconds(1))];
+        }
+
         internal Task<MergerRejectionVerification> VerifyAsync() =>
             new MergerOutcomeVerifier(Runner).VerifyRejectionAsync(
                 new HostPaths(Path.Combine(temp.Path, "host")), project, session, Invocation,
                 classification, Comments, Owner, CancellationToken.None);
+
+        internal Task<MergerApprovalVerification> VerifyApprovalAsync() =>
+            new MergerOutcomeVerifier(Runner).VerifyApprovalAsync(session, Invocation,
+                new(AgentOutcomeChoice.Approved, "fixture", "The merged result is confirmed."),
+                Comments, Owner, CancellationToken.None);
 
         public void Dispose() => temp.Dispose();
 
@@ -360,12 +473,27 @@ public sealed class MergerOutcomeVerifierTests
         internal bool CheckFailed { get; set; } = true;
         internal string AdvertisedHead { get; set; } = head;
         internal string? HeadAfterChecks { get; set; }
+        internal string BaseBranch { get; set; } = "main";
+        internal bool ApprovalMode { get; set; }
+        internal bool MergeCommitReachable { get; set; } = true;
+        internal bool FetchedDefaultBranch { get; private set; }
         internal int PullRequestViewCount { get; private set; }
         internal int RequiredChecksCount { get; private set; }
 
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
-            if (request.FileName == "git") return system.RunAsync(request, cancellationToken);
+            if (request.FileName == "git")
+            {
+                if (request.Arguments.SequenceEqual(["fetch", "origin", "main"], StringComparer.Ordinal))
+                {
+                    FetchedDefaultBranch = true;
+                    return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
+                }
+                if (request.Arguments.Count == 4 && request.Arguments[0] == "merge-base"
+                    && request.Arguments[1] == "--is-ancestor")
+                    return Task.FromResult(new ProcessResult(MergeCommitReachable ? 0 : 1, string.Empty, string.Empty));
+                return system.RunAsync(request, cancellationToken);
+            }
             if (request.FileName == "bd")
             {
                 if (request.Arguments.Contains("comments", StringComparer.Ordinal))
@@ -383,7 +511,13 @@ public sealed class MergerOutcomeVerifierTests
                 PullRequestViewCount++;
                 return Task.FromResult(new ProcessResult(0, JsonSerializer.Serialize(new
                 {
-                    state = "OPEN", headRefName = branch, headRefOid = AdvertisedHead, url = pullRequest
+                    state = ApprovalMode ? "MERGED" : "OPEN",
+                    baseRefName = BaseBranch,
+                    headRefName = branch,
+                    headRefOid = AdvertisedHead,
+                    url = pullRequest,
+                    mergedAt = ApprovalMode ? "2026-11-04T20:00:00Z" : null,
+                    mergeCommit = ApprovalMode ? new { oid = new string('b', 40) } : null
                 }), string.Empty));
             }
             if (request.FileName == "gh" && request.Arguments.Count >= 2

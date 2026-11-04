@@ -163,6 +163,26 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
             .ConfigureAwait(false);
     }
 
+    internal async Task<ProcessResult> CloseVerifiedTaskAsync(ValidatedTargetRepository repository, string beadId,
+        string expectedAssignee, CancellationToken cancellationToken)
+    {
+        BeadsReader.EnsureMutationFreeBackend(repository);
+        return await processRunner.RunAsync(BeadsCommand.CreateWrite(repository.Path,
+            ["update", beadId, "--status", "closed", "--assignee", string.Empty,
+                "--if-status", "in_progress", "--if-assignee", expectedAssignee, "--json"], expectedAssignee),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<ProcessResult> ClosePlannedProductAsync(ValidatedTargetRepository repository, string beadId,
+        CancellationToken cancellationToken)
+    {
+        BeadsReader.EnsureMutationFreeBackend(repository);
+        return await processRunner.RunAsync(BeadsCommand.CreateWrite(repository.Path,
+            ["update", beadId, "--status", "closed", "--assignee", string.Empty,
+                "--if-status", "open", "--if-assignee", string.Empty, "--json"], "local-console"),
+            cancellationToken).ConfigureAwait(false);
+    }
+
     internal async Task<GuardedStrandedClaimReleaseResult> ReleaseStrandedClaimAsync(
         ValidatedTargetRepository repository, string beadId, string actor, CancellationToken cancellationToken)
     {

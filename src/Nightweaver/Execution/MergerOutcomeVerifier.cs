@@ -18,8 +18,22 @@ internal sealed record MergerRejectionFinding(
 internal sealed record MergerRejectionVerification(bool Succeeded, string Diagnostic,
     MergerRejectionFinding? Finding = null);
 
+internal sealed record MergerVerifiedMergeEvidence(string PullRequest, string CheckedHead, string MergeCommit,
+    string MergeMethod, string SourceCommentId);
+
+internal sealed record MergerApprovalVerification(bool Succeeded, string Diagnostic,
+    MergerVerifiedMergeEvidence? Evidence = null);
+
 internal interface IMergerOutcomeVerifier
 {
+    Task<MergerApprovalVerification> VerifyApprovalAsync(
+        AgentStageSession session,
+        AgentStageResult invocation,
+        AgentOutcomeClassificationResult classification,
+        IReadOnlyList<BeadCommentSnapshot> comments,
+        string expectedAssignee,
+        CancellationToken cancellationToken);
+
     Task<MergerRejectionVerification> VerifyRejectionAsync(
         HostPaths hostPaths,
         ProjectConfig project,
@@ -38,6 +52,178 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
     private const string LocalCheckEvidencePrefix = "NIGHTWEAVER_LOCAL_CHECK_V1 ";
     private const string LocalCheckEvidenceEnd = "END_NIGHTWEAVER_LOCAL_CHECK_V1";
     private readonly BeadsReader beadsReader = new(processRunner);
+
+    public async Task<MergerApprovalVerification> VerifyApprovalAsync(
+        AgentStageSession session,
+        AgentStageResult invocation,
+        AgentOutcomeClassificationResult classification,
+        IReadOnlyList<BeadCommentSnapshot> comments,
+        string expectedAssignee,
+        CancellationToken cancellationToken)
+    {
+        if (session.Role != AgentRole.Merger || invocation.Role != AgentRole.Merger
+            || invocation.BeadId != session.BeadId || classification.Outcome != AgentOutcomeChoice.Approved)
+            return ApprovalFailed("Only the current classified Merger approval can enter merge verification.");
+        if (invocation.Failure is not null || invocation.Observations is not { } observations
+            || observations.ProcessStatus != AgentExecutionStatus.Exited || observations.ExitCode != 0)
+            return ApprovalFailed("A failed, timed out, cancelled, or unobserved Merger invocation cannot authorize completion.");
+        if (observations.BeforeState.Stage != "stage:merge" || observations.ObservedState != observations.BeforeState
+            || observations.BeforeState.Status != "in_progress"
+            || !string.Equals(observations.BeforeAssignee, expectedAssignee, StringComparison.Ordinal)
+            || !string.Equals(observations.ObservedAssignee, expectedAssignee, StringComparison.Ordinal)
+            || observations.WorktreeClean != true)
+            return ApprovalFailed("The Merger workflow, owner, or clean-worktree proof changed during invocation.");
+
+        var expectedBranch = $"nightweaver/{session.BeadId}";
+        var expectedHead = observations.HeadSha;
+        if (!string.Equals(observations.BranchName, expectedBranch, StringComparison.Ordinal) || !IsSha(expectedHead))
+            return ApprovalFailed("The invocation did not retain the expected Merger branch and valid current HEAD.");
+        var verifiedHead = expectedHead!;
+        if (invocation.PreInvocationCommentIds is null)
+            return ApprovalFailed("The invocation has no comment baseline, so merge evidence cannot be attributed to this run.");
+
+        var evidenceRows = new List<(BeadCommentSnapshot Comment, string PullRequest, string CheckedHead,
+            string MergeMethod, string MergeCommit)>();
+        foreach (var comment in comments.Where(item => !invocation.PreInvocationCommentIds.Contains(item.Id)))
+        {
+            var parsed = ParseMergeEvidence(comment.Text);
+            if (parsed is { } row) evidenceRows.Add((comment, row.PullRequest, row.CheckedHead, row.MergeMethod, row.MergeCommit));
+        }
+        if (evidenceRows.Count != 1)
+            return ApprovalFailed("The current invocation must provide exactly one structured verified-merge evidence comment.");
+        var evidence = evidenceRows[0];
+        if (!string.Equals(evidence.CheckedHead, verifiedHead, StringComparison.OrdinalIgnoreCase))
+            return ApprovalFailed("The merge evidence does not identify the retained current HEAD.");
+
+        try
+        {
+            var bead = await ReadBeadAsync(session.Repository, session.BeadId, cancellationToken).ConfigureAwait(false);
+            if (BeadWorkflowState.Parse(bead) != observations.BeforeState || bead.Status != "in_progress"
+                || !string.Equals(bead.Assignee, expectedAssignee, StringComparison.Ordinal))
+                return ApprovalFailed("The current Bead workflow state or claim owner changed before merge verification.");
+
+            var branch = await RunGitAsync(["branch", "--show-current"], session.Worktree.Path, cancellationToken).ConfigureAwait(false);
+            var head = await RunGitAsync(["rev-parse", "HEAD"], session.Worktree.Path, cancellationToken).ConfigureAwait(false);
+            var status = await RunGitAsync(["status", "--porcelain"], session.Worktree.Path, cancellationToken).ConfigureAwait(false);
+            var unmerged = await RunGitAsync(["ls-files", "-u"], session.Worktree.Path, cancellationToken).ConfigureAwait(false);
+            if (branch.StandardOutput.Trim() != expectedBranch
+                || !string.Equals(head.StandardOutput.Trim(), verifiedHead, StringComparison.OrdinalIgnoreCase)
+                || !string.IsNullOrEmpty(status.StandardOutput) || !string.IsNullOrEmpty(unmerged.StandardOutput))
+                return ApprovalFailed("The retained branch, HEAD, index, or worktree changed during independent merge verification.");
+            foreach (var rebaseState in new[] { "rebase-merge", "rebase-apply" })
+            {
+                var gitPath = await RunGitAsync(["rev-parse", "--git-path", rebaseState], session.Worktree.Path,
+                    cancellationToken).ConfigureAwait(false);
+                var path = gitPath.StandardOutput.Trim();
+                if (!Path.IsPathFullyQualified(path)) path = Path.GetFullPath(Path.Combine(session.Worktree.Path, path));
+                if (Directory.Exists(path) || File.Exists(path))
+                    return ApprovalFailed("The retained worktree still contains an unfinished rebase.");
+            }
+
+            var pr = await ReadMergedPullRequestAsync(session.Worktree.Path, evidence.PullRequest, cancellationToken).ConfigureAwait(false);
+            if (!MatchesMergedPullRequest(pr, evidence.PullRequest, expectedBranch, verifiedHead,
+                    session.Project.TargetRepository.DefaultBranch, evidence.MergeCommit))
+                return ApprovalFailed("The pull request identity, configured base, current head, merged state, or merge commit does not match this invocation.");
+
+            var checks = await RunJsonCommandAsync("gh",
+                ["pr", "checks", evidence.PullRequest, "--required", "--json", "name,state,bucket"],
+                session.Worktree.Path, cancellationToken).ConfigureAwait(false);
+            using (var checksDocument = JsonDocument.Parse(checks.StandardOutput, new JsonDocumentOptions { MaxDepth = 8 }))
+            {
+                var root = checksDocument.RootElement;
+                if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() == 0
+                    || root.EnumerateArray().Any(check => check.ValueKind != JsonValueKind.Object
+                        || !ReadString(check, "name", out var name) || string.IsNullOrWhiteSpace(name)
+                        || !ReadString(check, "state", out var state) || state != "SUCCESS"
+                        || !ReadString(check, "bucket", out var bucket) || bucket != "pass"))
+                    return ApprovalFailed("Required pull request checks were missing, pending, or not passing for the current head.");
+            }
+
+            var afterChecks = await ReadMergedPullRequestAsync(session.Worktree.Path, evidence.PullRequest, cancellationToken)
+                .ConfigureAwait(false);
+            if (!MatchesMergedPullRequest(afterChecks, evidence.PullRequest, expectedBranch, verifiedHead,
+                    session.Project.TargetRepository.DefaultBranch, evidence.MergeCommit))
+                return ApprovalFailed("The pull request identity or merged head changed while required checks were being observed.");
+
+            var defaultBranch = session.Project.TargetRepository.DefaultBranch;
+            var checkedBranch = await RunGitAsync(["check-ref-format", $"refs/heads/{defaultBranch}"],
+                session.Worktree.Path, cancellationToken).ConfigureAwait(false);
+            if (checkedBranch.ExitCode != 0)
+                return ApprovalFailed("The configured default branch is not a valid Git branch name.");
+            var fetch = await RunGitAsyncAllowFailure(["fetch", "origin", defaultBranch], session.Worktree.Path,
+                cancellationToken).ConfigureAwait(false);
+            if (fetch.ExitCode != 0)
+                return ApprovalFailed("The configured origin default branch could not be freshly fetched for merge confirmation.");
+            var reachable = await RunGitAsyncAllowFailure(["merge-base", "--is-ancestor", evidence.MergeCommit, "FETCH_HEAD"],
+                session.Worktree.Path, cancellationToken).ConfigureAwait(false);
+            if (reachable.ExitCode != 0)
+                return ApprovalFailed("The reported merge commit is not reachable from the freshly fetched configured default branch.");
+
+            return new(true, "Verified current-invocation PR, required checks, merged commit, and configured default-branch reachability.",
+                new(evidence.PullRequest, evidence.CheckedHead, evidence.MergeCommit, evidence.MergeMethod, evidence.Comment.Id));
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
+        {
+            return ApprovalFailed($"Could not independently verify Merger completion ({exception.GetType().Name}): {Limit(exception.Message)}");
+        }
+    }
+
+    private async Task<MergedPullRequestObservation> ReadMergedPullRequestAsync(string worktreePath, string pullRequest,
+        CancellationToken cancellationToken)
+    {
+        var result = await RunJsonCommandAsync("gh", ["pr", "view", pullRequest, "--json",
+            "state,baseRefName,headRefName,headRefOid,url,mergedAt,mergeCommit"], worktreePath, cancellationToken)
+            .ConfigureAwait(false);
+        using var document = JsonDocument.Parse(result.StandardOutput, new JsonDocumentOptions { MaxDepth = 8 });
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object || !HasUniqueNames(root)
+            || !ReadString(root, "state", out var state)
+            || !ReadString(root, "baseRefName", out var baseBranch)
+            || !ReadString(root, "headRefName", out var headBranch)
+            || !ReadString(root, "headRefOid", out var head)
+            || !ReadString(root, "url", out var url)
+            || !ReadString(root, "mergedAt", out var mergedAt)
+            || !root.TryGetProperty("mergeCommit", out var mergeCommit) || mergeCommit.ValueKind != JsonValueKind.Object
+            || !HasUniqueNames(mergeCommit) || !ReadString(mergeCommit, "oid", out var mergeCommitOid))
+            return new(null, null, null, null, null, null, null);
+        return new(state, baseBranch, headBranch, head, url, mergedAt, mergeCommitOid);
+    }
+
+    private static bool MatchesMergedPullRequest(MergedPullRequestObservation pullRequest, string expectedUrl,
+        string expectedBranch, string expectedHead, string expectedBase, string expectedMergeCommit) =>
+        pullRequest.State == "MERGED"
+        && string.Equals(pullRequest.BaseBranch, expectedBase, StringComparison.Ordinal)
+        && string.Equals(pullRequest.HeadBranch, expectedBranch, StringComparison.Ordinal)
+        && string.Equals(pullRequest.Head, expectedHead, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(pullRequest.Url, expectedUrl, StringComparison.Ordinal)
+        && !string.IsNullOrWhiteSpace(pullRequest.MergedAt)
+        && string.Equals(pullRequest.MergeCommit, expectedMergeCommit, StringComparison.OrdinalIgnoreCase);
+
+    private static (string PullRequest, string CheckedHead, string MergeMethod, string MergeCommit)? ParseMergeEvidence(string text)
+    {
+        var fields = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (fields.Length != 6 || fields[0] != "nightweaver-merge-v1") return null;
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var field in fields.Skip(1))
+        {
+            var separator = field.IndexOf('=');
+            if (separator <= 0 || separator == field.Length - 1
+                || !values.TryAdd(field[..separator], field[(separator + 1)..])) return null;
+        }
+        if (values.Count != 5 || !values.TryGetValue("pull_request", out var pullRequest)
+            || !Uri.TryCreate(pullRequest, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps
+            || !values.TryGetValue("checked_head", out var checkedHead) || !IsSha(checkedHead)
+            || !values.TryGetValue("required_checks", out var requiredChecks) || requiredChecks != "passed"
+            || !values.TryGetValue("merge_method", out var mergeMethod) || mergeMethod is not ("squash" or "merge" or "rebase")
+            || !values.TryGetValue("merge_commit", out var mergeCommit) || !IsSha(mergeCommit)) return null;
+        return (pullRequest, checkedHead, mergeMethod, mergeCommit);
+    }
+
+    private static MergerApprovalVerification ApprovalFailed(string diagnostic) => new(false, diagnostic);
+
+    private sealed record MergedPullRequestObservation(string? State, string? BaseBranch, string? HeadBranch,
+        string? Head, string? Url, string? MergedAt, string? MergeCommit);
 
     public async Task<MergerRejectionVerification> VerifyRejectionAsync(
         HostPaths hostPaths,
@@ -295,6 +481,10 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
             throw new ToolExecutionException($"git {string.Join(' ', arguments)} exited {result.ExitCode}", result.StandardError);
         return result;
     }
+
+    private async Task<ProcessResult> RunGitAsyncAllowFailure(IReadOnlyList<string> arguments, string worktreePath,
+        CancellationToken cancellationToken) =>
+        await processRunner.RunAsync(GitCommand.Create(arguments, worktreePath), cancellationToken).ConfigureAwait(false);
 
     private async Task<BeadSnapshot> ReadBeadAsync(ValidatedTargetRepository repository, string beadId,
         CancellationToken cancellationToken)

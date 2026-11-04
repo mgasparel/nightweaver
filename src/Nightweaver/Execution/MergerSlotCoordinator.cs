@@ -230,9 +230,14 @@ internal sealed class MergerSlotCoordinator
             }
 
             var verified = stage.StageResult.VerifiedState;
-            if (verified == claimedState && stage.StageResult.OutcomeClassification?.Outcome == AgentOutcomeChoice.Approved)
-                return Result(MergerSlotDisposition.StoppedAtUnsupportedOutcome, verified, stage, false,
-                    "Merger success evidence is retained for the completion owner; no Agent-written closure was accepted.");
+            if (stage.StageResult.OutcomeClassification?.Outcome == AgentOutcomeChoice.Approved
+                && stage.StageResult.MergerCompletion is { } completion
+                && verified == completion.ClosedState && completion.ClosedState.Status == "closed")
+            {
+                var diagnostic = completion.CleanupDiagnostic is null && completion.ProductDiagnostic is null ? null
+                    : $"Verified merge and task closure completed; post-merge housekeeping needs attention. Cleanup: {completion.CleanupDiagnostic ?? "completed"}; Product: {completion.ProductDiagnostic ?? "completed or safely ineligible"}.";
+                return Result(MergerSlotDisposition.Merged, completion.ClosedState, stage, true, diagnostic);
+            }
 
             return Result(MergerSlotDisposition.Failed, verified ?? claimedState, stage, false,
                 "Merger did not return a supported verified rejection or completion publication.");

@@ -85,6 +85,7 @@ internal sealed class OperationalRetryCoordinator
     private readonly IDeliveryOutcomePublisher outcomePublisher;
     private readonly IDeliveryOutcomeVerifier outcomeVerifier;
     private readonly IMergerOutcomeVerifier mergerOutcomeVerifier;
+    private readonly MergerCompletionFinalizer mergerCompletionFinalizer;
 
     internal OperationalRetryCoordinator(
         IProcessRunner processRunner,
@@ -116,6 +117,7 @@ internal sealed class OperationalRetryCoordinator
         this.outcomePublisher = outcomePublisher ?? new DeliveryOutcomePublisher(processRunner);
         this.outcomeVerifier = outcomeVerifier ?? new DeliveryOutcomeVerifier(processRunner);
         this.mergerOutcomeVerifier = mergerOutcomeVerifier ?? new MergerOutcomeVerifier(processRunner);
+        mergerCompletionFinalizer = new MergerCompletionFinalizer(processRunner);
     }
 
     internal async Task<OperationalRetryOutcome> RunAsync(
@@ -571,9 +573,34 @@ internal sealed class OperationalRetryCoordinator
 
         if (classification.Outcome == AgentOutcomeChoice.Approved)
         {
-            // Completion/finalization is owned by the completion slice. Keep the claim and
-            // retained environment until that owner can independently publish closure.
-            return Success(invocation with { VerifiedState = invocation.Observations!.BeforeState }, attempts);
+            var approvalVerification = await mergerOutcomeVerifier.VerifyApprovalAsync(session, invocation,
+                classification, comments, expectedAssignee, cancellationToken).ConfigureAwait(false);
+            if (!approvalVerification.Succeeded || approvalVerification.Evidence is null)
+                return await EscalateMergerOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                    approvalVerification.Diagnostic, classification, NeedsHumanCause.DeliveryOutcomeFailure, cancellationToken)
+                    .ConfigureAwait(false);
+
+            MergerCompletionResult completion;
+            try
+            {
+                completion = await mergerCompletionFinalizer.CompleteAsync(session, invocation, expectedAssignee,
+                    approvalVerification.Evidence, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception exception)
+            {
+                completion = new(false, null, null, $"Verified merge could not be finalized: {exception.Message}");
+            }
+            if (!completion.Succeeded || completion.FinalState is null || completion.Receipt is null)
+                return await EscalateMergerOutcomeAsync(session, invocation, expectedAssignee, attempts,
+                    completion.Diagnostic ?? "Verified merge task closure could not be confirmed.", classification,
+                    NeedsHumanCause.DeliveryOutcomeFailure, cancellationToken).ConfigureAwait(false);
+            return Success(invocation with
+            {
+                VerifiedState = completion.FinalState,
+                MergerCompletion = completion.Receipt,
+                Diagnostics = completion.Diagnostic is null ? invocation.Diagnostics : invocation.Diagnostics.Append(completion.Diagnostic).ToArray()
+            }, attempts);
         }
 
         if (classification.Outcome == AgentOutcomeChoice.ProductDecisionRequired)
