@@ -117,12 +117,20 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
     }
 
     [Fact]
-    public async Task NativeMergerRejectionReturnsWorkToDeliveryAndImplementerResumesTheRetainedEnvironment()
+    public async Task NativeLocalBuildRejectionReturnsWorkToDeliveryAndImplementerRepairsTheRetainedEnvironment()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
+        File.WriteAllText(Path.Combine(target.Path, "LocalCheckFixture.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup></Project>\n",
+            new System.Text.UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(target.Path, "BrokenFixture.cs"),
+            "public sealed class LocalCheckFixture { public int Broken => ; }\n", new System.Text.UTF8Encoding(false));
+        target.RunTarget("git", ["add", "LocalCheckFixture.csproj", "BrokenFixture.cs"]);
+        target.RunTarget("git", ["commit", "-m", "seed controlled local build failure"]);
+        target.RunTarget("git", ["push", "origin", "main"]);
         var beadId = target.CreateBead("Native Merger rejection handoff", "task", "stage:merge", "keep:label");
-        target.FixtureRequiredCheckFails = true;
+        target.FixtureRequiredCheckFails = false;
         target.RunTarget("bd", ["update", beadId, "--set-metadata", "retained=fixture"]);
         var project = target.CreateProject(AgentCli.Codex, maxRepairCycles: 1, maxConcurrentDelivery: 3, timeoutMinutes: 5);
         var repository = new ValidatedTargetRepository(target.Path, "main");
@@ -163,7 +171,7 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
                     ["BD_ACTOR"] = project.RecoveryActor,
                     ["NIGHTWEAVER_DEFAULT_BRANCH"] = project.TargetRepository.DefaultBranch,
                     ["NIGHTWEAVER_FIXTURE_ACTION"] = "merger-reject-checks",
-                    ["NIGHTWEAVER_FIXTURE_CI_RESULT"] = "fail",
+                    ["NIGHTWEAVER_FIXTURE_CHECK_SOURCE"] = "local",
                     ["NIGHTWEAVER_FIXTURE_GH_LOG"] = ghLog,
                     ["NIGHTWEAVER_FIXTURE_PID_FILE"] = mergerPid
                 }), cancellationToken);
@@ -203,10 +211,18 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).First());
         Assert.NotEmpty(target.RunTarget("git", ["ls-remote", "origin", $"refs/heads/{originalBranch}"]));
         using (var comments = JsonDocument.Parse(target.ReadComments(beadId)))
-            Assert.Contains(StringValues(comments.RootElement), value => value.Contains(
+        {
+            var findingText = StringValues(comments.RootElement).Single(value => value.Contains(
                 "nightweaver-merger-rejection-v1", StringComparison.Ordinal));
-        var mergerCommands = File.ReadAllLines(ghLog).Select(line => JsonSerializer.Deserialize<string[]>(line)!).ToArray();
-        Assert.Contains(mergerCommands, command => command.Length >= 2 && command[0] == "pr" && command[1] == "checks");
+            using var finding = JsonDocument.Parse(findingText);
+            Assert.Equal("local", finding.RootElement.GetProperty("check_source").GetString());
+            Assert.Equal("dotnet build", finding.RootElement.GetProperty("subject").GetString());
+            Assert.Equal(1, finding.RootElement.GetProperty("local_exit_code").GetInt32());
+        }
+        var mergerCommands = File.Exists(ghLog)
+            ? File.ReadAllLines(ghLog).Select(line => JsonSerializer.Deserialize<string[]>(line)!).ToArray()
+            : [];
+        Assert.DoesNotContain(mergerCommands, command => command.Length >= 2 && command[0] == "pr" && command[1] == "checks");
         Assert.DoesNotContain(mergerCommands, command => command.Length >= 2 && command[0] == "pr" && command[1] == "merge");
         Assert.True(File.Exists(mergerPid));
         AssertFixtureExited(mergerPid);
@@ -246,6 +262,7 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
                 ["NIGHTWEAVER_FIXTURE_PID_FILE"] = pid,
                 ["NIGHTWEAVER_FIXTURE_EXPECTED_REPAIR_CYCLES"] = "1",
                 ["NIGHTWEAVER_FIXTURE_EXPECTED_FINDING"] = "nightweaver-merger-rejection-v1",
+                ["NIGHTWEAVER_FIXTURE_FIX_LOCAL_BUILD"] = "true",
                 ["NIGHTWEAVER_FIXTURE_WARM_SENTINEL"] = warmSentinel,
                 ["NIGHTWEAVER_FIXTURE_TMP_SENTINEL"] = tmpSentinel,
                 ["NIGHTWEAVER_FIXTURE_RESUME_EVIDENCE"] = resumeEvidence
@@ -277,6 +294,8 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         Assert.Equal(originalBranch, target.CurrentBranch(beadId));
         Assert.True(File.Exists(warmSentinel));
         Assert.True(File.Exists(tmpSentinel));
+        Assert.Equal("public sealed class LocalCheckFixture { public int Repaired => 1; }\n",
+            File.ReadAllText(Path.Combine(worktree.Path, "BrokenFixture.cs")));
         var resumedState = target.ReadState(beadId);
         Assert.Equal("open", resumedState.Status);
         Assert.Equal("stage:merge", resumedState.Stage);

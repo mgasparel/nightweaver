@@ -243,7 +243,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         var beadIds = new[]
         {
             target.CreateBead("Published blocked Git and active Agent one", "task", "stage:implement"),
-            target.CreateBead("Published blocked Git and active Agent two", "task", "stage:implement")
+            target.CreateBead("Published blocked Git and active Agent two", "task", "stage:implement", "product-decision-required")
         };
         var hostRoot = CreatePublishedHost(target, deliveryCapacity: 2);
         var gateDirectory = Directory.CreateDirectory(Path.Combine(target.RootPath, "published-git-force-gates")).FullName;
@@ -281,11 +281,13 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
 
         try
         {
-            await WaitForStageLaunchCountAsync(stageLaunchLog, beadIds.Length, runtime, TimeSpan.FromSeconds(90));
+            await WaitForStageLaunchCountAsync(stageLaunchLog, 1, runtime, TimeSpan.FromSeconds(90));
             var hungAgentRecord = File.ReadAllLines(stageLaunchLog)
                 .Single(record => record.StartsWith(beadIds[0] + "|", StringComparison.Ordinal));
             using var hungAgent = ReadFixtureProcessFromLaunchRecord(hungAgentRecord).Process;
             await WaitForFileAsync(Path.Combine(agentReadyDirectory, beadIds[0] + ".ready"), runtime, TimeSpan.FromSeconds(30));
+            Assert.False(hungAgent.HasExited, "One Agent must be active before admitting the bead that blocks Git verification.");
+            target.RunTarget("bd", ["update", beadIds[1], "--remove-label", "product-decision-required"]);
             await WaitForFileAsync(gitStarted, runtime, TimeSpan.FromSeconds(90));
             try { git = ReadFixtureProcess(gitStarted); }
             catch (Exception exception)

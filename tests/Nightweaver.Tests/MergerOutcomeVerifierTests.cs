@@ -18,6 +18,124 @@ public sealed class MergerOutcomeVerifierTests
         Assert.True(result.Succeeded, result.Diagnostic);
         Assert.Equal("fixture checks", result.Finding?.Subject);
         Assert.Equal(fixture.Head, result.Finding?.CheckedHead);
+        Assert.Equal(2, fixture.Runner.PullRequestViewCount);
+        Assert.Equal(1, fixture.Runner.RequiredChecksCount);
+    }
+
+    [Fact]
+    public async Task AcceptsLocalBuildFailureWithoutAFailedRemoteCheck()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.Runner.CheckFailed = false;
+        fixture.SetLocalCheckFinding("dotnet build", 1);
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.True(result.Succeeded, result.Diagnostic);
+        Assert.Equal("local", result.Finding?.CheckSource);
+        Assert.Equal(1, result.Finding?.LocalExitCode);
+        Assert.Equal(1, fixture.Runner.PullRequestViewCount);
+        Assert.Equal(0, fixture.Runner.RequiredChecksCount);
+    }
+
+    [Fact]
+    public async Task AcceptsLocalTestFailureWithACompletedNonzeroTranscript()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetLocalCheckFinding("dotnet test", 1);
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.True(result.Succeeded, result.Diagnostic);
+        Assert.Equal("dotnet test", result.Finding?.Subject);
+        Assert.Equal(0, fixture.Runner.RequiredChecksCount);
+    }
+
+    [Fact]
+    public async Task RejectsLocalCheckMarkerWithoutFramedNonzeroTranscript()
+    {
+        using var fixture = new VerifierFixture();
+        const string details = "error CS1002: expected ';' in Fixture.cs";
+        const string summary = "Local build failed for the checked HEAD.";
+        fixture.SetFinding("checks", "dotnet build", summary, details, "local", 1,
+            $"A prior report mentioned Build FAILED. and 1 Error(s). {summary} {details}");
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("complete local check transcript", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Equal(0, fixture.Runner.RequiredChecksCount);
+    }
+
+    [Fact]
+    public async Task RejectsLocalTranscriptThatContradictsStructuredExitCode()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetLocalCheckFinding("dotnet build", 1, transcriptExitCode: 0);
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("nonzero exit", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RejectsLocalTranscriptWithLaterSuccessfulTerminalResult()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetLocalCheckFinding("dotnet build", 1, trailingOutput: "Build succeeded.");
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("no unambiguous nonzero build/test failure summary", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("README.md")]
+    [InlineData("src/Nightweaver.cs")]
+    public async Task AcceptsRootLevelAndNestedConflictPaths(string subject)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetFinding("conflict", subject, "A repository conflict requires implementation repair.",
+            $"CONFLICT: both branches changed {subject} and the rebase was aborted.",
+            transcript: $"CONFLICT: both branches changed {subject} and the rebase was aborted.");
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Theory]
+    [InlineData("../README.md")]
+    [InlineData("src/../README.md")]
+    [InlineData("/README.md")]
+    [InlineData("C:\\README.md")]
+    public async Task RejectsAbsoluteOrTraversalConflictPaths(string subject)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetFinding("conflict", subject, "A repository conflict requires implementation repair.",
+            $"CONFLICT: both branches changed {subject} and the rebase was aborted.",
+            transcript: $"CONFLICT: both branches changed {subject} and the rebase was aborted.");
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("No structured actionable", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RejectsRemoteCheckFailureWhenPullRequestHeadChangesDuringObservation()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.Runner.HeadAfterChecks = new string('d', 40);
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("identity or head changed", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Equal(2, fixture.Runner.PullRequestViewCount);
+        Assert.Equal(1, fixture.Runner.RequiredChecksCount);
     }
 
     [Fact]
@@ -149,26 +267,16 @@ public sealed class MergerOutcomeVerifierTests
 
             var branch = $"nightweaver/{BeadId}";
             PullRequest = $"https://example.invalid/pull/{Uri.EscapeDataString(branch)}";
-            var details = $"Required check 'fixture checks' failed for synchronized HEAD {Head}; inspect the fixture failure.";
-            var finding = JsonSerializer.Serialize(new
-            {
-                schema = "nightweaver-merger-rejection-v1",
-                kind = "checks",
-                pull_request = PullRequest,
-                checked_head = Head,
-                subject = "fixture checks",
-                summary = "The required fixture check failed.",
-                details
-            });
-            Comments = [new("prior", finding, DateTimeOffset.UnixEpoch), new("current", finding, DateTimeOffset.UnixEpoch.AddSeconds(1))];
             var logPath = Path.Combine(host.LogsRoot(project.Name), BeadId, invocationId + ".log");
             Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
-            File.WriteAllText(logPath, $"Merger rejection evidence: fixture checks; {details}\n");
             var observations = new AgentStageObservations(state, state, Owner, Owner, AgentExecutionStatus.Exited,
                 0, branch, Head, string.Empty, true);
             Invocation = new AgentStageResult(AgentRole.Merger, BeadId, invocationId, logPath, null, [], state,
                 observations, classification, new HashSet<string>(["prior"], StringComparer.Ordinal));
             Runner = new VerifierProcessRunner(Head, branch, PullRequest);
+            SetFinding("checks", "fixture checks", "The required fixture check failed.",
+                $"Required check 'fixture checks' failed for synchronized HEAD {Head}; inspect the fixture failure.", "remote",
+                transcript: $"Merger rejection evidence: fixture checks; Required check 'fixture checks' failed for synchronized HEAD {Head}; inspect the fixture failure.");
         }
 
         internal string Worktree { get; }
@@ -176,7 +284,45 @@ public sealed class MergerOutcomeVerifierTests
         internal string PullRequest { get; }
         internal VerifierProcessRunner Runner { get; }
         internal AgentStageResult Invocation { get; set; }
-        internal IReadOnlyList<BeadCommentSnapshot> Comments { get; set; }
+        internal IReadOnlyList<BeadCommentSnapshot> Comments { get; set; } = [];
+        private string LogText { get; set; } = string.Empty;
+
+        internal void SetLocalCheckFinding(string command, int exitCode, int? transcriptExitCode = null,
+            string trailingOutput = "")
+        {
+            var summary = $"Local {command} failed for the checked HEAD.";
+            var details = command == "dotnet test"
+                ? "Failed: LocalCheckFailureTests.RejectsInvalidInput [1 ms]"
+                : "error CS1002: expected ';' in Fixture.cs";
+            var reportedExitCode = transcriptExitCode ?? exitCode;
+            var envelope = JsonSerializer.Serialize(new { command, checked_head = Head, exit_code = reportedExitCode });
+            var terminal = command == "dotnet test"
+                ? "Test run summary: Failed!\ntotal: 1\nfailed: 1"
+                : "Build FAILED.\n1 Error(s)";
+            var transcript = $"NIGHTWEAVER_LOCAL_CHECK_V1 {envelope}\n{terminal}\n{summary}\n{details}\n{trailingOutput}\nEND_NIGHTWEAVER_LOCAL_CHECK_V1\n";
+            SetFinding("checks", command, summary, details, "local", exitCode, transcript);
+        }
+
+        internal void SetFinding(string kind, string subject, string summary, string details,
+            string? checkSource = null, int? localExitCode = null, string? transcript = null)
+        {
+            var fields = new Dictionary<string, object?>
+            {
+                ["schema"] = "nightweaver-merger-rejection-v1",
+                ["kind"] = kind,
+                ["pull_request"] = PullRequest,
+                ["checked_head"] = Head,
+                ["subject"] = subject,
+                ["summary"] = summary,
+                ["details"] = details
+            };
+            if (checkSource is not null) fields["check_source"] = checkSource;
+            if (localExitCode is not null) fields["local_exit_code"] = localExitCode.Value;
+            var finding = JsonSerializer.Serialize(fields);
+            Comments = [new("prior", finding, DateTimeOffset.UnixEpoch), new("current", finding, DateTimeOffset.UnixEpoch.AddSeconds(1))];
+            LogText = transcript ?? $"Merger rejection evidence: {subject}; {details}\n";
+            File.WriteAllText(Invocation.LogFilePath, LogText);
+        }
 
         internal Task<MergerRejectionVerification> VerifyAsync() =>
             new MergerOutcomeVerifier(Runner).VerifyRejectionAsync(
@@ -213,6 +359,9 @@ public sealed class MergerOutcomeVerifierTests
         internal string Stage { get; set; } = "stage:merge";
         internal bool CheckFailed { get; set; } = true;
         internal string AdvertisedHead { get; set; } = head;
+        internal string? HeadAfterChecks { get; set; }
+        internal int PullRequestViewCount { get; private set; }
+        internal int RequiredChecksCount { get; private set; }
 
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
@@ -230,16 +379,23 @@ public sealed class MergerOutcomeVerifierTests
             }
             if (request.FileName == "gh" && request.Arguments.Count >= 2
                 && request.Arguments[0] == "pr" && request.Arguments[1] == "view")
+            {
+                PullRequestViewCount++;
                 return Task.FromResult(new ProcessResult(0, JsonSerializer.Serialize(new
                 {
                     state = "OPEN", headRefName = branch, headRefOid = AdvertisedHead, url = pullRequest
                 }), string.Empty));
+            }
             if (request.FileName == "gh" && request.Arguments.Count >= 2
                 && request.Arguments[0] == "pr" && request.Arguments[1] == "checks")
+            {
+                RequiredChecksCount++;
+                if (HeadAfterChecks is not null) AdvertisedHead = HeadAfterChecks;
                 return Task.FromResult(new ProcessResult(0, JsonSerializer.Serialize(new[]
                 {
                     new { name = "fixture checks", state = CheckFailed ? "FAILURE" : "SUCCESS", bucket = CheckFailed ? "fail" : "pass" }
                 }), string.Empty));
+            }
             throw new InvalidOperationException($"Unexpected verifier command: {request.FileName} {string.Join(' ', request.Arguments)}");
         }
 

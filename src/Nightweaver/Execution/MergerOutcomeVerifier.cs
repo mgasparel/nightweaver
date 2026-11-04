@@ -11,7 +11,9 @@ internal sealed record MergerRejectionFinding(
     string Subject,
     string Summary,
     string Details,
-    string SourceCommentId);
+    string SourceCommentId,
+    string? CheckSource = null,
+    int? LocalExitCode = null);
 
 internal sealed record MergerRejectionVerification(bool Succeeded, string Diagnostic,
     MergerRejectionFinding? Finding = null);
@@ -33,6 +35,8 @@ internal interface IMergerOutcomeVerifier
 internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMergerOutcomeVerifier
 {
     private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(20);
+    private const string LocalCheckEvidencePrefix = "NIGHTWEAVER_LOCAL_CHECK_V1 ";
+    private const string LocalCheckEvidenceEnd = "END_NIGHTWEAVER_LOCAL_CHECK_V1";
     private readonly BeadsReader beadsReader = new(processRunner);
 
     public async Task<MergerRejectionVerification> VerifyRejectionAsync(
@@ -104,18 +108,16 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                 .ConfigureAwait(false);
             if (log.HadInvalidUtf8)
                 return Failed("The Merger invocation log contains invalid UTF-8 and cannot verify its rejection finding.");
-            if (!log.Text.Contains(finding.Subject, StringComparison.OrdinalIgnoreCase)
-                || !log.Text.Contains(finding.Details, StringComparison.OrdinalIgnoreCase))
-                return Failed("The current Merger log does not retain the subject and diagnostics recorded in the rejection comment.");
-
             if (finding.Kind == "checks")
             {
-                var checkFailure = await VerifyFailedCurrentHeadCheckAsync(session.Worktree.Path, finding,
-                    expectedBranch, expectedHead!, cancellationToken).ConfigureAwait(false);
+                var checkFailure = await VerifyCheckFailureAsync(session.Worktree.Path, finding,
+                    expectedBranch, expectedHead!, log, cancellationToken).ConfigureAwait(false);
                 if (checkFailure is not null) return Failed(checkFailure);
             }
-            else if (finding.Kind == "conflict"
-                && !log.Text.Contains("conflict", StringComparison.OrdinalIgnoreCase))
+            else if (!log.Text.Contains(finding.Subject, StringComparison.OrdinalIgnoreCase)
+                || !log.Text.Contains(finding.Details, StringComparison.OrdinalIgnoreCase))
+                return Failed("The current Merger log does not retain the subject and diagnostics recorded in the rejection comment.");
+            else if (finding.Kind == "conflict" && !log.Text.Contains("conflict", StringComparison.OrdinalIgnoreCase))
             {
                 return Failed("The current Merger log contains no conflict diagnostic for the reported path.");
             }
@@ -129,24 +131,20 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         }
     }
 
-    private async Task<string?> VerifyFailedCurrentHeadCheckAsync(
+    private async Task<string?> VerifyCheckFailureAsync(
         string worktreePath,
         MergerRejectionFinding finding,
         string expectedBranch,
         string expectedHead,
+        FailureLogTail log,
         CancellationToken cancellationToken)
     {
-        var pullRequest = await RunJsonCommandAsync("gh",
-            ["pr", "view", finding.PullRequest, "--json", "state,headRefName,headRefOid,url"],
-            worktreePath, cancellationToken).ConfigureAwait(false);
-        using var prDocument = JsonDocument.Parse(pullRequest.StandardOutput, new JsonDocumentOptions { MaxDepth = 8 });
-        var pr = prDocument.RootElement;
-        if (pr.ValueKind != JsonValueKind.Object
-            || !ReadString(pr, "state", out var state) || state != "OPEN"
-            || !ReadString(pr, "headRefName", out var branch) || branch != expectedBranch
-            || !ReadString(pr, "headRefOid", out var head) || !string.Equals(head, expectedHead, StringComparison.OrdinalIgnoreCase)
-            || !ReadString(pr, "url", out var url) || !string.Equals(url, finding.PullRequest, StringComparison.Ordinal))
+        var before = await ReadPullRequestAsync(worktreePath, finding.PullRequest, cancellationToken).ConfigureAwait(false);
+        if (!MatchesCurrentPullRequest(before, finding.PullRequest, expectedBranch, expectedHead))
             return "The pull request does not identify the open retained branch and current checked HEAD.";
+
+        if (finding.CheckSource == "local")
+            return VerifyLocalCheckFailure(finding, expectedHead, log);
 
         var checks = await RunJsonCommandAsync("gh",
             ["pr", "checks", finding.PullRequest, "--required", "--json", "name,state,bucket"],
@@ -160,8 +158,121 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
             && ReadString(check, "bucket", out var bucket) && bucket == "fail"
             && ReadString(check, "state", out var checkState)
             && checkState is "FAILURE" or "ERROR" or "TIMED_OUT" or "CANCELLED");
-        return matchedFailure ? null : "No required check with the reported name is in a failed terminal state for the current HEAD.";
+        if (!matchedFailure)
+            return "No required check with the reported name is in a failed terminal state for the current HEAD.";
+
+        var after = await ReadPullRequestAsync(worktreePath, finding.PullRequest, cancellationToken).ConfigureAwait(false);
+        return MatchesCurrentPullRequest(after, finding.PullRequest, expectedBranch, expectedHead)
+            ? null
+            : "The pull request identity or head changed while required checks were being observed.";
     }
+
+    private async Task<PullRequestObservation> ReadPullRequestAsync(string worktreePath, string pullRequest,
+        CancellationToken cancellationToken)
+    {
+        var result = await RunJsonCommandAsync("gh",
+            ["pr", "view", pullRequest, "--json", "state,headRefName,headRefOid,url"],
+            worktreePath, cancellationToken).ConfigureAwait(false);
+        using var document = JsonDocument.Parse(result.StandardOutput, new JsonDocumentOptions { MaxDepth = 8 });
+        var pr = document.RootElement;
+        if (pr.ValueKind != JsonValueKind.Object || !HasUniqueNames(pr)
+            || !ReadString(pr, "state", out var state)
+            || !ReadString(pr, "headRefName", out var branch)
+            || !ReadString(pr, "headRefOid", out var head)
+            || !ReadString(pr, "url", out var url))
+            return new(null, null, null, null);
+        return new(state, branch, head, url);
+    }
+
+    private static bool MatchesCurrentPullRequest(PullRequestObservation pullRequest, string expectedUrl,
+        string expectedBranch, string expectedHead) =>
+        pullRequest.State == "OPEN"
+        && pullRequest.HeadBranch == expectedBranch
+        && string.Equals(pullRequest.Head, expectedHead, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(pullRequest.Url, expectedUrl, StringComparison.Ordinal);
+
+    private static string? VerifyLocalCheckFailure(MergerRejectionFinding finding, string expectedHead, FailureLogTail log)
+    {
+        if (log.Truncated || log.HadInvalidUtf8)
+            return "The local check transcript is truncated or invalid and cannot verify its result.";
+        var lines = log.Text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var startLines = lines.Select((line, index) => (line, index))
+            .Where(item => item.line.StartsWith(LocalCheckEvidencePrefix, StringComparison.Ordinal)).ToArray();
+        var endLines = lines.Select((line, index) => (line, index))
+            .Where(item => item.line == LocalCheckEvidenceEnd).ToArray();
+        if (startLines.Length != 1 || endLines.Length != 1 || endLines[0].index <= startLines[0].index)
+            return "The settled log does not contain one complete local check transcript for this invocation.";
+
+        JsonDocument transcript;
+        try
+        {
+            var metadata = startLines[0].line[LocalCheckEvidencePrefix.Length..];
+            transcript = JsonDocument.Parse(metadata, new JsonDocumentOptions { MaxDepth = 4 });
+        }
+        catch (JsonException)
+        {
+            return "The local check transcript metadata is malformed.";
+        }
+        using (transcript)
+        {
+            var root = transcript.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || !HasUniqueNames(root)
+                || root.EnumerateObject().Count() != 3
+                || !ReadString(root, "command", out var command)
+                || command is not ("dotnet build" or "dotnet test")
+                || !ReadString(root, "checked_head", out var checkedHead)
+                || !string.Equals(checkedHead, expectedHead, StringComparison.OrdinalIgnoreCase)
+                || !root.TryGetProperty("exit_code", out var exitCodeElement)
+                || exitCodeElement.ValueKind != JsonValueKind.Number
+                || !exitCodeElement.TryGetInt32(out var exitCode) || exitCode <= 0
+                || !string.Equals(command, finding.Subject, StringComparison.Ordinal)
+                || finding.LocalExitCode != exitCode)
+                return "The local check transcript does not identify an allowlisted failing command, nonzero exit, and retained HEAD.";
+
+            var output = string.Join('\n', lines[(startLines[0].index + 1)..endLines[0].index]);
+            if (!output.Contains(finding.Details, StringComparison.Ordinal)
+                || !output.Contains(finding.Summary, StringComparison.Ordinal))
+                return "The local check transcript does not retain the reported summary and diagnostics.";
+
+            var hasTerminalFailure = command switch
+            {
+                "dotnet build" => HasBuildFailureSummary(output),
+                "dotnet test" => HasTestFailureSummary(output),
+                _ => false
+            };
+            return hasTerminalFailure
+                ? null
+                : "The local check transcript has no unambiguous nonzero build/test failure summary.";
+        }
+    }
+
+    private static bool HasBuildFailureSummary(string output)
+    {
+        var lines = output.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var terminalResult = Array.FindLastIndex(lines, line =>
+            line.Trim().Equals("Build FAILED.", StringComparison.OrdinalIgnoreCase)
+            || line.Trim().Equals("Build succeeded.", StringComparison.OrdinalIgnoreCase));
+        return terminalResult >= 0
+            && lines[terminalResult].Trim().Equals("Build FAILED.", StringComparison.OrdinalIgnoreCase)
+            && lines.Skip(terminalResult + 1).Any(line => System.Text.RegularExpressions.Regex.IsMatch(line.Trim(),
+                @"^[1-9][0-9]* Error\(s\)$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant));
+    }
+
+    private static bool HasTestFailureSummary(string output)
+    {
+        var lines = output.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var terminalResult = Array.FindLastIndex(lines, line =>
+            line.Trim().Equals("Test run summary: Failed!", StringComparison.OrdinalIgnoreCase)
+            || line.Trim().Equals("Test run summary: Passed!", StringComparison.OrdinalIgnoreCase));
+        return terminalResult >= 0
+            && lines[terminalResult].Trim().Equals("Test run summary: Failed!", StringComparison.OrdinalIgnoreCase)
+            && lines.Skip(terminalResult + 1).Any(line => System.Text.RegularExpressions.Regex.IsMatch(line.Trim(),
+                @"failed:\s*[1-9][0-9]*$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant));
+    }
+
+    private sealed record PullRequestObservation(string? State, string? HeadBranch, string? Head, string? Url);
 
     private async Task<ProcessResult> RunJsonCommandAsync(string fileName, IReadOnlyList<string> arguments,
         string worktreePath, CancellationToken cancellationToken)
@@ -213,15 +324,53 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                     || !ReadString(root, "summary", out var summary)
                     || !ReadString(root, "details", out var details))
                     continue;
-                if (root.EnumerateObject().Count() != 7 || summary.Length < 12 || details.Length < 12
+                if (summary.Length < 12 || details.Length < 12
                     || !Uri.TryCreate(pullRequest, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
                     continue;
-                if (kind == "conflict" && !subject.Contains('/') && !subject.Contains('\\')) continue;
-                return new(kind, uri.AbsoluteUri, checkedHead, subject, summary, details, comment.Id);
+
+                string? checkSource = null;
+                int? localExitCode = null;
+                if (kind == "checks")
+                {
+                    if (!ReadString(root, "check_source", out checkSource)) continue;
+                    if (checkSource == "remote")
+                    {
+                        if (root.EnumerateObject().Count() != 8) continue;
+                    }
+                    else if (checkSource == "local")
+                    {
+                        if (root.EnumerateObject().Count() != 9
+                            || subject is not ("dotnet build" or "dotnet test")
+                            || !root.TryGetProperty("local_exit_code", out var exitCodeElement)
+                            || exitCodeElement.ValueKind != JsonValueKind.Number
+                            || !exitCodeElement.TryGetInt32(out var exitCode) || exitCode <= 0)
+                            continue;
+                        localExitCode = exitCode;
+                    }
+                    else continue;
+                }
+                else if (root.EnumerateObject().Count() != 7 || root.TryGetProperty("check_source", out _)
+                    || root.TryGetProperty("local_exit_code", out _))
+                    continue;
+
+                if (kind == "conflict" && !IsSafeRepositoryRelativePath(subject)) continue;
+                return new(kind, uri.AbsoluteUri, checkedHead, subject, summary, details, comment.Id, checkSource, localExitCode);
             }
             catch (JsonException) { }
         }
         return null;
+    }
+
+    private static bool IsSafeRepositoryRelativePath(string path)
+    {
+        if (path.Length is 0 or > 1024 || path.Any(char.IsControl)
+            || path.StartsWith('/') || path.StartsWith('\\') || Path.IsPathRooted(path)
+            || path.Contains(':') || path.IndexOfAny(['<', '>', '"', '|', '?', '*']) >= 0)
+            return false;
+
+        var segments = path.Replace('\\', '/').Split('/');
+        return segments.All(segment => segment.Length > 0 && segment is not ("." or "..")
+            && !segment.EndsWith(' ') && !segment.EndsWith('.'));
     }
 
     private static bool ReadString(JsonElement element, string name, out string value)

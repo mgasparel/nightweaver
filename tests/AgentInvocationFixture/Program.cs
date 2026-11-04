@@ -818,49 +818,83 @@ internal static class Program
                     || beforeChecks.GetProperty("headRefOid").GetString() != head)
                     throw new InvalidOperationException("Fixture pull request did not identify the synchronized current HEAD before rejection.");
 
-                try
+                var checkSource = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CHECK_SOURCE") ?? "remote";
+                string subject;
+                string summary;
+                string details;
+                int? localExitCode = null;
+                if (checkSource == "local")
                 {
-                    Run("gh", ["pr", "checks", pullRequest, "--watch"]);
-                    throw new InvalidOperationException("The controlled fixture check was expected to fail.");
+                    const string command = "dotnet build";
+                    var artifactsPath = Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored", "local-check-artifacts");
+                    var build = RunCapturingExitCode("dotnet", ["build", "LocalCheckFixture.csproj", "--nologo", "--artifacts-path", artifactsPath]);
+                    if (build.ExitCode == 0)
+                        throw new InvalidOperationException("The controlled local build was expected to fail.");
+                    var output = build.StandardOutput + Environment.NewLine + build.StandardError;
+                    details = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                        .FirstOrDefault(line => line.Contains("error ", StringComparison.OrdinalIgnoreCase))
+                        ?? throw new InvalidOperationException("The controlled local build returned nonzero without a compiler diagnostic.");
+                    subject = command;
+                    localExitCode = build.ExitCode;
+                    summary = $"Local dotnet build failed for synchronized HEAD {head} with exit code {build.ExitCode}.";
+                    var localEvidenceMetadata = JsonSerializer.Serialize(new { command, checked_head = head, exit_code = build.ExitCode });
+                    Console.WriteLine($"NIGHTWEAVER_LOCAL_CHECK_V1 {localEvidenceMetadata}");
+                    Console.WriteLine(output);
+                    Console.WriteLine(summary);
+                    Console.WriteLine(details);
+                    Console.WriteLine("END_NIGHTWEAVER_LOCAL_CHECK_V1");
                 }
-                catch (InvalidOperationException exception) when (exception.Message.Contains("exited 1", StringComparison.Ordinal))
+                else if (checkSource == "remote")
                 {
-                    AbortRebaseIfActive();
-                    const string subject = "fixture checks";
-                    var details = $"Required check '{subject}' failed for synchronized HEAD {head}; inspect merger-rejected.txt and fix the reported behavior.";
-                    var finding = JsonSerializer.Serialize(new
+                    try
                     {
-                        schema = "nightweaver-merger-rejection-v1",
-                        kind = "checks",
-                        pull_request = pullRequest,
-                        checked_head = head,
-                        subject,
-                        summary = "Required CI rejected the synchronized Merger branch.",
-                        details
-                    });
-                    Run("bd", ["comments", "add", beadId, finding]);
-                    Console.WriteLine($"Merger rejection evidence: {subject}; {details}");
-                    var persisted = ReadFixtureBead(beadId);
-                    var metadata = persisted.GetProperty("metadata");
-                    var cycles = metadata.TryGetProperty("repair_cycles", out var count) ? count.GetInt32() : 0;
-                    if (cycles != 0)
-                        throw new InvalidOperationException($"Expected repair_cycles=0 before rejection, observed {cycles}.");
-                    var unchanged = ReadFixtureBead(beadId);
-                    var labels = unchanged.GetProperty("labels").EnumerateArray().Select(label => label.GetString()).ToArray();
-                    var state = unchanged.GetProperty("metadata");
-                    var unchangedCycles = state.TryGetProperty("repair_cycles", out var unchangedCounter)
-                        ? unchangedCounter.GetInt32()
-                        : 0;
-                    if (unchanged.GetProperty("status").GetString() != "in_progress"
-                        || unchanged.GetProperty("assignee").GetString() != Environment.GetEnvironmentVariable("BD_ACTOR")
-                        || !labels.Contains("stage:merge", StringComparer.Ordinal)
-                        || labels.Contains("stage:implement", StringComparer.Ordinal)
-                        || !labels.Contains("keep:label", StringComparer.Ordinal)
-                        || unchangedCycles != 0
-                        || state.GetProperty("retained").GetString() != "fixture")
-                        throw new InvalidOperationException("Merger agent changed lifecycle state while recording rejection evidence.");
-                    break;
+                        Run("gh", ["pr", "checks", pullRequest, "--watch"]);
+                        throw new InvalidOperationException("The controlled fixture check was expected to fail.");
+                    }
+                    catch (InvalidOperationException exception) when (exception.Message.Contains("exited 1", StringComparison.Ordinal))
+                    {
+                        subject = "fixture checks";
+                        summary = "Required CI rejected the synchronized Merger branch.";
+                        details = $"Required check '{subject}' failed for synchronized HEAD {head}; inspect merger-rejected.txt and fix the reported behavior.";
+                    }
                 }
+                else throw new InvalidOperationException($"Unsupported fixture check source '{checkSource}'.");
+
+                AbortRebaseIfActive();
+                var findingFields = new Dictionary<string, object?>
+                {
+                    ["schema"] = "nightweaver-merger-rejection-v1",
+                    ["kind"] = "checks",
+                    ["pull_request"] = pullRequest,
+                    ["checked_head"] = head,
+                    ["subject"] = subject,
+                    ["summary"] = summary,
+                    ["details"] = details,
+                    ["check_source"] = checkSource
+                };
+                if (localExitCode is not null) findingFields["local_exit_code"] = localExitCode.Value;
+                Run("bd", ["comments", "add", beadId, JsonSerializer.Serialize(findingFields)]);
+                if (checkSource == "remote") Console.WriteLine($"Merger rejection evidence: {subject}; {details}");
+                var persisted = ReadFixtureBead(beadId);
+                var metadata = persisted.GetProperty("metadata");
+                var cycles = metadata.TryGetProperty("repair_cycles", out var count) ? count.GetInt32() : 0;
+                if (cycles != 0)
+                    throw new InvalidOperationException($"Expected repair_cycles=0 before rejection, observed {cycles}.");
+                var unchanged = ReadFixtureBead(beadId);
+                var labels = unchanged.GetProperty("labels").EnumerateArray().Select(label => label.GetString()).ToArray();
+                var state = unchanged.GetProperty("metadata");
+                var unchangedCycles = state.TryGetProperty("repair_cycles", out var unchangedCounter)
+                    ? unchangedCounter.GetInt32()
+                    : 0;
+                if (unchanged.GetProperty("status").GetString() != "in_progress"
+                    || unchanged.GetProperty("assignee").GetString() != Environment.GetEnvironmentVariable("BD_ACTOR")
+                    || !labels.Contains("stage:merge", StringComparer.Ordinal)
+                    || labels.Contains("stage:implement", StringComparer.Ordinal)
+                    || !labels.Contains("keep:label", StringComparer.Ordinal)
+                    || unchangedCycles != 0
+                    || state.GetProperty("retained").GetString() != "fixture")
+                    throw new InvalidOperationException("Merger agent changed lifecycle state while recording rejection evidence.");
+                break;
             }
             case "merger-resumed-implement":
             {
@@ -900,6 +934,14 @@ internal static class Program
                 }), new UTF8Encoding(false));
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-repair.txt"),
                     "Delivery resumed from the verified Merger rejection.\n", new UTF8Encoding(false));
+                if (Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_FIX_LOCAL_BUILD") == "true")
+                {
+                    File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "BrokenFixture.cs"),
+                        "public sealed class LocalCheckFixture { public int Repaired => 1; }\n", new UTF8Encoding(false));
+                    Run("dotnet", ["build", "LocalCheckFixture.csproj", "--nologo", "--artifacts-path",
+                        Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored", "local-check-artifacts")]);
+                    Run("git", ["add", "BrokenFixture.cs"]);
+                }
                 Run("git", ["add", "delivery-repair.txt"]);
                 Run("git", ["commit", "-m", "fixture Delivery repair after Merger rejection"]);
                 var branch = Run("git", ["branch", "--show-current"]).Trim();
@@ -1021,6 +1063,28 @@ internal static class Program
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"{fileName} {string.Join(' ', arguments)} exited {process.ExitCode}: {stderrTask.Result}{stdoutTask.Result}");
         return stdoutTask.Result;
+    }
+
+    private static FixtureProcessResult RunCapturingExitCode(string fileName, IReadOnlyList<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            WorkingDirectory = Environment.CurrentDirectory,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start '{fileName}'.");
+        process.StandardInput.Close();
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        process.WaitForExit();
+        Task.WaitAll(stdoutTask, stderrTask);
+        return new(process.ExitCode, stdoutTask.Result, stderrTask.Result);
     }
 
     private static void SpawnProcess(string mode, params string[] arguments)
