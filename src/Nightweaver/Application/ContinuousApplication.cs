@@ -5,7 +5,7 @@ using Nightweaver.Inspection;
 
 namespace Nightweaver.Application;
 
-/// <summary>Runs the selector-only continuous Delivery runtime after conservative startup recovery.</summary>
+/// <summary>Runs the selector-only continuous Delivery and singleton Merger runtime after startup recovery.</summary>
 internal static class ContinuousApplication
 {
     internal static async Task<int> RunAsync(
@@ -53,6 +53,9 @@ internal static class ContinuousApplication
         var pool = new DeliveryPoolCoordinator(hostPaths, project, repository, processRunner,
             slotLifetimeToken: slotLifetime.Token,
             stopGate: stopGate);
+        var mergerPool = new MergerPoolCoordinator(hostPaths, project, repository, processRunner,
+            slotLifetimeToken: slotLifetime.Token,
+            stopGate: stopGate);
         var configuredPools = new[]
         {
             new ContinuousPoolRegistration(
@@ -67,7 +70,20 @@ internal static class ContinuousApplication
                 pool.CompletionReader,
                 slotLifetime.Cancel,
                 async token => { await pool.WaitForActiveSlotsAsync(token).ConfigureAwait(false); },
-                pool.WaitForCompletionAccountingAsync)
+                pool.WaitForCompletionAccountingAsync),
+            new ContinuousPoolRegistration(
+                ContinuousPoolKind.Merger,
+                async token =>
+                {
+                    var evaluation = await mergerPool.EvaluateAsync(token).ConfigureAwait(false);
+                    foreach (var admission in evaluation.Admitted)
+                        environment.Out.WriteLine($"Merger reserved task Bead '{admission.BeadId}' (singleton capacity {mergerPool.CapacityLimit}).");
+                    return evaluation.Diagnostics;
+                },
+                mergerPool.CompletionReader,
+                slotLifetime.Cancel,
+                async token => { await mergerPool.WaitForActiveSlotsAsync(token).ConfigureAwait(false); },
+                mergerPool.WaitForCompletionAccountingAsync)
         };
         var runtime = new ContinuousDiscoveryCoordinator(
             configuredPools,
@@ -83,8 +99,8 @@ internal static class ContinuousApplication
                 .RunAsync(repository, token),
             stopGate: stopGate);
 
-        environment.Out.WriteLine($"Continuous Delivery runtime starting for Project '{project.Name.Value}' and Target Repository '{repository.Path}'.");
-        environment.Out.WriteLine($"Delivery capacity: {pool.CapacityLimit}; periodic discovery: 30 seconds; press Ctrl+C to stop.");
+        environment.Out.WriteLine($"Continuous Delivery runtime starting with singleton Merger for Project '{project.Name.Value}' and Target Repository '{repository.Path}'.");
+        environment.Out.WriteLine($"Delivery capacity: {pool.CapacityLimit}; Merger capacity: {mergerPool.CapacityLimit}; periodic discovery: 30 seconds; press Ctrl+C to stop.");
         var drained = await runtime.RunAsync(cancellationToken).ConfigureAwait(false);
         return drained ? ExitCodes.Success : ExitCodes.InspectionFailure;
     }

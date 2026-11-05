@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Threading.Channels;
+using System.Collections.Concurrent;
+using Nightweaver.Application;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
@@ -142,10 +145,12 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
     }
 
     [Fact]
-    public async Task NativeLocalBuildRejectionReturnsWorkToDeliveryAndImplementerRepairsTheRetainedEnvironment()
+    public async Task NativeContinuousMergerDeliveryRepairAndMergeUseVerifiedHandoffs()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
+        target.ConfigureHostedFixtureOriginWithLocalRewrite();
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "needs-human"]);
         File.WriteAllText(Path.Combine(target.Path, "LocalCheckFixture.csproj"),
             "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup></Project>\n",
             new System.Text.UTF8Encoding(false));
@@ -158,7 +163,10 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         target.FixtureRequiredCheckFails = false;
         target.RunTarget("bd", ["update", beadId, "--set-metadata", "retained=fixture"]);
         var project = target.CreateProject(AgentCli.Codex, maxRepairCycles: 1, maxConcurrentDelivery: 3, timeoutMinutes: 5);
-        var repository = new ValidatedTargetRepository(target.Path, "main");
+        var repository = new ValidatedTargetRepository(target.Path, "main")
+        {
+            GitCommonDirectory = target.RunTarget("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"]).Trim()
+        };
         var systemRunner = new SystemProcessRunner();
         var processRunner = new RecordingProcessRunner((request, cancellationToken) =>
             target.RunWithFixturePullRequestAsync(systemRunner, request, cancellationToken));
@@ -175,8 +183,11 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         var mainHead = target.RunTarget("git", ["ls-remote", "origin", "refs/heads/main"])
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).First();
         var ghLog = Path.Combine(target.RootPath, "merger-rejection-gh-commands.jsonl");
-        var mergerPid = Path.Combine(target.RootPath, "merger-rejection-native-fixture.pid");
+        var mergerPidFiles = new List<string>();
+        var mergerAttempt = 0;
         var preparer = new AgentInvocationPreparer();
+        var stopGate = new ContinuousStopGate();
+        using var runtimeLifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 
         async Task<PreparedAgentInvocation> PrepareMerger(HostPaths hostPaths, ProjectConfig config, AgentRole role,
             AgentDispatchContext context, string worktreePath, CancellationToken cancellationToken)
@@ -189,17 +200,22 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         }
 
         Task<AgentExecutionResult> ExecuteMerger(HostPaths hostPaths, ProjectSlug projectSlug,
-            PreparedAgentInvocation invocation, CancellationToken cancellationToken) =>
-            AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
+            PreparedAgentInvocation invocation, CancellationToken cancellationToken)
+        {
+            var currentAttempt = Interlocked.Increment(ref mergerAttempt);
+            var pidFile = Path.Combine(target.RootPath, $"merger-continuous-{currentAttempt}.pid");
+            mergerPidFiles.Add(pidFile);
+            return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
                 target.CreateProcessLauncher(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["BD_ACTOR"] = project.RecoveryActor,
                     ["NIGHTWEAVER_DEFAULT_BRANCH"] = project.TargetRepository.DefaultBranch,
-                    ["NIGHTWEAVER_FIXTURE_ACTION"] = "merger-reject-checks",
+                    ["NIGHTWEAVER_FIXTURE_ACTION"] = currentAttempt == 1 ? "merger-reject-checks" : "merger-verified-merge",
                     ["NIGHTWEAVER_FIXTURE_CHECK_SOURCE"] = "local",
                     ["NIGHTWEAVER_FIXTURE_GH_LOG"] = ghLog,
-                    ["NIGHTWEAVER_FIXTURE_PID_FILE"] = mergerPid
+                    ["NIGHTWEAVER_FIXTURE_PID_FILE"] = pidFile
                 }), cancellationToken);
+        }
 
         var mergerStages = new AgentStageCoordinator(processRunner, prepare: PrepareMerger, execute: ExecuteMerger);
         var mergerRetries = new OperationalRetryCoordinator(processRunner, stages: mergerStages,
@@ -207,50 +223,25 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         MergerRoleRunner mergerRole = (host, config, targetRepository, requestedBead, role, actor, expectedState, token, progress) =>
             mergerRetries.RunAsync(host, config, targetRepository, requestedBead, role, actor, token, progress, expectedState);
         var slot = new MergerSlotCoordinator(processRunner, mergerRole);
-        var pool = new MergerPoolCoordinator(target.Host, project, repository, processRunner, runSlot: slot.RunAsync,
-            slotLifetimeToken: TestContext.Current.CancellationToken);
-
-        var evaluation = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
-        var admission = Assert.Single(evaluation.Admitted);
-        Assert.Equal(beadId, admission.BeadId);
-        var completion = await admission.Completion.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
-        Assert.True(completion.LocalCapacityReleased);
-        Assert.Empty(pool.ActiveReservations);
-        Assert.True(completion.Outcome?.Disposition == MergerSlotDisposition.RepairHandedOff,
-            $"disposition={completion.Outcome?.Disposition}; diagnostic={completion.Diagnostic}; stage={completion.Outcome?.Stage?.StageResult.OutcomeClassification?.Diagnostic}; "
-            + $"stageOutcome={completion.Outcome?.Stage?.StageResult.OutcomeClassification?.Outcome}; stageFailure={completion.Outcome?.Stage?.StageResult.Failure?.Reason}; "
-            + $"escalationFindings={string.Join(" | ", completion.Outcome?.Stage?.Escalation?.Failures ?? [])}");
-        Assert.True(completion.Outcome?.RepairHandoffCompleted, completion.Diagnostic);
-        var rejected = target.ReadBead(beadId);
-        var rejectedState = BeadWorkflowState.Parse(rejected);
-        Assert.Equal("open", rejected.Status);
-        Assert.Null(rejected.Assignee);
-        Assert.Equal("stage:implement", rejectedState.Stage);
-        Assert.Equal(1, rejectedState.RepairCycles);
-        Assert.Contains("keep:label", rejected.Labels);
-        Assert.Equal("fixture", rejected.Payload.GetProperty("metadata").GetProperty("retained").GetString());
-        Assert.Equal(originalBranch, target.CurrentBranch(beadId));
-        Assert.True(File.Exists(warmSentinel));
-        Assert.True(File.Exists(tmpSentinel));
-        Assert.Equal(mainHead, target.RunTarget("git", ["ls-remote", "origin", "refs/heads/main"])
-            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).First());
-        Assert.NotEmpty(target.RunTarget("git", ["ls-remote", "origin", $"refs/heads/{originalBranch}"]));
-        using (var comments = JsonDocument.Parse(target.ReadComments(beadId)))
+        var mergerOutcomes = Channel.CreateUnbounded<MergerSlotOutcome>();
+        var handoffTrace = new ConcurrentQueue<string>();
+        var mergerSlotCalls = 0;
+        var secondMergerEntered = NewSignal();
+        var releaseSecondMerger = NewSignal();
+        MergerPoolSlotRunner mergerSlotRunner = async (host, config, targetRepository, requestedBead, agentAttemptStarted, token) =>
         {
-            var findingText = StringValues(comments.RootElement).Single(value => value.Contains(
-                "nightweaver-merger-rejection-v1", StringComparison.Ordinal));
-            using var finding = JsonDocument.Parse(findingText);
-            Assert.Equal("local", finding.RootElement.GetProperty("check_source").GetString());
-            Assert.Equal("dotnet build", finding.RootElement.GetProperty("subject").GetString());
-            Assert.Equal(1, finding.RootElement.GetProperty("local_exit_code").GetInt32());
-        }
-        var mergerCommands = File.Exists(ghLog)
-            ? File.ReadAllLines(ghLog).Select(line => JsonSerializer.Deserialize<string[]>(line)!).ToArray()
-            : [];
-        Assert.DoesNotContain(mergerCommands, command => command.Length >= 2 && command[0] == "pr" && command[1] == "checks");
-        Assert.DoesNotContain(mergerCommands, command => command.Length >= 2 && command[0] == "pr" && command[1] == "merge");
-        Assert.True(File.Exists(mergerPid));
-        AssertFixtureExited(mergerPid);
+            if (Interlocked.Increment(ref mergerSlotCalls) == 2)
+            {
+                secondMergerEntered.TrySetResult(true);
+                await releaseSecondMerger.Task.WaitAsync(token);
+            }
+            var outcome = await slot.RunAsync(host, config, targetRepository, requestedBead, agentAttemptStarted, token);
+            handoffTrace.Enqueue($"Merger:{outcome.Disposition}");
+            mergerOutcomes.Writer.TryWrite(outcome);
+            return outcome;
+        };
+        var mergerPool = new MergerPoolCoordinator(target.Host, project, repository, processRunner,
+            runSlot: mergerSlotRunner, stopGate: stopGate, slotLifetimeToken: runtimeLifetime.Token);
 
         var resumeEvidence = Path.Combine(target.RootPath, "delivery-resume-evidence.json");
         var deliveryPidFiles = new List<string>();
@@ -302,11 +293,96 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         DeliveryRoleRunner deliveryRole = (host, config, targetRepository, requestedBead, role, actor, expectedState, token, progress) =>
             deliveryRetries.RunAsync(host, config, targetRepository, requestedBead, role, actor, token, progress, expectedState);
         var deliverySlot = new DeliverySlotCoordinator(processRunner, deliveryRole);
-        var deliveryOutcome = await deliverySlot.RunAsync(target.Host, project, repository, beadId,
-            TestContext.Current.CancellationToken);
+        var deliveryEntered = NewSignal();
+        var releaseDelivery = NewSignal();
+        var holdFirstDelivery = 1;
+        var deliveryOutcomes = Channel.CreateUnbounded<DeliverySlotOutcome>();
+        DeliveryPoolSlotRunner deliverySlotRunner = async (host, config, targetRepository, requestedBead, token) =>
+        {
+            if (Interlocked.Exchange(ref holdFirstDelivery, 0) == 1)
+            {
+                handoffTrace.Enqueue("Delivery:reserved");
+                deliveryEntered.TrySetResult(true);
+                await releaseDelivery.Task.WaitAsync(token);
+            }
+            var outcome = await deliverySlot.RunAsync(host, config, targetRepository, requestedBead, token);
+            handoffTrace.Enqueue($"Delivery:{outcome.Disposition}");
+            deliveryOutcomes.Writer.TryWrite(outcome);
+            return outcome;
+        };
+        var deliveryPool = new DeliveryPoolCoordinator(target.Host, project, repository, processRunner,
+            runSlot: deliverySlotRunner, stopGate: stopGate, slotLifetimeToken: runtimeLifetime.Token);
+        var runtimeOutput = new StringWriter();
+        var runtime = new ContinuousDiscoveryCoordinator(
+            [
+                new ContinuousPoolRegistration(ContinuousPoolKind.Delivery,
+                    async token => (await deliveryPool.EvaluateAsync(token)).Diagnostics,
+                    deliveryPool.CompletionReader,
+                    runtimeLifetime.Cancel,
+                    async token => { await deliveryPool.WaitForActiveSlotsAsync(token); },
+                    deliveryPool.WaitForCompletionAccountingAsync),
+                new ContinuousPoolRegistration(ContinuousPoolKind.Merger,
+                    async token => (await mergerPool.EvaluateAsync(token)).Diagnostics,
+                    mergerPool.CompletionReader,
+                    runtimeLifetime.Cancel,
+                    async token => { await mergerPool.WaitForActiveSlotsAsync(token); },
+                    mergerPool.WaitForCompletionAccountingAsync)
+            ],
+            _ => Task.CompletedTask,
+            runtimeOutput,
+            TextWriter.Null,
+            stopGate: stopGate);
+        var runtimeTask = runtime.RunAsync(runtimeLifetime.Token);
+
+        try
+        {
+            var firstMerger = await mergerOutcomes.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+            Assert.True(firstMerger.Disposition == MergerSlotDisposition.RepairHandedOff,
+                $"disposition={firstMerger.Disposition}; diagnostic={firstMerger.Diagnostic}; stage={firstMerger.Stage?.StageResult.OutcomeClassification?.Diagnostic}; "
+                + $"stageOutcome={firstMerger.Stage?.StageResult.OutcomeClassification?.Outcome}; stageFailure={firstMerger.Stage?.StageResult.Failure?.Reason}; "
+                + $"escalationFindings={string.Join(" | ", firstMerger.Stage?.Escalation?.Failures ?? [])}");
+            Assert.True(firstMerger.RepairHandoffCompleted, firstMerger.Diagnostic);
+            await deliveryEntered.Task.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+
+            var rejected = target.ReadBead(beadId);
+            var rejectedState = BeadWorkflowState.Parse(rejected);
+            Assert.Equal("open", rejected.Status);
+            Assert.Null(rejected.Assignee);
+            Assert.Equal("stage:implement", rejectedState.Stage);
+            Assert.Equal(1, rejectedState.RepairCycles);
+            Assert.Contains("keep:label", rejected.Labels);
+            Assert.Equal("fixture", rejected.Payload.GetProperty("metadata").GetProperty("retained").GetString());
+            Assert.Equal(originalBranch, target.CurrentBranch(beadId));
+            Assert.True(File.Exists(warmSentinel));
+            Assert.True(File.Exists(tmpSentinel));
+            Assert.Equal(mainHead, target.RunTarget("git", ["ls-remote", "origin", "refs/heads/main"])
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).First());
+            Assert.NotEmpty(target.RunTarget("git", ["ls-remote", "origin", $"refs/heads/{originalBranch}"]));
+            using (var comments = JsonDocument.Parse(target.ReadComments(beadId)))
+            {
+                var findingText = StringValues(comments.RootElement).Single(value => value.Contains(
+                    "nightweaver-merger-rejection-v1", StringComparison.Ordinal));
+                using var finding = JsonDocument.Parse(findingText);
+                Assert.Equal("local", finding.RootElement.GetProperty("check_source").GetString());
+                Assert.Equal("dotnet build", finding.RootElement.GetProperty("subject").GetString());
+                Assert.Equal(1, finding.RootElement.GetProperty("local_exit_code").GetInt32());
+            }
+            var mergerCommands = File.Exists(ghLog)
+                ? File.ReadAllLines(ghLog).Select(line => JsonSerializer.Deserialize<string[]>(line)!).ToArray()
+                : [];
+            Assert.DoesNotContain(mergerCommands, command => command.Length >= 2 && command[0] == "pr" && command[1] == "checks");
+            Assert.DoesNotContain(mergerCommands, command => command.Length >= 2 && command[0] == "pr" && command[1] == "merge");
+            AssertFixtureExited(mergerPidFiles[0]);
+            Assert.Equal("Merger:RepairHandedOff", handoffTrace.First());
+            releaseDelivery.TrySetResult(true);
+
+            var deliveryOutcome = await deliveryOutcomes.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(120), TestContext.Current.CancellationToken);
 
         Assert.Equal(DeliverySlotDisposition.MergeReady, deliveryOutcome.Disposition);
         Assert.True(deliveryOutcome.ClaimHandoffCompleted, deliveryOutcome.Diagnostic);
+        await secondMergerEntered.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         Assert.True(File.Exists(resumeEvidence));
         using (var evidence = JsonDocument.Parse(File.ReadAllText(resumeEvidence)))
         {
@@ -325,6 +401,36 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         Assert.Equal("open", resumedState.Status);
         Assert.Equal("stage:merge", resumedState.Stage);
         Assert.Equal(1, resumedState.RepairCycles);
+            releaseSecondMerger.TrySetResult(true);
+            var secondMerger = await mergerOutcomes.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(120), TestContext.Current.CancellationToken);
+            Assert.True(secondMerger.Disposition == MergerSlotDisposition.Merged,
+                $"disposition={secondMerger.Disposition}; diagnostic={secondMerger.Diagnostic}; stage={secondMerger.Stage?.StageResult.OutcomeClassification?.Diagnostic}; "
+                + $"stageOutcome={secondMerger.Stage?.StageResult.OutcomeClassification?.Outcome}; stageFailure={secondMerger.Stage?.StageResult.Failure?.Reason}; "
+                + $"escalationCause={secondMerger.Stage?.EscalationCause}; duplicateFailure={secondMerger.Stage?.LastClassification?.Verdict}:"
+                + $"{secondMerger.Stage?.LastClassification?.Diagnostic}; escalationFindings={string.Join(" | ", secondMerger.EscalationProgress?.Failures ?? [])}");
+            Assert.True(secondMerger.MergeCompleted, secondMerger.Diagnostic);
+            Assert.Equal(["Merger:RepairHandedOff", "Delivery:reserved", "Delivery:MergeReady", "Merger:Merged"], handoffTrace.ToArray());
+            Assert.Contains("Merger slot", runtimeOutput.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Delivery slot", runtimeOutput.ToString(), StringComparison.Ordinal);
+
+            var completed = target.ReadBead(beadId);
+            Assert.Equal("closed", completed.Status);
+            Assert.Null(completed.Assignee);
+            Assert.Equal(1, BeadWorkflowState.Parse(completed).RepairCycles);
+            Assert.False(Directory.Exists(worktree.Path));
+            Assert.False(Directory.Exists(Path.Combine(target.Host.TmpRoot(project.Name), beadId)));
+            Assert.All(deliveryPidFiles, AssertFixtureExited);
+            AssertFixtureExited(mergerPidFiles[1]);
+            runtimeLifetime.Cancel();
+            Assert.True(await runtimeTask.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            runtimeLifetime.Cancel();
+            if (!runtimeTask.IsCompleted)
+                await runtimeTask.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+        }
     }
 
     private static string RunGit(string workingDirectory, params string[] arguments)
@@ -349,6 +455,9 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             throw new InvalidOperationException($"git {string.Join(' ', arguments)} exited {process.ExitCode}: {stderr}{stdout}");
         return stdout.Trim();
     }
+
+    private static TaskCompletionSource<bool> NewSignal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private static void AssertFixtureExited(string pidFile)
     {

@@ -14,7 +14,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows console control events and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
-        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge"]);
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge", "--add-label", "needs-human"]);
         var beadId = target.CreateBead("Published console stop and fallback", "task", "stage:implement");
         var hostRoot = CreatePublishedHost(target);
         var gateDirectory = Directory.CreateDirectory(Path.Combine(target.RootPath, "published-console-gates")).FullName;
@@ -88,7 +88,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows console control events and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
-        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge"]);
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge", "--add-label", "needs-human"]);
         var beadIds = new[]
         {
             target.CreateBead("Published second console stop one", "task", "stage:implement"),
@@ -171,7 +171,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows console control events and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
-        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge"]);
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge", "--add-label", "needs-human"]);
         var beadId = target.CreateBead("Published force during classification", "task", "stage:implement");
         var hostRoot = CreatePublishedHost(target);
         var gateDirectory = Directory.CreateDirectory(Path.Combine(target.RootPath, "published-classifier-force-gates")).FullName;
@@ -239,7 +239,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows console control events and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
-        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge"]);
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge", "--add-label", "needs-human"]);
         var beadIds = new[]
         {
             target.CreateBead("Published blocked Git and active Agent one", "task", "stage:implement"),
@@ -339,7 +339,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows console control events and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
-        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge"]);
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge", "--add-label", "needs-human"]);
         var beadIds = new[]
         {
             target.CreateBead("Published bd finalization and active Agent one", "task", "stage:implement"),

@@ -28,7 +28,8 @@ internal enum MergerPoolDiagnosticCode
     AlreadyReserved,
     CapacityReached,
     SlotRefused,
-    SlotEnded
+    SlotEnded,
+    Stopping
 }
 
 internal sealed record MergerPoolDiagnostic(string BeadId, MergerPoolDiagnosticCode Code, string Message);
@@ -38,10 +39,12 @@ internal sealed record MergerPoolCompletion(
     MergerSlotOutcome? Outcome,
     Exception? Exception,
     bool IsCanceled,
-    bool LocalCapacityReleased)
+    bool LocalCapacityReleased,
+    TaskCompletionSource<bool>? AccountingBarrier = null)
 {
     internal bool MergeCompleted => Outcome?.MergeCompleted ?? false;
     internal string? Diagnostic => Outcome?.Diagnostic ?? Exception?.Message;
+    internal bool IsAccountingBarrier => AccountingBarrier is not null;
 }
 
 internal sealed record MergerPoolAdmission(string BeadId, Task<MergerPoolCompletion> Completion);
@@ -60,17 +63,7 @@ internal sealed class MergerPoolCoordinator
         internal string BeadId { get; } = beadId;
         internal TaskCompletionSource<MergerPoolCompletion> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal TaskCompletionSource<AdmissionResolution> AdmissionResolved { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
-
-    private abstract record AdmissionResolution
-    {
-        internal sealed record AgentAttemptStarted : AdmissionResolution;
-        internal sealed record CompletedBeforeAgentAttempt(MergerPoolCompletion Completion) : AdmissionResolution;
-    }
-
-    private sealed record PendingAdmissionWait(ReservationState[] Reservations, Task CapacityChanged);
 
     private sealed class AdmissionReleaser(TaskCompletionSource<bool> turn) : IDisposable
     {
@@ -82,13 +75,13 @@ internal sealed class MergerPoolCoordinator
     private readonly ProjectConfig project;
     private readonly ValidatedTargetRepository repository;
     private readonly CancellationToken slotLifetimeToken;
+    private readonly ContinuousStopGate? stopGate;
     private readonly MergerPoolSnapshotReader readSnapshot;
     private readonly MergerPoolSlotRunner runSlot;
     private readonly object admissionSync = new();
     private Task admissionTail = Task.CompletedTask;
     private readonly object stateGate = new();
     private readonly Dictionary<string, ReservationState> reservations = new(StringComparer.Ordinal);
-    private TaskCompletionSource<bool> capacityChanged = NewSignal();
     private readonly Channel<MergerPoolCompletion> completions = Channel.CreateUnbounded<MergerPoolCompletion>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false, AllowSynchronousContinuations = false });
     private readonly int capacityLimit = ConcurrencyConfig.MergerSlots;
@@ -100,6 +93,7 @@ internal sealed class MergerPoolCoordinator
         IProcessRunner processRunner,
         MergerPoolSnapshotReader? readSnapshot = null,
         MergerPoolSlotRunner? runSlot = null,
+        ContinuousStopGate? stopGate = null,
         CancellationToken slotLifetimeToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
@@ -110,6 +104,7 @@ internal sealed class MergerPoolCoordinator
         this.project = project;
         this.repository = repository;
         this.slotLifetimeToken = slotLifetimeToken;
+        this.stopGate = stopGate;
         if (readSnapshot is null)
         {
             var reader = new BeadsReader(processRunner);
@@ -160,80 +155,32 @@ internal sealed class MergerPoolCoordinator
         var diagnostics = new List<MergerPoolDiagnostic>();
         var eligible = SelectEligible(snapshot, diagnostics);
         var admitted = new List<MergerPoolAdmission>();
-        var passReservations = new List<ReservationState>();
 
-        for (var index = 0; index < eligible.Count;)
+        for (var index = 0; index < eligible.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var bead = eligible[index];
-            ReservationState? reservation;
-            lock (stateGate)
-            {
-                if (reservations.ContainsKey(bead.Id))
-                {
-                    diagnostics.Add(new MergerPoolDiagnostic(bead.Id, MergerPoolDiagnosticCode.AlreadyReserved,
-                        "This Plan Bead already has a reservation in this Project's Merger slot."));
-                    index++;
-                    continue;
-                }
-                if (reservations.Count >= CapacityLimit)
-                {
-                    reservation = null;
-                }
-                else
-                {
-                    reservation = new ReservationState(bead.Id);
-                    reservations.Add(bead.Id, reservation);
-                }
-            }
-
+            var reservation = TryReserve(bead.Id, out var reservationDiagnostic);
             if (reservation is null)
             {
-                var pendingAdmissionWait = GetPendingAdmissionsIfCapacityIsFull();
-                if (pendingAdmissionWait is null)
-                    continue;
-                if (pendingAdmissionWait.Reservations.Length == 0)
+                diagnostics.Add(reservationDiagnostic!);
+                if (reservationDiagnostic!.Code is MergerPoolDiagnosticCode.CapacityReached or MergerPoolDiagnosticCode.Stopping)
                 {
-                    for (var waiting = index; waiting < eligible.Count; waiting++)
-                    {
-                        diagnostics.Add(new MergerPoolDiagnostic(eligible[waiting].Id,
-                            MergerPoolDiagnosticCode.CapacityReached,
-                            "The Project's single Merger slot is reserved; this candidate remains queued for a later evaluation."));
-                    }
+                    var code = reservationDiagnostic.Code;
+                    var message = code == MergerPoolDiagnosticCode.CapacityReached
+                        ? $"The Project's single Merger slot is reserved; this candidate remains queued for a later evaluation."
+                        : "The continuous runtime is stopping; this candidate remains unclaimed.";
+                    for (var waiting = index + 1; waiting < eligible.Count; waiting++)
+                        diagnostics.Add(new MergerPoolDiagnostic(eligible[waiting].Id, code, message));
                     break;
-                }
-
-                var admissionAndCapacitySignals = pendingAdmissionWait.Reservations
-                    .Select(pending => (Task)pending.AdmissionResolved.Task)
-                    .Append(pendingAdmissionWait.CapacityChanged);
-                var signaled = await Task.WhenAny(admissionAndCapacitySignals)
-                    .WaitAsync(cancellationToken).ConfigureAwait(false);
-                if (signaled != pendingAdmissionWait.CapacityChanged)
-                {
-                    var resolution = await ((Task<AdmissionResolution>)signaled).ConfigureAwait(false);
-                    if (resolution is AdmissionResolution.CompletedBeforeAgentAttempt endedBeforeLaunch)
-                        diagnostics.Add(CreatePreLaunchDiagnostic(endedBeforeLaunch.Completion));
                 }
                 continue;
             }
 
             admitted.Add(new MergerPoolAdmission(bead.Id, reservation.Completion.Task));
-            passReservations.Add(reservation);
-            // The reservation is visible before execution starts. Once admitted, the pass token
-            // no longer controls the slot; project shutdown is represented by slotLifetimeToken.
+            // The reservation is visible before execution starts. Preparation and execution run
+            // independently so a slow Merger slot never holds the shared discovery pass.
             _ = Task.Run(() => RunReservedSlotAsync(reservation), CancellationToken.None);
-            index++;
-        }
-
-        foreach (var reservation in passReservations)
-        {
-            if (!reservation.AdmissionResolved.Task.IsCompletedSuccessfully
-                || reservation.AdmissionResolved.Task.Result is not AdmissionResolution.CompletedBeforeAgentAttempt endedBeforeLaunch
-                || diagnostics.Any(diagnostic => diagnostic.BeadId == endedBeforeLaunch.Completion.BeadId
-                    && diagnostic.Code is MergerPoolDiagnosticCode.SlotRefused or MergerPoolDiagnosticCode.SlotEnded))
-                continue;
-
-            diagnostics.Add(CreatePreLaunchDiagnostic(endedBeforeLaunch.Completion));
         }
 
         return new MergerPoolEvaluation(CapacityLimit, admitted, diagnostics.ToArray(), ActiveReservations);
@@ -246,6 +193,17 @@ internal sealed class MergerPoolCoordinator
             active = reservations.Values.Select(reservation => reservation.Completion.Task).ToArray();
         if (active.Length == 0) return [];
         return await Task.WhenAll(active).WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Waits until the completion reader has processed every slot result published before this call.</summary>
+    internal async Task WaitForCompletionAccountingAsync(CancellationToken cancellationToken)
+    {
+        var accounted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var barrier = new MergerPoolCompletion(string.Empty, null, null, false,
+            LocalCapacityReleased: true, AccountingBarrier: accounted);
+        if (!completions.Writer.TryWrite(barrier))
+            throw new InvalidOperationException("Merger completion channel closed before its drain accounting barrier was published.");
+        await accounted.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static List<BeadSnapshot> SelectEligible(MergerPoolSnapshot snapshot,
@@ -291,11 +249,14 @@ internal sealed class MergerPoolCoordinator
         MergerSlotOutcome? outcome = null;
         Exception? failure = null;
         var canceled = false;
+        using var launchContext = ContinuousAgentLaunchContext.Enter(stopGate);
         try
         {
-            outcome = await runSlot(paths, project, repository, reservation.BeadId,
-                () => reservation.AdmissionResolved.TrySetResult(new AdmissionResolution.AgentAttemptStarted()), slotLifetimeToken)
-                .ConfigureAwait(false);
+            outcome = stopGate?.IsStopRequested == true
+                ? new MergerSlotOutcome(MergerSlotDisposition.Refused, null, null, false,
+                    "The continuous runtime stopped before this reserved Merger slot began claim acquisition.")
+                : await runSlot(paths, project, repository, reservation.BeadId, static () => { }, slotLifetimeToken)
+                    .ConfigureAwait(false);
         }
         catch (OperationCanceledException exception)
         {
@@ -307,47 +268,52 @@ internal sealed class MergerPoolCoordinator
             failure = exception;
         }
 
-        TaskCompletionSource<bool> capacityReleased;
+        var completion = new MergerPoolCompletion(reservation.BeadId, outcome, failure, canceled, LocalCapacityReleased: true);
         lock (stateGate)
         {
             reservations.Remove(reservation.BeadId);
-            capacityReleased = capacityChanged;
-            capacityChanged = NewSignal();
+            // Publish the result in the same critical section that releases capacity. A drain
+            // which observes no reservations can then safely place its accounting barrier next.
+            if (!completions.Writer.TryWrite(completion))
+                throw new InvalidOperationException("Merger completion channel closed before slot completion publication.");
+            reservation.Completion.TrySetResult(completion);
         }
-        var completion = new MergerPoolCompletion(reservation.BeadId, outcome, failure, canceled, LocalCapacityReleased: true);
-        reservation.Completion.TrySetResult(completion);
-        reservation.AdmissionResolved.TrySetResult(new AdmissionResolution.CompletedBeforeAgentAttempt(completion));
-        capacityReleased.TrySetResult(true);
-        if (!completions.Writer.TryWrite(completion))
-            throw new InvalidOperationException("Merger completion channel closed before slot completion publication.");
     }
 
-    private PendingAdmissionWait? GetPendingAdmissionsIfCapacityIsFull()
+    private ReservationState? TryReserve(string beadId, out MergerPoolDiagnostic? diagnostic)
     {
-        lock (stateGate)
+        ReservationState? reservation = null;
+        MergerPoolDiagnostic? refusal = null;
+        bool TryReserveLocal()
         {
-            if (reservations.Count < CapacityLimit)
-                return null;
+            lock (stateGate)
+            {
+                if (reservations.ContainsKey(beadId))
+                {
+                    refusal = new MergerPoolDiagnostic(beadId, MergerPoolDiagnosticCode.AlreadyReserved,
+                        "This task Bead already has a reservation in this Project's singleton Merger slot.");
+                    return false;
+                }
+                if (reservations.Count >= CapacityLimit)
+                {
+                    refusal = new MergerPoolDiagnostic(beadId, MergerPoolDiagnosticCode.CapacityReached,
+                        "The Project's singleton Merger slot is reserved; this candidate remains queued for a later evaluation.");
+                    return false;
+                }
 
-            return new PendingAdmissionWait(reservations.Values
-                .Where(reservation => !reservation.AdmissionResolved.Task.IsCompleted)
-                .ToArray(), capacityChanged.Task);
+                reservation = new ReservationState(beadId);
+                reservations.Add(beadId, reservation);
+                return true;
+            }
         }
-    }
 
-    private static TaskCompletionSource<bool> NewSignal() =>
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    private static MergerPoolDiagnostic CreatePreLaunchDiagnostic(MergerPoolCompletion completion)
-    {
-        var refused = completion.Outcome?.Disposition == MergerSlotDisposition.Refused;
-        var message = completion.Diagnostic
-            ?? (completion.IsCanceled
-                ? "Merger slot was canceled before an Agent attempt started."
-                : $"Merger slot ended before an Agent attempt started{(completion.Outcome is null ? "." : $" with disposition '{completion.Outcome.Disposition}'.")}");
-        return new MergerPoolDiagnostic(completion.BeadId,
-            refused ? MergerPoolDiagnosticCode.SlotRefused : MergerPoolDiagnosticCode.SlotEnded,
-            message);
+        if (stopGate is null)
+            _ = TryReserveLocal();
+        else if (!stopGate.TryReserve(TryReserveLocal, out _))
+            refusal = new MergerPoolDiagnostic(beadId, MergerPoolDiagnosticCode.Stopping,
+                "The continuous runtime is stopping; this candidate remains unclaimed.");
+        diagnostic = refusal;
+        return reservation;
     }
 
     private async Task<IDisposable> EnterAdmissionAsync(CancellationToken cancellationToken)

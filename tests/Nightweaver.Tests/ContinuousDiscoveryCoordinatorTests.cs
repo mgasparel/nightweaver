@@ -507,6 +507,53 @@ public sealed class ContinuousDiscoveryCoordinatorTests
         Assert.Contains("Delivery ownership finalization failed", error.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task MergerCompletionProjectionTriggersDiscoveryAndDrainAccounting()
+    {
+        using var lifetime = new CancellationTokenSource();
+        var completions = Channel.CreateUnbounded<MergerPoolCompletion>();
+        var firstPass = NewSignal();
+        var secondPass = NewSignal();
+        var output = new StringWriter();
+        var passes = 0;
+        var barriers = 0;
+        var coordinator = new ContinuousDiscoveryCoordinator(
+            [new ContinuousPoolRegistration(
+                ContinuousPoolKind.Merger,
+                _ =>
+                {
+                    if (Interlocked.Increment(ref passes) == 1) firstPass.TrySetResult(true);
+                    else secondPass.TrySetResult(true);
+                    return Task.FromResult<IReadOnlyList<MergerPoolDiagnostic>>([]);
+                },
+                completions.Reader,
+                static () => { },
+                _ => Task.CompletedTask,
+                async token =>
+                {
+                    var accounted = NewSignal();
+                    completions.Writer.TryWrite(new MergerPoolCompletion(string.Empty, null, null, false,
+                        LocalCapacityReleased: true, AccountingBarrier: accounted));
+                    await accounted.Task.WaitAsync(token);
+                    Interlocked.Increment(ref barriers);
+                })],
+            _ => Task.CompletedTask,
+            output,
+            TextWriter.Null);
+
+        var run = coordinator.RunAsync(lifetime.Token);
+        await firstPass.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        completions.Writer.TryWrite(new MergerPoolCompletion("merge-failed",
+            new MergerSlotOutcome(MergerSlotDisposition.Failed, null, null, false, "controlled failure"),
+            null, false, LocalCapacityReleased: true));
+        await secondPass.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        lifetime.Cancel();
+        Assert.False(await run.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.Equal(1, Volatile.Read(ref barriers));
+        Assert.Contains("Merger slot 'merge-failed' released local capacity (Failed; claim handoff=False): controlled failure", output.ToString(), StringComparison.Ordinal);
+    }
+
     private static ContinuousDiscoveryCoordinator CreateCoordinator(
         Func<CancellationToken, Task<IReadOnlyList<DeliveryPoolDiagnostic>>> evaluate,
         ChannelReader<DeliveryPoolCompletion> completions,

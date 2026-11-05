@@ -12,7 +12,7 @@ Relevant domain vocabulary is defined in [`GLOSSARY.md`](./GLOSSARY.md). Archite
 
 1. **Two-Tier Bead Lifecycle (`Product Bead` -> `Plan Bead`)**:
    - **Product Beads** (`--type feature` or `--type bug`) are human-authored Beads describing user-level product requirements or bug reports that enter **Planning**.
-   - **Plan Beads** (`--type task`) are Planner-authored (or human-authored) Beads containing a self-contained technical implementation specification ready for **Delivery**, linked to their parent **Product Bead** via `--deps discovered-from:<product-bead-id>`.
+   - **Plan Beads** (`--type task`) are maintainer-authored Beads containing a self-contained technical implementation specification ready for **Delivery**, optionally linked to their parent **Product Bead** via `--deps discovered-from:<product-bead-id>`. Automated Planning is outside the current runtime.
    - Every **Plan Bead** slice must be **independently deployable** to `default_branch`. When multiple **Plan Beads** require sequencing, the **Planner Agent** wires native `blocks` dependencies (`bd dep add <later-slice> <earlier-slice>`) between them so `bd ready` enforces ordering automatically.
 
 2. **Beads-Native Workflow State**:
@@ -22,10 +22,10 @@ Relevant domain vocabulary is defined in [`GLOSSARY.md`](./GLOSSARY.md). Archite
 3. **Crash-Stateless Orchestrator with Verifiable Agent Evidence**:
    - **Orchestrator responsibilities**:
      - Use a best-effort `bd events tail --follow` on the configured **Target Repository** as a discovery wake-up hint; periodic discovery remains active when the journal is unavailable.
-     - Claim eligible Beads (`bd update <id> --claim`) and schedule them across three bounded concurrency pools (**Planning**, **Delivery**, and singleton **Merger**).
+     - Claim eligible manually authored tasks (`bd update <id> --claim`) and schedule them through the active bounded pools in order: **Delivery**, then singleton **Merger**. Planning remains manually authored and can compose later.
      - Provision, reset, and clean up isolated Git worktrees, per-invocation temporary directories, and **Win32 Job Objects**.
      - Map each Bead's `(type, stage:* label)` to its corresponding **Agent** role and launch the configured **Agent CLI**.
-     - Verify process, worktree, Git, and tracker invariants independently of model answers; classify completed Delivery evidence from Implementer, Reviewer, and QA; publish guarded outcomes; manage operational retries and semantic repair budgets; and auto-close `planned` **Product Beads** once all their `discovered-from` **Plan Beads** reach `closed`.
+     - Verify process, worktree, Git, and tracker invariants independently of model answers; classify Delivery and Merger evidence; publish guarded outcomes; manage operational retries and semantic repair budgets; and auto-close eligible `planned` **Product Beads** after their discovered tasks close.
    - **Agent responsibilities**:
      - Each **Agent** executes directly inside the Bead's isolated worktree with full CLI/tool autonomy within its role mandate (`bd`, `git`, `gh`, and the **Target Repository**'s build/test toolchain).
      - Each **Agent** reads its assigned Bead via `bd show <id>` and `bd comments <id>`, performs its single lifecycle responsibility, and records natural-language findings or evidence via `bd comments add`. The Orchestrator owns verified stage, pause, status, claim, type, and repair-counter transitions.
@@ -139,8 +139,8 @@ stateDiagram-v2
      2. If `nightweaver/<bead-id>` is behind `origin/<default_branch>`, runs `git rebase origin/<default_branch>`.
      3. **Active Conflict Resolution**: If rebase conflicts occur, the **Merger Agent** inspects the conflicting changes, attempts to resolve the conflicts directly, completes the rebase, and runs the local build/test suite to verify the resolution compiles and passes tests.
      4. Pushes the synchronized branch (`git push --force-with-lease`) and waits for remote CI checks on the current `HEAD` (`gh pr checks --watch`) to pass.
-     5. Merges the Pull Request (`gh pr merge --squash --delete-branch`, unless overridden by the **Target Repository**'s `AGENTS.md`) and closes the **Plan Bead** (`bd close <id>`).
-     6. **Return to Implementer (`stage:implement`)**: If changes on `origin/<default_branch>` semantically invalidate the **Plan Bead**'s design, conflict resolution cannot be completed cleanly, or local tests / remote CI fail after rebase, the **Merger Agent** aborts any in-progress rebase, posts the conflict or CI failure details via `bd comments add`, increments `repair_cycles`, and transitions the **Plan Bead** back to `stage:implement`.
+     5. Merges the Pull Request using the Target Repository's documented method and records a current-invocation merge-evidence comment. It leaves all Bead lifecycle fields unchanged; the comment is evidence, not closure.
+     6. **Orchestrator-owned result**: The **Orchestrator** independently verifies the merge evidence and current claim. Verified approval records evidence, closes the task with one guarded update, then attempts exact environment cleanup and eligible Product completion. Verified semantic rejection uses the shared rejection publisher to increment `repair_cycles` once and return the task to open/unassigned `stage:implement`; an exhausted budget or unresolved outcome follows the established pause path. The publication receipt ends outgoing tracker and environment operations, and the receiving pool rereads eligibility and claims freshly.
 
 ---
 
@@ -153,7 +153,7 @@ stateDiagram-v2
 | **Implementer Agent** | **Plan Bead**: Unlabeled or `stage:implement` | Edit/commit files on `nightweaver/<bead-id>`, `git push`, `gh pr create`/`edit`, and `bd comments add`. Must leave no new uncommitted changes; inherited contents are preserved. It cannot change status, type, stage/pause labels, assignee, or `repair_cycles`. | No workflow mutation; reports natural-language evidence for Orchestrator classification |
 | **Reviewer Agent** | **Plan Bead**: `stage:review` | Read-only review of worktree/diff and `bd comments add`. **No worktree file, commit, or workflow-field mutations.** | Reports `approved`, `changes_required`, `product_decision_required`, `technical_blocker`, or `incomplete_or_unclear` evidence for Orchestrator classification |
 | **QA Agent** | **Plan Bead**: `stage:qa` | Build/boot/exercise software and `bd comments add`. Must remove its own test artifacts; inherited dirty contents are preserved and block success if they prevent verification. **No workflow-field mutations.** | Reports `approved`, `changes_required`, `product_decision_required`, `technical_blocker`, or `incomplete_or_unclear` evidence for Orchestrator classification |
-| **Merger Agent** | **Plan Bead**: `stage:merge` (Singleton) | `git fetch`, `git rebase`, resolve rebase conflicts & run tests, `git push --force-with-lease`, `gh pr checks`, `gh pr merge`, `bd comments add`, `bd update` / `bd close`. **Must leave `git status --porcelain` clean on exit.** | `closed` or `stage:implement` (with `repair_cycles=<N>`) |
+| **Merger Agent** | **Plan Bead**: `stage:merge` (Singleton) | Synchronize its branch, resolve clear conflicts, run required checks, inspect hosted checks, merge the pull request, and add invocation evidence with `bd comments add`. Preserve inherited worktree contents and leave every workflow field unchanged; never use `bd update` or `bd close` as completion proof. | Reports approved merge evidence, verified rejection evidence, or a concrete blocker for Orchestrator classification and verification |
 
 ---
 
@@ -177,7 +177,7 @@ stateDiagram-v2
      - Process exits with a non-zero exit code.
      - Process exceeds its configured per-role wall-clock timeout (`timeout_minutes`) and is terminated by its **Win32 Job Object**.
      - Worktree fails post-exit cleanliness (`git status --porcelain` is non-empty, or forbidden `HEAD` mutations occurred during a read-only stage).
-     - A Planning or Merger Agent exits `0` without performing the legal `bd` state transition owned by that role (per Section 3). Delivery Agents (Implementer, Reviewer, and QA) are expected to leave workflow fields unchanged and provide evidence; the Orchestrator classifies that evidence, verifies the outcome independently, and publishes the guarded transition. Missing Agent-written Delivery transitions are not operational failures.
+     - A Planning Agent exits `0` without its phase's required evidence. Delivery and Merger Agents are expected to leave workflow fields unchanged and provide evidence; the Orchestrator classifies that evidence, verifies the outcome independently, and publishes guarded transitions. A missing Agent-written lifecycle transition is not an operational failure.
 2. **In-Memory Retry Tracking (`max_operational_retries`, default `2`)**:
    - Operational retries are tracked in-memory inside the **Orchestrator** for the active stage without mutating `repair_cycles` metadata in `bd`.
    - Before retrying an initially clean session, the **Orchestrator** may reset the isolated worktree to its recorded `HEAD` and remove untracked, non-ignored files. If a retained session was already dirty when opened, retries preserve its tracked, staged, untracked, ignored, and temporary contents; when those contents prevent a verified success, the **Orchestrator** preserves them and escalates instead of resetting them.
@@ -211,9 +211,9 @@ stateDiagram-v2
 
 ## 5. Orchestrator Concurrency, Continuous Discovery, and Worktree Isolation
 
-### 5.1 Continuous Discovery and the Current Delivery Runtime
+### 5.1 Continuous Discovery and the Current Delivery and Merger Runtime
 
-The selector-only CLI is a live continuous runtime; `--dry-run` remains a separate one-shot inspection. This implementation slice wires Delivery after startup recovery and cleanup. Planning and Merger execution are future pool integrations.
+The selector-only CLI is a live continuous runtime; `--dry-run` remains a separate one-shot inspection. After startup recovery and cleanup, the supported runtime evaluates Delivery and then the singleton Merger pool. Both pools have independent bounded capacity and queued preparation, and both feed completion-triggered discovery after releasing local capacity. Planning remains manually authored and is not scheduled by this runtime.
 
 **Repository Exclusion and Startup Recovery for Live Dispatch**:
 Before any Beads inventory/readiness query, recovery, dispatch write, Project runtime-directory creation, worktree operation, or Agent launch, a live Orchestrator performs read-only configuration and Git validation, then acquires an OS-managed mutex keyed to the physical Git common-directory identity. The mutex is shared by every Project name and Nightweaver host root that targets the same local repository, is outside the Target Repository, and remains owned for the process lifetime. A competing process exits with a diagnostic before tracker or runtime mutations. Process exit or death releases ownership; no lease database, heartbeat, or PID proof is used.
@@ -236,8 +236,8 @@ flowchart TD
     Recovery --> Sweep[Revalidate and remove only completed managed worktrees]
     Sweep --> Tmp[Delete owned tmp only after checking actual survivors]
     Tmp --> Actual[Read fresh inventory and actual bd ready state]
-    Actual --> Discover[Fresh Delivery discovery]
-    Discover --> Reserve[Reserve local capacity and queue slot]
+    Actual --> Discover[Fresh Delivery then Merger discovery]
+    Discover --> Reserve[Reserve pool-local capacity and queue slot]
     Reserve --> Slot[Prepare and run slot independently]
     Slot --> Complete[Release local capacity and publish completion]
     Complete --> Discover
@@ -257,14 +257,14 @@ flowchart TD
     DryRun[Dry-run] --> Inspect[Read-only inspection and projection]
     Inspect --> Report[Report without a mutex or recovery]
 ```
-1. Startup recovery and environment cleanup complete before the initial Delivery discovery pass. A competing runtime exits before tracker or runtime mutation. Journal setup and tailing begin as best-effort background work; admission does not wait for setup, attachment, head capture, or historical replay.
-2. Startup, best-effort journal event hints, an always-on 30-second timer, and every Delivery completion after local capacity release enter one bounded, coalescing signal. A single reader serializes passes. It consumes the current signal before evaluation, so a request that arrives during a pass remains pending for one subsequent pass. Bursts while a signal is already pending coalesce.
-3. Every pass reads fresh inventory and native readiness. A failed tracker read admits no work from a prior snapshot and waits for a later timer or completion trigger; it does not retry in a tight loop. Discovery does not perform no-op tracker writes.
+1. Startup recovery and environment cleanup complete before the initial Delivery and Merger discovery pass. A competing runtime exits before tracker or runtime mutation. Journal setup and tailing begin as best-effort background work; admission does not wait for setup, attachment, head capture, or historical replay.
+2. Startup, best-effort journal event hints, an always-on 30-second timer, and every Delivery or Merger completion after local capacity release enter one bounded, coalescing signal. A single reader serializes passes in Delivery-then-Merger order. It consumes the current signal before evaluation, so a request that arrives during a pass remains pending for one subsequent pass. Bursts while a signal is already pending coalesce.
+3. Each pool evaluation reads fresh inventory and native readiness independently. A failed tracker read admits no work from a prior snapshot and waits for a later timer or pool completion trigger; it does not retry in a tight loop. Discovery does not perform no-op tracker writes.
 4. The watcher follows the configured Project's actual Target Repository. Journal records, including Orchestrator-authored events, are wake-up hints only; duplicate or old records are harmless, and fresh tracker reads—not event payloads or counts—establish eligibility. Unexpected tail termination or truncation requests discovery and reconnects with exponential backoff capped at 30 seconds. Truncation discards the obsolete in-memory sequence and resumes after the reported head. Timer and completion triggers stay active throughout reconnect, and stream failure alone does not stop admission or running Agents. No durable cursor or replay ledger is kept.
 5. Ordinary comments, notes, description edits, and audit history do not resume paused Beads. Only a successful guarded Attention Desk Resume or Retry state update makes the persisted Bead eligible for ordinary scheduling.
 6. The first `Ctrl+C` closes reservation and synchronous native-launch boundaries under one stop gate, then stops discovery helpers. Work already preparing settles without launching; an Agent already launched can finish deterministic verification, bounded outcome classification including its permitted fallback, and guarded result recording under its normal role timeout. The runtime starts no next role, operational retry, duplicate-failure classifier, or retry-only environment reset. It finalizes claims only after rereading confirmed current ownership, retains unfinished work and pauses, and drains all slots independently. There is no fixed two-minute cutoff. A failed current turn or required finalization/reread returns an unsuccessful shutdown after the other slots drain. A second signal atomically closes the force gate, closes every active Agent Job Object, emits a best-effort deferred-recovery diagnostic, and exits unsuccessfully without awaiting invocation cancellation, executor cleanup, classification, external operations, verification, resets, environment cleanup, or claim release. Further signals do not restart the force path. The repository mutex remains held through process exit. Restart uses ordinary guarded recovery against actual tracker and filesystem state; it does not assume an interrupted write succeeded or replay a ledger.
 
-### 5.2 Three Concurrency Pools & Planning Backpressure
+### 5.2 Lifecycle Pools & Planning Backpressure
 
 1. **Planning Pool (`max_concurrent_planning`, default `2`)**:
    - Claims eligible Product Beads and holds the claim across the Planning stages. On planned, completed-environment cleanup may remove the detached worktree; on either pause label, the worktree and temporary files are retained and the still-owned claim is released.
@@ -278,9 +278,9 @@ flowchart TD
    - A Delivery slot holds the claim and persistent worktree continuously across Orchestrator-verified `stage:implement` -> `stage:review` -> `stage:qa` outcomes (including immediate `-> stage:implement` repair cycles). QA approval atomically publishes `stage:merge`, opens the Bead, and clears the assignee; a pause also publishes and releases the claim atomically. Once the publication receipt or one verifying reread confirms the handoff, the slot returns immediately without further Bead reads, writes, or worktree operations, leaving the retained worktree for the Singleton Merger Slot.
 4. **Singleton Merger Slot (concurrency = `1`)**:
    - Dedicated to `stage:merge` **Plan Beads** (`bd ready --type task --label stage:merge --unassigned`).
-   - Claims and processes one `stage:merge` **Plan Bead** at a time in priority/FIFO order so rebase, conflict resolution, and remote CI waits never block **Delivery Pool** slots.
-   - If a `stage:merge` **Plan Bead** is returned to `stage:implement` (conflict/CI failure), the **Merger** releases the claim so the **Delivery Pool** picks it back up on `nightweaver/<bead-id>`.
-   - Planning and Merger slot admission/completion/lifecycle wiring are not implemented by the current runtime.
+   - Claims and processes one eligible `stage:merge` task at a time in priority, creation-time, then ordinal-ID order. It queues preparation without holding shared discovery, so rebases, checks, and remote CI waits never block Delivery admissions.
+   - The Orchestrator publishes a verified repair handoff once, returning the task open and unassigned at `stage:implement`; the next fresh Delivery evaluation claims the retained worktree and branch.
+   - Verified merge evidence is finalized by the Orchestrator, which records closure and attempts owned cleanup. Parentless tasks complete normally. Automated Planning and Planning backpressure remain outside the current runtime.
 
 ### 5.3 Worktree & Runtime Environment Isolation
 
@@ -448,7 +448,7 @@ Each **Project** configuration binds one **Target Repository** to the **Orchestr
 ### 7.2 CLI Entrypoints & Shutdown
 
 1. **CLI Invocation**:
-   - `nightweaver --project <project-slug>` (loads `<nightweaver-root>/projects/<project-slug>.json`) starts the continuous Delivery runtime.
+   - `nightweaver --project <project-slug>` (loads `<nightweaver-root>/projects/<project-slug>.json`) starts the continuous Delivery and singleton Merger runtime.
    - `nightweaver --config <path-to-project-json>` starts the same runtime from an explicit config path.
    - `--dry-run`: Runs read-only startup recovery inspection and initial discovery projection without acquiring recovery authority, mutating `bd`, creating/removing worktrees, or launching **Agents**, then exits.
    - `dispatch <bead-id>` continues to run exactly one explicitly selected lifecycle stage.

@@ -131,86 +131,88 @@ public sealed class MergerPoolCoordinatorTests
     }
 
     [Fact]
-    public async Task PreLaunchRefusalAdvancesToNextCandidateInSameEvaluation()
+    public async Task PreLaunchRefusalCompletesBeforeLaterDiscoveryAdmitsTheNextCandidate()
     {
         var rows = new[]
         {
             Row("first", priority: 0, labels: ["stage:merge"]),
             Row("second", priority: 1, labels: ["stage:merge"])
         };
+        var firstEligible = 1;
         var firstEntered = NewSignal();
         var releaseRefusal = NewSignal();
-        var secondAttemptStarted = NewSignal();
-        var pool = CreatePool(() => Task.FromResult(Snapshot(rows, ["first", "second"])),
+        var pool = CreatePool(() => Task.FromResult(Volatile.Read(ref firstEligible) == 1
+                ? Snapshot(rows, ["first", "second"])
+                : Snapshot([Row("first", status: "in_progress", assignee: "human", labels: ["stage:merge"]), rows[1]], ["second"])),
             async (_, _, _, beadId, agentAttemptStarted, _) =>
             {
                 if (beadId == "first")
                 {
                     firstEntered.TrySetResult(true);
                     await releaseRefusal.Task;
+                    Volatile.Write(ref firstEligible, 0);
                     return Outcome(MergerSlotDisposition.Refused);
                 }
 
                 agentAttemptStarted();
-                secondAttemptStarted.TrySetResult(true);
                 return Outcome(MergerSlotDisposition.Merged, handoff: true);
             });
 
-        var evaluationTask = pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        var evaluation = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("first", Assert.Single(evaluation.Admitted).BeadId);
         await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        Assert.False(evaluationTask.IsCompleted);
+        Assert.Contains(evaluation.Diagnostics, item => item.BeadId == "second" && item.Code == MergerPoolDiagnosticCode.CapacityReached);
 
         releaseRefusal.TrySetResult(true);
-        var evaluation = await evaluationTask.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        await secondAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-
-        Assert.Equal(["first", "second"], evaluation.Admitted.Select(admission => admission.BeadId));
-        Assert.Contains(evaluation.Diagnostics, item => item.BeadId == "first" && item.Code == MergerPoolDiagnosticCode.SlotRefused);
-        Assert.Equal(MergerSlotDisposition.Refused,
-            (await evaluation.Admitted.Single(admission => admission.BeadId == "first").Completion).Outcome?.Disposition);
-        Assert.True((await evaluation.Admitted.Single(admission => admission.BeadId == "second").Completion).MergeCompleted);
+        var refusal = await evaluation.Admitted[0].Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.Equal(MergerSlotDisposition.Refused, refusal.Outcome?.Disposition);
+        Assert.True(refusal.LocalCapacityReleased);
+        var next = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("second", Assert.Single(next.Admitted).BeadId);
+        Assert.True((await next.Admitted[0].Completion).MergeCompleted);
         Assert.Empty(pool.ActiveReservations);
     }
 
     [Fact]
-    public async Task PreLaunchExceptionAdvancesToNextCandidateAndReportsSlotEnded()
+    public async Task PreLaunchExceptionCompletesAndLaterDiscoveryCanAdmitTheNextCandidate()
     {
         var rows = new[]
         {
             Row("first", priority: 0, labels: ["stage:merge"]),
             Row("second", priority: 1, labels: ["stage:merge"])
         };
+        var firstEligible = 1;
         var firstEntered = NewSignal();
         var releaseFailure = NewSignal();
-        var secondAttemptStarted = NewSignal();
-        var pool = CreatePool(() => Task.FromResult(Snapshot(rows, ["first", "second"])),
+        var pool = CreatePool(() => Task.FromResult(Volatile.Read(ref firstEligible) == 1
+                ? Snapshot(rows, ["first", "second"])
+                : Snapshot([Row("first", status: "in_progress", assignee: "human", labels: ["stage:merge"]), rows[1]], ["second"])),
             async (_, _, _, beadId, agentAttemptStarted, _) =>
             {
                 if (beadId == "first")
                 {
                     firstEntered.TrySetResult(true);
                     await releaseFailure.Task;
+                    Volatile.Write(ref firstEligible, 0);
                     throw new InvalidOperationException("controlled prelaunch failure");
                 }
 
                 agentAttemptStarted();
-                secondAttemptStarted.TrySetResult(true);
                 return Outcome(MergerSlotDisposition.Merged, handoff: true);
             });
 
-        var evaluationTask = pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        var evaluation = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("first", Assert.Single(evaluation.Admitted).BeadId);
         await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        Assert.False(evaluationTask.IsCompleted);
+        Assert.Contains(evaluation.Diagnostics, item => item.BeadId == "second" && item.Code == MergerPoolDiagnosticCode.CapacityReached);
 
         releaseFailure.TrySetResult(true);
-        var evaluation = await evaluationTask.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        await secondAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-
-        Assert.Equal(["first", "second"], evaluation.Admitted.Select(admission => admission.BeadId));
-        Assert.Contains(evaluation.Diagnostics, item => item.BeadId == "first" && item.Code == MergerPoolDiagnosticCode.SlotEnded);
-        Assert.IsType<InvalidOperationException>(
-            (await evaluation.Admitted.Single(admission => admission.BeadId == "first").Completion).Exception);
-        Assert.True((await evaluation.Admitted.Single(admission => admission.BeadId == "second").Completion).MergeCompleted);
+        var failure = await evaluation.Admitted[0].Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.IsType<InvalidOperationException>(failure.Exception);
+        Assert.True(failure.LocalCapacityReleased);
+        var next = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("second", Assert.Single(next.Admitted).BeadId);
+        Assert.True((await next.Admitted[0].Completion).MergeCompleted);
         Assert.Empty(pool.ActiveReservations);
     }
 
@@ -235,8 +237,8 @@ public sealed class MergerPoolCoordinatorTests
             });
 
         var evaluationTask = pool.EvaluateAsync(TestContext.Current.CancellationToken);
-        await ciStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         var evaluation = await evaluationTask.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await ciStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Assert.Equal(["ci-wait"], evaluation.Admitted.Select(admission => admission.BeadId));
         Assert.Contains(evaluation.Diagnostics, item => item.BeadId == "queued" && item.Code == MergerPoolDiagnosticCode.CapacityReached);
         Assert.False(evaluation.Admitted[0].Completion.IsCompleted);
@@ -248,7 +250,7 @@ public sealed class MergerPoolCoordinatorTests
     }
 
     [Fact]
-    public async Task EvaluationCancellationWhileInitialAdmissionIsPendingLeavesSlotOwnedByProjectLifetime()
+    public async Task EvaluationCancellationAfterQueuedAdmissionLeavesSlotOwnedByProjectLifetime()
     {
         var rows = new[]
         {
@@ -268,14 +270,50 @@ public sealed class MergerPoolCoordinatorTests
 
         using var cancellation = new CancellationTokenSource();
         var evaluationTask = pool.EvaluateAsync(cancellation.Token);
+        var evaluation = await evaluationTask.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluationTask);
+        Assert.Single(evaluation.Admitted);
 
         var active = Assert.Single(pool.ActiveReservations);
         release.TrySetResult(true);
         var completion = await active.Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Assert.True(completion.LocalCapacityReleased);
+        Assert.Empty(pool.ActiveReservations);
+    }
+
+    [Fact]
+    public async Task SharedStopGateDeniesNewMergerReservationsAndWorkingAgentLaunches()
+    {
+        var gate = new ContinuousStopGate();
+        var row = Row("merge", labels: ["stage:merge"]);
+        var entered = NewSignal();
+        var release = NewSignal();
+        var launches = 0;
+        var pool = CreatePool(() => Task.FromResult(Snapshot([row], ["merge"])),
+            async (_, _, _, _, _, _) =>
+            {
+                entered.TrySetResult(true);
+                await release.Task;
+                Assert.True(ContinuousAgentLaunchContext.StopRequested);
+                var launched = ContinuousAgentLaunchContext.TryLaunch(() => Interlocked.Increment(ref launches));
+                Assert.False(launched);
+                return Outcome(MergerSlotDisposition.StoppedAtUnsupportedOutcome);
+            }, stopGate: gate);
+
+        var admitted = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.Single(admitted.Admitted);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        gate.RequestStop();
+        var stopping = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.Empty(stopping.Admitted);
+        Assert.Contains(stopping.Diagnostics, item => item.Code == MergerPoolDiagnosticCode.Stopping);
+
+        release.TrySetResult(true);
+        var completion = await admitted.Admitted[0].Completion.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.True(completion.LocalCapacityReleased);
+        Assert.Equal(0, Volatile.Read(ref launches));
         Assert.Empty(pool.ActiveReservations);
     }
 
@@ -357,14 +395,14 @@ public sealed class MergerPoolCoordinatorTests
     }
 
     private static MergerPoolCoordinator CreatePool(Func<Task<MergerPoolSnapshot>> snapshotReader,
-        MergerPoolSlotRunner slotRunner, int maxConcurrentDelivery = 1)
+        MergerPoolSlotRunner slotRunner, int maxConcurrentDelivery = 1, ContinuousStopGate? stopGate = null)
     {
         var host = new HostPaths(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "merger-pool-host")));
         var target = new ValidatedTargetRepository(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "merger-pool-target")), "main");
         var project = CreateProject(target, maxConcurrentDelivery);
         var runner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(0, "", "")));
         return new MergerPoolCoordinator(host, project, target, runner,
-            (_, _, _) => snapshotReader(), slotRunner);
+            (_, _, _) => snapshotReader(), slotRunner, stopGate: stopGate);
     }
 
     private static ProjectConfig CreateProject(ValidatedTargetRepository target, int maxConcurrentDelivery)

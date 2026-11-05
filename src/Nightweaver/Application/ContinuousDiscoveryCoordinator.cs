@@ -70,7 +70,7 @@ internal sealed class ContinuousDiscoveryCoordinator(
             if (!cancellationToken.IsCancellationRequested)
             {
                 await first.ConfigureAwait(false);
-                throw new InvalidOperationException("Continuous Delivery runtime infrastructure stopped unexpectedly.");
+                throw new InvalidOperationException("Continuous runtime infrastructure stopped unexpectedly.");
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -158,7 +158,7 @@ internal sealed class ContinuousDiscoveryCoordinator(
 
             if (Volatile.Read(ref drainFailureObserved) != 0 || Volatile.Read(ref forceCancelFailed) != 0)
                 drained = false;
-            output.WriteLine("Continuous Delivery runtime stopped.");
+            output.WriteLine("Continuous runtime stopped.");
         }
         return drained;
     }
@@ -199,11 +199,9 @@ internal sealed class ContinuousDiscoveryCoordinator(
             RequestDiscovery();
     }
 
-    private async Task ReadPoolCompletionsAsync(
-        ContinuousPoolRegistration pool,
-        CancellationToken cancellationToken)
+    private async Task ReadPoolCompletionsAsync(ContinuousPoolRegistration pool, CancellationToken cancellationToken)
     {
-        await foreach (var completion in pool.Completions.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        await foreach (var completion in pool.ReadCompletions(cancellationToken).ConfigureAwait(false))
         {
             if (completion.IsAccountingBarrier)
             {
@@ -211,14 +209,14 @@ internal sealed class ContinuousDiscoveryCoordinator(
                 continue;
             }
 
-            if (IsDrainFailure(completion))
+            if (completion.IsDrainFailure)
                 Interlocked.Exchange(ref drainFailureObserved, 1);
             var result = completion.Exception is not null
                 ? $"failed: {completion.Exception.Message}"
                 : completion.IsCanceled
                     ? "canceled"
-                    : completion.Outcome?.Disposition.ToString() ?? "ended without an outcome";
-            output.WriteLine($"{pool.Kind} slot '{completion.BeadId}' released local capacity ({result}).");
+                    : completion.Result ?? "ended without an outcome";
+            output.WriteLine($"{pool.Kind} slot '{completion.BeadId}' released local capacity ({result}; claim handoff={completion.ClaimHandoffCompleted}){(completion.Diagnostic is null ? "." : $": {completion.Diagnostic}")}");
             RequestDiscovery();
         }
     }
@@ -233,13 +231,6 @@ internal sealed class ContinuousDiscoveryCoordinator(
         await first.ConfigureAwait(false);
         throw new InvalidOperationException("A configured pool completion stream stopped unexpectedly.");
     }
-
-    private static bool IsDrainFailure(DeliveryPoolCompletion completion) =>
-        completion.Exception is not null
-        || completion.IsCanceled
-        || completion.Outcome?.Disposition is DeliverySlotDisposition.Failed or DeliverySlotDisposition.IncompletePauseDisposition
-        || completion.Outcome?.Disposition == DeliverySlotDisposition.Escalated && !completion.ClaimHandoffCompleted
-        || completion.Outcome?.Disposition == DeliverySlotDisposition.PausedForProductDecision && !completion.ClaimHandoffCompleted;
 
     private async Task ObserveJournalWatcherAsync(
         Func<Action, CancellationToken, Task> journalWatcher,
