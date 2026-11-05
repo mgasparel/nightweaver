@@ -94,8 +94,14 @@ internal static partial class FactoryTelemetryEndpoints
             selection.Value.Invocation.BeadId, invocationId);
         var stream = opened.Stream;
         var length = stream.Length;
-        var cursor = requestedCursor ?? Math.Max(0, length - MaximumReplayBytes);
+        var replayStart = Math.Max(0, length - MaximumReplayBytes);
+        var cursor = requestedCursor ?? replayStart;
         var reset = requestedCursor is null && length > MaximumReplayBytes;
+        if (cursor < replayStart)
+        {
+            cursor = replayStart;
+            reset = true;
+        }
         if (cursor > length)
         {
             cursor = length;
@@ -195,21 +201,21 @@ internal static partial class FactoryTelemetryEndpoints
             var terminal = selectedInvocation.Status is "completed" or "failed" or "timed_out" or "cancelled"
                 or "launch_failed" or "launch_denied" or "preparation_failed"
                 || selectedAvailability == FactoryTelemetryAvailability.Stopped;
-            if (terminal && pending.Length > 0)
-            {
-                safeCursor += pending.Length;
-                pending = [];
-                await WriteEventAsync(context, "log", new
-                {
-                    runtimeId,
-                    slotId,
-                    invocationId,
-                    text = "\uFFFD",
-                    cursor = safeCursor
-                }, EventId(runtimeId, invocationId, safeCursor), context.RequestAborted).ConfigureAwait(false);
-            }
             if (terminal && chunk.Bytes.Length == 0)
             {
+                if (pending.Length > 0)
+                {
+                    safeCursor += pending.Length;
+                    pending = [];
+                    await WriteEventAsync(context, "log", new
+                    {
+                        runtimeId,
+                        slotId,
+                        invocationId,
+                        text = "\uFFFD",
+                        cursor = safeCursor
+                    }, EventId(runtimeId, invocationId, safeCursor), context.RequestAborted).ConfigureAwait(false);
+                }
                 await WriteEventAsync(context, "end", new { runtimeId, invocationId, status = selectedInvocation.Status },
                     EventId(runtimeId, invocationId, safeCursor), context.RequestAborted).ConfigureAwait(false);
                 break;

@@ -439,6 +439,9 @@ internal sealed class FactoryTelemetryReader(HostPaths paths, ProjectConfig proj
                 return new(FactoryTelemetryAvailability.Unavailable, "invalid-size", null);
             var snapshot = JsonSerializer.Deserialize<FactoryTelemetrySnapshot>(bytes, JsonOptions);
             if (snapshot is null || snapshot.SchemaVersion != 1
+                || snapshot.Project is null || snapshot.TargetRepository is null
+                || snapshot.RuntimeId is null || snapshot.RuntimeStatus is null
+                || snapshot.Delivery is null || snapshot.Merger is null
                 || !string.Equals(snapshot.Project, project.Name.Value, StringComparison.Ordinal)
                 || !PathEquals(snapshot.TargetRepository, project.TargetRepository.Path)
                 || !IsValid(snapshot))
@@ -471,29 +474,41 @@ internal sealed class FactoryTelemetryReader(HostPaths paths, ProjectConfig proj
         }
     }
 
-    private bool IsValid(FactoryTelemetrySnapshot snapshot)
+    private bool IsValid(FactoryTelemetrySnapshot? snapshot)
     {
-        if (snapshot.RuntimeId.Length is < 16 or > 64 || snapshot.Revision < 0
+        if (snapshot is null || snapshot.Project is null || snapshot.TargetRepository is null
+            || snapshot.RuntimeId is null || snapshot.RuntimeStatus is null
+            || snapshot.Delivery is null || snapshot.Merger is null
+            || snapshot.RuntimeId.Length is < 16 or > 64 || snapshot.Revision < 0
             || snapshot.Delivery.Capacity != project.Concurrency.MaxConcurrentDelivery
             || snapshot.Merger.Capacity != 1
-            || snapshot.Delivery.Slots.Count != snapshot.Delivery.Capacity
-            || snapshot.Merger.Slots.Count != snapshot.Merger.Capacity)
+            || !PathEquals(snapshot.TargetRepository, project.TargetRepository.Path))
             return false;
         if (!ValidPool(snapshot.Delivery, "delivery") || !ValidPool(snapshot.Merger, "merger")) return false;
         return snapshot.RuntimeStatus is "live" or "stopped";
     }
 
-    private static bool ValidPool(FactoryPoolObservation pool, string prefix)
+    private static bool ValidPool(FactoryPoolObservation? pool, string prefix)
     {
+        if (pool?.Slots is null || pool.Capacity < 1 || pool.Slots.Count != pool.Capacity
+            || pool.Slots.Any(slot => slot is null))
+            return false;
         var expected = Enumerable.Range(1, pool.Capacity).Select(index => $"{prefix}-{index}").ToHashSet(StringComparer.Ordinal);
-        return pool.Slots.All(slot => expected.Remove(slot.SlotId)
+        return pool.Slots.All(slot => slot.SlotId is not null && expected.Remove(slot.SlotId)
             && slot.Status is "idle" or "reserved" or "preparing" or "running" or "settling"
             && (slot.BeadId is null || SafeSegment(slot.BeadId))
             && (slot.Invocation is null || SafeInvocation(slot.Invocation)));
     }
 
-    private static bool SafeInvocation(FactoryInvocationObservation invocation)
-        => SafeSegment(invocation.BeadId)
+    private static bool SafeInvocation(FactoryInvocationObservation? invocation)
+        => invocation is not null
+            && invocation.BeadId is not null
+            && invocation.InvocationId is not null
+            && invocation.Purpose is not null
+            && invocation.Cli is not null
+            && invocation.Effort is not null
+            && invocation.Status is not null
+            && SafeSegment(invocation.BeadId)
             && invocation.InvocationId.Length is >= 25 and <= 64
             && invocation.InvocationId.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_')
             && invocation.Purpose.Length <= 48 && invocation.Cli.Length <= 48
@@ -501,12 +516,13 @@ internal sealed class FactoryTelemetryReader(HostPaths paths, ProjectConfig proj
             && invocation.Status is "running" or "completed" or "failed" or "timed_out" or "cancelled"
                 or "launch_failed" or "launch_denied" or "preparation_failed" or "unknown";
 
-    private static bool SafeSegment(string value) => value.Length is > 0 and <= 128
+    private static bool SafeSegment(string? value) => value is not null && value.Length is > 0 and <= 128
         && char.IsAsciiLetterOrDigit(value[0])
         && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
 
-    private static bool PathEquals(string left, string right)
+    private static bool PathEquals(string? left, string? right)
     {
+        if (left is null || right is null) return false;
         try { return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal); }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
     }

@@ -27,7 +27,7 @@ node smoke.mjs
 node telemetry.mjs
 ```
 
-The isolated AppHost starts two disposable native `AgentInvocationFixture` processes through Nightweaver's invocation preparer, telemetry publisher, and executor. Each writes a distinct marker and waits for AppHost cleanup to release it, so `telemetry.mjs` can verify that each accessible invocation dialog streams only its own live output before the process exits. It also checks the stale-availability presentation while retaining the last validated occupied snapshot. The fixture's temporary repository, worktree directories, logs, runtime snapshot, and processes are removed or settled when the AppHost stops.
+The isolated AppHost starts two disposable native `AgentInvocationFixture` processes through Nightweaver's invocation preparer, telemetry publisher, and executor. Each writes a distinct marker and waits for a disposable release file, so `telemetry.mjs` can inspect the live output and then observe the actual completion. The browser script interrupts the first EventSource once, verifies the reconnect's `Last-Event-ID` and duplicate-free output from the real endpoint, exercises pause/resume-follow/jump-to-latest, checks completion and retry cessation, and tests Escape/focus at a 375px viewport and at a 640 CSS-pixel viewport with device scale factor 2 (the effective layout at 200% zoom on a 1280px desktop). It also checks stale availability while retaining the last validated occupied snapshot. The script writes both release files in its `finally` block; AppHost teardown releases them again defensively, settles the native processes, and removes the disposable repository, worktrees, logs, runtime snapshot, and processes.
 
 ## Playwright mutation QA
 

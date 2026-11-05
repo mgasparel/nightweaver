@@ -87,6 +87,8 @@ internal static class Program
                 Console.Out.Flush();
                 File.WriteAllText(args[1], "waiting", new UTF8Encoding(false));
                 WaitForFile(args[2], TimeSpan.FromMinutes(30));
+                Console.WriteLine("live-marker-after-release " + (args.Length > 3 ? args[3] : "default"));
+                Console.Out.Flush();
                 return 0;
             case "live-split-utf8":
             {

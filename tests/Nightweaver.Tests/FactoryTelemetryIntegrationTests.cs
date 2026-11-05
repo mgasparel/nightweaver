@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
@@ -61,6 +62,64 @@ public sealed class FactoryTelemetryIntegrationTests
         var stale = reader.Read();
         Assert.Equal(FactoryTelemetryAvailability.Stale, stale.Availability);
         Assert.Equal("heartbeat-expired", stale.Reason);
+    }
+
+    [Fact]
+    public async Task MalformedPersistedSnapshotsAreUnavailableToReaderAndHttp()
+    {
+        using var factory = new NightweaverWebApplicationFactory();
+        using var client = factory.CreateClient();
+        var host = factory.Services.GetRequiredService<HostPaths>();
+        var project = factory.Services.GetRequiredService<ProjectConfig>();
+        var repository = new ValidatedTargetRepository(project.TargetRepository.Path, project.TargetRepository.DefaultBranch);
+        var publisher = new FactoryTelemetryPublisher(host, project, repository,
+            project.Concurrency.MaxConcurrentDelivery, ConcurrencyConfig.MergerSlots);
+        await publisher.StartAsync(TestContext.Current.CancellationToken);
+        const string beadId = "ns-null-check.1";
+        const string invocationId = "20260301T0102030000000Z-malformed";
+        publisher.Reserve("delivery", "delivery-1", beadId);
+        publisher.SetInvocation("delivery", "delivery-1", new FactoryInvocationObservation(
+            beadId, invocationId, "implementer", "codex", "gpt-test", "high", "running",
+            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(5), 1234, null));
+        var snapshot = await WaitForSnapshotAsync(factory.Services.GetRequiredService<FactoryTelemetryReader>(),
+            value => value.Delivery.Slots[0].Invocation?.InvocationId == invocationId,
+            TestContext.Current.CancellationToken);
+        var baseline = JsonSerializer.SerializeToNode(snapshot, JsonOptions)!.AsObject();
+        await publisher.DisposeAsync();
+
+        var mutations = new (string Name, Action<JsonObject> Apply)[]
+        {
+            ("null delivery", root => root["delivery"] = null),
+            ("missing delivery", root => root.Remove("delivery")),
+            ("null merger", root => root["merger"] = null),
+            ("null slots", root => root["delivery"]!["slots"] = null),
+            ("missing slots", root => root["delivery"]!.AsObject().Remove("slots")),
+            ("null slot element", root => root["delivery"]!["slots"]![0] = null),
+            ("null slot identity", root => root["delivery"]!["slots"]![0]!["slot_id"] = null),
+            ("null invocation bead", root => root["delivery"]!["slots"]![0]!["invocation"]!["bead_id"] = null),
+            ("missing invocation id", root => root["delivery"]!["slots"]![0]!["invocation"]!.AsObject().Remove("invocation_id")),
+            ("null invocation purpose", root => root["delivery"]!["slots"]![0]!["invocation"]!["purpose"] = null),
+            ("null invocation cli", root => root["delivery"]!["slots"]![0]!["invocation"]!["cli"] = null),
+            ("null invocation effort", root => root["delivery"]!["slots"]![0]!["invocation"]!["effort"] = null),
+            ("null invocation status", root => root["delivery"]!["slots"]![0]!["invocation"]!["status"] = null)
+        };
+
+        var reader = factory.Services.GetRequiredService<FactoryTelemetryReader>();
+        foreach (var (name, apply) in mutations)
+        {
+            var malformed = baseline.DeepClone().AsObject();
+            apply(malformed);
+            await File.WriteAllTextAsync(host.FactoryTelemetryPath(project.Name), malformed.ToJsonString(),
+                TestContext.Current.CancellationToken);
+            var direct = reader.Read();
+            Assert.True(direct.Availability == FactoryTelemetryAvailability.Unavailable && direct.Snapshot is null,
+                $"The reader accepted {name}.");
+            using var response = await client.GetAsync("/api/factory/state", TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(TestContext.Current.CancellationToken));
+            Assert.Equal("unavailable", json.RootElement.GetProperty("availability").GetString());
+            Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("snapshot").ValueKind);
+        }
     }
 
     [Fact]
@@ -313,6 +372,114 @@ public sealed class FactoryTelemetryIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task ExplicitCursorsAreClampedToTheBoundedReplayWindow()
+    {
+        using var factory = new NightweaverWebApplicationFactory();
+        using var client = factory.CreateClient();
+        var host = factory.Services.GetRequiredService<HostPaths>();
+        var project = factory.Services.GetRequiredService<ProjectConfig>();
+        var repository = new ValidatedTargetRepository(project.TargetRepository.Path, project.TargetRepository.DefaultBranch);
+        await using var publisher = new FactoryTelemetryPublisher(host, project, repository,
+            project.Concurrency.MaxConcurrentDelivery, ConcurrencyConfig.MergerSlots);
+        await publisher.StartAsync(TestContext.Current.CancellationToken);
+
+        const string beadId = "ns-replay.1";
+        const string slot = "delivery-1";
+        const string invocationId = "20260301T0102030000000Z-implementer";
+        const int logLength = 256 * 1024;
+        const int replayLength = 64 * 1024;
+        publisher.Reserve("delivery", slot, beadId);
+        publisher.SetInvocation("delivery", slot, new FactoryInvocationObservation(
+            beadId, invocationId, "implementer", "codex", "gpt-test", "high", "running",
+            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(5), 1234, null));
+        var logPath = Path.Combine(host.LogsRoot(project.Name), beadId, invocationId + ".log");
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+        await File.WriteAllTextAsync(logPath, new string('x', logLength), new UTF8Encoding(false),
+            TestContext.Current.CancellationToken);
+        publisher.FinishInvocation("delivery", slot, invocationId, "completed", 0);
+        var snapshot = await WaitForSnapshotAsync(factory.Services.GetRequiredService<FactoryTelemetryReader>(),
+            value => value.Delivery.Slots[0].Invocation?.Status == "completed",
+            TestContext.Current.CancellationToken);
+        var url = StreamUrl(snapshot.RuntimeId, slot, invocationId) + $"&cursor=0";
+        var requests = new[] { new HttpRequestMessage(HttpMethod.Get, url) };
+        var headerRequest = new HttpRequestMessage(HttpMethod.Get, url + $"&cursor={logLength}");
+        headerRequest.Headers.TryAddWithoutValidation("Last-Event-ID", $"{snapshot.RuntimeId}.{invocationId}.0");
+        requests = [requests[0], headerRequest];
+        foreach (var request in requests)
+        {
+            using (request)
+            using (var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
+                       TestContext.Current.CancellationToken))
+            {
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+                deadline.CancelAfter(TimeSpan.FromSeconds(10));
+                var events = await ReadAllEventsAsync(response, deadline.Token);
+                var reset = Assert.Single(events, item => item.Name == "reset");
+                Assert.Equal(logLength - replayLength, reset.Data.GetProperty("cursor").GetInt64());
+                var logEvents = events.Where(item => item.Name == "log").ToArray();
+                Assert.Equal(replayLength, logEvents.Sum(item => Encoding.UTF8.GetByteCount(item.Data.GetProperty("text").GetString()!)));
+                Assert.Equal(logLength, ParseCursor(logEvents[^1].Id));
+                Assert.Equal("end", events[^1].Name);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TerminalUtf8BacklogDrainsAcrossChunkBoundary(bool stoppedRuntime)
+    {
+        using var factory = new NightweaverWebApplicationFactory();
+        using var client = factory.CreateClient();
+        var host = factory.Services.GetRequiredService<HostPaths>();
+        var project = factory.Services.GetRequiredService<ProjectConfig>();
+        var repository = new ValidatedTargetRepository(project.TargetRepository.Path, project.TargetRepository.DefaultBranch);
+        var publisher = new FactoryTelemetryPublisher(host, project, repository,
+            project.Concurrency.MaxConcurrentDelivery, ConcurrencyConfig.MergerSlots);
+        await publisher.StartAsync(TestContext.Current.CancellationToken);
+
+        const string beadId = "ns-terminal-utf8.1";
+        const string slot = "delivery-1";
+        const string invocationId = "20260301T0102030000000Z-implementer";
+        var expected = new string('x', 16383) + "€-suffix\n";
+        publisher.Reserve("delivery", slot, beadId);
+        publisher.SetInvocation("delivery", slot, new FactoryInvocationObservation(
+            beadId, invocationId, "implementer", "codex", "gpt-test", "high", "running",
+            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(5), 1234, null));
+        var logPath = Path.Combine(host.LogsRoot(project.Name), beadId, invocationId + ".log");
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+        await File.WriteAllTextAsync(logPath, expected, new UTF8Encoding(false), TestContext.Current.CancellationToken);
+        if (stoppedRuntime) await publisher.DisposeAsync();
+        else
+        {
+            publisher.FinishInvocation("delivery", slot, invocationId, "completed", 0);
+            await WaitForSnapshotAsync(factory.Services.GetRequiredService<FactoryTelemetryReader>(),
+                value => value.Delivery.Slots[0].Invocation?.Status == "completed",
+                TestContext.Current.CancellationToken);
+        }
+
+        try
+        {
+            var snapshot = Assert.IsType<FactoryTelemetrySnapshot>(
+                factory.Services.GetRequiredService<FactoryTelemetryReader>().Read().Snapshot);
+            using var response = await client.GetAsync(StreamUrl(snapshot.RuntimeId, slot, invocationId),
+                HttpCompletionOption.ResponseHeadersRead, TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(10));
+            var events = await ReadAllEventsAsync(response, deadline.Token);
+            var logEvents = events.Where(item => item.Name == "log").ToArray();
+            var actual = string.Concat(logEvents.Select(item => item.Data.GetProperty("text").GetString()));
+            Assert.Equal(expected, actual);
+            Assert.DoesNotContain("\uFFFD", actual, StringComparison.Ordinal);
+            Assert.Equal(Encoding.UTF8.GetByteCount(expected), ParseCursor(logEvents[^1].Id));
+            Assert.Equal("end", events[^1].Name);
+        }
+        finally { await publisher.DisposeAsync(); }
+    }
+
     private static async Task<PreparedAgentInvocation> PrepareFixtureInvocationAsync(AgentInvocationPreparer preparer,
         HostPaths host, ProjectConfig project, FactoryTelemetryPublisher publisher,
         string slot, string beadId)
@@ -405,6 +572,37 @@ public sealed class FactoryTelemetryIntegrationTests
             else if (line.StartsWith("id: ", StringComparison.Ordinal)) eventId = line[4..];
             else if (line.StartsWith("data: ", StringComparison.Ordinal)) data.Append(line[6..]);
         }
+    }
+
+    private sealed record CapturedSseEvent(string Name, string Id, JsonElement Data);
+
+    private static async Task<List<CapturedSseEvent>> ReadAllEventsAsync(HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        await using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var reader = new StreamReader(body, Encoding.UTF8);
+        var events = new List<CapturedSseEvent>();
+        var name = string.Empty;
+        var id = string.Empty;
+        var data = new StringBuilder();
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        {
+            if (line.Length == 0)
+            {
+                if (name.Length > 0)
+                {
+                    using var document = JsonDocument.Parse(data.ToString());
+                    events.Add(new(name, id, document.RootElement.Clone()));
+                }
+                name = string.Empty;
+                id = string.Empty;
+                data.Clear();
+            }
+            else if (line.StartsWith("event: ", StringComparison.Ordinal)) name = line[7..];
+            else if (line.StartsWith("id: ", StringComparison.Ordinal)) id = line[4..];
+            else if (line.StartsWith("data: ", StringComparison.Ordinal)) data.Append(line[6..]);
+        }
+        return events;
     }
 
     private static long ParseCursor(string eventId)

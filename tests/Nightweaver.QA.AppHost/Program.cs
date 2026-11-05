@@ -173,7 +173,7 @@ static async Task<AgentExecutionResult> RunTelemetryFixtureAsync(HostPaths paths
     var prepared = await preparer.PrepareAsync(paths, project, AgentRole.Implementer, dispatch, worktree, cancellationToken);
     var fixtureInvocation = new PreparedAgentInvocation("dotnet",
         [typeof(FixtureMarker).Assembly.Location, "live-marker", readyFile, releaseFile, label],
-        prepared.WorkingDirectory, prepared.StandardInput, prepared.EnvironmentOverrides, TimeSpan.FromMinutes(2),
+        prepared.WorkingDirectory, prepared.StandardInput, prepared.EnvironmentOverrides, TimeSpan.FromMinutes(30),
         prepared.InvocationId, prepared.TemporaryDirectory, prepared.LogFilePath, prepared.Purpose,
         prepared.Stage, prepared.RepairCycles, prepared.MaxRepairCycles, "QA fixture", "medium");
     return await AgentInvocationExecutor.ExecuteAsync(paths, project.Name, fixtureInvocation, cancellationToken);
