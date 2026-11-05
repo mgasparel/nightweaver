@@ -90,18 +90,32 @@ public sealed class MergerProductEligibilityTests
     }
 
     [Theory]
-    [InlineData("needs-human")]
-    [InlineData("product-decision-required")]
-    public void PausedProductNeverBecomesEligibleForAutomaticClosure(string pauseLabel)
+    [InlineData("needs-human", false)]
+    [InlineData("product-decision-required", true)]
+    public void PausedOrContradictoryProductNeverBecomesEligibleForAutomaticClosure(
+        string pauseLabel, bool contradictory)
     {
         var inventory = Inventory(Bead(ProductId, "open", "feature", "planned", pauseLabel),
             Bead(TaskId, "closed", "task"));
         var result = Evaluate(inventory, [Edge(TaskId, ProductId, "discovered-from")],
             [Edge(TaskId, ProductId, "discovered-from")]);
 
-        Assert.Equal(MergerProductCheck.PausedProduct, result.Check);
+        Assert.Equal(contradictory ? MergerProductCheck.InconsistentWorkflowState : MergerProductCheck.PausedProduct, result.Check);
     }
 
+    [Theory]
+    [InlineData("planned", "stage:implement")]
+    [InlineData("planned", "stage:implement", "stage:merge")]
+    [InlineData("planned", "stage:unknown")]
+    public void ContradictoryOrMalformedProductWorkflowIsNeverEligible(params string[] labels)
+    {
+        var inventory = Inventory(Bead(ProductId, "open", "feature", labels),
+            Bead(TaskId, "closed", "task"));
+        var result = Evaluate(inventory, [Edge(TaskId, ProductId, "discovered-from")],
+            [Edge(TaskId, ProductId, "discovered-from")]);
+
+        Assert.Equal(MergerProductCheck.InconsistentWorkflowState, result.Check);
+    }
     private static (MergerProductCheck Check, string? ProductId) Evaluate(BeadsInventory inventory,
         IReadOnlyList<BeadDependency> taskEdges, IReadOnlyList<BeadDependency> productEdges) =>
         MergerProductEligibility.Evaluate(TaskId, taskEdges, inventory, productEdges);

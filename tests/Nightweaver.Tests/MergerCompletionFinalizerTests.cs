@@ -135,10 +135,8 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         Assert.Empty(target.RunTarget("git", ["branch", "--list", $"nightweaver/{beadId}"]));
     }
 
-    [Theory]
-    [InlineData("needs-human")]
-    [InlineData("product-decision-required")]
-    public async Task ProductPauseAddedAfterInitialReadPreventsAutoClosure(string pauseLabel)
+    [Fact]
+    public async Task ContradictoryStageAddedAfterInitialReadPreventsAutoClosure()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires native Windows CLI fixtures.");
         using var target = new AgentStageTargetFixture();
@@ -160,7 +158,7 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
                 && request.Arguments.Contains("up", StringComparer.Ordinal))
             {
                 pauseAdded = true;
-                target.RunTarget("bd", ["update", productId, "--add-label", pauseLabel]);
+                target.RunTarget("bd", ["update", productId, "--add-label", "stage:implement"]);
             }
             return await systemRunner.RunAsync(request, cancellationToken);
         });
@@ -174,7 +172,7 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         Assert.True(result.Receipt!.CleanupSucceeded);
         Assert.True(result.Receipt.ProductCompletionSucceeded);
         Assert.Equal("open", target.ReadBead(productId).Status);
-        Assert.Contains(pauseLabel, target.ReadBead(productId).Labels);
+        Assert.Contains("stage:implement", target.ReadBead(productId).Labels);
         Assert.False(Directory.Exists(worktree.Path));
     }
 

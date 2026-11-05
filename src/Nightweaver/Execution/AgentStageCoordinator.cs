@@ -30,6 +30,7 @@ internal sealed record AgentStageSession(
 /// <summary>Coordinates exactly one provision, preparation, execution, and post-exit verification for a Bead stage.</summary>
 internal sealed class AgentStageCoordinator
 {
+    private readonly IProcessRunner processRunner;
     private readonly BeadsReader beadsReader;
     private readonly ProvisionAgentWorktree provision;
     private readonly PrepareAgentInvocation prepare;
@@ -42,6 +43,7 @@ internal sealed class AgentStageCoordinator
         PrepareAgentInvocation? prepare = null,
         ExecuteAgentInvocation? execute = null)
     {
+        this.processRunner = processRunner;
         beadsReader = new BeadsReader(processRunner);
         this.provision = provision ?? new WorktreeProvisioner(processRunner).ProvisionAsync;
         this.prepare = prepare ?? new AgentInvocationPreparer().PrepareAsync;
@@ -81,6 +83,21 @@ internal sealed class AgentStageCoordinator
                 ? "Classifier is not a lifecycle role for single-stage execution."
                 : $"Unknown Agent role '{role}'.");
 
+        var sessionRepository = repository;
+        if (role == AgentRole.Merger)
+        {
+            var originResult = await processRunner.RunAsync(
+                GitCommand.Create(["config", "--get", "remote.origin.url"], repository.Path), cancellationToken)
+                .ConfigureAwait(false);
+            var originUrl = originResult.ExitCode == 0 ? originResult.StandardOutput.Trim() : null;
+            if (string.IsNullOrWhiteSpace(originUrl)) originUrl = null;
+            sessionRepository = repository with
+            {
+                OriginUrl = originUrl,
+                OriginRepository = GitHubRepositoryIdentity.ParseRemoteUrl(originUrl)
+            };
+        }
+
         var initial = await ReadRequestedStateAsync(repository, beadId, cancellationToken);
         EnsureValidInput(role, initial.State);
         if (expectedAssignee is not null) EnsureExpectedClaim(initial, expectedAssignee, requireInProgress: true);
@@ -99,7 +116,7 @@ internal sealed class AgentStageCoordinator
             throw new AgentStageInputException($"Bead '{beadId}' workflow state changed during provisioning; refusing to dispatch a stale stage.");
 
         _ = ParseProvisionedHead(worktree.HeadSha);
-        return new AgentStageSession(hostPaths, project, repository, beadId, role, purpose, worktree,
+        return new AgentStageSession(hostPaths, project, sessionRepository, beadId, role, purpose, worktree,
             fresh.State, fresh.Bead.Assignee,
             new AgentDispatchContext(fresh.State.Id, fresh.State.IssueType, fresh.State.Stage, fresh.State.RepairCycles),
             worktree.WasDirty);

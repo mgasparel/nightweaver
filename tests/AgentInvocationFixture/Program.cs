@@ -782,7 +782,7 @@ internal static class Program
                 Run("git", ["commit", "-m", "fixture verified Merger change"]);
                 head = Run("git", ["rev-parse", "HEAD"]).Trim();
                 Run("git", ["push", "--force-with-lease", "origin", $"HEAD:refs/heads/{branch}"]);
-                var pullRequest = $"https://example.invalid/pull/{Uri.EscapeDataString(branch)}";
+                var pullRequest = "https://github.com/nightweaver-fixture/target/pull/123";
                 var beforeChecks = ReadPullRequest(pullRequest);
                 if (beforeChecks.GetProperty("state").GetString() != "OPEN"
                     || beforeChecks.GetProperty("headRefOid").GetString() != head)
@@ -812,7 +812,7 @@ internal static class Program
                 Run("git", ["commit", "-m", "fixture Merger change rejected by checks"]);
                 var head = Run("git", ["rev-parse", "HEAD"]).Trim();
                 Run("git", ["push", "--force-with-lease", "origin", $"HEAD:refs/heads/{branch}"]);
-                var pullRequest = $"https://example.invalid/pull/{Uri.EscapeDataString(branch)}";
+                var pullRequest = "https://github.com/nightweaver-fixture/target/pull/123";
                 var beforeChecks = ReadPullRequest(pullRequest);
                 if (beforeChecks.GetProperty("state").GetString() != "OPEN"
                     || beforeChecks.GetProperty("headRefOid").GetString() != head)

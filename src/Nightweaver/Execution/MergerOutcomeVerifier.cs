@@ -94,6 +94,13 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         var evidence = evidenceRows[0];
         if (!string.Equals(evidence.CheckedHead, verifiedHead, StringComparison.OrdinalIgnoreCase))
             return ApprovalFailed("The merge evidence does not identify the retained current HEAD.");
+        var expectedRepository = session.Repository.OriginRepository;
+        var expectedOriginUrl = session.Repository.OriginUrl;
+        var pullRequestIdentity = GitHubRepositoryIdentity.ParsePullRequestUrl(evidence.PullRequest);
+        if (expectedRepository is null || string.IsNullOrWhiteSpace(expectedOriginUrl))
+            return ApprovalFailed("The Target Repository has no validated hosted origin identity for PR verification.");
+        if (pullRequestIdentity is null || !expectedRepository.Matches(pullRequestIdentity.Repository))
+            return ApprovalFailed("The current invocation PR URL does not identify the validated Target Repository.");
 
         try
         {
@@ -120,13 +127,16 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                     return ApprovalFailed("The retained worktree still contains an unfinished rebase.");
             }
 
-            var pr = await ReadMergedPullRequestAsync(session.Worktree.Path, evidence.PullRequest, cancellationToken).ConfigureAwait(false);
-            if (!MatchesMergedPullRequest(pr, evidence.PullRequest, expectedBranch, verifiedHead,
+            if (!await OriginMatchesValidatedTargetAsync(session.Repository, expectedRepository, cancellationToken).ConfigureAwait(false))
+                return ApprovalFailed("The Target Repository origin changed from its validated repository identity.");
+            var pr = await ReadMergedPullRequestAsync(session.Worktree.Path, pullRequestIdentity, cancellationToken).ConfigureAwait(false);
+            if (!MatchesMergedPullRequest(pr, pullRequestIdentity, expectedRepository, expectedBranch, verifiedHead,
                     session.Project.TargetRepository.DefaultBranch, evidence.MergeCommit))
-                return ApprovalFailed("The pull request identity, configured base, current head, merged state, or merge commit does not match this invocation.");
+                return ApprovalFailed("The pull request or base repository identity, configured base, current head, merged state, or merge commit does not match this invocation.");
 
             var checks = await RunJsonCommandAsync("gh",
-                ["pr", "checks", evidence.PullRequest, "--required", "--json", "name,state,bucket"],
+                ["pr", "checks", pullRequestIdentity.Number.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    "--repo", expectedRepository.CliRepository, "--required", "--json", "name,state,bucket"],
                 session.Worktree.Path, cancellationToken).ConfigureAwait(false);
             using (var checksDocument = JsonDocument.Parse(checks.StandardOutput, new JsonDocumentOptions { MaxDepth = 8 }))
             {
@@ -139,18 +149,20 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                     return ApprovalFailed("Required pull request checks were missing, pending, or not passing for the current head.");
             }
 
-            var afterChecks = await ReadMergedPullRequestAsync(session.Worktree.Path, evidence.PullRequest, cancellationToken)
+            var afterChecks = await ReadMergedPullRequestAsync(session.Worktree.Path, pullRequestIdentity, cancellationToken)
                 .ConfigureAwait(false);
-            if (!MatchesMergedPullRequest(afterChecks, evidence.PullRequest, expectedBranch, verifiedHead,
+            if (!MatchesMergedPullRequest(afterChecks, pullRequestIdentity, expectedRepository, expectedBranch, verifiedHead,
                     session.Project.TargetRepository.DefaultBranch, evidence.MergeCommit))
-                return ApprovalFailed("The pull request identity or merged head changed while required checks were being observed.");
+                return ApprovalFailed("The pull request or base repository identity or merged head changed while required checks were being observed.");
+            if (!await OriginMatchesValidatedTargetAsync(session.Repository, expectedRepository, cancellationToken).ConfigureAwait(false))
+                return ApprovalFailed("The Target Repository origin changed while PR checks were being verified.");
 
             var defaultBranch = session.Project.TargetRepository.DefaultBranch;
             var checkedBranch = await RunGitAsync(["check-ref-format", $"refs/heads/{defaultBranch}"],
                 session.Worktree.Path, cancellationToken).ConfigureAwait(false);
             if (checkedBranch.ExitCode != 0)
                 return ApprovalFailed("The configured default branch is not a valid Git branch name.");
-            var fetch = await RunGitAsyncAllowFailure(["fetch", "origin", defaultBranch], session.Worktree.Path,
+            var fetch = await RunGitAsyncAllowFailure(["fetch", expectedOriginUrl, defaultBranch], session.Worktree.Path,
                 cancellationToken).ConfigureAwait(false);
             if (fetch.ExitCode != 0)
                 return ApprovalFailed("The configured origin default branch could not be freshly fetched for merge confirmation.");
@@ -158,8 +170,10 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                 session.Worktree.Path, cancellationToken).ConfigureAwait(false);
             if (reachable.ExitCode != 0)
                 return ApprovalFailed("The reported merge commit is not reachable from the freshly fetched configured default branch.");
+            if (!await OriginMatchesValidatedTargetAsync(session.Repository, expectedRepository, cancellationToken).ConfigureAwait(false))
+                return ApprovalFailed("The Target Repository origin changed during merge verification.");
 
-            return new(true, "Verified current-invocation PR, required checks, merged commit, and configured default-branch reachability.",
+            return new(true, "Verified current-invocation PR, target-repository required checks, merged commit, and configured default-branch reachability.",
                 new(evidence.PullRequest, evidence.CheckedHead, evidence.MergeCommit, evidence.MergeMethod, evidence.Comment.Id));
         }
         catch (OperationCanceledException) { throw; }
@@ -169,12 +183,14 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         }
     }
 
-    private async Task<MergedPullRequestObservation> ReadMergedPullRequestAsync(string worktreePath, string pullRequest,
-        CancellationToken cancellationToken)
+    private async Task<MergedPullRequestObservation> ReadMergedPullRequestAsync(string worktreePath,
+        GitHubPullRequestIdentity pullRequest, CancellationToken cancellationToken)
     {
-        var result = await RunJsonCommandAsync("gh", ["pr", "view", pullRequest, "--json",
-            "state,baseRefName,headRefName,headRefOid,url,mergedAt,mergeCommit"], worktreePath, cancellationToken)
-            .ConfigureAwait(false);
+        var number = pullRequest.Number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var result = await RunJsonCommandAsync("gh", ["pr", "view", number, "--repo",
+            pullRequest.Repository.CliRepository, "--json",
+            "state,baseRefName,headRefName,headRefOid,url,baseRepository,mergedAt,mergeCommit"],
+            worktreePath, cancellationToken).ConfigureAwait(false);
         using var document = JsonDocument.Parse(result.StandardOutput, new JsonDocumentOptions { MaxDepth = 8 });
         var root = document.RootElement;
         if (root.ValueKind != JsonValueKind.Object || !HasUniqueNames(root)
@@ -183,22 +199,44 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
             || !ReadString(root, "headRefName", out var headBranch)
             || !ReadString(root, "headRefOid", out var head)
             || !ReadString(root, "url", out var url)
+            || !root.TryGetProperty("baseRepository", out var baseRepository)
+            || baseRepository.ValueKind != JsonValueKind.Object || !HasUniqueNames(baseRepository)
+            || !ReadString(baseRepository, "nameWithOwner", out var baseRepositoryName)
+            || !ReadString(baseRepository, "url", out var baseRepositoryUrl)
             || !ReadString(root, "mergedAt", out var mergedAt)
             || !root.TryGetProperty("mergeCommit", out var mergeCommit) || mergeCommit.ValueKind != JsonValueKind.Object
             || !HasUniqueNames(mergeCommit) || !ReadString(mergeCommit, "oid", out var mergeCommitOid))
-            return new(null, null, null, null, null, null, null);
-        return new(state, baseBranch, headBranch, head, url, mergedAt, mergeCommitOid);
+            return new(null, null, null, null, null, null, null, null, null);
+        return new(state, baseBranch, headBranch, head, url, baseRepositoryName, baseRepositoryUrl,
+            mergedAt, mergeCommitOid);
     }
 
-    private static bool MatchesMergedPullRequest(MergedPullRequestObservation pullRequest, string expectedUrl,
-        string expectedBranch, string expectedHead, string expectedBase, string expectedMergeCommit) =>
-        pullRequest.State == "MERGED"
-        && string.Equals(pullRequest.BaseBranch, expectedBase, StringComparison.Ordinal)
-        && string.Equals(pullRequest.HeadBranch, expectedBranch, StringComparison.Ordinal)
-        && string.Equals(pullRequest.Head, expectedHead, StringComparison.OrdinalIgnoreCase)
-        && string.Equals(pullRequest.Url, expectedUrl, StringComparison.Ordinal)
-        && !string.IsNullOrWhiteSpace(pullRequest.MergedAt)
-        && string.Equals(pullRequest.MergeCommit, expectedMergeCommit, StringComparison.OrdinalIgnoreCase);
+    private static bool MatchesMergedPullRequest(MergedPullRequestObservation pullRequest,
+        GitHubPullRequestIdentity expectedPullRequest, GitHubRepositoryIdentity expectedRepository,
+        string expectedBranch, string expectedHead, string expectedBase, string expectedMergeCommit)
+    {
+        var actualPullRequest = GitHubRepositoryIdentity.ParsePullRequestUrl(pullRequest.Url);
+        var actualBaseRepository = GitHubRepositoryIdentity.ParseRemoteUrl(pullRequest.BaseRepositoryUrl);
+        return pullRequest.State == "MERGED"
+            && string.Equals(pullRequest.BaseBranch, expectedBase, StringComparison.Ordinal)
+            && string.Equals(pullRequest.HeadBranch, expectedBranch, StringComparison.Ordinal)
+            && string.Equals(pullRequest.Head, expectedHead, StringComparison.OrdinalIgnoreCase)
+            && actualPullRequest is not null && expectedRepository.Matches(actualPullRequest.Repository)
+            && actualPullRequest.Number == expectedPullRequest.Number
+            && string.Equals(pullRequest.BaseRepositoryName, expectedRepository.FullName, StringComparison.OrdinalIgnoreCase)
+            && expectedRepository.Matches(actualBaseRepository)
+            && !string.IsNullOrWhiteSpace(pullRequest.MergedAt)
+            && string.Equals(pullRequest.MergeCommit, expectedMergeCommit, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<bool> OriginMatchesValidatedTargetAsync(ValidatedTargetRepository repository,
+        GitHubRepositoryIdentity expectedRepository, CancellationToken cancellationToken)
+    {
+        var currentOrigin = await RunGitAsyncAllowFailure(["config", "--get", "remote.origin.url"], repository.Path,
+            cancellationToken).ConfigureAwait(false);
+        if (currentOrigin.ExitCode != 0) return false;
+        return expectedRepository.Matches(GitHubRepositoryIdentity.ParseRemoteUrl(currentOrigin.StandardOutput.Trim()));
+    }
 
     internal static (string PullRequest, string CheckedHead, string MergeMethod, string MergeCommit)? ParseMergeEvidence(string text)
     {
@@ -223,7 +261,8 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
     private static MergerApprovalVerification ApprovalFailed(string diagnostic) => new(false, diagnostic);
 
     private sealed record MergedPullRequestObservation(string? State, string? BaseBranch, string? HeadBranch,
-        string? Head, string? Url, string? MergedAt, string? MergeCommit);
+        string? Head, string? Url, string? BaseRepositoryName, string? BaseRepositoryUrl,
+        string? MergedAt, string? MergeCommit);
 
     public async Task<MergerRejectionVerification> VerifyRejectionAsync(
         HostPaths hostPaths,

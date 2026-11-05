@@ -988,6 +988,9 @@ public abstract class AgentStageIntegrationTestSupport
 
     private protected sealed class AgentStageTargetFixture : IDisposable
     {
+        internal const string FixtureOriginUrl = "https://github.com/nightweaver-fixture/target.git";
+        internal const string FixtureRepositoryName = "nightweaver-fixture/target";
+        internal const string FixturePullRequestUrl = "https://github.com/nightweaver-fixture/target/pull/123";
         private readonly TempDirectory temp = new();
         private long nextRun;
         private static readonly Lazy<AgentStageTargetFixture> Template = new(() =>
@@ -1121,6 +1124,14 @@ public abstract class AgentStageIntegrationTestSupport
                 TargetPath, BeadsEnvironment);
             if (result.Length > 0)
                 throw new InvalidOperationException($"Console Ctrl+Break helper failed for process {processId}: {result}");
+        }
+
+        internal void ConfigureHostedFixtureOriginWithLocalRewrite()
+        {
+            var localOriginUrl = OriginPath.Replace('\\', '/');
+            Run("git", ["config", "remote.origin.url", FixtureOriginUrl], TargetPath, BeadsEnvironment);
+            Run("git", ["config", "remote.origin.pushurl", localOriginUrl], TargetPath, BeadsEnvironment);
+            Run("git", ["config", $"url.{localOriginUrl}.insteadOf", FixtureOriginUrl], TargetPath, BeadsEnvironment);
         }
 
         internal async Task<ProcessResult> RunWithFixturePullRequestAsync(IProcessRunner inner, ProcessRequest request,
@@ -1257,7 +1268,12 @@ public abstract class AgentStageIntegrationTestSupport
                 baseRefName = "main",
                 headRefName = branch,
                 headRefOid = head,
-                url = $"https://example.invalid/pull/{Uri.EscapeDataString(branch)}",
+                url = FixturePullRequestUrl,
+                baseRepository = new
+                {
+                    nameWithOwner = FixtureRepositoryName,
+                    url = "https://github.com/nightweaver-fixture/target"
+                },
                 mergedAt = merged ? "2026-11-04T20:00:00Z" : null,
                 mergeCommit = merged ? new { oid = remoteMain } : null
             });

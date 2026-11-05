@@ -13,6 +13,7 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
+        target.ConfigureHostedFixtureOriginWithLocalRewrite();
         var beadId = target.CreateBead("Native Merger pool closure", "task", "stage:merge");
         var productId = target.CreateBead("Native planned Product completion", "feature", "planned");
         target.RunTarget("bd", ["dep", "add", beadId, productId, "--type", "discovered-from"]);
@@ -105,7 +106,7 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
 
         using (var comments = JsonDocument.Parse(target.ReadComments(beadId)))
             Assert.Contains(StringValues(comments.RootElement), value => value.Contains(
-                $"nightweaver-merge-v1 pull_request=https://example.invalid/pull/{Uri.EscapeDataString(originalBranch)} checked_head={remoteMain} required_checks=passed merge_method=squash merge_commit={remoteMain}",
+                $"nightweaver-merge-v1 pull_request={AgentStageTargetFixture.FixturePullRequestUrl} checked_head={remoteMain} required_checks=passed merge_method=squash merge_commit={remoteMain}",
                 StringComparison.Ordinal));
 
         var ghCommands = File.ReadAllLines(ghLog).Select(line => JsonSerializer.Deserialize<string[]>(line)!).ToArray();
@@ -116,6 +117,19 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         Assert.Contains("--watch", ghCommands[checksIndex]);
         Assert.Contains("--squash", ghCommands[mergeIndex]);
         Assert.Contains("--delete-branch", ghCommands[mergeIndex]);
+        Assert.Contains(processRunner.Requests, request => request.FileName == "git"
+            && request.Arguments.SequenceEqual(["config", "--get", "remote.origin.url"], StringComparer.Ordinal)
+            && request.WorkingDirectory == target.Path);
+        var verifierViews = processRunner.Requests.Where(request => request.FileName == "gh"
+            && request.Arguments.Count >= 2 && request.Arguments[0] == "pr" && request.Arguments[1] == "view"
+            && request.Arguments.Contains("--repo", StringComparer.Ordinal)).ToArray();
+        Assert.Equal(2, verifierViews.Length);
+        Assert.All(verifierViews, request => Assert.Equal("github.com/nightweaver-fixture/target",
+            request.Arguments[request.Arguments.ToList().IndexOf("--repo") + 1]));
+        Assert.Contains(processRunner.Requests, request => request.FileName == "gh"
+            && request.Arguments.Count >= 2 && request.Arguments[0] == "pr" && request.Arguments[1] == "checks"
+            && request.Arguments.Contains("--required", StringComparer.Ordinal)
+            && request.Arguments.Contains("github.com/nightweaver-fixture/target", StringComparer.Ordinal));
         Assert.True(File.Exists(pidFile));
         AssertFixtureExited(pidFile);
         var claimWrites = AgentStageTargetFixture.ClaimWrites(processRunner.Requests, beadId);

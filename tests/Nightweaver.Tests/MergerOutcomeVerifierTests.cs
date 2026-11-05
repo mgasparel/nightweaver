@@ -245,6 +245,59 @@ public sealed class MergerOutcomeVerifierTests
         Assert.Equal(2, fixture.Runner.PullRequestViewCount);
         Assert.Equal(1, fixture.Runner.RequiredChecksCount);
         Assert.True(fixture.Runner.FetchedDefaultBranch);
+        Assert.Equal("github.com/example/project", fixture.Runner.PullRequestRepository);
+        Assert.Equal("github.com/example/project", fixture.Runner.ChecksRepository);
+    }
+
+    [Fact]
+    public async Task RejectsApprovalWhenPRBaseRepositoryDiffersDespiteMatchingHeadAndMergeCommit()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.Runner.ApprovalMode = true;
+        fixture.Runner.CheckFailed = false;
+        fixture.Runner.BaseRepositoryName = "attacker/other";
+        fixture.Runner.BaseRepositoryUrl = "https://github.com/attacker/other";
+        fixture.SetMergeEvidence();
+
+        var result = await fixture.VerifyApprovalAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("base repository identity", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Equal(1, fixture.Runner.PullRequestViewCount);
+        Assert.Equal(0, fixture.Runner.RequiredChecksCount);
+        Assert.Equal("github.com/example/project", fixture.Runner.PullRequestRepository);
+    }
+
+    [Fact]
+    public async Task RejectsEvidenceForAForeignRepositoryPRUrlBeforeQueryingGitHub()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.Runner.ApprovalMode = true;
+        fixture.SetMergeEvidence(pullRequest: "https://github.com/attacker/other/pull/123");
+
+        var result = await fixture.VerifyApprovalAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("does not identify the validated Target Repository", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Equal(0, fixture.Runner.PullRequestViewCount);
+        Assert.Equal(0, fixture.Runner.RequiredChecksCount);
+    }
+
+    [Fact]
+    public async Task RejectsTargetOriginChangedDuringRequiredCheckVerification()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.Runner.ApprovalMode = true;
+        fixture.Runner.CheckFailed = false;
+        fixture.Runner.OriginUrlAfterChecks = "https://github.com/attacker/other.git";
+        fixture.SetMergeEvidence();
+
+        var result = await fixture.VerifyApprovalAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("origin changed while PR checks", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Equal(1, fixture.Runner.RequiredChecksCount);
+        Assert.False(fixture.Runner.FetchedDefaultBranch);
     }
 
     [Fact]
@@ -360,14 +413,18 @@ public sealed class MergerOutcomeVerifierTests
                 new(1, 1, 1), new(3, 1), new(AgentCli.Codex, null, "low", 1),
                 new RoleSettings(AgentRoles.All.ToDictionary(role => role,
                     _ => new AgentSettings(AgentCli.Codex, null, "low", 1))));
-            repository = new ValidatedTargetRepository(temp.CreateDirectory("target"), "main");
+            repository = new ValidatedTargetRepository(temp.CreateDirectory("target"), "main")
+            {
+                OriginUrl = "https://github.com/example/project.git",
+                OriginRepository = new("github.com", "example", "project")
+            };
             var state = new BeadWorkflowState(BeadId, "task", "in_progress", "stage:merge", false, false, false, 0);
             session = new AgentStageSession(host, project, repository, BeadId, AgentRole.Merger,
                 WorktreePurpose.Delivery, new ProvisionedWorktree(Worktree, Head), state, Owner,
                 new AgentDispatchContext(BeadId, "task", "stage:merge", 0), PreserveInheritedChanges: true);
 
             var branch = $"nightweaver/{BeadId}";
-            PullRequest = $"https://example.invalid/pull/{Uri.EscapeDataString(branch)}";
+            PullRequest = "https://github.com/example/project/pull/123";
             var logPath = Path.Combine(host.LogsRoot(project.Name), BeadId, invocationId + ".log");
             Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
             var observations = new AgentStageObservations(state, state, Owner, Owner, AgentExecutionStatus.Exited,
@@ -467,6 +524,12 @@ public sealed class MergerOutcomeVerifierTests
     private sealed class VerifierProcessRunner(string head, string branch, string pullRequest) : IProcessRunner
     {
         private readonly SystemProcessRunner system = new();
+        internal string OriginUrl { get; set; } = "https://github.com/example/project.git";
+        internal string? OriginUrlAfterChecks { get; set; }
+        internal string BaseRepositoryName { get; set; } = "example/project";
+        internal string BaseRepositoryUrl { get; set; } = "https://github.com/example/project";
+        internal string? PullRequestRepository { get; private set; }
+        internal string? ChecksRepository { get; private set; }
         internal string Status { get; set; } = "in_progress";
         internal string Assignee { get; set; } = VerifierFixture.Owner;
         internal string Stage { get; set; } = "stage:merge";
@@ -484,7 +547,14 @@ public sealed class MergerOutcomeVerifierTests
         {
             if (request.FileName == "git")
             {
-                if (request.Arguments.SequenceEqual(["fetch", "origin", "main"], StringComparer.Ordinal))
+                if (request.Arguments.SequenceEqual(["config", "--get", "remote.origin.url"], StringComparer.Ordinal))
+                {
+                    var origin = OriginUrlAfterChecks is not null && RequiredChecksCount > 0
+                        ? OriginUrlAfterChecks : OriginUrl;
+                    return Task.FromResult(new ProcessResult(0, origin, string.Empty));
+                }
+                if (request.Arguments.Count == 3 && request.Arguments[0] == "fetch"
+                    && request.Arguments[1] == OriginUrl && request.Arguments[2] == "main")
                 {
                     FetchedDefaultBranch = true;
                     return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
@@ -509,6 +579,9 @@ public sealed class MergerOutcomeVerifierTests
                 && request.Arguments[0] == "pr" && request.Arguments[1] == "view")
             {
                 PullRequestViewCount++;
+                var repoIndex = request.Arguments.ToList().IndexOf("--repo");
+                PullRequestRepository = repoIndex >= 0 && repoIndex + 1 < request.Arguments.Count
+                    ? request.Arguments[repoIndex + 1] : null;
                 return Task.FromResult(new ProcessResult(0, JsonSerializer.Serialize(new
                 {
                     state = ApprovalMode ? "MERGED" : "OPEN",
@@ -516,6 +589,7 @@ public sealed class MergerOutcomeVerifierTests
                     headRefName = branch,
                     headRefOid = AdvertisedHead,
                     url = pullRequest,
+                    baseRepository = new { nameWithOwner = BaseRepositoryName, url = BaseRepositoryUrl },
                     mergedAt = ApprovalMode ? "2026-11-04T20:00:00Z" : null,
                     mergeCommit = ApprovalMode ? new { oid = new string('b', 40) } : null
                 }), string.Empty));
@@ -523,6 +597,9 @@ public sealed class MergerOutcomeVerifierTests
             if (request.FileName == "gh" && request.Arguments.Count >= 2
                 && request.Arguments[0] == "pr" && request.Arguments[1] == "checks")
             {
+                var repoIndex = request.Arguments.ToList().IndexOf("--repo");
+                ChecksRepository = repoIndex >= 0 && repoIndex + 1 < request.Arguments.Count
+                    ? request.Arguments[repoIndex + 1] : null;
                 RequiredChecksCount++;
                 if (HeadAfterChecks is not null) AdvertisedHead = HeadAfterChecks;
                 return Task.FromResult(new ProcessResult(0, JsonSerializer.Serialize(new[]

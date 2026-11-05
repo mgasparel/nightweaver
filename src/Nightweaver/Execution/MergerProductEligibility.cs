@@ -9,6 +9,7 @@ internal enum MergerProductCheck
     MissingProduct,
     NotPlannedProduct,
     PausedProduct,
+    InconsistentWorkflowState,
     AlreadyClosed,
     NotOpenOrUnassigned,
     NeedLinkedTasks,
@@ -31,11 +32,12 @@ internal static class MergerProductEligibility
         var productId = productIds[0];
         if (!inventory.ById.TryGetValue(productId, out var product))
             return (MergerProductCheck.MissingProduct, productId);
-        if (product.IssueType is not ("feature" or "bug")
-            || !product.Labels.Contains("planned", StringComparer.Ordinal))
+        BeadWorkflowState workflow;
+        try { workflow = BeadWorkflowState.Parse(product); }
+        catch (FormatException) { return (MergerProductCheck.InconsistentWorkflowState, productId); }
+        if (product.IssueType is not ("feature" or "bug") || !workflow.Planned)
             return (MergerProductCheck.NotPlannedProduct, productId);
-        if (product.Labels.Contains("needs-human", StringComparer.Ordinal)
-            || product.Labels.Contains("product-decision-required", StringComparer.Ordinal))
+        if (workflow.NeedsHuman || workflow.ProductDecisionRequired)
             return (MergerProductCheck.PausedProduct, productId);
         if (product.Status == "closed" && product.Assignee is null)
             return (MergerProductCheck.AlreadyClosed, productId);
