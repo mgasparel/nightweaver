@@ -77,6 +77,65 @@ public sealed class MergerSlotCoordinatorTests
     }
 
     [Fact]
+    public async Task DeniedLaunchReleaseFailureFailsRequiredFinalizationWithoutReplay()
+    {
+        var runner = new MergerSlotProcessRunner(releaseFailureBeforeWrite: true);
+        var slot = CreateSlot(runner, (_, _, _, _, _, _, _, _, _) => throw new AgentLaunchDeniedException());
+
+        var result = await slot.RunAsync(CreateHost(), CreateProject(), CreateRepository(), "candidate",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MergerSlotDisposition.Failed, result.Disposition);
+        Assert.False(result.ClaimHandoffCompleted);
+        Assert.Contains("fixture release failed before commit", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Equal("in_progress", runner.Bead.Status);
+        Assert.Equal("nightweaver:merger-slot-tests", runner.Bead.Assignee);
+        var claimWrites = runner.ClaimWrites("candidate");
+        Assert.Equal(2, claimWrites.Length);
+        Assert.Equal(["open", "in_progress"], claimWrites.Select(MergerSlotProcessRunner.GuardedStatus));
+        Assert.Equal(1, runner.ReleaseReconciliationReadCount);
+    }
+
+    [Fact]
+    public async Task DeniedLaunchLostReleaseResponseSucceedsAfterOneFreshRead()
+    {
+        var runner = new MergerSlotProcessRunner(releaseFailureAfterWrite: true);
+        var slot = CreateSlot(runner, (_, _, _, _, _, _, _, _, _) => throw new AgentLaunchDeniedException());
+
+        var result = await slot.RunAsync(CreateHost(), CreateProject(), CreateRepository(), "candidate",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MergerSlotDisposition.Refused, result.Disposition);
+        Assert.True(result.ClaimHandoffCompleted, result.Diagnostic);
+        Assert.Equal("open", runner.Bead.Status);
+        Assert.Null(runner.Bead.Assignee);
+        var claimWrites = runner.ClaimWrites("candidate");
+        Assert.Equal(2, claimWrites.Length);
+        Assert.Equal(["open", "in_progress"], claimWrites.Select(MergerSlotProcessRunner.GuardedStatus));
+        Assert.Equal(1, runner.ReleaseReconciliationReadCount);
+    }
+
+    [Fact]
+    public async Task DeniedLaunchRereadFailureFailsRequiredFinalizationWithoutReplay()
+    {
+        var runner = new MergerSlotProcessRunner(failSnapshotAfterRelease: true);
+        var slot = CreateSlot(runner, (_, _, _, _, _, _, _, _, _) => throw new AgentLaunchDeniedException());
+
+        var result = await slot.RunAsync(CreateHost(), CreateProject(), CreateRepository(), "candidate",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(MergerSlotDisposition.Failed, result.Disposition);
+        Assert.False(result.ClaimHandoffCompleted);
+        Assert.Contains("fresh ownership reread after guarded release failed", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Equal("open", runner.Bead.Status);
+        Assert.Null(runner.Bead.Assignee);
+        var claimWrites = runner.ClaimWrites("candidate");
+        Assert.Equal(2, claimWrites.Length);
+        Assert.Equal(["open", "in_progress"], claimWrites.Select(MergerSlotProcessRunner.GuardedStatus));
+        Assert.Equal(1, runner.ReleaseReconciliationReadCount);
+    }
+
+    [Fact]
     public async Task SemanticRejectionAtBudgetBoundaryReleasesExactlyOnceAndPreservesMetadata()
     {
         var runner = new MergerSlotProcessRunner(initialRepairCycles: 2);
@@ -492,13 +551,17 @@ public sealed class MergerSlotCoordinatorTests
 
     private sealed class MergerSlotProcessRunner(bool foreignClaimOnAcquire = false, bool removeReadinessAfterClaim = false,
         string initialStatus = "open", string? initialAssignee = null, int initialRepairCycles = 0,
-        bool releaseFailureAfterWrite = false)
+        bool releaseFailureAfterWrite = false, bool releaseFailureBeforeWrite = false,
+        bool failSnapshotAfterRelease = false)
         : IProcessRunner
     {
         private readonly List<ProcessRequest> requests = [];
+        private bool failNextSnapshotAfterRelease;
+        private bool releaseAttempted;
         internal FakeBead Bead { get; } = new(initialStatus, initialAssignee, initialRepairCycles);
         internal Action? BeforeNextSnapshot { get; set; }
         internal Action? BeforeNextReadiness { get; set; }
+        internal int ReleaseReconciliationReadCount { get; private set; }
         internal int RequestCount => requests.Count;
 
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
@@ -517,6 +580,12 @@ public sealed class MergerSlotCoordinatorTests
                 return Task.FromResult(Readiness(arguments));
             if (arguments.Contains("list", StringComparer.Ordinal))
             {
+                if (releaseAttempted) ReleaseReconciliationReadCount++;
+                if (failNextSnapshotAfterRelease)
+                {
+                    failNextSnapshotAfterRelease = false;
+                    return Task.FromResult(new ProcessResult(1, string.Empty, "fixture post-release snapshot read failure"));
+                }
                 var beforeNextSnapshot = BeforeNextSnapshot;
                 BeforeNextSnapshot = null;
                 beforeNextSnapshot?.Invoke();
@@ -565,8 +634,12 @@ public sealed class MergerSlotCoordinatorTests
             if (guardedAssignee == "nightweaver:merger-slot-tests" && assignee == string.Empty
                 && Bead.Status == guardedStatus && Bead.Assignee == guardedAssignee)
             {
+                releaseAttempted = true;
+                if (releaseFailureBeforeWrite)
+                    return new ProcessResult(1, string.Empty, "fixture release failed before commit");
                 Bead.Status = guardedStatus == "in_progress" ? "open" : guardedStatus!;
                 Bead.Assignee = null;
+                if (failSnapshotAfterRelease) failNextSnapshotAfterRelease = true;
                 if (releaseFailureAfterWrite) return new ProcessResult(1, string.Empty, "fixture lost the release response");
                 return new ProcessResult(0, "{}", string.Empty);
             }

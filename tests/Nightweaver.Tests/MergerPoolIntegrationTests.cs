@@ -207,6 +207,7 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         }
 
         var mergerProcessRunner = new RecordingProcessRunner(RunMergerProcessAsync);
+        var mergerDiscoveryProcessRunner = new RecordingProcessRunner(RunMergerProcessAsync);
         var deliveryProcessRunner = new RecordingProcessRunner(RunDeliveryProcessAsync);
         var provisioner = new WorktreeProvisioner(systemRunner);
         var worktree = await provisioner.ProvisionAsync(target.Host, project.Name, repository, beadId,
@@ -292,7 +293,7 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             mergerOutcomes.Writer.TryWrite(outcome);
             return outcome;
         };
-        var mergerPool = new MergerPoolCoordinator(target.Host, project, repository, mergerProcessRunner,
+        var mergerPool = new MergerPoolCoordinator(target.Host, project, repository, mergerDiscoveryProcessRunner,
             runSlot: mergerSlotRunner, stopGate: stopGate, slotLifetimeToken: runtimeLifetime.Token);
 
         var resumeEvidence = Path.Combine(target.RootPath, "delivery-resume-evidence.json");
@@ -496,7 +497,8 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             Assert.Equal("in_progress", receivingDeliveryState.Status);
             Assert.Equal("stage:implement", receivingDeliveryState.Stage);
             Assert.Equal(project.RecoveryActor, target.ReadBead(beadId).Assignee);
-            Assert.Equal(mergerRequestsAtHandoff, mergerProcessRunner.Requests.Count);
+            var mergerRequestsAfterDeliveryPrepare = mergerProcessRunner.Requests;
+            Assert.Equal(mergerRequestsAtHandoff, mergerRequestsAfterDeliveryPrepare.Count);
             releaseDeliveryPrepare.TrySetResult(true);
 
             await deliveryMergePublicationEntered.Task.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);

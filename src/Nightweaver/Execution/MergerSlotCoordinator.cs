@@ -247,7 +247,8 @@ internal sealed class MergerSlotCoordinator
         {
             if (claimAcquiredHere)
                 return await RefuseAfterClaimAsync(project, repository, beadId, claimed, claimAcquiredHere,
-                    $"The continuous runtime stopped before the next Agent launch; unfinished work was retained. {exception.Message}")
+                    $"The continuous runtime stopped before the next Agent launch; unfinished work was retained. {exception.Message}",
+                    requiredFinalization: true)
                     .ConfigureAwait(false);
             if (claimAcquisitionAttempted)
                 return Result(MergerSlotDisposition.Refused, initialState, null, false,
@@ -451,13 +452,15 @@ internal sealed class MergerSlotCoordinator
     }
 
     private async Task<MergerSlotOutcome> RefuseAfterClaimAsync(ProjectConfig project,
-        ValidatedTargetRepository repository, string beadId, BeadSnapshot? claimed, bool claimAcquiredHere, string reason)
+        ValidatedTargetRepository repository, string beadId, BeadSnapshot? claimed, bool claimAcquiredHere, string reason,
+        bool requiredFinalization = false)
     {
         if (!claimAcquiredHere)
             return Result(MergerSlotDisposition.Refused,
                 claimed is null ? null : BeadWorkflowState.Parse(claimed), null, false, reason);
 
         string? releaseFailure = null;
+        var handoff = false;
         using var timeout = new CancellationTokenSource(ClaimFinalizationTimeout);
         if (claimed is null)
         {
@@ -473,18 +476,59 @@ internal sealed class MergerSlotCoordinator
             && string.Equals(claimed.Assignee, project.RecoveryActor, StringComparison.Ordinal)
             && claimed.Status is "open" or "in_progress" or "closed")
         {
+            var expectedStatus = claimed.Status;
+            var expectedReleasedStatus = expectedStatus == "in_progress" ? "open" : expectedStatus;
+            BeadWorkflowState? expectedReleasedState = null;
             try
             {
-                var expectedStatus = claimed.Status;
-                await writer.ReleaseDispatchClaimAsync(repository, beadId, project.RecoveryActor, expectedStatus, timeout.Token)
-                    .ConfigureAwait(false);
-                var released = await reader.ReadSnapshotAsync(repository, timeout.Token).ConfigureAwait(false);
-                var expectedReleasedStatus = expectedStatus == "in_progress" ? "open" : expectedStatus;
-                if (!released.ById.TryGetValue(beadId, out var finalBead) || finalBead.Assignee is not null
-                    || finalBead.Status != expectedReleasedStatus)
-                    releaseFailure = "guarded claim release did not verify against the fresh Beads inventory";
+                expectedReleasedState = BeadWorkflowState.Parse(claimed) with { Status = expectedReleasedStatus };
             }
-            catch (Exception exception) { releaseFailure = exception.Message; }
+            catch (FormatException exception)
+            {
+                releaseFailure = $"workflow state could not be verified before release: {exception.Message}";
+            }
+
+            if (releaseFailure is null)
+            {
+                Exception? releaseException = null;
+                try
+                {
+                    await writer.ReleaseDispatchClaimAsync(repository, beadId, project.RecoveryActor, expectedStatus, timeout.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception exception) { releaseException = exception; }
+
+                try
+                {
+                    // Always reconcile an uncertain guarded write once. Never replay the release.
+                    var released = await reader.ReadSnapshotAsync(repository, timeout.Token).ConfigureAwait(false);
+                    if (!released.ById.TryGetValue(beadId, out var finalBead))
+                        releaseFailure = "the Bead disappeared during guarded release reconciliation";
+                    else
+                    {
+                        BeadWorkflowState? finalState = null;
+                        try { finalState = BeadWorkflowState.Parse(finalBead); }
+                        catch (FormatException exception)
+                        {
+                            releaseFailure = $"fresh release state could not be verified: {exception.Message}";
+                        }
+
+                        if (releaseFailure is null && finalBead.Status == expectedReleasedStatus && finalBead.Assignee is null
+                            && finalState == expectedReleasedState)
+                            handoff = true;
+                        else if (releaseFailure is null)
+                            releaseFailure = releaseException is null
+                                ? "guarded claim release did not verify against the fresh Beads inventory"
+                                : $"guarded claim release returned an uncertain result ({releaseException.Message}); fresh state remains status '{finalBead.Status}', assignee '{finalBead.Assignee ?? "(none)"}' and was left untouched";
+                    }
+                }
+                catch (Exception exception)
+                {
+                    releaseFailure = releaseException is null
+                        ? $"fresh ownership reread after guarded release failed: {exception.Message}"
+                        : $"guarded claim release returned an uncertain result ({releaseException.Message}) and fresh ownership reread failed: {exception.Message}";
+                }
+            }
         }
         else if (releaseFailure is null && claimed is null)
         {
@@ -495,9 +539,11 @@ internal sealed class MergerSlotCoordinator
             releaseFailure = $"claim is no longer owned by '{project.RecoveryActor}' (observed '{claimed?.Assignee ?? "(none)"}'); it was left untouched";
         }
 
-        return Result(MergerSlotDisposition.Refused,
-            claimed is null ? null : BeadWorkflowState.Parse(claimed), null,
-            releaseFailure is null, releaseFailure is null ? reason : $"{reason} Claim release: {releaseFailure}.");
+        var finalizationRequired = requiredFinalization || ContinuousAgentLaunchContext.StopRequested;
+        return Result(releaseFailure is not null && finalizationRequired
+                ? MergerSlotDisposition.Failed : MergerSlotDisposition.Refused,
+            claimed is null ? null : BeadWorkflowState.Parse(claimed), null, handoff,
+            releaseFailure is null ? reason : $"{reason} Claim release: {releaseFailure}.");
     }
 
     private static MergerSlotOutcome Result(MergerSlotDisposition disposition, BeadWorkflowState? state,
