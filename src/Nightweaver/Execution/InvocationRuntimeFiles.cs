@@ -17,6 +17,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
     private const uint FileReadAttributes = 0x0080;
     private const uint FileShareRead = 0x00000001;
     private const uint FileShareWrite = 0x00000002;
+    private const uint FileShareDelete = 0x00000004;
     private const uint OpenExisting = 3;
     private const uint CreateNew = 1;
     private const uint FileFlagBackupSemantics = 0x02000000;
@@ -170,6 +171,105 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         if (!SafeWindowsSegment(project.Value)) throw new InvalidDataException("Project slug is not a safe path segment.");
         var expected = RuntimePaths.Normalize(hostPaths.FactoryTelemetryPath(project));
         return OpenPinnedReadOnlyFile(expected, FileShareRead | FileShareWrite | 0x00000004, "factory snapshot");
+    }
+
+    /// <summary>Publishes a factory snapshot while pinning its directory chain and creating a fresh sibling file.</summary>
+    internal static async Task WriteFactorySnapshotAtomicallyAsync(
+        HostPaths hostPaths, ProjectSlug project, string runtimeId, ReadOnlyMemory<byte> bytes,
+        CancellationToken cancellationToken)
+    {
+        var path = RuntimePaths.Normalize(hostPaths.FactoryTelemetryPath(project));
+        var temporaryPath = path + "." + runtimeId + ".tmp";
+        var directory = Path.GetDirectoryName(path)
+            ?? throw new InvalidDataException("Factory snapshot path has no parent directory.");
+
+        if (!OperatingSystem.IsWindows())
+        {
+            Directory.CreateDirectory(directory);
+            await WritePortableFactorySnapshotAsync(temporaryPath, path, bytes, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!SafeWindowsSegment(project.Value) || !SafeWindowsSegment(runtimeId))
+            throw new InvalidDataException("Factory snapshot identity contains an unsafe path segment.");
+
+        ValidatePathSegments(path);
+        var guard = new InvocationRuntimeFiles(string.Empty, path, null!);
+        var temporaryCreated = false;
+        try
+        {
+            // Each component is opened without FILE_SHARE_DELETE and checked with OPEN_REPARSE_POINT. Keeping
+            // those handles alive prevents a junction or renamed directory from redirecting the write.
+            guard.PinDirectoryChain(directory, createMissing: true, exclusiveLeaf: false);
+            ValidateFactorySnapshotDestination(path);
+            await using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write,
+                FileShare.Read, 16 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                temporaryCreated = true;
+                await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            // The fresh temp was created under the pinned parent. Rename replaces the destination directory
+            // entry atomically; it does not open or write through an existing destination reparse point.
+            File.Move(temporaryPath, path, overwrite: true);
+            temporaryCreated = false;
+        }
+        finally
+        {
+            if (temporaryCreated)
+            {
+                try { File.Delete(temporaryPath); }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+            }
+            guard.Dispose();
+        }
+    }
+
+    private static void ValidateFactorySnapshotDestination(string path)
+    {
+        using var handle = CreateFileW(path, FileReadAttributes, FileShareRead | FileShareWrite | FileShareDelete,
+            IntPtr.Zero, OpenExisting, FileFlagOpenReparsePoint, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            var error = Marshal.GetLastWin32Error();
+            if ((uint)error is ErrorFileNotFound or ErrorPathNotFound) return;
+            throw NativeError($"Could not safely inspect factory snapshot destination '{path}'", error);
+        }
+
+        if (!GetFileInformationByHandle(handle, out var info))
+            throw NativeError($"Could not inspect factory snapshot destination '{path}'", Marshal.GetLastWin32Error());
+        if ((info.FileAttributes & AttributeReparsePoint) != 0)
+            throw new InvalidDataException($"Refusing reparse point in factory snapshot destination: '{path}'.");
+        if ((info.FileAttributes & AttributeDirectory) != 0)
+            throw new InvalidDataException($"Factory snapshot destination '{path}' is a directory.");
+    }
+
+    private static async Task WritePortableFactorySnapshotAsync(
+        string temporaryPath, string path, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken)
+    {
+        var temporaryCreated = false;
+        try
+        {
+            await using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write,
+                FileShare.Read, 16 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                temporaryCreated = true;
+                await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            File.Move(temporaryPath, path, overwrite: true);
+            temporaryCreated = false;
+        }
+        finally
+        {
+            if (temporaryCreated)
+            {
+                try { File.Delete(temporaryPath); }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+            }
+        }
     }
 
     private static PinnedLogReadStream OpenPinnedReadOnlyFile(string expected, uint shareMode, string description)

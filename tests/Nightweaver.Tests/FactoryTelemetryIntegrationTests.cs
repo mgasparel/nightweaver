@@ -1,7 +1,11 @@
 using System.Net;
+using System.Buffers.Binary;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Win32.SafeHandles;
 using Microsoft.Extensions.DependencyInjection;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
@@ -120,6 +124,150 @@ public sealed class FactoryTelemetryIntegrationTests
             Assert.Equal("unavailable", json.RootElement.GetProperty("availability").GetString());
             Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("snapshot").ValueKind);
         }
+    }
+
+    [Fact]
+    public async Task PublisherDoesNotWriteThroughTelemetryDirectoryJunction()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "Telemetry publication path pinning uses Windows no-follow handles.");
+        using var directory = new TempDirectory();
+        var hostRoot = directory.CreateDirectory("host");
+        var host = new HostPaths(hostRoot);
+        var targetPath = directory.CreateDirectory("target");
+        var project = CreateProject(host, targetPath, "telemetry-junction", capacity: 1);
+        var outside = directory.CreateDirectory("outside");
+        var sentinel = Path.Combine(outside, "factory.json");
+        await File.WriteAllTextAsync(sentinel, "outside-sentinel", TestContext.Current.CancellationToken);
+        var telemetryParent = Directory.CreateDirectory(Path.Combine(hostRoot, "telemetry")).FullName;
+        var telemetryRoot = host.TelemetryRoot(project.Name);
+        CreateDirectoryJunction(telemetryRoot, outside);
+        var failures = new List<string>();
+
+        await using var publisher = new FactoryTelemetryPublisher(host, project,
+            new ValidatedTargetRepository(targetPath, "main"), 1, 1, message => { failures.Add(message); });
+        await publisher.StartAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("outside-sentinel", await File.ReadAllTextAsync(sentinel, TestContext.Current.CancellationToken));
+        Assert.NotEmpty(failures);
+        Assert.Contains("could not publish its snapshot", failures[0], StringComparison.OrdinalIgnoreCase);
+        Assert.True(Directory.Exists(telemetryParent));
+    }
+
+    [Fact]
+    public async Task PublisherDoesNotWriteThroughPreexistingTemporarySnapshotHardLink()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "Telemetry publication path pinning uses Windows no-follow handles.");
+        using var directory = new TempDirectory();
+        var hostRoot = directory.CreateDirectory("host");
+        var host = new HostPaths(hostRoot);
+        var targetPath = directory.CreateDirectory("target");
+        var project = CreateProject(host, targetPath, "telemetry-file-link", capacity: 1);
+        Directory.CreateDirectory(host.TelemetryRoot(project.Name));
+        var outside = directory.CreateDirectory("outside");
+        var sentinel = Path.Combine(outside, "sentinel.txt");
+        await File.WriteAllTextAsync(sentinel, "outside-sentinel", TestContext.Current.CancellationToken);
+        var snapshotPath = host.FactoryTelemetryPath(project.Name);
+        var failures = new List<string>();
+        await using var publisher = new FactoryTelemetryPublisher(host, project,
+            new ValidatedTargetRepository(targetPath, "main"), 1, 1, message => { failures.Add(message); });
+        var temporaryPath = snapshotPath + "." + publisher.RuntimeId + ".tmp";
+        CreateHardLink(temporaryPath, sentinel);
+
+        await publisher.StartAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("outside-sentinel", await File.ReadAllTextAsync(sentinel, TestContext.Current.CancellationToken));
+        Assert.NotEmpty(failures);
+        Assert.Contains("could not publish its snapshot", failures[0], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task UnsafeSnapshotDirectoryJunctionIsUnavailableToReaderAndHttp()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "Factory snapshot paths are validated with Windows no-follow handles.");
+        using var factory = new NightweaverWebApplicationFactory();
+        using var client = factory.CreateClient();
+        var host = factory.Services.GetRequiredService<HostPaths>();
+        var project = factory.Services.GetRequiredService<ProjectConfig>();
+        var repository = new ValidatedTargetRepository(project.TargetRepository.Path, project.TargetRepository.DefaultBranch);
+        await using var publisher = new FactoryTelemetryPublisher(host, project, repository,
+            project.Concurrency.MaxConcurrentDelivery, ConcurrencyConfig.MergerSlots);
+        await publisher.StartAsync(TestContext.Current.CancellationToken);
+        publisher.Reserve("delivery", "delivery-1", "sentinel-secret.1");
+        await WaitForSnapshotAsync(factory.Services.GetRequiredService<FactoryTelemetryReader>(),
+            snapshot => snapshot.Delivery.Slots[0].BeadId == "sentinel-secret.1",
+            TestContext.Current.CancellationToken);
+        await publisher.DisposeAsync();
+
+        var telemetryRoot = host.TelemetryRoot(project.Name);
+        var snapshotPath = host.FactoryTelemetryPath(project.Name);
+        var outside = Directory.CreateDirectory(Path.Combine(factory.TargetRoot, "outside-snapshot")).FullName;
+        var outsideSnapshot = Path.Combine(outside, "factory.json");
+        File.Copy(snapshotPath, outsideSnapshot);
+        DeleteTelemetryFilesAndDirectoryBeforeJunction(telemetryRoot);
+        CreateDirectoryJunction(telemetryRoot, outside);
+
+        await AssertUnsafeSnapshotUnavailableAsync(factory.Services.GetRequiredService<FactoryTelemetryReader>(),
+            client, "sentinel-secret.1");
+        Assert.True(File.Exists(outsideSnapshot));
+        Assert.Contains("sentinel-secret.1", await File.ReadAllTextAsync(outsideSnapshot, TestContext.Current.CancellationToken),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExistingTelemetryStreamEndsExplicitlyWhenSnapshotDirectoryBecomesUnsafe()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "Factory snapshot paths are validated with Windows no-follow handles.");
+        using var factory = new NightweaverWebApplicationFactory();
+        using var client = factory.CreateClient();
+        var host = factory.Services.GetRequiredService<HostPaths>();
+        var project = factory.Services.GetRequiredService<ProjectConfig>();
+        var repository = new ValidatedTargetRepository(project.TargetRepository.Path, project.TargetRepository.DefaultBranch);
+        await using var publisher = new FactoryTelemetryPublisher(host, project, repository,
+            project.Concurrency.MaxConcurrentDelivery, ConcurrencyConfig.MergerSlots);
+        await publisher.StartAsync(TestContext.Current.CancellationToken);
+        const string beadId = "unsafe-stream.1";
+        const string invocationId = "20260301T0102030000000Z-implementer";
+        publisher.Reserve("delivery", "delivery-1", beadId);
+        publisher.SetInvocation("delivery", "delivery-1", new FactoryInvocationObservation(
+            beadId, invocationId, "implementer", "codex", "gpt-test", "high", "running",
+            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(5), 4321, null));
+        var logPath = Path.Combine(host.LogsRoot(project.Name), beadId, invocationId + ".log");
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+        await File.WriteAllTextAsync(logPath, "unsafe-refresh-marker\n", new UTF8Encoding(false),
+            TestContext.Current.CancellationToken);
+        var snapshot = await WaitForSnapshotAsync(factory.Services.GetRequiredService<FactoryTelemetryReader>(),
+            value => value.Delivery.Slots[0].Invocation?.InvocationId == invocationId,
+            TestContext.Current.CancellationToken);
+        using var response = await client.GetAsync(StreamUrl(snapshot.RuntimeId, "delivery-1", invocationId),
+            HttpCompletionOption.ResponseHeadersRead, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await using var body = await response.Content.ReadAsStreamAsync(TestContext.Current.CancellationToken);
+        using var reader = new StreamReader(body, Encoding.UTF8);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(8));
+        var firstEvent = await ReadNextSseEventAsync(reader, deadline.Token);
+        Assert.Equal("status", firstEvent.Name);
+
+        await publisher.DisposeAsync();
+        var telemetryRoot = host.TelemetryRoot(project.Name);
+        var outside = Directory.CreateDirectory(Path.Combine(factory.TargetRoot, "unsafe-refresh-target")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(outside, "factory.json"), "private-sentinel", deadline.Token);
+        DeleteTelemetryFilesAndDirectoryBeforeJunction(telemetryRoot);
+        CreateDirectoryJunction(telemetryRoot, outside);
+
+        var observed = new List<CapturedSseEvent>();
+        while (true)
+        {
+            var item = await ReadNextSseEventAsync(reader, deadline.Token);
+            observed.Add(item);
+            if (item.Name == "end") break;
+        }
+        var error = Assert.Single(observed, item => item.Name == "error");
+        var end = Assert.Single(observed, item => item.Name == "end");
+        Assert.Equal("runtime_lost", error.Data.GetProperty("reason").GetString());
+        Assert.Equal("runtime_lost", end.Data.GetProperty("reason").GetString());
+        Assert.DoesNotContain("private-sentinel", string.Join("\n", observed.Select(item => item.Data.ToString())),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -546,6 +694,92 @@ public sealed class FactoryTelemetryIntegrationTests
         Assert.True(sawEnd, "The telemetry stream closed before its terminal event.");
     }
 
+    private static async Task AssertUnsafeSnapshotUnavailableAsync(FactoryTelemetryReader reader, HttpClient client,
+        string secretValue)
+    {
+        var direct = reader.Read();
+        Assert.Equal(FactoryTelemetryAvailability.Unavailable, direct.Availability);
+        Assert.Null(direct.Snapshot);
+
+        using var response = await client.GetAsync("/api/factory/state", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        using var json = JsonDocument.Parse(body);
+        Assert.Equal("unavailable", json.RootElement.GetProperty("availability").GetString());
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("snapshot").ValueKind);
+        Assert.DoesNotContain(secretValue, body, StringComparison.Ordinal);
+    }
+
+    private static async Task<CapturedSseEvent> ReadNextSseEventAsync(StreamReader reader,
+        CancellationToken cancellationToken)
+    {
+        var name = string.Empty;
+        var id = string.Empty;
+        var data = new StringBuilder();
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        {
+            if (line.Length == 0)
+            {
+                if (name.Length == 0) continue;
+                using var document = JsonDocument.Parse(data.ToString());
+                return new CapturedSseEvent(name, id, document.RootElement.Clone());
+            }
+            if (line.StartsWith("event: ", StringComparison.Ordinal)) name = line[7..];
+            else if (line.StartsWith("id: ", StringComparison.Ordinal)) id = line[4..];
+            else if (line.StartsWith("data: ", StringComparison.Ordinal)) data.Append(line[6..]);
+        }
+        throw new EndOfStreamException("The telemetry stream ended before the expected SSE event.");
+    }
+
+    private static void CreateDirectoryJunction(string linkPath, string targetPath)
+    {
+        Directory.CreateDirectory(linkPath);
+        using var handle = CreateFileW(linkPath, 0x40000000, 0x00000007, IntPtr.Zero, 3,
+            0x02000000 | 0x00200000, IntPtr.Zero);
+        if (handle.IsInvalid)
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Opening telemetry test junction failed.");
+
+        var printName = Path.GetFullPath(targetPath);
+        var substituteName = @"\??\" + printName;
+        var substituteBytes = Encoding.Unicode.GetBytes(substituteName);
+        var printBytes = Encoding.Unicode.GetBytes(printName);
+        var dataLength = 8 + substituteBytes.Length + sizeof(char) + printBytes.Length + sizeof(char);
+        var buffer = new byte[8 + dataLength];
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(0, 4), 0xA0000003);
+        BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(4, 2), checked((ushort)dataLength));
+        BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(8, 2), 0);
+        BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(10, 2), checked((ushort)substituteBytes.Length));
+        BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(12, 2), checked((ushort)(substituteBytes.Length + sizeof(char))));
+        BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(14, 2), checked((ushort)printBytes.Length));
+        substituteBytes.CopyTo(buffer.AsSpan(16));
+        printBytes.CopyTo(buffer.AsSpan(16 + substituteBytes.Length + sizeof(char)));
+        if (!DeviceIoControl(handle, 0x000900A4, buffer, (uint)buffer.Length, IntPtr.Zero, 0, out _, IntPtr.Zero))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Creating telemetry test junction failed.");
+    }
+
+    private static void CreateHardLink(string linkPath, string targetPath)
+    {
+        if (!CreateHardLinkW(linkPath, targetPath, IntPtr.Zero))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Creating telemetry test hard link failed.");
+    }
+
+    private static void DeleteTelemetryFilesAndDirectoryBeforeJunction(string telemetryRoot)
+    {
+        Assert.True(Directory.Exists(telemetryRoot));
+        Assert.False((File.GetAttributes(telemetryRoot) & FileAttributes.ReparsePoint) != 0,
+            "The telemetry test root must be a real directory before replacing it with a junction.");
+        foreach (var entry in Directory.EnumerateFileSystemEntries(telemetryRoot))
+        {
+            var attributes = File.GetAttributes(entry);
+            Assert.False((attributes & FileAttributes.ReparsePoint) != 0,
+                $"Refusing to remove reparse entry '{entry}' while preparing a junction test.");
+            Assert.False((attributes & FileAttributes.Directory) != 0,
+                $"Unexpected nested telemetry directory '{entry}' while preparing a junction test.");
+            File.Delete(entry);
+        }
+        Directory.Delete(telemetryRoot);
+    }
+
     private static async Task<(string Id, string Text)> ReadLogEventAsync(StreamReader reader,
         CancellationToken cancellationToken)
     {
@@ -668,4 +902,17 @@ public sealed class FactoryTelemetryIntegrationTests
         }
         throw new TimeoutException("Factory telemetry did not publish the expected lifecycle update.");
     }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateFileW")]
+    private static extern SafeFileHandle CreateFileW(string fileName, uint desiredAccess, uint shareMode,
+        IntPtr securityAttributes, uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DeviceIoControl(SafeFileHandle device, uint controlCode, byte[] inputBuffer,
+        uint inputBufferSize, IntPtr outputBuffer, uint outputBufferSize, out uint bytesReturned, IntPtr overlapped);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateHardLinkW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateHardLinkW(string fileName, string existingFileName, IntPtr securityAttributes);
 }

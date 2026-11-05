@@ -107,10 +107,9 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
     {
         try
         {
-            Directory.CreateDirectory(paths.TelemetryRoot(project));
             await WriteSnapshotAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException
             or ArgumentException or NotSupportedException)
         {
             ReportFailure(exception);
@@ -366,16 +365,9 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
                 new FactoryPoolObservation(mergerCapacity, merger.Values.OrderBy(slot => slot.SlotId, StringComparer.Ordinal).ToArray()));
         }
 
-        var path = paths.FactoryTelemetryPath(project);
-        var temporaryPath = path + "." + runtimeId + ".tmp";
         var bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonOptions);
-        await using (var stream = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.Read,
-            16 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough))
-        {
-            await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-        }
-        File.Move(temporaryPath, path, overwrite: true);
+        await InvocationRuntimeFiles.WriteFactorySnapshotAtomicallyAsync(paths, project, runtimeId, bytes,
+            cancellationToken).ConfigureAwait(false);
         }
         finally { writeGate.Release(); }
     }
@@ -453,7 +445,7 @@ internal sealed class FactoryTelemetryReader(HostPaths paths, ProjectConfig proj
                 return new(FactoryTelemetryAvailability.Stale, "heartbeat-expired", snapshot);
             return new(FactoryTelemetryAvailability.Live, null, snapshot);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException
             or JsonException or ArgumentException or NotSupportedException)
         {
             return new(FactoryTelemetryAvailability.Unavailable, "unreadable-or-corrupt", null);
