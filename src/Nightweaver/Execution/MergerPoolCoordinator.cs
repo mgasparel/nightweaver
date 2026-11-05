@@ -2,6 +2,7 @@ using System.Threading.Channels;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 using Nightweaver.Planning;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -58,9 +59,10 @@ internal sealed record MergerPoolEvaluation(
 /// <summary>Serializes merge work for one Project while keeping its reservation separate from Delivery.</summary>
 internal sealed class MergerPoolCoordinator
 {
-    private sealed class ReservationState(string beadId)
+    private sealed class ReservationState(string beadId, string slotId)
     {
         internal string BeadId { get; } = beadId;
+        internal string SlotId { get; } = slotId;
         internal TaskCompletionSource<MergerPoolCompletion> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -76,6 +78,7 @@ internal sealed class MergerPoolCoordinator
     private readonly ValidatedTargetRepository repository;
     private readonly CancellationToken slotLifetimeToken;
     private readonly ContinuousStopGate? stopGate;
+    private readonly FactoryTelemetryPublisher? telemetry;
     private readonly MergerPoolSnapshotReader readSnapshot;
     private readonly MergerPoolSlotRunner runSlot;
     private readonly object admissionSync = new();
@@ -94,6 +97,7 @@ internal sealed class MergerPoolCoordinator
         MergerPoolSnapshotReader? readSnapshot = null,
         MergerPoolSlotRunner? runSlot = null,
         ContinuousStopGate? stopGate = null,
+        FactoryTelemetryPublisher? telemetry = null,
         CancellationToken slotLifetimeToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
@@ -105,6 +109,7 @@ internal sealed class MergerPoolCoordinator
         this.repository = repository;
         this.slotLifetimeToken = slotLifetimeToken;
         this.stopGate = stopGate;
+        this.telemetry = telemetry;
         if (readSnapshot is null)
         {
             var reader = new BeadsReader(processRunner);
@@ -249,7 +254,9 @@ internal sealed class MergerPoolCoordinator
         MergerSlotOutcome? outcome = null;
         Exception? failure = null;
         var canceled = false;
-        using var launchContext = ContinuousAgentLaunchContext.Enter(stopGate);
+        using var launchContext = ContinuousAgentLaunchContext.Enter(stopGate, telemetry, "merger",
+            reservation.SlotId, reservation.BeadId);
+        telemetry?.UpdateSlot("merger", reservation.SlotId, "preparing", reservation.BeadId);
         try
         {
             outcome = stopGate?.IsStopRequested == true
@@ -271,6 +278,7 @@ internal sealed class MergerPoolCoordinator
         var completion = new MergerPoolCompletion(reservation.BeadId, outcome, failure, canceled, LocalCapacityReleased: true);
         lock (stateGate)
         {
+            telemetry?.Release("merger", reservation.SlotId, reservation.BeadId);
             reservations.Remove(reservation.BeadId);
             // Publish the result in the same critical section that releases capacity. A drain
             // which observes no reservations can then safely place its accounting barrier next.
@@ -301,8 +309,10 @@ internal sealed class MergerPoolCoordinator
                     return false;
                 }
 
-                reservation = new ReservationState(beadId);
+                var slotId = telemetry?.SlotForReservation("merger", beadId) ?? "merger-1";
+                reservation = new ReservationState(beadId, slotId);
                 reservations.Add(beadId, reservation);
+                telemetry?.Reserve("merger", slotId, beadId);
                 return true;
             }
         }

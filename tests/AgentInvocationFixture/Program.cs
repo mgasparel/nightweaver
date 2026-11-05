@@ -81,6 +81,27 @@ internal static class Program
                 Console.OpenStandardInput().Dispose();
                 Console.OpenStandardOutput().Write(Encoding.UTF8.GetBytes("stdin-closed\n"));
                 return 0;
+            case "live-marker":
+                if (args.Length < 3) return 65;
+                Console.WriteLine("live-marker-before-exit " + (args.Length > 3 ? args[3] : "default"));
+                Console.Out.Flush();
+                File.WriteAllText(args[1], "waiting", new UTF8Encoding(false));
+                WaitForFile(args[2], TimeSpan.FromMinutes(30));
+                return 0;
+            case "live-split-utf8":
+            {
+                if (args.Length < 3) return 65;
+                var output = Console.OpenStandardOutput();
+                output.Write(Encoding.UTF8.GetBytes("prefix-"));
+                output.Write([0xE2, 0x82]);
+                output.Flush();
+                File.WriteAllText(args[1], "waiting", new UTF8Encoding(false));
+                WaitForFile(args[2], TimeSpan.FromMinutes(30));
+                output.Write([0xAC]);
+                output.Write(Encoding.UTF8.GetBytes("-suffix\n"));
+                output.Flush();
+                return 0;
+            }
             case "never-read":
                 if (args.Length > 1) File.WriteAllText(args[1], Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 while (true) Thread.Sleep(1000);

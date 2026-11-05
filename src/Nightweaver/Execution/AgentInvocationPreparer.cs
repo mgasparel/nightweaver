@@ -130,7 +130,7 @@ internal sealed class AgentInvocationPreparer
         if (string.Equals(roleSuffix, "outcome-classifier", StringComparison.Ordinal))
             environmentOverrides["NIGHTWEAVER_INVOCATION_PURPOSE"] = "outcome-classifier";
 
-        return new PreparedAgentInvocation(
+        var prepared = new PreparedAgentInvocation(
             AgentCliNames.ToConfigValue(settings.Cli),
             arguments,
             workingDirectory,
@@ -139,7 +139,15 @@ internal sealed class AgentInvocationPreparer
             settings.Timeout,
             invocationId,
             temporaryDirectory,
-            logFilePath);
+            logFilePath,
+            purpose: roleSuffix,
+            stage: context.StageLabel,
+            repairCycles: context.RepairCycles,
+            maxRepairCycles: project.Limits.MaxRepairCycles,
+            configuredModel: settings.Model,
+            effort: settings.Effort);
+        ContinuousAgentLaunchContext.ObservePrepared(prepared);
+        return prepared;
     }
 
     private static (string FileName, string Suffix) GetPromptFileAndSuffix(AgentRole role) => role switch

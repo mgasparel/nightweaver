@@ -1,7 +1,16 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text;
+using Nightweaver.Configuration;
+using Nightweaver.Execution;
+using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
+using Nightweaver.Tests.AgentInvocationFixture;
 
 var fixture = Path.Combine(Path.GetTempPath(), "nightweaver-qa-" + Guid.NewGuid().ToString("N"));
+FactoryTelemetryPublisher? telemetry = null;
+Task<AgentExecutionResult>[] telemetryRuns = [];
+string[] telemetryReleaseFiles = [];
 try
 {
     var repository = Path.Combine(fixture, "repo");
@@ -51,6 +60,43 @@ try
         await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", markdownId,
             "Comment anchor for the sanitizer fixture. <script>window.__workspaceInjected = true</script><img src=\"https://example.invalid/comment.png\" onerror=\"window.__workspaceInjected = true\">");
         await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "Blocked QA task", "--type", "task", "--status", "blocked");
+
+        Directory.CreateDirectory(Path.Combine(fixture, "prompts"));
+        await File.WriteAllTextAsync(Path.Combine(fixture, "prompts", "implementer.md"),
+            "Disposable live telemetry fixture.\n", new UTF8Encoding(false), cancellationToken);
+        var paths = new HostPaths(fixture);
+        var project = ProjectConfigLoader.Load(config, ProjectSlug.Parse("qa"), paths);
+        telemetry = new FactoryTelemetryPublisher(paths, project,
+            new ValidatedTargetRepository(repository, "main"), project.Concurrency.MaxConcurrentDelivery,
+            ConcurrencyConfig.MergerSlots);
+        await telemetry.StartAsync(cancellationToken);
+
+        var slots = new[]
+        {
+            (Slot: "delivery-1", Bead: "qa-live-1", Label: "slot-one"),
+            (Slot: "delivery-2", Bead: "qa-live-2", Label: "slot-two")
+        };
+        var readinessFiles = new string[slots.Length];
+        telemetryReleaseFiles = new string[slots.Length];
+        var preparer = new AgentInvocationPreparer();
+        telemetryRuns = new Task<AgentExecutionResult>[slots.Length];
+        for (var index = 0; index < slots.Length; index++)
+        {
+            var item = slots[index];
+            var worktree = Path.Combine(paths.WorktreesRoot(project.Name), item.Bead);
+            Directory.CreateDirectory(worktree);
+            readinessFiles[index] = Path.Combine(fixture, item.Bead + ".ready");
+            telemetryReleaseFiles[index] = Path.Combine(fixture, item.Bead + ".release");
+            telemetry.Reserve("delivery", item.Slot, item.Bead);
+            telemetry.UpdateSlot("delivery", item.Slot, "preparing", item.Bead, "stage:qa",
+                "implementer", worktree, 0, project.Limits.MaxRepairCycles);
+            telemetryRuns[index] = RunTelemetryFixtureAsync(paths, project,
+                new ValidatedTargetRepository(repository, "main"), telemetry, preparer,
+                item.Slot, item.Bead, item.Label, worktree, readinessFiles[index], telemetryReleaseFiles[index],
+                cancellationToken);
+        }
+
+        await WaitForFilesAsync(readinessFiles, TimeSpan.FromSeconds(30), cancellationToken);
     });
     builder.AddProject<Projects.Nightweaver_Web>("web")
         // Publish the direct local binding checked by the mutation-origin policy.
@@ -80,6 +126,24 @@ try
 }
 finally
 {
+    foreach (var releaseFile in telemetryReleaseFiles)
+    {
+        try { File.WriteAllText(releaseFile, "release", new UTF8Encoding(false)); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+    if (telemetryRuns.Length > 0)
+    {
+        try { await Task.WhenAll(telemetryRuns).WaitAsync(TimeSpan.FromSeconds(20)); }
+        catch (Exception exception) { Console.Error.WriteLine($"Live telemetry fixture did not settle cleanly: {exception.Message}"); }
+    }
+    if (telemetry is not null)
+    {
+        foreach (var slot in new[] { ("delivery-1", "qa-live-1"), ("delivery-2", "qa-live-2") })
+            telemetry.Release("delivery", slot.Item1, slot.Item2);
+        await telemetry.DisposeAsync();
+    }
+
     for (var attempt = 0; attempt < 10 && Directory.Exists(fixture); attempt++)
     {
         try
@@ -96,6 +160,38 @@ finally
     {
         Console.Error.WriteLine($"Could not remove QA fixture directory '{fixture}' after ten attempts.");
         Environment.ExitCode = 1;
+    }
+}
+
+static async Task<AgentExecutionResult> RunTelemetryFixtureAsync(HostPaths paths, ProjectConfig project,
+    ValidatedTargetRepository repository, FactoryTelemetryPublisher telemetry, AgentInvocationPreparer preparer,
+    string slot, string beadId, string label, string worktree, string readyFile, string releaseFile,
+    CancellationToken cancellationToken)
+{
+    using var launch = ContinuousAgentLaunchContext.Enter(null, telemetry, "delivery", slot, beadId);
+    var dispatch = new AgentDispatchContext(beadId, "task", "stage:qa", 0);
+    var prepared = await preparer.PrepareAsync(paths, project, AgentRole.Implementer, dispatch, worktree, cancellationToken);
+    var fixtureInvocation = new PreparedAgentInvocation("dotnet",
+        [typeof(FixtureMarker).Assembly.Location, "live-marker", readyFile, releaseFile, label],
+        prepared.WorkingDirectory, prepared.StandardInput, prepared.EnvironmentOverrides, TimeSpan.FromMinutes(2),
+        prepared.InvocationId, prepared.TemporaryDirectory, prepared.LogFilePath, prepared.Purpose,
+        prepared.Stage, prepared.RepairCycles, prepared.MaxRepairCycles, "QA fixture", "medium");
+    return await AgentInvocationExecutor.ExecuteAsync(paths, project.Name, fixtureInvocation, cancellationToken);
+}
+
+static async Task WaitForFilesAsync(IEnumerable<string> paths, TimeSpan timeout, CancellationToken cancellationToken)
+{
+    var expected = paths.ToArray();
+    using var timer = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+    timer.CancelAfter(timeout);
+    try
+    {
+        while (expected.Any(path => !File.Exists(path)))
+            await Task.Delay(100, timer.Token);
+    }
+    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+    {
+        throw new TimeoutException("The native QA telemetry fixture processes did not become ready within 30 seconds.");
     }
 }
 

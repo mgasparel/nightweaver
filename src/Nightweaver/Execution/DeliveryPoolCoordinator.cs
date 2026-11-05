@@ -2,6 +2,7 @@ using System.Threading.Channels;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 using Nightweaver.Planning;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -72,9 +73,10 @@ internal sealed record DeliveryPoolEvaluation(
 /// </remarks>
 internal sealed class DeliveryPoolCoordinator
 {
-    private sealed class ReservationState(string beadId)
+    private sealed class ReservationState(string beadId, string slotId)
     {
         internal string BeadId { get; } = beadId;
+        internal string SlotId { get; } = slotId;
         internal TaskCompletionSource<DeliveryPoolCompletion> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -92,6 +94,7 @@ internal sealed class DeliveryPoolCoordinator
     private readonly int capacityLimit;
     private readonly CancellationToken slotLifetimeToken;
     private readonly ContinuousStopGate? stopGate;
+    private readonly FactoryTelemetryPublisher? telemetry;
     private readonly DeliveryPoolSnapshotReader readSnapshot;
     private readonly DeliveryPoolSlotRunner runSlot;
     private readonly object admissionSync = new();
@@ -109,6 +112,7 @@ internal sealed class DeliveryPoolCoordinator
         DeliveryPoolSnapshotReader? readSnapshot = null,
         DeliveryPoolSlotRunner? runSlot = null,
         ContinuousStopGate? stopGate = null,
+        FactoryTelemetryPublisher? telemetry = null,
         CancellationToken slotLifetimeToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
@@ -121,6 +125,7 @@ internal sealed class DeliveryPoolCoordinator
         this.repository = repository;
         this.slotLifetimeToken = slotLifetimeToken;
         this.stopGate = stopGate;
+        this.telemetry = telemetry;
         capacityLimit = project.Concurrency.MaxConcurrentDelivery;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacityLimit);
 
@@ -288,8 +293,11 @@ internal sealed class DeliveryPoolCoordinator
                     return false;
                 }
 
-                reservation = new ReservationState(beadId);
+                var slotId = telemetry?.SlotForReservation("delivery", beadId)
+                    ?? $"delivery-{Enumerable.Range(1, capacityLimit).First(index => reservations.Values.All(active => active.SlotId != $"delivery-{index}"))}";
+                reservation = new ReservationState(beadId, slotId);
                 reservations.Add(beadId, reservation);
+                telemetry?.Reserve("delivery", slotId, beadId);
                 return true;
             }
         }
@@ -343,7 +351,9 @@ internal sealed class DeliveryPoolCoordinator
         DeliverySlotOutcome? outcome = null;
         Exception? failure = null;
         var canceled = false;
-        using var launchContext = ContinuousAgentLaunchContext.Enter(stopGate);
+        using var launchContext = ContinuousAgentLaunchContext.Enter(stopGate, telemetry, "delivery",
+            reservation.SlotId, reservation.BeadId);
+        telemetry?.UpdateSlot("delivery", reservation.SlotId, "preparing", reservation.BeadId);
         try
         {
             if (stopGate?.IsStopRequested == true)
@@ -366,6 +376,7 @@ internal sealed class DeliveryPoolCoordinator
         var completion = new DeliveryPoolCompletion(reservation.BeadId, outcome, failure, canceled, LocalCapacityReleased: true);
         lock (stateGate)
         {
+            telemetry?.Release("delivery", reservation.SlotId, reservation.BeadId);
             reservations.Remove(reservation.BeadId);
             // Capacity is released before notification. Keep that transition and publication under
             // one lock so a drain cannot observe an empty reservation set before this result exists.

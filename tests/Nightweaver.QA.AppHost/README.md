@@ -24,7 +24,10 @@ Set `NIGHTWEAVER_QA_URL` to the returned endpoint URL and run the connectivity s
 ```powershell
 $env:NIGHTWEAVER_QA_URL = '<web http endpoint URL from aspire describe>'
 node smoke.mjs
+node telemetry.mjs
 ```
+
+The isolated AppHost starts two disposable native `AgentInvocationFixture` processes through Nightweaver's invocation preparer, telemetry publisher, and executor. Each writes a distinct marker and waits for AppHost cleanup to release it, so `telemetry.mjs` can verify that each accessible invocation dialog streams only its own live output before the process exits. It also checks the stale-availability presentation while retaining the last validated occupied snapshot. The fixture's temporary repository, worktree directories, logs, runtime snapshot, and processes are removed or settled when the AppHost stops.
 
 ## Playwright mutation QA
 
@@ -35,6 +38,8 @@ The disposable tracker is seeded with separate attention items for the browser a
 - `QA needs human abort` for the two-step `Abort & Close` confirmation.
 
 Use headless Playwright on the same URL from `aspire describe`. Exercise each action in the page so the browser sends its same-origin headers; do not substitute `APIRequestContext` for these mutation checks. Confirm that each POST succeeds and that the page/tracker reflects the resulting state: the decision card and retry card resolve, and the abort item closes. Capture `pageerror` and console error events as in `smoke.mjs`, and close the browser in a `finally` block.
+
+Run the full fixture interaction checks with `node workspace-qa.mjs`; this covers the existing workspace and mutation flows in addition to the invocation stream check.
 
 Run scripts from this directory so `playwright` resolves from its local installation. The `web-browser-logs` dashboard resource captures logs from its own tracked browser session, not arbitrary Playwright sessions.
 

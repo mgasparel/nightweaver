@@ -119,6 +119,47 @@ public sealed class AgentInvocationExecutorTests
     }
 
     [Fact]
+    public async Task FlushesMergedOutputBeforeTheNativeAgentExits()
+    {
+        using var fixture = new ExecutionFixture();
+        var ready = Path.Combine(fixture.Temp.Path, "live log ready.txt");
+        var release = Path.Combine(fixture.Temp.Path, "live log release.txt");
+        var invocation = fixture.Invocation("live-marker", "payload", TimeSpan.FromSeconds(20), ready, release);
+        var execution = AgentInvocationExecutor.ExecuteAsync(fixture.Paths, fixture.Project, invocation,
+            TestContext.Current.CancellationToken);
+        try
+        {
+            await WaitForFileAsync(ready, TimeSpan.FromSeconds(10));
+            var deadline = Stopwatch.StartNew();
+            string observed;
+            while (true)
+            {
+                using var live = InvocationRuntimeFiles.OpenExistingLiveLogForRead(fixture.Paths,
+                    fixture.Project, "ns-xci-fixture", invocation.InvocationId);
+                live.Stream.Position = 0;
+                using var reader = new StreamReader(live.Stream, Encoding.UTF8, leaveOpen: true);
+                observed = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
+                if (observed.Contains("live-marker-before-exit", StringComparison.Ordinal)) break;
+                if (deadline.Elapsed >= TimeSpan.FromSeconds(5))
+                    throw new TimeoutException("The Agent output was not flushed while its process remained alive.");
+                await Task.Delay(50, TestContext.Current.CancellationToken);
+            }
+
+            Assert.Contains("live-marker-before-exit", observed, StringComparison.Ordinal);
+            Assert.False(execution.IsCompleted);
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(release, "release", TestContext.Current.CancellationToken);
+        }
+
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        Assert.Equal(AgentExecutionStatus.Exited, result.Status);
+        Assert.Contains("live-marker-before-exit", await File.ReadAllTextAsync(result.LogFilePath,
+            TestContext.Current.CancellationToken), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DrainsLargeStdoutAndStderrAndPreservesNaturalNonzeroExit()
     {
         using var fixture = new ExecutionFixture();

@@ -132,6 +132,7 @@ public sealed class ContinuousDiscoveryCoordinatorTests
         var ticks = Channel.CreateUnbounded<bool>();
         var error = new StringWriter();
         var watcherStopped = NewSignal();
+        var failWatcher = NewSignal();
         var passGates = Channel.CreateUnbounded<TaskCompletionSource<bool>>();
         var coordinator = new ContinuousDiscoveryCoordinator(
             [Registration(ContinuousPoolKind.Delivery, token =>
@@ -144,8 +145,9 @@ public sealed class ContinuousDiscoveryCoordinatorTests
             TextWriter.Null,
             error,
             token => ReadTicksAsync(ticks.Reader, token),
-            (_, _) =>
+            async (_, token) =>
             {
+                await failWatcher.Task.WaitAsync(token);
                 watcherStopped.TrySetResult(true);
                 throw new IOException("tail transport exited");
             });
@@ -154,6 +156,9 @@ public sealed class ContinuousDiscoveryCoordinatorTests
         try
         {
             var startupPass = await ReadPassGateAsync();
+            // Failure before startup begins may correctly coalesce with startup's
+            // request. Hold startup in flight before requiring a separate pass.
+            failWatcher.TrySetResult(true);
             await watcherStopped.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
             await WaitForWatcherFailureAsync();
             Assert.Contains("periodic and completion discovery remain active", error.ToString(), StringComparison.Ordinal);

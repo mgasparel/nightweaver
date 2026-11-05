@@ -18,7 +18,13 @@ internal sealed class PreparedAgentInvocation
         TimeSpan timeout,
         string invocationId,
         string temporaryDirectory,
-        string logFilePath)
+        string logFilePath,
+        string? purpose = null,
+        string? stage = null,
+        int? repairCycles = null,
+        int? maxRepairCycles = null,
+        string? configuredModel = null,
+        string? effort = null)
     {
         Executable = executable;
         Arguments = Array.AsReadOnly(arguments.ToArray());
@@ -30,6 +36,12 @@ internal sealed class PreparedAgentInvocation
         InvocationId = invocationId;
         TemporaryDirectory = temporaryDirectory;
         LogFilePath = logFilePath;
+        Purpose = purpose ?? invocationId[(invocationId.LastIndexOf('-') + 1)..];
+        Stage = stage;
+        RepairCycles = repairCycles;
+        MaxRepairCycles = maxRepairCycles;
+        ConfiguredModel = configuredModel;
+        Effort = effort;
     }
 
     internal string Executable { get; }
@@ -41,4 +53,10 @@ internal sealed class PreparedAgentInvocation
     internal string InvocationId { get; }
     internal string TemporaryDirectory { get; }
     internal string LogFilePath { get; }
+    internal string Purpose { get; }
+    internal string? Stage { get; }
+    internal int? RepairCycles { get; }
+    internal int? MaxRepairCycles { get; }
+    internal string? ConfiguredModel { get; }
+    internal string? Effort { get; }
 }

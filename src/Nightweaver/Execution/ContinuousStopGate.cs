@@ -1,3 +1,5 @@
+using Nightweaver.Telemetry;
+
 namespace Nightweaver.Execution;
 
 internal interface IForceCloseAgentJob
@@ -155,19 +157,64 @@ internal sealed class ContinuousAgentLaunchContext : IDisposable
     private readonly ContinuousAgentLaunchContext? previousSlot;
     private readonly AgentLaunchPurpose previousPurpose;
     private readonly ContinuousStopGate? gate;
+    private readonly FactoryTelemetryPublisher? telemetry;
+    private readonly string? telemetryPool;
+    private readonly string? telemetrySlot;
+    private readonly string? telemetryBead;
     private int hasLaunchedAgent;
     private int disposed;
 
-    private ContinuousAgentLaunchContext(ContinuousStopGate? gate)
+    private ContinuousAgentLaunchContext(ContinuousStopGate? gate, FactoryTelemetryPublisher? telemetry = null,
+        string? telemetryPool = null, string? telemetrySlot = null, string? telemetryBead = null)
     {
         this.gate = gate;
+        this.telemetry = telemetry;
+        this.telemetryPool = telemetryPool;
+        this.telemetrySlot = telemetrySlot;
+        this.telemetryBead = telemetryBead;
         previousSlot = CurrentSlot.Value;
         previousPurpose = CurrentPurpose.Value;
         CurrentSlot.Value = this;
         CurrentPurpose.Value = AgentLaunchPurpose.WorkingAgent;
     }
 
-    internal static ContinuousAgentLaunchContext Enter(ContinuousStopGate? gate) => new(gate);
+    internal static ContinuousAgentLaunchContext Enter(ContinuousStopGate? gate, FactoryTelemetryPublisher? telemetry = null,
+        string? telemetryPool = null, string? telemetrySlot = null, string? telemetryBead = null)
+        => new(gate, telemetry, telemetryPool, telemetrySlot, telemetryBead);
+
+    internal static void ObservePrepared(PreparedAgentInvocation invocation)
+    {
+        var slot = CurrentSlot.Value;
+        if (slot?.telemetry is null || slot.telemetryPool is null || slot.telemetrySlot is null) return;
+        slot.telemetry.ObservePreparedInvocation(slot.telemetryPool, slot.telemetrySlot,
+            slot.telemetryBead ?? "unknown", invocation);
+    }
+
+    internal static void ObserveLaunched(PreparedAgentInvocation invocation, int? processId, DateTimeOffset startedAt)
+    {
+        var slot = CurrentSlot.Value;
+        if (slot?.telemetry is null || slot.telemetryPool is null || slot.telemetrySlot is null) return;
+        slot.telemetry.SetInvocation(slot.telemetryPool, slot.telemetrySlot, new(
+            slot.telemetryBead ?? "unknown", invocation.InvocationId, invocation.Purpose, invocation.Executable, invocation.ConfiguredModel,
+            invocation.Effort ?? "unknown", "running", startedAt, startedAt + invocation.Timeout,
+            processId, null));
+    }
+
+    internal static void ObserveSettled(PreparedAgentInvocation invocation, string status, int? exitCode)
+    {
+        var slot = CurrentSlot.Value;
+        if (slot?.telemetry is null || slot.telemetryPool is null || slot.telemetrySlot is null) return;
+        slot.telemetry.FinishInvocation(slot.telemetryPool, slot.telemetrySlot, invocation.InvocationId, status, exitCode);
+    }
+
+    internal static void ObserveLaunchFailure(PreparedAgentInvocation invocation, string status)
+    {
+        var slot = CurrentSlot.Value;
+        if (slot?.telemetry is null || slot.telemetryPool is null || slot.telemetrySlot is null) return;
+        slot.telemetry.SetInvocation(slot.telemetryPool, slot.telemetrySlot, new(
+            slot.telemetryBead ?? "unknown", invocation.InvocationId, invocation.Purpose, invocation.Executable,
+            invocation.ConfiguredModel, invocation.Effort ?? "unknown", status, null, null, null, null));
+    }
 
     internal bool HasLaunchedAgent => Volatile.Read(ref hasLaunchedAgent) != 0;
 

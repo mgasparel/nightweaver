@@ -8,6 +8,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Nightweaver.Tests" />
     <InternalsVisibleTo Include="Nightweaver.Web" />
+    <InternalsVisibleTo Include="Nightweaver.QA.AppHost" />
     <InternalsVisibleTo Include="ExecutionCrashHost" />
   </ItemGroup>
   <ItemGroup>

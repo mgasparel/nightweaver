@@ -144,22 +144,25 @@
         </div>
       </div>
       <div class="bay-grid">
-        <article class="surface bay-card">
+        <article class="surface bay-card planning-disabled">
           <span class="bay-number" aria-hidden="true">01</span>
-          <h3>Planning Pool</h3>
-          <p>Planning activity will be shown here when factory telemetry is connected.</p>
+          <h3>Planning</h3>
+          <p>Planning automation is disabled. Maintainers manually plan and create task Beads.</p>
         </article>
         <article class="surface bay-card">
           <span class="bay-number" aria-hidden="true">02</span>
           <h3>Delivery Floor</h3>
-          <p>Delivery activity will be shown here when factory telemetry is connected.</p>
+          <p class="bay-pool-status" id="delivery-pool-status">Runtime observations unavailable.</p>
+          <div class="bay-slots" id="delivery-slots" aria-live="polite"></div>
         </article>
         <article class="surface bay-card">
           <span class="bay-number" aria-hidden="true">03</span>
           <h3>Singleton Merger</h3>
-          <p>Merge activity will be shown here when factory telemetry is connected.</p>
+          <p class="bay-pool-status" id="merger-pool-status">Runtime observations unavailable.</p>
+          <div class="bay-slots" id="merger-slots" aria-live="polite"></div>
         </article>
       </div>
+      <p class="factory-status" id="factory-status" role="status" aria-live="polite">Loading runtime observations…</p>
     </section>
 
     <section class="console-section" id="beads" aria-labelledby="beads-title">
@@ -277,6 +280,26 @@
       </div>
     </section>
   </main>
+
+  <dialog class="telemetry-dialog" id="invocation-dialog" aria-labelledby="invocation-title" aria-describedby="invocation-status">
+    <section class="telemetry-panel">
+      <div class="telemetry-heading">
+        <div>
+          <p class="eyebrow">Read-only invocation telemetry</p>
+          <h2 id="invocation-title">Agent invocation</h2>
+        </div>
+        <button class="icon-button" id="invocation-close" type="button" aria-label="Close invocation telemetry">Close</button>
+      </div>
+      <p id="invocation-status" class="telemetry-status" role="status" aria-live="polite">Select an active invocation to follow its output.</p>
+      <dl class="telemetry-metadata" id="invocation-metadata"></dl>
+      <div class="telemetry-actions">
+        <button class="secondary-action" id="invocation-pause" type="button" disabled>Pause follow</button>
+        <button class="secondary-action" id="invocation-latest" type="button" disabled>Jump to latest</button>
+      </div>
+      <pre class="telemetry-output" id="invocation-output" tabindex="0" aria-label="Merged Agent output"></pre>
+      <p class="telemetry-note" id="invocation-truncation" hidden>Earlier output was removed to keep this view within its display limit.</p>
+    </section>
+  </dialog>
 
   <footer class="site-footer">
     <div class="footer-inner"><span>Nightweaver</span><span>Console shell</span></div>

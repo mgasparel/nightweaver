@@ -1,6 +1,7 @@
 using Nightweaver.Configuration;
 using Nightweaver;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 using System.Text.Json;
 using System.Net.Http.Headers;
 
@@ -73,6 +74,8 @@ public sealed class Program
         builder.Services.AddSingleton<BeadWorkspaceEnvironmentObserver>();
         builder.Services.AddSingleton<TrackerBridge>();
         builder.Services.AddSingleton<LocalMutationRequestPolicy>();
+        builder.Services.AddSingleton(services => new FactoryTelemetryReader(
+            services.GetRequiredService<HostPaths>(), services.GetRequiredService<ProjectConfig>()));
 
         var app = builder.Build();
         // Resolve before listening, after all host configuration providers have been applied.
@@ -80,6 +83,7 @@ public sealed class Program
         app.UseDefaultFiles();
         app.UseStaticFiles();
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+        app.MapFactoryTelemetry();
         app.MapGet("/api/beads", async (HttpContext context, TrackerBridge explorer, ILogger<Program> logger) =>
         {
             context.Response.Headers.CacheControl = "no-store";

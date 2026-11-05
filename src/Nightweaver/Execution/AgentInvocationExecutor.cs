@@ -84,6 +84,8 @@ internal sealed class AgentInvocationExecutor
         Task? stdinWrite = null;
         Task? stdoutPump = null;
         Task? stderrPump = null;
+        Task? logFlusher = null;
+        CancellationTokenSource? logFlushStop = null;
         SemaphoreSlim? logGate = null;
         var stdoutCapture = maximumCapturedBytes is null ? null : new BoundedStandardOutputCapture(maximumCapturedBytes.Value);
         Exception? primaryFailure = null;
@@ -92,6 +94,7 @@ internal sealed class AgentInvocationExecutor
         int? exitCode = null;
         var cancelled = false;
         var launchDenied = false;
+        var nativeLaunchAttempted = false;
 
         try
         {
@@ -107,16 +110,20 @@ internal sealed class AgentInvocationExecutor
 
             // The role wall-clock budget starts immediately before native launch and includes prompt delivery.
             var launchStarted = Stopwatch.GetTimestamp();
+            nativeLaunchAttempted = true;
             if (!ContinuousAgentLaunchContext.TryLaunchAgent(() => processLauncher is null
                     ? WindowsProcessLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment)
                     : processLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment),
                     out child))
                 throw new AgentLaunchDeniedException();
             var launchedChild = child ?? throw new InvalidOperationException("Native Agent launch completed without returning its process handle.");
+            ContinuousAgentLaunchContext.ObserveLaunched(invocation, launchedChild.ProcessId, DateTimeOffset.UtcNow);
             rootExit = launchedChild.WaitForRootExitAsync();
             logGate = new SemaphoreSlim(1, 1);
             stdoutPump = PumpOutputAsync(launchedChild.StandardOutput, runtimeFiles.LogStream, logGate, stdoutCapture);
             stderrPump = PumpOutputAsync(launchedChild.StandardError, runtimeFiles.LogStream, logGate);
+            logFlushStop = new CancellationTokenSource();
+            logFlusher = FlushLogWhileRunningAsync(runtimeFiles.LogStream, logGate, logFlushStop.Token);
             stdinWrite = WriteInputAndCloseAsync(launchedChild.StandardInput, Encoding.UTF8.GetBytes(invocation.StandardInput));
 
             var outcome = await WaitForOutcomeAsync(rootExit, stdinWrite, stdoutPump, stderrPump,
@@ -164,6 +171,14 @@ internal sealed class AgentInvocationExecutor
                  }),
                  ("stdout drain", () => stdoutPump ?? Task.CompletedTask),
                  ("stderr drain", () => stderrPump ?? Task.CompletedTask)], CleanupBudget).ConfigureAwait(false));
+            logFlushStop?.Cancel();
+            if (logFlusher is not null)
+                cleanupFailure = CombineOptional(cleanupFailure, await SettleCleanupAsync(
+                    [("live log flush", async () =>
+                    {
+                        try { await logFlusher.ConfigureAwait(false); }
+                        catch (OperationCanceledException) when (logFlushStop?.IsCancellationRequested == true) { }
+                    })], CleanupBudget).ConfigureAwait(false));
             // Flush only after writers have settled; never race a pending pump with a log flush.
             if ((stdoutPump?.IsCompleted ?? true) && (stderrPump?.IsCompleted ?? true) && runtimeFiles is not null)
                 cleanupFailure = CombineOptional(cleanupFailure, await SettleCleanupAsync(
@@ -176,6 +191,20 @@ internal sealed class AgentInvocationExecutor
         logGate?.Dispose();
         try { runtimeFiles?.Dispose(); }
         catch (Exception exception) { cleanupFailure = Combine(cleanupFailure, exception); }
+        logFlushStop?.Dispose();
+
+        if (child is not null)
+        {
+            var observedStatus = cleanupFailure is not null || primaryFailure is not null ? "failed"
+                : cancelled || cancellationToken.IsCancellationRequested ? "cancelled"
+                : status == AgentExecutionStatus.TimedOut ? "timed_out"
+                : status == AgentExecutionStatus.Exited && exitCode == 0 ? "completed"
+                : status == AgentExecutionStatus.Exited ? "failed" : "unknown";
+            ContinuousAgentLaunchContext.ObserveSettled(invocation, observedStatus, exitCode);
+        }
+        else if (primaryFailure is not null || launchDenied)
+            ContinuousAgentLaunchContext.ObserveLaunchFailure(invocation,
+                launchDenied ? "launch_denied" : nativeLaunchAttempted ? "launch_failed" : "preparation_failed");
 
         if (cleanupFailure is not null)
         {
@@ -286,6 +315,17 @@ internal sealed class AgentInvocationExecutor
         finally
         {
             await input.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private static async Task FlushLogWhileRunningAsync(Stream log, SemaphoreSlim logGate, CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await logGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try { await log.FlushAsync(cancellationToken).ConfigureAwait(false); }
+            finally { logGate.Release(); }
         }
     }
 

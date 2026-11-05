@@ -2,6 +2,7 @@ using Nightweaver.Cli;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Application;
 
@@ -48,14 +49,21 @@ internal static class ContinuousApplication
         foreach (var diagnostic in cleanupDiagnostics)
             environment.Err.WriteLine($"nightweaver: startup cleanup retained '{diagnostic.BeadId}' at '{diagnostic.Path}': {diagnostic.Reason}");
 
+        await using var telemetry = new FactoryTelemetryPublisher(hostPaths, project, repository,
+            project.Concurrency.MaxConcurrentDelivery, ConcurrencyConfig.MergerSlots,
+            message => environment.Err.WriteLine("nightweaver: " + message), processRunner);
+        await telemetry.StartAsync(cancellationToken).ConfigureAwait(false);
+
         using var slotLifetime = new CancellationTokenSource();
         var stopGate = shutdownSignals?.StopGate ?? new ContinuousStopGate();
         var pool = new DeliveryPoolCoordinator(hostPaths, project, repository, processRunner,
             slotLifetimeToken: slotLifetime.Token,
-            stopGate: stopGate);
+            stopGate: stopGate,
+            telemetry: telemetry);
         var mergerPool = new MergerPoolCoordinator(hostPaths, project, repository, processRunner,
             slotLifetimeToken: slotLifetime.Token,
-            stopGate: stopGate);
+            stopGate: stopGate,
+            telemetry: telemetry);
         var configuredPools = new[]
         {
             new ContinuousPoolRegistration(

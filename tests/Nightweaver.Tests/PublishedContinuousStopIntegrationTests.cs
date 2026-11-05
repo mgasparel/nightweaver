@@ -191,6 +191,9 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         var deliveryBeadId = target.CreateBead("Published graceful active Delivery", "task", "stage:implement");
         var mergerBeadId = target.CreateBead("Published graceful active Merger", "task", "stage:merge");
         var queuedMergerBeadId = target.CreateBead("Published graceful queued Merger receiver", "task", "stage:merge");
+        // Creation times can tie at the tracker's timestamp precision, leaving random
+        // Bead IDs to order the two Merger candidates. Make the intended queue explicit.
+        target.RunTarget("bd", ["update", mergerBeadId, "--priority", "1"]);
         var hostRoot = CreatePublishedHost(target);
         var gateDirectory = Directory.CreateDirectory(Path.Combine(target.RootPath, "published-active-cross-pool-graceful-gates")).FullName;
         var releaseDirectory = Directory.CreateDirectory(Path.Combine(gateDirectory, "delivery-releases")).FullName;
@@ -227,13 +230,13 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         try
         {
             await WaitForStageLaunchCountAsync(stageLaunchLog, 2, runtime, TimeSpan.FromSeconds(90));
-            await WaitForFileAsync(Path.Combine(agentReadyDirectory, deliveryBeadId + ".ready"), runtime, TimeSpan.FromSeconds(30));
-            await WaitForFileAsync(mergerStarted, runtime, TimeSpan.FromSeconds(90));
             var activeAgents = File.ReadAllLines(stageLaunchLog).Select(ReadFixtureProcessFromLaunchRecord).ToArray();
             Assert.Equal(new[] { deliveryBeadId, mergerBeadId }.Order(StringComparer.Ordinal),
                 activeAgents.Select(agent => agent.BeadId).Order(StringComparer.Ordinal));
             using var deliveryAgent = Assert.Single(activeAgents, agent => agent.BeadId == deliveryBeadId).Process;
             using var mergerAgent = Assert.Single(activeAgents, agent => agent.BeadId == mergerBeadId).Process;
+            await WaitForFileAsync(Path.Combine(agentReadyDirectory, deliveryBeadId + ".ready"), runtime, TimeSpan.FromSeconds(30));
+            await WaitForFileAsync(mergerStarted, runtime, TimeSpan.FromSeconds(90));
             var queuedMerger = target.ReadBead(queuedMergerBeadId);
             Assert.Equal("open", queuedMerger.Status);
             Assert.Null(queuedMerger.Assignee);

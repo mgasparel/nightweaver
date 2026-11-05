@@ -150,6 +150,68 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         }
     }
 
+    /// <summary>Opens a running invocation log with sharing that is compatible with the active writer.</summary>
+    internal static PinnedLogReadStream OpenExistingLiveLogForRead(
+        HostPaths hostPaths, ProjectSlug project, string beadId, string invocationId)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Live invocation logs require Windows no-follow file handles.");
+        if (!SafeBeadId(beadId) || !SafeWindowsSegment(project.Value) || !IsValidInvocationId(invocationId))
+            throw new InvalidDataException("Live invocation identity contains an unsafe path segment.");
+        var expected = RuntimePaths.Normalize(Path.Combine(hostPaths.LogsRoot(project), beadId, invocationId + ".log"));
+        return OpenPinnedReadOnlyFile(expected, FileShareRead | FileShareWrite, "live invocation log");
+    }
+
+    /// <summary>Opens the canonical factory snapshot while allowing its writer to atomically replace it.</summary>
+    internal static PinnedLogReadStream OpenExistingFactorySnapshotForRead(HostPaths hostPaths, ProjectSlug project)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Factory snapshots require Windows no-follow file handles.");
+        if (!SafeWindowsSegment(project.Value)) throw new InvalidDataException("Project slug is not a safe path segment.");
+        var expected = RuntimePaths.Normalize(hostPaths.FactoryTelemetryPath(project));
+        return OpenPinnedReadOnlyFile(expected, FileShareRead | FileShareWrite | 0x00000004, "factory snapshot");
+    }
+
+    private static PinnedLogReadStream OpenPinnedReadOnlyFile(string expected, uint shareMode, string description)
+    {
+        ValidatePathSegments(expected);
+        var guard = new InvocationRuntimeFiles(string.Empty, expected, null!);
+        try
+        {
+            guard.PinDirectoryChain(Path.GetDirectoryName(expected)!, createMissing: false, exclusiveLeaf: false);
+            var handle = CreateFileW(expected, GenericRead, shareMode, IntPtr.Zero, OpenExisting,
+                FileFlagOverlapped | FileFlagOpenReparsePoint, IntPtr.Zero);
+            if (handle.IsInvalid)
+            {
+                var error = Marshal.GetLastWin32Error();
+                handle.Dispose();
+                throw NativeError($"Could not open {description} '{expected}' for read", error);
+            }
+
+            try
+            {
+                if (!GetFileInformationByHandle(handle, out var info))
+                    throw NativeError($"Could not inspect {description} '{expected}'", Marshal.GetLastWin32Error());
+                if ((info.FileAttributes & AttributeReparsePoint) != 0)
+                    throw new InvalidDataException($"Refusing reparse point in {description} path: '{expected}'.");
+                if ((info.FileAttributes & AttributeDirectory) != 0)
+                    throw new InvalidDataException($"{description} path '{expected}' is a directory.");
+                var stream = new FileStream(handle, FileAccess.Read, 4096, isAsync: true);
+                return new PinnedLogReadStream(stream, guard);
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+        catch
+        {
+            guard.Dispose();
+            throw;
+        }
+    }
+
     private const uint GenericWrite = 0x40000000;
     private const uint GenericRead = 0x80000000;
 

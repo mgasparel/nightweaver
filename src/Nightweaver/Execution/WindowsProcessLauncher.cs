@@ -105,7 +105,7 @@ internal static class WindowsProcessLauncher
             parentStdoutRead = null;
             stderrStream = new FileStream(parentStderrRead, FileAccess.Read, 64 * 1024, isAsync: false);
             parentStderrRead = null;
-            var result = new WindowsAgentProcess(job, process, stdinStream, stdoutStream, stderrStream);
+            var result = new WindowsAgentProcess(job, process, processInformation.ProcessId, stdinStream, stdoutStream, stderrStream);
             job = null;
             process = null;
             stdinStream = null;
@@ -434,14 +434,16 @@ internal static class WindowsProcessLauncher
     {
         private SafeKernelHandle? job;
         private SafeKernelHandle? process;
+        private readonly uint processId;
         private Action<IForceCloseAgentJob>? jobClosedCallback;
         private bool disposed;
 
-        internal WindowsAgentProcess(SafeKernelHandle job, SafeKernelHandle process,
+        internal WindowsAgentProcess(SafeKernelHandle job, SafeKernelHandle process, uint processId,
             FileStream stdin, FileStream stdout, FileStream stderr)
         {
             this.job = job;
             this.process = process;
+            this.processId = processId;
             StandardInput = stdin;
             StandardOutput = stdout;
             StandardError = stderr;
@@ -450,6 +452,7 @@ internal static class WindowsProcessLauncher
         internal FileStream StandardInput { get; }
         internal FileStream StandardOutput { get; }
         internal FileStream StandardError { get; }
+        internal int? ProcessId => processId <= int.MaxValue ? (int)processId : null;
 
         internal void SetJobClosedCallback(Action<IForceCloseAgentJob> callback)
         {
