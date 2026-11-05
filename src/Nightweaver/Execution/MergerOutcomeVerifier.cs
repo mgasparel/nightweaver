@@ -189,7 +189,7 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         var number = pullRequest.Number.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var result = await RunJsonCommandAsync("gh", ["pr", "view", number, "--repo",
             pullRequest.Repository.CliRepository, "--json",
-            "state,baseRefName,headRefName,headRefOid,url,baseRepository,mergedAt,mergeCommit"],
+            "state,baseRefName,headRefName,headRefOid,url,mergedAt,mergeCommit"],
             worktreePath, cancellationToken).ConfigureAwait(false);
         using var document = JsonDocument.Parse(result.StandardOutput, new JsonDocumentOptions { MaxDepth = 8 });
         var root = document.RootElement;
@@ -199,16 +199,11 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
             || !ReadString(root, "headRefName", out var headBranch)
             || !ReadString(root, "headRefOid", out var head)
             || !ReadString(root, "url", out var url)
-            || !root.TryGetProperty("baseRepository", out var baseRepository)
-            || baseRepository.ValueKind != JsonValueKind.Object || !HasUniqueNames(baseRepository)
-            || !ReadString(baseRepository, "nameWithOwner", out var baseRepositoryName)
-            || !ReadString(baseRepository, "url", out var baseRepositoryUrl)
             || !ReadString(root, "mergedAt", out var mergedAt)
             || !root.TryGetProperty("mergeCommit", out var mergeCommit) || mergeCommit.ValueKind != JsonValueKind.Object
             || !HasUniqueNames(mergeCommit) || !ReadString(mergeCommit, "oid", out var mergeCommitOid))
-            return new(null, null, null, null, null, null, null, null, null);
-        return new(state, baseBranch, headBranch, head, url, baseRepositoryName, baseRepositoryUrl,
-            mergedAt, mergeCommitOid);
+            return new(null, null, null, null, null, null, null);
+        return new(state, baseBranch, headBranch, head, url, mergedAt, mergeCommitOid);
     }
 
     private static bool MatchesMergedPullRequest(MergedPullRequestObservation pullRequest,
@@ -216,15 +211,12 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         string expectedBranch, string expectedHead, string expectedBase, string expectedMergeCommit)
     {
         var actualPullRequest = GitHubRepositoryIdentity.ParsePullRequestUrl(pullRequest.Url);
-        var actualBaseRepository = GitHubRepositoryIdentity.ParseRemoteUrl(pullRequest.BaseRepositoryUrl);
         return pullRequest.State == "MERGED"
             && string.Equals(pullRequest.BaseBranch, expectedBase, StringComparison.Ordinal)
             && string.Equals(pullRequest.HeadBranch, expectedBranch, StringComparison.Ordinal)
             && string.Equals(pullRequest.Head, expectedHead, StringComparison.OrdinalIgnoreCase)
             && actualPullRequest is not null && expectedRepository.Matches(actualPullRequest.Repository)
             && actualPullRequest.Number == expectedPullRequest.Number
-            && string.Equals(pullRequest.BaseRepositoryName, expectedRepository.FullName, StringComparison.OrdinalIgnoreCase)
-            && expectedRepository.Matches(actualBaseRepository)
             && !string.IsNullOrWhiteSpace(pullRequest.MergedAt)
             && string.Equals(pullRequest.MergeCommit, expectedMergeCommit, StringComparison.OrdinalIgnoreCase);
     }
@@ -261,8 +253,7 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
     private static MergerApprovalVerification ApprovalFailed(string diagnostic) => new(false, diagnostic);
 
     private sealed record MergedPullRequestObservation(string? State, string? BaseBranch, string? HeadBranch,
-        string? Head, string? Url, string? BaseRepositoryName, string? BaseRepositoryUrl,
-        string? MergedAt, string? MergeCommit);
+        string? Head, string? Url, string? MergedAt, string? MergeCommit);
 
     public async Task<MergerRejectionVerification> VerifyRejectionAsync(
         HostPaths hostPaths,

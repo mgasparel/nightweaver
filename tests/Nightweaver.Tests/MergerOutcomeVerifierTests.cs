@@ -9,6 +9,32 @@ namespace Nightweaver.Tests;
 public sealed class MergerOutcomeVerifierTests
 {
     [Fact]
+    public void PullRequestQueryUsesFieldsSupportedByTheInstalledGhCli()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "gh", UseShellExecute = false, RedirectStandardOutput = true,
+            RedirectStandardError = true, CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("pr");
+        startInfo.ArgumentList.Add("view");
+        startInfo.ArgumentList.Add("--help");
+        using var process = Process.Start(startInfo);
+        Assert.NotNull(process);
+        var output = process!.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        Assert.Equal(0, process.ExitCode);
+        var help = output + error;
+        Assert.Contains("JSON FIELDS", help, StringComparison.Ordinal);
+        Assert.Contains("--repo [HOST/]OWNER/REPO", help, StringComparison.Ordinal);
+        foreach (var field in new[] { "state", "baseRefName", "headRefName", "headRefOid", "url", "mergedAt", "mergeCommit" })
+            Assert.Contains(field, help, StringComparison.Ordinal);
+        Assert.DoesNotContain("baseRepository", help, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task AcceptsOnlyANewStructuredFindingConfirmedByTheCurrentRequiredCheck()
     {
         using var fixture = new VerifierFixture();
@@ -250,21 +276,35 @@ public sealed class MergerOutcomeVerifierTests
     }
 
     [Fact]
-    public async Task RejectsApprovalWhenPRBaseRepositoryDiffersDespiteMatchingHeadAndMergeCommit()
+    public async Task RejectsApprovalWhenReturnedPRUrlIdentifiesAForeignRepository()
     {
         using var fixture = new VerifierFixture();
         fixture.Runner.ApprovalMode = true;
         fixture.Runner.CheckFailed = false;
-        fixture.Runner.BaseRepositoryName = "attacker/other";
-        fixture.Runner.BaseRepositoryUrl = "https://github.com/attacker/other";
+        fixture.Runner.ReportedPullRequestUrl = "https://github.com/attacker/other/pull/123";
         fixture.SetMergeEvidence();
 
         var result = await fixture.VerifyApprovalAsync();
 
         Assert.False(result.Succeeded);
-        Assert.Contains("base repository identity", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Contains("does not match", result.Diagnostic, StringComparison.Ordinal);
         Assert.Equal(1, fixture.Runner.PullRequestViewCount);
         Assert.Equal(0, fixture.Runner.RequiredChecksCount);
+        Assert.Equal("github.com/example/project", fixture.Runner.PullRequestRepository);
+    }
+
+    [Fact]
+    public async Task AcceptsReturnedPRUrlForTheCapturedSameRepository()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.Runner.ApprovalMode = true;
+        fixture.Runner.CheckFailed = false;
+        fixture.SetMergeEvidence();
+
+        var result = await fixture.VerifyApprovalAsync();
+
+        Assert.True(result.Succeeded, result.Diagnostic);
+        Assert.Equal("https://github.com/example/project/pull/123", result.Evidence?.PullRequest);
         Assert.Equal("github.com/example/project", fixture.Runner.PullRequestRepository);
     }
 
@@ -526,8 +566,7 @@ public sealed class MergerOutcomeVerifierTests
         private readonly SystemProcessRunner system = new();
         internal string OriginUrl { get; set; } = "https://github.com/example/project.git";
         internal string? OriginUrlAfterChecks { get; set; }
-        internal string BaseRepositoryName { get; set; } = "example/project";
-        internal string BaseRepositoryUrl { get; set; } = "https://github.com/example/project";
+        internal string ReportedPullRequestUrl { get; set; } = pullRequest;
         internal string? PullRequestRepository { get; private set; }
         internal string? ChecksRepository { get; private set; }
         internal string Status { get; set; } = "in_progress";
@@ -579,6 +618,16 @@ public sealed class MergerOutcomeVerifierTests
                 && request.Arguments[0] == "pr" && request.Arguments[1] == "view")
             {
                 PullRequestViewCount++;
+                var jsonIndex = request.Arguments.ToList().IndexOf("--json");
+                if (jsonIndex < 0 || jsonIndex + 1 >= request.Arguments.Count)
+                    return Task.FromResult(new ProcessResult(1, string.Empty, "gh pr view requires --json fields in this fixture."));
+                var requestedFields = request.Arguments[jsonIndex + 1].Split(',', StringSplitOptions.RemoveEmptyEntries);
+                var supportedFields = new HashSet<string>(
+                    ["state", "baseRefName", "headRefName", "headRefOid", "url", "mergedAt", "mergeCommit"],
+                    StringComparer.Ordinal);
+                var unsupportedField = requestedFields.FirstOrDefault(field => !supportedFields.Contains(field));
+                if (unsupportedField is not null)
+                    return Task.FromResult(new ProcessResult(1, string.Empty, $"Unknown JSON field: {unsupportedField}"));
                 var repoIndex = request.Arguments.ToList().IndexOf("--repo");
                 PullRequestRepository = repoIndex >= 0 && repoIndex + 1 < request.Arguments.Count
                     ? request.Arguments[repoIndex + 1] : null;
@@ -588,8 +637,7 @@ public sealed class MergerOutcomeVerifierTests
                     baseRefName = BaseBranch,
                     headRefName = branch,
                     headRefOid = AdvertisedHead,
-                    url = pullRequest,
-                    baseRepository = new { nameWithOwner = BaseRepositoryName, url = BaseRepositoryUrl },
+                    url = ReportedPullRequestUrl,
                     mergedAt = ApprovalMode ? "2026-11-04T20:00:00Z" : null,
                     mergeCommit = ApprovalMode ? new { oid = new string('b', 40) } : null
                 }), string.Empty));
