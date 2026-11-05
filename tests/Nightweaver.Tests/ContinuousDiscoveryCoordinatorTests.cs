@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading.Channels;
 using Nightweaver.Application;
+using Nightweaver.Configuration;
 using Nightweaver.Execution;
 
 namespace Nightweaver.Tests;
@@ -554,6 +556,122 @@ public sealed class ContinuousDiscoveryCoordinatorTests
         Assert.Contains("Merger slot 'merge-failed' released local capacity (Failed; claim handoff=False): controlled failure", output.ToString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false, true, "cleanup needs retry", null, false)]
+    [InlineData(true, false, null, "Product completion failed", false)]
+    [InlineData(true, true, null, "Required housekeeping diagnostic could not be persisted", false)]
+    [InlineData(true, false, null, null, true)]
+    public async Task MergedHousekeepingReceiptControlsDrainWithoutSkippingDeliveryAccounting(
+        bool cleanupSucceeded, bool productCompletionSucceeded, string? productDiagnostic,
+        string? diagnosticPersistenceDiagnostic, bool expectedDrain)
+    {
+        using var lifetime = new CancellationTokenSource();
+        var deliveryCompletions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
+        var mergerCompletions = Channel.CreateUnbounded<MergerPoolCompletion>();
+        var initialPasses = NewSignal();
+        var completionPass = NewSignal();
+        var evaluationCounts = new int[3];
+        var drainCounts = 0;
+        var accountingCounts = 0;
+        var output = new ChannelLineWriter();
+
+        Task<IReadOnlyList<TDiagnostic>> Evaluate<TDiagnostic>(int poolIndex, Func<IReadOnlyList<TDiagnostic>> diagnostics)
+        {
+            var otherPoolIndex = poolIndex == (int)ContinuousPoolKind.Delivery
+                ? (int)ContinuousPoolKind.Merger
+                : (int)ContinuousPoolKind.Delivery;
+            var count = Interlocked.Increment(ref evaluationCounts[poolIndex]);
+            if (count == 1 && Volatile.Read(ref evaluationCounts[otherPoolIndex]) >= 1)
+                initialPasses.TrySetResult(true);
+            if (count >= 2 && Volatile.Read(ref evaluationCounts[otherPoolIndex]) >= 2)
+                completionPass.TrySetResult(true);
+            return Task.FromResult(diagnostics());
+        }
+
+        async Task WaitDeliveryAccountingAsync(CancellationToken token)
+        {
+            var barrier = NewSignal();
+            deliveryCompletions.Writer.TryWrite(new DeliveryPoolCompletion(string.Empty, null, null, false,
+                LocalCapacityReleased: true, AccountingBarrier: barrier));
+            await barrier.Task.WaitAsync(token);
+            Interlocked.Increment(ref accountingCounts);
+        }
+
+        async Task WaitMergerAccountingAsync(CancellationToken token)
+        {
+            var barrier = NewSignal();
+            mergerCompletions.Writer.TryWrite(new MergerPoolCompletion(string.Empty, null, null, false,
+                LocalCapacityReleased: true, AccountingBarrier: barrier));
+            await barrier.Task.WaitAsync(token);
+            Interlocked.Increment(ref accountingCounts);
+        }
+
+        var coordinator = new ContinuousDiscoveryCoordinator(
+            [
+                new ContinuousPoolRegistration(ContinuousPoolKind.Delivery,
+                    _ => Evaluate((int)ContinuousPoolKind.Delivery, Array.Empty<DeliveryPoolDiagnostic>),
+                    deliveryCompletions.Reader, static () => { }, _ => { Interlocked.Increment(ref drainCounts); return Task.CompletedTask; },
+                    WaitDeliveryAccountingAsync),
+                new ContinuousPoolRegistration(ContinuousPoolKind.Merger,
+                    _ => Evaluate((int)ContinuousPoolKind.Merger, Array.Empty<MergerPoolDiagnostic>),
+                    mergerCompletions.Reader, static () => { }, _ => { Interlocked.Increment(ref drainCounts); return Task.CompletedTask; },
+                    WaitMergerAccountingAsync)
+            ],
+            _ => Task.CompletedTask,
+            output,
+            TextWriter.Null);
+
+        var run = coordinator.RunAsync(lifetime.Token);
+        await initialPasses.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        var closed = new BeadWorkflowState("merge-task", "task", "closed", "stage:merge", false, false, false, 0);
+        var receipt = new MergerCompletionReceipt(closed, "https://example.invalid/pull/123", new string('a', 40),
+            new string('b', 40), cleanupSucceeded, productCompletionSucceeded,
+            cleanupSucceeded ? null : "cleanup needs retry", productDiagnostic, diagnosticPersistenceDiagnostic);
+        var stage = new AgentStageResult(AgentRole.Merger, "merge-task", "fixture-invocation", string.Empty,
+            null, [], MergerCompletion: receipt);
+        var mergerOutcome = new MergerSlotOutcome(MergerSlotDisposition.Merged, closed,
+            new OperationalRetryOutcome(OperationalRetryStatus.Succeeded, stage, 1, null, null, null),
+            ClaimHandoffCompleted: true, Diagnostic: "typed completion diagnostic");
+        mergerCompletions.Writer.TryWrite(new MergerPoolCompletion("merge-task", mergerOutcome, null, false,
+            LocalCapacityReleased: true));
+        var deliveryState = new BeadWorkflowState("delivery-task", "task", "open", "stage:merge", false, false, false, 0);
+        deliveryCompletions.Writer.TryWrite(new DeliveryPoolCompletion("delivery-task",
+            new DeliverySlotOutcome(DeliverySlotDisposition.MergeReady, deliveryState, AgentRole.Qa, null, true, null),
+            null, false, LocalCapacityReleased: true));
+
+        await completionPass.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var observedLines = new List<string>();
+        while (!observedLines.Any(line => line.Contains("Merger slot 'merge-task'", StringComparison.Ordinal))
+            || !observedLines.Any(line => line.Contains("Delivery slot 'delivery-task'", StringComparison.Ordinal)))
+        {
+            observedLines.Add(await output.Lines.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        }
+        lifetime.Cancel();
+        bool drained;
+        try
+        {
+            drained = await run.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        }
+        catch (TimeoutException exception)
+        {
+            throw new InvalidOperationException(
+                $"Continuous drain stalled; drains={Volatile.Read(ref drainCounts)}, accounting={Volatile.Read(ref accountingCounts)}, "
+                + $"evals={string.Join(',', evaluationCounts)}; output={string.Join(" | ", observedLines)}", exception);
+        }
+
+        Assert.Equal(expectedDrain, drained);
+        Assert.Equal("closed", mergerOutcome.FinalState?.Status);
+        Assert.True(mergerOutcome.MergeCompleted);
+        Assert.Equal(2, Volatile.Read(ref drainCounts));
+        Assert.Equal(2, Volatile.Read(ref accountingCounts));
+        Assert.Contains("Merger slot 'merge-task' released local capacity (Merged; claim handoff=True)",
+            string.Join(Environment.NewLine, observedLines), StringComparison.Ordinal);
+        Assert.Contains("Delivery slot 'delivery-task' released local capacity (MergeReady; claim handoff=True)",
+            string.Join(Environment.NewLine, observedLines), StringComparison.Ordinal);
+    }
+
     private static ContinuousDiscoveryCoordinator CreateCoordinator(
         Func<CancellationToken, Task<IReadOnlyList<DeliveryPoolDiagnostic>>> evaluate,
         ChannelReader<DeliveryPoolCompletion> completions,
@@ -587,6 +705,15 @@ public sealed class ContinuousDiscoveryCoordinatorTests
     }
 
     private static TaskCompletionSource<bool> NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private sealed class ChannelLineWriter : TextWriter
+    {
+        private readonly Channel<string> lines = Channel.CreateUnbounded<string>();
+
+        internal ChannelReader<string> Lines => lines.Reader;
+        public override Encoding Encoding => Encoding.UTF8;
+        public override void WriteLine(string? value) => lines.Writer.TryWrite(value ?? string.Empty);
+    }
 
     private static void UpdateMaximum(ref int maximum, int value)
     {

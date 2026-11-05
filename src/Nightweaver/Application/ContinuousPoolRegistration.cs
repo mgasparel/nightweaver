@@ -118,11 +118,17 @@ internal sealed record ContinuousPoolRegistration
         await foreach (var completion in reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
             var disposition = completion.Outcome?.Disposition;
+            var receipt = completion.Outcome?.Stage?.StageResult.MergerCompletion;
+            var requiredHousekeepingFailed = receipt is { } completedMerge
+                && (!completedMerge.CleanupSucceeded
+                    || completedMerge.ProductDiagnostic is not null
+                    || completedMerge.DiagnosticPersistenceDiagnostic is not null);
             var failed = completion.Exception is not null
                 || completion.IsCanceled
                 || disposition is MergerSlotDisposition.Failed or MergerSlotDisposition.Canceled
                 || disposition == MergerSlotDisposition.Escalated && !completion.Outcome!.ClaimHandoffCompleted
-                || disposition == MergerSlotDisposition.PausedForProductDecision && !completion.Outcome!.ClaimHandoffCompleted;
+                || disposition == MergerSlotDisposition.PausedForProductDecision && !completion.Outcome!.ClaimHandoffCompleted
+                || disposition == MergerSlotDisposition.Merged && requiredHousekeepingFailed;
             yield return new ContinuousPoolCompletion(
                 completion.BeadId,
                 disposition?.ToString() ?? (completion.IsAccountingBarrier ? null : "ended without an outcome"),

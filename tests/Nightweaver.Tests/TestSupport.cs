@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Nightweaver.Inspection;
@@ -107,13 +108,13 @@ internal sealed class TempDirectory : IDisposable
 
 internal sealed class RecordingProcessRunner(Func<ProcessRequest, CancellationToken, Task<ProcessResult>> handler) : IProcessRunner
 {
-    private readonly List<ProcessRequest> requests = [];
+    private readonly ConcurrentQueue<ProcessRequest> requests = new();
 
-    internal IReadOnlyList<ProcessRequest> Requests => requests;
+    internal IReadOnlyList<ProcessRequest> Requests => requests.ToArray();
 
     public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
     {
-        requests.Add(request);
+        requests.Enqueue(request);
         return handler(request, cancellationToken);
     }
 }

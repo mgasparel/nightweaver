@@ -243,6 +243,17 @@ internal sealed class MergerSlotCoordinator
             return Result(MergerSlotDisposition.Failed, verified ?? claimedState, stage, false,
                 "Merger did not return a supported verified rejection or completion publication.");
         }
+        catch (AgentLaunchDeniedException exception)
+        {
+            if (claimAcquiredHere)
+                return await RefuseAfterClaimAsync(project, repository, beadId, claimed, claimAcquiredHere,
+                    $"The continuous runtime stopped before the next Agent launch; unfinished work was retained. {exception.Message}")
+                    .ConfigureAwait(false);
+            if (claimAcquisitionAttempted)
+                return Result(MergerSlotDisposition.Refused, initialState, null, false,
+                    "The continuous runtime stopped before guarded claim acquisition was confirmed; ownership remains uncertain.");
+            return Result(MergerSlotDisposition.Refused, initialState, null, false, exception.Message);
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             if (claimAcquiredHere && !executionStarted)

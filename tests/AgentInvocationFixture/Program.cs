@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Diagnostics;
@@ -151,6 +152,8 @@ internal static class Program
                 "reviewer" => "approved",
                 "qa" when sources.Contains("qa failure:", StringComparison.OrdinalIgnoreCase) => "changes_required",
                 "qa" => "approved",
+                "merger" when sources.Contains("nightweaver-merger-rejection-v1", StringComparison.Ordinal) => "changes_required",
+                "merger" when sources.Contains("nightweaver-merge-v1", StringComparison.Ordinal) => "approved",
                 _ => "incomplete_or_unclear"
             };
         var schema = "nightweaver-" + role + "-outcome-v1";
@@ -159,6 +162,7 @@ internal static class Program
             "implementer" => "implementer_outcome",
             "reviewer" => "reviewer_outcome",
             "qa" => "qa_outcome",
+            "merger" => "merger_outcome",
             _ => "unknown_outcome"
         };
         var response = JsonSerializer.Serialize(new
@@ -220,7 +224,13 @@ internal static class Program
             baseRefName = "main",
             headRefName = branch.Trim(),
             headRefOid = head.Trim(),
-            url = "https://example.invalid/pull/fixture",
+            url = "https://github.com/nightweaver-fixture/target/pull/123",
+            baseRepository = new
+            {
+                nameWithOwner = "nightweaver-fixture/target",
+                url = "https://github.com/nightweaver-fixture/target"
+            },
+            mergedAt = state == "MERGED" ? "2026-11-04T20:00:00Z" : null,
             mergeCommit = state == "MERGED" ? new { oid = head.Trim() } : null
         });
         Console.OpenStandardOutput().Write(Encoding.UTF8.GetBytes(response));
@@ -353,6 +363,19 @@ internal static class Program
             WaitForFile(releaseFile, TimeSpan.FromMinutes(2));
             AppendShimLog($"gate-released pid={Environment.ProcessId}");
         }
+        if (mode == "graceful-stop-preparation-gate" && targetWorktree is not null
+            && string.Equals(Path.GetFullPath(Environment.CurrentDirectory), Path.GetFullPath(targetWorktree), StringComparison.OrdinalIgnoreCase)
+            && args.SequenceEqual(["status", "--porcelain=v1", "--untracked-files=all"], StringComparer.Ordinal))
+        {
+            var startedFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_GIT_SHIM_STARTED_FILE")
+                ?? throw new InvalidOperationException("The native Merger preparation gate requires a started-file path.");
+            var releaseFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_GIT_SHIM_RELEASE_FILE")
+                ?? throw new InvalidOperationException("The native Merger preparation gate requires a release-file path.");
+            AppendShimLog($"preparation-gate-start pid={Environment.ProcessId} cwd={Environment.CurrentDirectory} release={releaseFile} release_exists={File.Exists(releaseFile)}");
+            WriteProcessIdentity(startedFile);
+            WaitForFile(releaseFile, TimeSpan.FromMinutes(2));
+            AppendShimLog($"preparation-gate-released pid={Environment.ProcessId}");
+        }
 
         var exitCode = RunRealGit(realGit, args);
         AppendShimLog($"git-exit pid={Environment.ProcessId} code={exitCode}");
@@ -362,8 +385,27 @@ internal static class Program
     private static void AppendShimLog(string line)
     {
         var path = Environment.GetEnvironmentVariable("NIGHTWEAVER_GIT_SHIM_LOG");
-        if (!string.IsNullOrWhiteSpace(path))
-            File.AppendAllText(path, line + Environment.NewLine, new UTF8Encoding(false));
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        var normalizedPath = Path.GetFullPath(path);
+        if (OperatingSystem.IsWindows()) normalizedPath = normalizedPath.ToUpperInvariant();
+        var mutexName = $"NightweaverGitShimLog-{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedPath)))}";
+        using var mutex = new Mutex(initiallyOwned: false, mutexName);
+        var acquired = false;
+        try
+        {
+            try { acquired = mutex.WaitOne(TimeSpan.FromSeconds(5)); }
+            catch (AbandonedMutexException) { acquired = true; }
+            if (!acquired) throw new TimeoutException("Timed out waiting to append to the native Git shim log.");
+
+            using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+            using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+            writer.WriteLine(line);
+        }
+        finally
+        {
+            if (acquired) mutex.ReleaseMutex();
+        }
     }
 
     private static void WriteProcessIdentity(string path) =>
@@ -504,6 +546,9 @@ internal static class Program
         Console.OpenStandardInput().CopyTo(Stream.Null);
         var beadId = Environment.GetEnvironmentVariable("NIGHTWEAVER_BEAD_ID")
             ?? throw new InvalidOperationException("NIGHTWEAVER_BEAD_ID is missing.");
+        var mergerBeadId = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_MERGER_BEAD_ID");
+        if (string.Equals(beadId, mergerBeadId, StringComparison.Ordinal))
+            action = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_MERGER_ACTION") ?? action;
         var pidPath = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE");
         var pidDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_DIRECTORY");
         if (!string.IsNullOrWhiteSpace(pidDirectory))
@@ -768,6 +813,14 @@ internal static class Program
                 break;
             case "merger-verified-merge":
             {
+                var mergerStartedFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_MERGER_STARTED_FILE");
+                if (!string.IsNullOrWhiteSpace(mergerStartedFile))
+                {
+                    var mergerReleaseFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_MERGER_RELEASE_FILE")
+                        ?? throw new InvalidOperationException("Merger release file is missing.");
+                    File.WriteAllText(mergerStartedFile, beadId, new UTF8Encoding(false));
+                    WaitForFile(mergerReleaseFile, TimeSpan.FromMinutes(2));
+                }
                 var defaultBranch = Environment.GetEnvironmentVariable("NIGHTWEAVER_DEFAULT_BRANCH") ?? "main";
                 var branch = Run("git", ["branch", "--show-current"]).Trim();
                 Run("git", ["fetch", "origin", defaultBranch]);

@@ -84,6 +84,208 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
     }
 
     [Fact]
+    public async Task PublishedFirstSignalStopsMergerPreparationAndDrainsDeliveryWithoutNextLaunch()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows console control events and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge", "--add-label", "needs-human"]);
+        var deliveryBeadId = target.CreateBead("Published graceful Delivery during Merger preparation", "task", "stage:implement");
+        var mergerBeadId = target.CreateBead("Published Merger preparation must stop before launch", "task", "stage:merge");
+        var hostRoot = CreatePublishedHost(target);
+        var gateDirectory = Directory.CreateDirectory(Path.Combine(target.RootPath, "published-merger-preparation-gates")).FullName;
+        var releaseDirectory = Directory.CreateDirectory(Path.Combine(gateDirectory, "agent-releases")).FullName;
+        var agentPidDirectory = Directory.CreateDirectory(Path.Combine(gateDirectory, "agent-pids")).FullName;
+        var agentReadyDirectory = Directory.CreateDirectory(Path.Combine(gateDirectory, "agent-ready")).FullName;
+        var classifierStarted = Path.Combine(gateDirectory, "classifier.started");
+        var classifierRelease = Path.Combine(gateDirectory, "classifier.release");
+        var classifierPid = Path.Combine(gateDirectory, "classifier.pid");
+        var stageLaunchLog = Path.Combine(gateDirectory, "stage-launches.log");
+        var gitStarted = Path.Combine(gateDirectory, "git-preparation.started");
+        var gitRelease = Path.Combine(gateDirectory, "git-preparation.release");
+        var gitShimLog = Path.Combine(gateDirectory, "git-shim.log");
+        var runtimeLog = Path.Combine(gateDirectory, "runtime.log");
+        var mergerWorktree = Path.Combine(hostRoot, "worktrees", "demo", mergerBeadId);
+        var environment = CreateGitShimEnvironment(target, new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["NIGHTWEAVER_FIXTURE_ACTION"] = "pool-implement-gated",
+            ["NIGHTWEAVER_FIXTURE_STARTED_FILE"] = Path.Combine(gateDirectory, "agent.started"),
+            ["NIGHTWEAVER_FIXTURE_RELEASE_FILE"] = Path.Combine(releaseDirectory, "default.release"),
+            ["NIGHTWEAVER_FIXTURE_RELEASE_DIRECTORY"] = releaseDirectory,
+            ["NIGHTWEAVER_FIXTURE_PID_DIRECTORY"] = agentPidDirectory,
+            ["NIGHTWEAVER_FIXTURE_READY_DIRECTORY"] = agentReadyDirectory,
+            ["NIGHTWEAVER_FIXTURE_STAGE_LAUNCH_LOG"] = stageLaunchLog,
+            ["NIGHTWEAVER_FIXTURE_CLASSIFIER_STARTED_FILE"] = classifierStarted,
+            ["NIGHTWEAVER_FIXTURE_CLASSIFIER_RELEASE_FILE"] = classifierRelease,
+            ["NIGHTWEAVER_FIXTURE_CLASSIFIER_PID_FILE"] = classifierPid,
+            ["NIGHTWEAVER_GIT_SHIM_MODE"] = "graceful-stop-preparation-gate",
+            ["NIGHTWEAVER_GIT_SHIM_TARGET_WORKTREE"] = mergerWorktree,
+            ["NIGHTWEAVER_GIT_SHIM_STARTED_FILE"] = gitStarted,
+            ["NIGHTWEAVER_GIT_SHIM_RELEASE_FILE"] = gitRelease,
+            ["NIGHTWEAVER_GIT_SHIM_LOG"] = gitShimLog,
+            ["OPENAI_API_KEY"] = null
+        });
+        using var runtime = WindowsConsoleProcess.Start(
+            Path.Combine(hostRoot, "nightweaver.exe"), ["--project", "demo"], target.Path, environment, runtimeLog);
+
+        try
+        {
+            await WaitForStageLaunchCountAsync(stageLaunchLog, 1, runtime, TimeSpan.FromSeconds(90));
+            var deliveryRecord = File.ReadAllLines(stageLaunchLog)
+                .Select(ReadFixtureProcessFromLaunchRecord)
+                .Single(record => record.BeadId == deliveryBeadId);
+            using var deliveryAgent = deliveryRecord.Process;
+            await WaitForFileAsync(Path.Combine(agentReadyDirectory, deliveryBeadId + ".ready"), runtime, TimeSpan.FromSeconds(30));
+            await WaitForFileAsync(gitStarted, runtime, TimeSpan.FromSeconds(90));
+            using var preparationGit = ReadFixtureProcess(gitStarted);
+            Assert.False(deliveryAgent.HasExited);
+            Assert.False(preparationGit.HasExited);
+
+            target.SendConsoleBreak(runtime.Id);
+            await Task.Delay(250, TestContext.Current.CancellationToken);
+            Assert.False(runtime.HasExited, "The first signal must gracefully drain Delivery while Merger preparation settles.");
+            Assert.False(deliveryAgent.HasExited, "The first signal must leave the active Delivery Agent running.");
+            Assert.False(preparationGit.HasExited, "The first signal must allow the in-flight Merger preparation operation to settle.");
+
+            File.WriteAllText(gitRelease, "settle Merger preparation after stop", new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(releaseDirectory, deliveryBeadId + ".release"), "finish current Delivery turn", new UTF8Encoding(false));
+            await WaitForFileAsync(classifierStarted, runtime, TimeSpan.FromSeconds(90));
+            using var classifier = ReadFixtureProcess(classifierPid);
+            Assert.False(classifier.HasExited, "Outcome classification for the active Delivery turn must remain part of graceful drain.");
+            Assert.Single(File.ReadAllLines(stageLaunchLog));
+
+            File.WriteAllText(classifierRelease, "complete current Delivery classification", new UTF8Encoding(false));
+            var exitCode = await runtime.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+            Assert.True(exitCode == 0, $"Expected graceful drain to exit successfully, got {exitCode}. Runtime output: {ReadRuntimeLog(runtime)}");
+            Assert.Single(File.ReadAllLines(stageLaunchLog));
+            Assert.Equal("stage:review", BeadWorkflowState.Parse(target.ReadBead(deliveryBeadId)).Stage);
+            Assert.Equal("open", target.ReadBead(deliveryBeadId).Status);
+            Assert.Null(target.ReadBead(deliveryBeadId).Assignee);
+            Assert.Equal("open", target.ReadBead(mergerBeadId).Status);
+            Assert.Null(target.ReadBead(mergerBeadId).Assignee);
+            Assert.Equal("stage:merge", BeadWorkflowState.Parse(target.ReadBead(mergerBeadId)).Stage);
+            Assert.DoesNotContain(File.ReadAllLines(stageLaunchLog), line => line.StartsWith(mergerBeadId + "|", StringComparison.Ordinal));
+            AssertFixtureProcessExited(classifierPid);
+        }
+        finally
+        {
+            File.WriteAllText(gitRelease, "test cleanup", new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(releaseDirectory, deliveryBeadId + ".release"), "test cleanup", new UTF8Encoding(false));
+            File.WriteAllText(classifierRelease, "test cleanup", new UTF8Encoding(false));
+            if (!runtime.HasExited)
+            {
+                try { target.SendConsoleBreak(runtime.Id); }
+                catch (Exception) { }
+                try { await runtime.WaitAsync(TimeSpan.FromSeconds(15), CancellationToken.None); }
+                catch (TimeoutException) { }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task PublishedFirstSignalDrainsActiveDeliveryAndMergerWithoutLaunchingQueuedReceiver()
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows console control events and native CLI fixtures.");
+        using var target = new AgentStageTargetFixture();
+        target.ConfigureHostedFixtureOriginWithLocalRewrite();
+        target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge", "--add-label", "needs-human"]);
+        var deliveryBeadId = target.CreateBead("Published graceful active Delivery", "task", "stage:implement");
+        var mergerBeadId = target.CreateBead("Published graceful active Merger", "task", "stage:merge");
+        var queuedMergerBeadId = target.CreateBead("Published graceful queued Merger receiver", "task", "stage:merge");
+        var hostRoot = CreatePublishedHost(target);
+        var gateDirectory = Directory.CreateDirectory(Path.Combine(target.RootPath, "published-active-cross-pool-graceful-gates")).FullName;
+        var releaseDirectory = Directory.CreateDirectory(Path.Combine(gateDirectory, "delivery-releases")).FullName;
+        var agentPidDirectory = Directory.CreateDirectory(Path.Combine(gateDirectory, "agent-pids")).FullName;
+        var agentReadyDirectory = Directory.CreateDirectory(Path.Combine(gateDirectory, "agent-ready")).FullName;
+        var classifierStarted = Path.Combine(gateDirectory, "classifier.started");
+        var classifierRelease = Path.Combine(gateDirectory, "classifier.release");
+        var classifierPid = Path.Combine(gateDirectory, "classifier.pid");
+        var mergerStarted = Path.Combine(gateDirectory, "merger.started");
+        var mergerRelease = Path.Combine(gateDirectory, "merger.release");
+        var stageLaunchLog = Path.Combine(gateDirectory, "stage-launches.log");
+        var runtimeLog = Path.Combine(gateDirectory, "runtime.log");
+        var environment = target.CreateRuntimeEnvironment(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["NIGHTWEAVER_FIXTURE_ACTION"] = "pool-implement-gated",
+            ["NIGHTWEAVER_FIXTURE_STARTED_FILE"] = Path.Combine(gateDirectory, "agent.started"),
+            ["NIGHTWEAVER_FIXTURE_RELEASE_FILE"] = Path.Combine(releaseDirectory, "default.release"),
+            ["NIGHTWEAVER_FIXTURE_RELEASE_DIRECTORY"] = releaseDirectory,
+            ["NIGHTWEAVER_FIXTURE_PID_DIRECTORY"] = agentPidDirectory,
+            ["NIGHTWEAVER_FIXTURE_READY_DIRECTORY"] = agentReadyDirectory,
+            ["NIGHTWEAVER_FIXTURE_STAGE_LAUNCH_LOG"] = stageLaunchLog,
+            ["NIGHTWEAVER_FIXTURE_CLASSIFIER_STARTED_FILE"] = classifierStarted,
+            ["NIGHTWEAVER_FIXTURE_CLASSIFIER_RELEASE_FILE"] = classifierRelease,
+            ["NIGHTWEAVER_FIXTURE_CLASSIFIER_PID_FILE"] = classifierPid,
+            ["NIGHTWEAVER_FIXTURE_MERGER_BEAD_ID"] = mergerBeadId,
+            ["NIGHTWEAVER_FIXTURE_MERGER_ACTION"] = "merger-verified-merge",
+            ["NIGHTWEAVER_FIXTURE_MERGER_STARTED_FILE"] = mergerStarted,
+            ["NIGHTWEAVER_FIXTURE_MERGER_RELEASE_FILE"] = mergerRelease,
+            ["OPENAI_API_KEY"] = null
+        });
+        using var runtime = WindowsConsoleProcess.Start(
+            Path.Combine(hostRoot, "nightweaver.exe"), ["--project", "demo"], target.Path, environment, runtimeLog);
+
+        try
+        {
+            await WaitForStageLaunchCountAsync(stageLaunchLog, 2, runtime, TimeSpan.FromSeconds(90));
+            await WaitForFileAsync(Path.Combine(agentReadyDirectory, deliveryBeadId + ".ready"), runtime, TimeSpan.FromSeconds(30));
+            await WaitForFileAsync(mergerStarted, runtime, TimeSpan.FromSeconds(90));
+            var activeAgents = File.ReadAllLines(stageLaunchLog).Select(ReadFixtureProcessFromLaunchRecord).ToArray();
+            Assert.Equal(new[] { deliveryBeadId, mergerBeadId }.Order(StringComparer.Ordinal),
+                activeAgents.Select(agent => agent.BeadId).Order(StringComparer.Ordinal));
+            using var deliveryAgent = Assert.Single(activeAgents, agent => agent.BeadId == deliveryBeadId).Process;
+            using var mergerAgent = Assert.Single(activeAgents, agent => agent.BeadId == mergerBeadId).Process;
+            var queuedMerger = target.ReadBead(queuedMergerBeadId);
+            Assert.Equal("open", queuedMerger.Status);
+            Assert.Null(queuedMerger.Assignee);
+            Assert.Equal("stage:merge", BeadWorkflowState.Parse(queuedMerger).Stage);
+            Assert.False(deliveryAgent.HasExited);
+            Assert.False(mergerAgent.HasExited);
+
+            target.SendConsoleBreak(runtime.Id);
+            await Task.Delay(250, TestContext.Current.CancellationToken);
+            Assert.False(runtime.HasExited, "The first signal must drain both active pools without canceling either current turn.");
+            Assert.False(deliveryAgent.HasExited, "The first signal must leave the active Delivery Agent running.");
+            Assert.False(mergerAgent.HasExited, "The first signal must leave the active Merger Agent running.");
+
+            File.WriteAllText(Path.Combine(releaseDirectory, deliveryBeadId + ".release"), "finish current Delivery turn", new UTF8Encoding(false));
+            File.WriteAllText(mergerRelease, "finish current Merger turn", new UTF8Encoding(false));
+            await WaitForFileAsync(classifierStarted, runtime, TimeSpan.FromSeconds(90));
+            using var classifier = ReadFixtureProcess(classifierPid);
+            Assert.False(classifier.HasExited, "The current Delivery outcome classifier must be allowed to finish during drain.");
+            Assert.Equal(2, File.ReadAllLines(stageLaunchLog).Length);
+
+            File.WriteAllText(classifierRelease, "finish current Delivery classification", new UTF8Encoding(false));
+            Assert.Equal(0, await runtime.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken));
+            Assert.Equal(2, File.ReadAllLines(stageLaunchLog).Length);
+            var delivery = target.ReadBead(deliveryBeadId);
+            Assert.Equal("open", delivery.Status);
+            Assert.Null(delivery.Assignee);
+            Assert.Equal("stage:review", BeadWorkflowState.Parse(delivery).Stage);
+            var merged = target.ReadBead(mergerBeadId);
+            Assert.Equal("closed", merged.Status);
+            Assert.Null(merged.Assignee);
+            queuedMerger = target.ReadBead(queuedMergerBeadId);
+            Assert.Equal("open", queuedMerger.Status);
+            Assert.Null(queuedMerger.Assignee);
+            Assert.Equal("stage:merge", BeadWorkflowState.Parse(queuedMerger).Stage);
+            AssertFixtureProcessExited(classifierPid);
+        }
+        finally
+        {
+            File.WriteAllText(Path.Combine(releaseDirectory, deliveryBeadId + ".release"), "test cleanup", new UTF8Encoding(false));
+            File.WriteAllText(mergerRelease, "test cleanup", new UTF8Encoding(false));
+            File.WriteAllText(classifierRelease, "test cleanup", new UTF8Encoding(false));
+            if (!runtime.HasExited)
+            {
+                try { target.SendConsoleBreak(runtime.Id); }
+                catch (Exception) { }
+                try { await runtime.WaitAsync(TimeSpan.FromSeconds(15), CancellationToken.None); }
+                catch (TimeoutException) { }
+            }
+        }
+    }
+
+    [Fact]
     public async Task PublishedRuntimeKeepsSecondConsoleSignalAvailableDuringFirstStopDrain()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows console control events and native CLI fixtures.");
@@ -91,10 +293,10 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge", "--add-label", "needs-human"]);
         var beadIds = new[]
         {
-            target.CreateBead("Published second console stop one", "task", "stage:implement"),
-            target.CreateBead("Published second console stop two", "task", "stage:implement")
+            target.CreateBead("Published second console stop Delivery", "task", "stage:implement"),
+            target.CreateBead("Published second console stop Merger", "task", "stage:merge")
         };
-        var hostRoot = CreatePublishedHost(target, deliveryCapacity: 2);
+        var hostRoot = CreatePublishedHost(target);
         var gateDirectory = Directory.CreateDirectory(Path.Combine(target.RootPath, "published-second-signal-gates")).FullName;
         var agentStarted = Path.Combine(gateDirectory, "agent.started");
         var agentRelease = Path.Combine(gateDirectory, "agent.release");
@@ -571,8 +773,13 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         throw new TimeoutException($"Published Nightweaver did not create fixture handshake '{path}' within {timeout}.");
     }
 
-    private static string ReadRuntimeLog(WindowsConsoleProcess runtime) =>
-        runtime.OutputLogPath is { } path && File.Exists(path) ? File.ReadAllText(path) : "(no console output log)";
+    private static string ReadRuntimeLog(WindowsConsoleProcess runtime)
+    {
+        if (runtime.OutputLogPath is not { } path || !File.Exists(path)) return "(no console output log)";
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
 
     private static Process ReadFixtureProcess(string path)
     {
