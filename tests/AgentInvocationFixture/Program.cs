@@ -634,6 +634,14 @@ internal static class Program
                         || string.Equals(beadId, secondGateBead, StringComparison.Ordinal))
                     {
                         Directory.CreateDirectory(gateDirectory);
+                        if (string.Equals(beadId,
+                            Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_RETAIN_SENTINEL_BEAD"),
+                            StringComparison.Ordinal))
+                        {
+                            var retainedSentinel = Path.Combine(Environment.CurrentDirectory, "manual-pilot-retained-sentinel.txt");
+                            if (!File.Exists(retainedSentinel))
+                                File.WriteAllText(retainedSentinel, "retain across runtime recovery\n", new UTF8Encoding(false));
+                        }
                         File.WriteAllText(Path.Combine(gateDirectory, beadId + ".started"), Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), new UTF8Encoding(false));
                         WaitForFile(Path.Combine(gateDirectory, beadId + ".release"), TimeSpan.FromMinutes(5));
                     }
@@ -643,7 +651,7 @@ internal static class Program
                         && metadata.TryGetProperty("repair_cycles", out var currentCycles) ? currentCycles.GetInt32() : 0;
                     var output = Path.Combine(Environment.CurrentDirectory, "manual-delivery-" + beadId + ".txt");
                     File.WriteAllText(output,
-                        $"Committed by the isolated native pilot for {beadId}; repair cycle {repairCycles}.\n",
+                        $"Committed by the isolated native pilot for {beadId}; repair cycle {repairCycles}; invocation process {Environment.ProcessId}.\n",
                         new UTF8Encoding(false));
                     Run("git", ["add", Path.GetFileName(output)]);
                     Run("git", ["commit", "-m", $"manual Delivery pilot implementation {beadId} cycle {repairCycles}"]);
@@ -653,10 +661,16 @@ internal static class Program
                 else if (role == "reviewer")
                 {
                     var rejectionBead = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_REJECT_BEAD");
+                    var exhaustionBead = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_EXHAUST_BEAD");
                     var state = ReadFixtureBead(beadId);
                     var repairCycles = state.TryGetProperty("metadata", out var metadata)
                         && metadata.TryGetProperty("repair_cycles", out var cycles) ? cycles.GetInt32() : 0;
-                    if (string.Equals(beadId, rejectionBead, StringComparison.Ordinal) && repairCycles == 0)
+                    var exhaustedPilot = string.Equals(beadId, exhaustionBead, StringComparison.Ordinal)
+                        && repairCycles <= ReadPilotRepairLimit();
+                    if (exhaustedPilot)
+                        Run("bd", ["comments", "add", beadId,
+                            $"Blocking finding: automatic pilot rejection cycle {repairCycles}; fix the documented issue before review can approve."]);
+                    else if (string.Equals(beadId, rejectionBead, StringComparison.Ordinal) && repairCycles == 0)
                         Run("bd", ["comments", "add", beadId, "Blocking finding: first pilot review requires the missing edge case; implement the correction before approval."]);
                     else
                         Run("bd", ["comments", "add", beadId, "Reviewer evidence: pilot change is ready for QA."]);
@@ -920,6 +934,16 @@ internal static class Program
                 break;
             case "merger-verified-merge":
             {
+                var pilotGateBead = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_MERGER_GATE_BEAD");
+                if (string.Equals(beadId, pilotGateBead, StringComparison.Ordinal))
+                {
+                    var pilotGateDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_MERGER_GATE_DIRECTORY")
+                        ?? throw new InvalidOperationException("The manual pilot Merger gate directory is missing.");
+                    Directory.CreateDirectory(pilotGateDirectory);
+                    File.WriteAllText(Path.Combine(pilotGateDirectory, beadId + ".merger.started"),
+                        Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), new UTF8Encoding(false));
+                    WaitForFile(Path.Combine(pilotGateDirectory, beadId + ".merger.release"), TimeSpan.FromMinutes(5));
+                }
                 var mergerStartedFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_MERGER_STARTED_FILE");
                 if (!string.IsNullOrWhiteSpace(mergerStartedFile))
                 {
@@ -1200,6 +1224,14 @@ internal static class Program
         using var document = JsonDocument.Parse(Run("bd", ["show", beadId, "--json"]));
         var root = document.RootElement;
         return (root.ValueKind == JsonValueKind.Array ? root[0] : root).Clone();
+    }
+
+    private static int ReadPilotRepairLimit()
+    {
+        var configPath = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_CONFIG")
+            ?? throw new InvalidOperationException("The manual pilot Project configuration path is missing.");
+        using var config = JsonDocument.Parse(File.ReadAllText(configPath));
+        return config.RootElement.GetProperty("limits").GetProperty("max_repair_cycles").GetInt32();
     }
 
     private static void AbortRebaseIfActive()

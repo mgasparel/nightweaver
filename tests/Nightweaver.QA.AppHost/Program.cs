@@ -16,6 +16,8 @@ var nightweaverRoot = fixture;
 var manualScenario = string.Equals(Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO"), "manual-delivery", StringComparison.Ordinal);
 var manualManifestPointer = Path.Combine(Environment.CurrentDirectory, ".manual-delivery-manifest.json");
 ManualDeliveryPilotFixture? manualPilot = null;
+CancellationTokenSource? manualRuntimeControlStop = null;
+Task? manualRuntimeControl = null;
 FactoryTelemetryPublisher? telemetry = null;
 Task<AgentExecutionResult>[] telemetryRuns = [];
 string[] telemetryReleaseFiles = [];
@@ -26,7 +28,9 @@ try
     {
         manualPilot = await ManualDeliveryPilotFixture.CreateAsync(
             agentInvocationFixturePath: typeof(FixtureMarker).Assembly.Location,
-            cancellationToken: CancellationToken.None);
+            cancellationToken: CancellationToken.None,
+            includeExhaustionTask: true,
+            includeForeignClaim: true);
         fixture = manualPilot.Root;
         repository = manualPilot.Repository;
         userHome = manualPilot.UserHome;
@@ -41,7 +45,12 @@ try
     {
         if (manualScenario)
         {
-            var runtime = manualPilot!.StartRuntime(typeof(ProjectConfigLoader).Assembly.Location);
+            var runtimeAssemblyPath = typeof(ProjectConfigLoader).Assembly.Location;
+            var runtime = manualPilot!.StartRuntime(runtimeAssemblyPath);
+            await File.WriteAllTextAsync(manualPilot.RuntimeProcessIdPath,
+                runtime.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), new UTF8Encoding(false), cancellationToken);
+            manualRuntimeControlStop = new CancellationTokenSource();
+            manualRuntimeControl = manualPilot.RunRuntimeRestartControlLoopAsync(runtimeAssemblyPath, manualRuntimeControlStop.Token);
             await manualPilot.WaitForGateAsync(manualPilot.ParentlessTaskId, TimeSpan.FromMinutes(2), cancellationToken);
             Console.WriteLine($"Manual Delivery pilot runtime PID {runtime.Id}; fixture manifest {manualManifestPointer}");
             return;
@@ -173,6 +182,18 @@ finally
 
     if (manualPilot is not null)
     {
+        if (manualRuntimeControlStop is not null)
+        {
+            manualRuntimeControlStop.Cancel();
+            try { if (manualRuntimeControl is not null) await manualRuntimeControl; }
+            catch (OperationCanceledException) when (manualRuntimeControlStop.IsCancellationRequested) { }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine($"Manual Delivery fixture restart control failed: {exception}");
+                Environment.ExitCode = 1;
+            }
+            finally { manualRuntimeControlStop.Dispose(); }
+        }
         try
         {
             manualPilot.ReleaseGate(manualPilot.ParentlessTaskId);

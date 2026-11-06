@@ -26,6 +26,9 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
         RuntimeLogPath = Path.Combine(Root, "runtime.log");
         ManifestPath = Path.Combine(Root, "manifest.json");
         ConfigPath = Path.Combine(Root, "project.json");
+        RuntimeRestartRequestPath = Path.Combine(GateDirectory, "runtime.restart.request");
+        RuntimeRestartAckPath = Path.Combine(GateDirectory, "runtime.restart.ack");
+        RuntimeProcessIdPath = Path.Combine(GateDirectory, "runtime.pid");
         inheritedPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
     }
 
@@ -40,18 +43,26 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
     public string RuntimeLogPath { get; }
     public string ManifestPath { get; }
     public string ConfigPath { get; }
+    public string RuntimeRestartRequestPath { get; }
+    public string RuntimeRestartAckPath { get; }
+    public string RuntimeProcessIdPath { get; }
     public string ParentlessTaskId { get; private set; } = string.Empty;
     public string ProductId { get; private set; } = string.Empty;
     public string ProductTaskId { get; private set; } = string.Empty;
     public string DecisionId { get; private set; } = string.Empty;
     public string PausedTaskId { get; private set; } = string.Empty;
+    public string ExhaustionTaskId { get; private set; } = string.Empty;
+    public string ForeignClaimId { get; private set; } = string.Empty;
+    public string? MergerGateBeadId { get; set; }
+    public string? RetainSentinelBeadId { get; set; }
     internal WindowsConsoleProcess? RuntimeProcess { get; private set; }
     public bool PreserveEvidenceOnDispose { get; private set; }
 
     public void PreserveForFailure() => PreserveEvidenceOnDispose = true;
 
     public static async Task<ManualDeliveryPilotFixture> CreateAsync(string? root = null,
-        string? agentInvocationFixturePath = null, CancellationToken cancellationToken = default)
+        string? agentInvocationFixturePath = null, bool includeExhaustionTask = false,
+        bool includeForeignClaim = false, CancellationToken cancellationToken = default)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The native manual Delivery pilot requires Windows process and console controls.");
@@ -73,7 +84,7 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
                     new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
 
             await fixture.InitializeGitAsync(cancellationToken).ConfigureAwait(false);
-            await fixture.InitializeBeadsAsync(cancellationToken).ConfigureAwait(false);
+            await fixture.InitializeBeadsAsync(includeExhaustionTask, includeForeignClaim, cancellationToken).ConfigureAwait(false);
             fixture.CopyAgentAliases(agentInvocationFixturePath ?? Path.Combine(AppContext.BaseDirectory, "AgentInvocationFixture.exe"));
             await fixture.WriteConfigurationAsync(cancellationToken).ConfigureAwait(false);
             await fixture.WriteManifestAsync(cancellationToken).ConfigureAwait(false);
@@ -117,6 +128,11 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
             ["NIGHTWEAVER_FIXTURE_PILOT_GATE_BEAD2"] = PausedTaskId,
             ["NIGHTWEAVER_FIXTURE_PILOT_GATE_DIRECTORY"] = GateDirectory,
             ["NIGHTWEAVER_FIXTURE_PILOT_EVIDENCE"] = EvidencePath,
+            ["NIGHTWEAVER_FIXTURE_PILOT_RETAIN_SENTINEL_BEAD"] = RetainSentinelBeadId,
+            ["NIGHTWEAVER_FIXTURE_PILOT_CONFIG"] = ConfigPath,
+            ["NIGHTWEAVER_FIXTURE_PILOT_EXHAUST_BEAD"] = string.IsNullOrEmpty(ExhaustionTaskId) ? null : ExhaustionTaskId,
+            ["NIGHTWEAVER_FIXTURE_PILOT_MERGER_GATE_BEAD"] = MergerGateBeadId,
+            ["NIGHTWEAVER_FIXTURE_PILOT_MERGER_GATE_DIRECTORY"] = GateDirectory,
             ["NIGHTWEAVER_FIXTURE_PILOT_REJECT_BEAD"] = ProductTaskId,
             ["NIGHTWEAVER_FIXTURE_DEFAULT_BRANCH"] = "main"
         };
@@ -129,6 +145,12 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
     internal WindowsConsoleProcess StartRuntime(string nightweaverAssemblyPath)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        if (RuntimeProcess is { HasExited: true } exitedRuntime)
+        {
+            ownedProcesses.Remove(exitedRuntime.Id);
+            exitedRuntime.Dispose();
+            RuntimeProcess = null;
+        }
         if (RuntimeProcess is { HasExited: false })
             throw new InvalidOperationException("The manual Delivery pilot runtime is already running.");
 
@@ -139,6 +161,52 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
         ownedProcesses.Add(process.Id);
         RuntimeProcess = process;
         return process;
+    }
+
+    public async Task RunRuntimeRestartControlLoopAsync(string nightweaverAssemblyPath, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            if (File.Exists(RuntimeRestartRequestPath) && RuntimeProcess is { HasExited: true })
+            {
+                File.Delete(RuntimeRestartRequestPath);
+                var runtime = StartRuntime(nightweaverAssemblyPath);
+                await File.WriteAllTextAsync(RuntimeProcessIdPath, runtime.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
+                await File.WriteAllTextAsync(RuntimeRestartAckPath, runtime.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
+            }
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public async Task SendRuntimeConsoleBreakAsync(CancellationToken cancellationToken = default)
+    {
+        var process = RuntimeProcess ?? throw new InvalidOperationException("The manual Delivery pilot runtime has not been started.");
+        if (process.HasExited) throw new InvalidOperationException("The manual Delivery pilot runtime has already exited.");
+        var helper = Path.Combine(FakeCliRoot, "AgentInvocationFixture.exe");
+        await RunToolAsync(helper,
+            ["--nightweaver-send-control-break", process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)],
+            Repository, CreateEnvironment(), TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task CrashRuntimeAsync(TimeSpan timeout)
+    {
+        if (RuntimeProcess is not { } process) return;
+        try
+        {
+            if (!process.HasExited) process.KillEntireProcessTree();
+            await process.WaitAsync(timeout).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (process.HasExited)
+            {
+                ownedProcesses.Remove(process.Id);
+                process.Dispose();
+                RuntimeProcess = null;
+            }
+        }
     }
 
     private void CopyRuntimePayload(string runtimeAssemblyPath)
@@ -176,6 +244,30 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
     public void ReleaseGate(string beadId) =>
         File.WriteAllText(Path.Combine(GateDirectory, beadId + ".release"), "release\n", new UTF8Encoding(false));
 
+    public void ReleaseMergerGate(string beadId) =>
+        File.WriteAllText(Path.Combine(GateDirectory, beadId + ".merger.release"), "release\n", new UTF8Encoding(false));
+
+    public async Task WaitForMergerGateAsync(string beadId, TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        var gate = Path.Combine(GateDirectory, beadId + ".merger.started");
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (File.Exists(gate)) return;
+            if (RuntimeProcess is { HasExited: true } process)
+                throw new InvalidOperationException($"Pilot runtime exited ({process.ExitCode}) before the Merger gate opened: {ReadRuntimeLog()}");
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        }
+        throw new TimeoutException($"Pilot Merger '{beadId}' did not reach its gate within {timeout}. Runtime output: {ReadRuntimeLog()}");
+    }
+
+    public Task<string> CreateTaskAsync(string title, CancellationToken cancellationToken = default) =>
+        CreateBeadAsync(title, "task", ["stage:implement"], cancellationToken);
+
+    public Task<string> CreateMergeGateTaskAsync(string title, CancellationToken cancellationToken = default) =>
+        CreateBeadAsync(title, "task", ["stage:merge"], cancellationToken);
+
     public string ReadRuntimeLog()
     {
         if (!File.Exists(RuntimeLogPath)) return string.Empty;
@@ -192,6 +284,19 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
         return (root.ValueKind == JsonValueKind.Array ? root[0] : root).Clone();
     }
 
+    public async Task<string> CreateForeignClaimAsync(CancellationToken cancellationToken = default)
+    {
+        var beadId = await CreateBeadAsync("QA manual pilot foreign-owned recovery sentinel", "task",
+            ["stage:implement"], cancellationToken).ConfigureAwait(false);
+        await RunToolAsync("bd", ["update", beadId, "--status", "in_progress", "--assignee", "foreign:operator"],
+            Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+        return beadId;
+    }
+
+    public Task<string> ReadWorktreeBranchAsync(string beadId, CancellationToken cancellationToken = default) =>
+        RunToolAsync("git", ["branch", "--show-current"], WorktreePath(beadId), CreateEnvironment(),
+            TimeSpan.FromSeconds(15), cancellationToken);
+
     public async Task<string> ReadRemoteMainFileAsync(string relativePath, CancellationToken cancellationToken = default) =>
         await RunToolAsync("git", ["--git-dir", Origin, "show", $"refs/heads/main:{relativePath}"], Root,
             CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
@@ -207,7 +312,8 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
             {
                 if (force)
                 {
-                    process.KillEntireProcessTree();
+                    await CrashRuntimeAsync(timeout).ConfigureAwait(false);
+                    return;
                 }
                 else
                 {
@@ -308,7 +414,7 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
         await RunToolAsync("git", ["push", "--set-upstream", "origin", "main"], Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task InitializeBeadsAsync(CancellationToken cancellationToken)
+    private async Task InitializeBeadsAsync(bool includeExhaustionTask, bool includeForeignClaim, CancellationToken cancellationToken)
     {
         await RunToolAsync("bd", ["init", "--prefix", "qa", "--non-interactive", "--skip-agents", "--skip-hooks"],
             Repository, CreateEnvironment(), TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
@@ -343,6 +449,16 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
         });
         await RunToolAsync("bd", ["comments", "add", PausedTaskId, diagnostic], Repository,
             CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+        if (includeExhaustionTask)
+            ExhaustionTaskId = await CreateBeadAsync("QA manual pilot automatic rejection exhaustion", "task",
+                ["stage:implement"], cancellationToken).ConfigureAwait(false);
+        if (includeForeignClaim)
+        {
+            ForeignClaimId = await CreateBeadAsync("QA manual pilot foreign-owned preservation sentinel", "task",
+                ["stage:implement"], cancellationToken).ConfigureAwait(false);
+            await RunToolAsync("bd", ["update", ForeignClaimId, "--status", "in_progress", "--assignee", "foreign:operator"],
+                Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task<string> CreateBeadAsync(string title, string type, IReadOnlyList<string> labels,
@@ -384,13 +500,18 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
             gateDirectory = GateDirectory,
             evidencePath = EvidencePath,
             runtimeLogPath = RuntimeLogPath,
+            runtimeRestartRequest = RuntimeRestartRequestPath,
+            runtimeRestartAck = RuntimeRestartAckPath,
+            runtimeProcessId = RuntimeProcessIdPath,
+            foreignClaim = string.IsNullOrEmpty(ForeignClaimId) ? null : ForeignClaimId,
             tasks = new
             {
                 parentless = ParentlessTaskId,
                 product = ProductId,
                 productTask = ProductTaskId,
                 decision = DecisionId,
-                paused = PausedTaskId
+                paused = PausedTaskId,
+                exhaustion = string.IsNullOrEmpty(ExhaustionTaskId) ? null : ExhaustionTaskId
             }
         };
         await File.WriteAllTextAsync(ManifestPath, JsonSerializer.Serialize(manifest, IndentedJson),
