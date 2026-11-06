@@ -22,7 +22,7 @@ dotnet test Nightweaver.slnx
 dotnet publish src/Nightweaver/Nightweaver.csproj -c Release --self-contained false -p:UseAppHost=true -o 'C:\Tools\Nightweaver'
 ```
 
-The publish command produces a framework-dependent apphost named `nightweaver.exe` on Windows and `nightweaver` on Unix. The machine running it needs the .NET 10 runtime.
+The single-project publish command produces the framework-dependent CLI apphost named `nightweaver.exe` on Windows and `nightweaver` on Unix. For paired background deployment on Windows, use the fresh-destination script below; the machine running the pair needs .NET 10 and ASP.NET Core 10.
 
 ## Project files and path resolution
 
@@ -65,6 +65,41 @@ Set-Location 'C:\Tools\Unrelated Caller Directory'
 ```
 
 Use the Unix apphost name `nightweaver` in place of `nightweaver.exe` on Unix systems.
+
+## Manual background deployment (Windows v1)
+
+The supported v1 deployment starts one detached runtime and its matching Web Console manually. Closing the starting terminal or browser does not stop the runtime. A crash requires an operator to run `background start` or `background restart`; Nightweaver installs no login task or Windows service and does not restart a crashed owner automatically.
+
+Publish both apphosts and their prompts/static assets to a new destination. Pass the existing Target Repository so the script can refuse a destination that overlaps either repository:
+
+```powershell
+.\scripts\Publish-Nightweaver.ps1 `
+  -Destination 'C:\Tools\Nightweaver Host' `
+  -TargetRepository 'H:\Work\Demo Product'
+```
+
+Create the Project JSON under `<destination>\projects\<slug>.json`, or keep it elsewhere and select it with `--config`. The installation is framework-dependent. The script only publishes binaries and a small pair/build manifest; it does not copy or rewrite Project configuration or initialize a tracker. It refuses nonempty destinations and never prunes an existing installation.
+
+From any caller directory, the `background` commands use the same resolved Project configuration and host root for CLI telemetry and Web Console:
+
+```powershell
+$nightweaverRoot = 'C:\Tools\Nightweaver Host'
+$nightweaver = Join-Path $nightweaverRoot 'nightweaver.exe'
+
+& $nightweaver background start --project demo
+& $nightweaver background status --project demo
+Start-Process 'http://127.0.0.1:5000'
+& $nightweaver background stop --project demo
+& $nightweaver background restart --project demo
+```
+
+`background start` waits until the Web `/health` endpoint and `/api/factory/state` both identify the actual live runtime, Project, and Target Repository. This check separates host health from runtime health. Status prints a JSON owner record with starting/running/stopping/stopped/degraded state, process/run identity, Web URL and health, actual runtime health, shared root/configuration, and diagnostic log paths. The current-user named pipe controls the owner; there is no TCP management endpoint. Only loopback HTTP URLs with an explicit port are accepted (default `http://127.0.0.1:5000`).
+
+The owner keeps one deployment/Project lock and the existing Target Repository process lock remains authoritative across host roots. A second start for the same owner is idempotent; a different config selection is rejected. `stop` requests the runtime's existing graceful drain and reports `stopping` if it has not completed. `stop --force` uses the existing second-stop Job Object path. Stop never respawns the owner. Restart waits for the old owner to exit before launching a new run identity; it preserves `worktrees\<slug>`, `tmp\<slug>`, `logs\<slug>`, and `telemetry\<slug>` so normal startup recovery can inspect unfinished operations. Web output and host diagnostics are written to `logs\<slug>\background-web.log` and `background-host.log` in bounded chunks. Inspect those logs and the returned status before retrying an uncertain startup or stop.
+
+For an explicit upgrade, stop the old owner, publish into another fresh destination, then restore the operator-owned `projects`, `worktrees`, `tmp`, `logs`, and `telemetry` directories. Do not copy `run\<slug>\background\owner.lock` or `owner.json`; those identify only the old local process and are regenerated. Keep the old installation until the new pair passes `background status` and browser checks. The script never overwrites an installation or deletes runtime data.
+
+The console can be opened or closed independently; its HTTP/SSE requests never own or cancel the runtime. A Web Console exit marks the owner degraded and requests a graceful runtime stop. A runtime or owner crash leaves a stale/unavailable observation and requires manual recovery. An explicit force stop can interrupt a tracker operation; refresh the tracker before resubmitting an operation whose result was uncertain.
 
 ## Web host scaffold
 

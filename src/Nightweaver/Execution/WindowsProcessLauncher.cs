@@ -19,6 +19,7 @@ internal static class WindowsProcessLauncher
     private const uint GenericRead = 0x80000000;
     private const uint GenericWrite = 0x40000000;
     private const uint FileShareRead = 0x00000001;
+    private const uint FileShareWrite = 0x00000002;
     private const uint OpenExisting = 3;
     private const uint FileFlagOverlapped = 0x40000000;
     private const int ProcThreadAttributeHandleList = 0x00020002;
@@ -126,6 +127,81 @@ internal static class WindowsProcessLauncher
             parentStderrRead?.Dispose(); childStderrWrite?.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Places the current owner in a kill-on-close process group. The owner keeps the returned handle rooted
+    /// until process exit so immediate force termination also closes any helper processes without waiting.
+    /// </summary>
+    internal static SafeKernelHandle AttachCurrentProcessToKillOnCloseJob()
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Windows Job Objects are required.");
+        var job = CreateJobObjectW(IntPtr.Zero, null);
+        if (job.IsInvalid)
+        {
+            var error = Marshal.GetLastWin32Error();
+            job.Dispose();
+            throw new Win32Exception(error, "CreateJobObjectW(background owner)");
+        }
+
+        try
+        {
+            var limits = new JobObjectExtendedLimitInformation
+            {
+                BasicLimitInformation = new JobObjectBasicLimitInformation { LimitFlags = JobObjectLimitKillOnJobClose }
+            };
+            if (!SetInformationJobObject(job, JobObjectExtendedLimitInformationClass, ref limits,
+                    (uint)Marshal.SizeOf<JobObjectExtendedLimitInformation>()))
+                throw LastError("SetInformationJobObject(background owner kill-on-close)");
+            if (!AssignProcessToJobObject(job, GetCurrentProcess()))
+                throw LastError("AssignProcessToJobObject(background owner)");
+            return job;
+        }
+        catch
+        {
+            job.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Starts a detached owner with only NUL standard handles inherited, never its caller's handles.</summary>
+    internal static WindowsDetachedProcess LaunchDetached(string executable, IReadOnlyList<string> arguments,
+        string workingDirectory)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Detached background owners require Windows.");
+
+        var security = new SecurityAttributes
+        {
+            Length = (uint)Marshal.SizeOf<SecurityAttributes>(),
+            InheritHandle = true
+        };
+        using var nullDevice = CreateFileW("NUL", GenericRead | GenericWrite, FileShareRead | FileShareWrite,
+            ref security, OpenExisting, 0, IntPtr.Zero);
+        if (nullDevice.IsInvalid) throw LastError("CreateFileW(NUL for detached owner)");
+
+        using var attributes = new ProcessAttributeList(1);
+        attributes.AddHandleList([nullDevice]);
+        var startup = new StartupInfoEx
+        {
+            StartupInfo = new StartupInfo
+            {
+                Cb = (uint)Marshal.SizeOf<StartupInfoEx>(),
+                Flags = StartfUseStdHandles,
+                StandardInput = nullDevice.DangerousGetHandle(),
+                StandardOutput = nullDevice.DangerousGetHandle(),
+                StandardError = nullDevice.DangerousGetHandle()
+            },
+            AttributeList = attributes.Pointer
+        };
+        using var commandLine = new SafeHGlobalBuffer(SerializeCommandLine(executable, arguments));
+        if (!CreateProcessW(executable, commandLine.DangerousGetHandle(), IntPtr.Zero, IntPtr.Zero,
+                inheritHandles: true, ExtendedStartupInfoPresent | CreateNoWindow | CreateUnicodeEnvironment,
+                IntPtr.Zero, workingDirectory, ref startup, out var processInformation))
+            throw LastError($"CreateProcessW(detached '{executable}')");
+
+        using var thread = new SafeKernelHandle(processInformation.Thread, ownsHandle: true);
+        return new WindowsDetachedProcess(new SafeKernelHandle(processInformation.Process, ownsHandle: true),
+            processInformation.ProcessId);
     }
 
     internal static string ResolveExecutable(string name, IReadOnlyDictionary<string, string> environment)
@@ -387,6 +463,13 @@ internal static class WindowsProcessLauncher
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AssignProcessToJobObject(SafeKernelHandle job, IntPtr process);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool QueryInformationJobObject(SafeKernelHandle job, int informationClass,
         out JobObjectBasicAccountingInformation information, uint informationLength, IntPtr returnLength);
 
@@ -398,6 +481,11 @@ internal static class WindowsProcessLauncher
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CreatePipe(out SafeFileHandle readPipe, out SafeFileHandle writePipe,
         ref SecurityAttributes pipeAttributes, uint size);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateFileW")]
+    private static extern SafeFileHandle CreateFileW(string fileName, uint desiredAccess, uint shareMode,
+        ref SecurityAttributes securityAttributes, uint creationDisposition, uint flagsAndAttributes,
+        IntPtr templateFile);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -421,6 +509,13 @@ internal static class WindowsProcessLauncher
     private static extern bool CreateProcessW(string applicationName, IntPtr commandLine,
         IntPtr processAttributes, IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
         uint creationFlags, IntPtr environment, string currentDirectory, ref StartupInfoEx startupInfo,
+        out ProcessInformation processInformation);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateProcessW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateProcessW(string applicationName, IntPtr commandLine,
+        IntPtr processAttributes, IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
+        uint creationFlags, IntPtr environment, string currentDirectory, ref StartupInfo startupInfo,
         out ProcessInformation processInformation);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -531,6 +626,39 @@ internal static class WindowsProcessLauncher
             StandardError.Dispose();
             Interlocked.Exchange(ref process, null)?.Dispose();
         }
+    }
+
+    internal sealed class WindowsDetachedProcess(SafeKernelHandle process, uint processId) : IDisposable
+    {
+        private const uint WaitTimeout = 0x00000102;
+        private SafeKernelHandle? processHandle = process;
+
+        internal bool HasExited
+        {
+            get
+            {
+                var handle = processHandle ?? throw new ObjectDisposedException(nameof(WindowsDetachedProcess));
+                var result = WaitForSingleObject(handle, 0);
+                if (result == WaitObject0) return true;
+                if (result == WaitTimeout) return false;
+                if (result == WaitFailed) throw LastError("WaitForSingleObject(detached owner)");
+                throw new IOException($"Unexpected detached-owner wait result 0x{result:X8}.");
+            }
+        }
+
+        internal int ExitCode
+        {
+            get
+            {
+                var handle = processHandle ?? throw new ObjectDisposedException(nameof(WindowsDetachedProcess));
+                if (!GetExitCodeProcess(handle, out var exitCode)) throw LastError("GetExitCodeProcess(detached owner)");
+                return unchecked((int)exitCode);
+            }
+        }
+
+        internal int ProcessId => checked((int)processId);
+
+        public void Dispose() => Interlocked.Exchange(ref processHandle, null)?.Dispose();
     }
 
     internal sealed class SafeKernelHandle : SafeHandleZeroOrMinusOneIsInvalid

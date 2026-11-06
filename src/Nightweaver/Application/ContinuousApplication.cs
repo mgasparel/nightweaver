@@ -14,7 +14,8 @@ internal static class ContinuousApplication
         AppEnvironment environment,
         IProcessRunner processRunner,
         RuntimeShutdownSignals? shutdownSignals,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<FactoryTelemetryPublisher, ProjectConfig, HostPaths, ValidatedTargetRepository, CancellationToken, Task>? onRuntimeReady = null)
     {
         var selector = options.Selector ?? throw new InvalidOperationException("A Project selector is required");
         cancellationToken.ThrowIfCancellationRequested();
@@ -53,6 +54,8 @@ internal static class ContinuousApplication
             project.Concurrency.MaxConcurrentDelivery, ConcurrencyConfig.MergerSlots,
             message => environment.Err.WriteLine("nightweaver: " + message), processRunner);
         await telemetry.StartAsync(cancellationToken).ConfigureAwait(false);
+        if (onRuntimeReady is not null)
+            await onRuntimeReady(telemetry, project, hostPaths, repository, cancellationToken).ConfigureAwait(false);
 
         using var slotLifetime = new CancellationTokenSource();
         var stopGate = shutdownSignals?.StopGate ?? new ContinuousStopGate();

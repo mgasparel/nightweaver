@@ -125,6 +125,31 @@ public sealed class CommandLineAndPathTests
     }
 
     [Fact]
+    public void BackgroundParserRequiresExplicitProjectAndRestrictsManagementOptions()
+    {
+        var start = BackgroundCommandParser.Parse(["background", "start", "--project", "demo"], out var help);
+        Assert.False(help);
+        Assert.Equal(BackgroundAction.Start, start.Action);
+        Assert.Null(start.Urls);
+
+        Assert.Equal(BackgroundAction.Stop,
+            BackgroundCommandParser.Parse(["background", "stop", "--config", "project.json", "--force"], out _).Action);
+        Assert.True(BackgroundCommandParser.Parse(["background", "restart", "--project", "demo", "--help"], out var backgroundHelp).Action == BackgroundAction.Restart && backgroundHelp);
+
+        var cases = new (string[] Args, string Error)[]
+        {
+            (["background"], "requires start, status, stop, or restart"),
+            (["background", "start"], "one of '--project"),
+            (["background", "status", "--project", "demo", "--force"], "only valid with 'background stop'"),
+            (["background", "status", "--project", "demo", "--urls", "http://127.0.0.1:5"], "only valid with 'background start'"),
+            (["background", "start", "--project", "demo", "--urls", "http://0.0.0.0:5000"], "loopback URL"),
+            (["background", "start", "--project", "demo", "--urls", "http://127.0.0.1:5000/console"], "loopback URL")
+        };
+        foreach (var (args, error) in cases)
+            Assert.Contains(error, Assert.Throws<UsageException>(() => BackgroundCommandParser.Parse(args, out _)).Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ProjectSlugAcceptsSafeAsciiSlugsAndRejectsUnsafeNames()
     {
         var accepted = new[] { "a", "my-app", "A_1", new string('a', 64), "console", "nul1" };

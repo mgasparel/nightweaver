@@ -5,6 +5,7 @@ internal static class HelpText
     internal const string Usage =
         "Usage: nightweaver (--project <project-slug> | --config <path-to-project-json>) [--dry-run]\n" +
         "       nightweaver dispatch <bead-id> [--role <role>] (--project <project-slug> | --config <path-to-project-json>)\n" +
+        "       nightweaver background <start|status|stop|restart> (--project <project-slug> | --config <path-to-project-json>) [--urls <loopback-url>] [--force]\n" +
         "       nightweaver --help\n\n" +
         "Options:\n" +
         "  --project <project-slug>       Load <nightweaver-root>/projects/<project-slug>.json.\n" +
@@ -13,9 +14,17 @@ internal static class HelpText
         "  (default)                      Run the continuous Delivery Orchestrator until Ctrl+C.\n" +
         "  dispatch <bead-id>             Run exactly one eligible lifecycle stage.\n" +
         "  --role <role>                  Override role inference (planner, plan_challenger, implementer, reviewer, qa, merger).\n" +
+        "  background                     Manage one detached runtime and its matching Web Console.\n" +
         "  --help, -h                     Print this help.\n\n" +
         "<nightweaver-root> is the directory containing the nightweaver executable.\n\n" +
         "Exit codes: 0 success, 1 dispatch/inspection failure, 2 usage or configuration error.\n";
+
+    internal const string BackgroundUsage =
+        "Usage: nightweaver background start|status|stop|restart (--project <project-slug> | --config <path-to-project-json>) [--urls <loopback-url>] [--force]\n\n" +
+        "Start launches one hidden runtime and its paired Web Console. Status reports owner, Web and runtime health.\n" +
+        "Stop drains by default; use --force to close active Agent jobs. Restart preserves host data and uses manual recovery.\n" +
+        "URLs must use a loopback address (default http://127.0.0.1:5000). No startup task or automatic crash restart is installed.\n" +
+        "Exit codes: 0 success, 1 unavailable/failed, 2 usage or configuration error.\n";
 
     internal const string DispatchUsage =
         "Usage: nightweaver dispatch <bead-id> [--role <role>] (--project <project-slug> | --config <path-to-project-json>)\n\n" +

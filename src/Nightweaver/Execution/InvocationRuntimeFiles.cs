@@ -15,11 +15,13 @@ namespace Nightweaver.Execution;
 internal sealed class InvocationRuntimeFiles : IDisposable
 {
     private const uint FileReadAttributes = 0x0080;
+    private const uint FileShareNone = 0;
     private const uint FileShareRead = 0x00000001;
     private const uint FileShareWrite = 0x00000002;
     private const uint FileShareDelete = 0x00000004;
     private const uint OpenExisting = 3;
     private const uint CreateNew = 1;
+    private const uint OpenAlways = 4;
     private const uint FileFlagBackupSemantics = 0x02000000;
     private const uint FileFlagOpenReparsePoint = 0x00200000;
     private const uint FileFlagOverlapped = 0x40000000;
@@ -223,6 +225,201 @@ internal sealed class InvocationRuntimeFiles : IDisposable
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
             }
             guard.Dispose();
+        }
+    }
+
+    /// <summary>Writes a small owned status file through a pinned, no-reparse parent chain.</summary>
+    internal static async Task WriteRuntimeFileAtomicallyAsync(string path, ReadOnlyMemory<byte> bytes,
+        CancellationToken cancellationToken)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var directory = Path.GetDirectoryName(fullPath)
+            ?? throw new InvalidDataException("Runtime status path has no parent directory.");
+        var temporaryPath = fullPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        if (!OperatingSystem.IsWindows())
+        {
+            Directory.CreateDirectory(directory);
+            await WritePortableFactorySnapshotAsync(temporaryPath, fullPath, bytes, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        ValidatePathSegments(fullPath);
+        var guard = new InvocationRuntimeFiles(string.Empty, fullPath, null!);
+        var temporaryCreated = false;
+        try
+        {
+            guard.PinDirectoryChain(directory, createMissing: true, exclusiveLeaf: false);
+            ValidateRuntimeFileDestination(fullPath, "Runtime status");
+            await using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write,
+                FileShare.Read, 16 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                temporaryCreated = true;
+                await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            File.Move(temporaryPath, fullPath, overwrite: true);
+            temporaryCreated = false;
+        }
+        finally
+        {
+            if (temporaryCreated)
+            {
+                try { File.Delete(temporaryPath); }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+            }
+            guard.Dispose();
+        }
+    }
+
+    /// <summary>Reads a bounded owned status file without following a file or directory reparse point.</summary>
+    internal static byte[] ReadRuntimeFileBounded(string path, int maximumBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
+        var fullPath = Path.GetFullPath(path);
+        if (!OperatingSystem.IsWindows())
+        {
+            using var portable = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return ReadBounded(portable, maximumBytes, fullPath);
+        }
+
+        ValidatePathSegments(fullPath);
+        var guard = new InvocationRuntimeFiles(string.Empty, fullPath, null!);
+        try
+        {
+            guard.PinDirectoryChain(Path.GetDirectoryName(fullPath)!, createMissing: false, exclusiveLeaf: false);
+            using var handle = CreateFileW(fullPath, GenericRead, FileShareRead | FileShareWrite | FileShareDelete,
+                IntPtr.Zero, OpenExisting, FileFlagOverlapped | FileFlagOpenReparsePoint, IntPtr.Zero);
+            if (handle.IsInvalid) throw NativeError($"Could not safely open runtime status file '{fullPath}'", Marshal.GetLastWin32Error());
+            ValidateRegularFile(handle, fullPath, "runtime status");
+            using var stream = new FileStream(handle, FileAccess.Read, 16 * 1024, isAsync: true);
+            return ReadBounded(stream, maximumBytes, fullPath);
+        }
+        finally { guard.Dispose(); }
+    }
+
+    /// <summary>Opens a per-Project lock file without following reparse points and pins its parent chain.</summary>
+    internal static PinnedRuntimeFile OpenExclusiveRuntimeFile(string path, bool createMissingDirectories)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (!OperatingSystem.IsWindows())
+        {
+            if (createMissingDirectories) Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            var portable = new FileStream(fullPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            return new PinnedRuntimeFile(portable, null);
+        }
+
+        ValidatePathSegments(fullPath);
+        var guard = new InvocationRuntimeFiles(string.Empty, fullPath, null!);
+        try
+        {
+            guard.PinDirectoryChain(Path.GetDirectoryName(fullPath)!, createMissingDirectories, exclusiveLeaf: false);
+            var handle = CreateFileW(fullPath, GenericRead | GenericWrite, FileShareNone, IntPtr.Zero,
+                OpenAlways, FileFlagOpenReparsePoint, IntPtr.Zero);
+            if (handle.IsInvalid)
+            {
+                var error = Marshal.GetLastWin32Error();
+                handle.Dispose();
+                throw NativeError($"Could not exclusively open runtime lock '{fullPath}'", error);
+            }
+            try
+            {
+                ValidateRegularFile(handle, fullPath, "runtime lock");
+                return new PinnedRuntimeFile(new FileStream(handle, FileAccess.ReadWrite, 4096, isAsync: false), guard);
+            }
+            catch { handle.Dispose(); throw; }
+        }
+        catch
+        {
+            guard.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Opens one append-only diagnostic log and pins its parent chain for the writer lifetime.</summary>
+    internal static PinnedRuntimeFile OpenAppendRuntimeLog(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (!OperatingSystem.IsWindows())
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            return new PinnedRuntimeFile(new FileStream(fullPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), null);
+        }
+
+        ValidatePathSegments(fullPath);
+        var guard = new InvocationRuntimeFiles(string.Empty, fullPath, null!);
+        try
+        {
+            guard.PinDirectoryChain(Path.GetDirectoryName(fullPath)!, createMissing: true, exclusiveLeaf: false);
+            var handle = CreateFileW(fullPath, GenericWrite, FileShareRead, IntPtr.Zero,
+                OpenAlways, FileFlagOverlapped | FileFlagOpenReparsePoint, IntPtr.Zero);
+            if (handle.IsInvalid)
+            {
+                var error = Marshal.GetLastWin32Error();
+                handle.Dispose();
+                throw NativeError($"Could not open runtime diagnostic log '{fullPath}'", error);
+            }
+            try
+            {
+                ValidateRegularFile(handle, fullPath, "runtime diagnostic log");
+                var stream = new FileStream(handle, FileAccess.Write, 16 * 1024, isAsync: true);
+                stream.Seek(0, SeekOrigin.End);
+                return new PinnedRuntimeFile(stream, guard);
+            }
+            catch { handle.Dispose(); throw; }
+        }
+        catch
+        {
+            guard.Dispose();
+            throw;
+        }
+    }
+
+    private static byte[] ReadBounded(Stream stream, int maximumBytes, string path)
+    {
+        if (stream.Length is <= 0 || stream.Length > maximumBytes)
+            throw new InvalidDataException($"Runtime status file '{path}' has an invalid size.");
+        using var output = new MemoryStream((int)stream.Length);
+        var buffer = new byte[Math.Min(16 * 1024, maximumBytes)];
+        while (true)
+        {
+            var remaining = maximumBytes + 1 - (int)output.Length;
+            if (remaining <= 0) throw new InvalidDataException($"Runtime status file '{path}' exceeds its size limit.");
+            var read = stream.Read(buffer, 0, Math.Min(buffer.Length, remaining));
+            if (read == 0) return output.ToArray();
+            output.Write(buffer, 0, read);
+        }
+    }
+
+    private static void ValidateRuntimeFileDestination(string path, string description)
+    {
+        using var handle = CreateFileW(path, FileReadAttributes, FileShareRead | FileShareWrite | FileShareDelete,
+            IntPtr.Zero, OpenExisting, FileFlagOpenReparsePoint, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            var error = Marshal.GetLastWin32Error();
+            if ((uint)error is ErrorFileNotFound or ErrorPathNotFound) return;
+            throw NativeError($"Could not inspect {description} destination '{path}'", error);
+        }
+        ValidateRegularFile(handle, path, description);
+    }
+
+    private static void ValidateRegularFile(SafeFileHandle handle, string path, string description)
+    {
+        if (!GetFileInformationByHandle(handle, out var info))
+            throw NativeError($"Could not inspect {description} '{path}'", Marshal.GetLastWin32Error());
+        if ((info.FileAttributes & AttributeReparsePoint) != 0)
+            throw new InvalidDataException($"Refusing reparse point in {description}: '{path}'.");
+        if ((info.FileAttributes & AttributeDirectory) != 0)
+            throw new InvalidDataException($"{description} is a directory: '{path}'.");
+    }
+
+    internal sealed class PinnedRuntimeFile(FileStream stream, InvocationRuntimeFiles? directoryPins) : IDisposable
+    {
+        internal FileStream Stream { get; } = stream;
+        public void Dispose()
+        {
+            try { Stream.Dispose(); }
+            finally { directoryPins?.Dispose(); }
         }
     }
 

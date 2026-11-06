@@ -1,4 +1,5 @@
 using Nightweaver.Application;
+using Nightweaver.Background;
 using Nightweaver.Cli;
 using Nightweaver.Inspection;
 
@@ -23,6 +24,20 @@ internal static class NightweaverApp
         var dispatchCommand = args.Count > 0 && args[0] == "dispatch";
         try
         {
+            if (args.Count > 0 && args[0] == "background")
+            {
+                var background = BackgroundCommandParser.Parse(args, out var backgroundHelp);
+                if (backgroundHelp)
+                {
+                    environment.Out.Write(HelpText.BackgroundUsage);
+                    return ExitCodes.Success;
+                }
+                if (background.Action == BackgroundAction.Owner)
+                    return await BackgroundOwnerApplication.RunAsync(background.Owner!, environment, processRunner,
+                        shutdownSignals ?? new RuntimeShutdownSignals(), cancellationToken).ConfigureAwait(false);
+                return await BackgroundManagerApplication.RunAsync(background, environment, cancellationToken).ConfigureAwait(false);
+            }
+
             var options = CommandLineParser.Parse(args);
             if (options.Help)
             {

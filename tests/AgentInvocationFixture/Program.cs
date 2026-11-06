@@ -659,6 +659,12 @@ internal static class Program
                 var worktreeMarkerDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_WORKTREE_MARKER_DIRECTORY");
                 if (!string.IsNullOrWhiteSpace(worktreeMarkerDirectory))
                     worktreeMarker = Path.Combine(worktreeMarkerDirectory, beadId + ".path");
+                var liveMarker = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_LIVE_MARKER");
+                if (!string.IsNullOrWhiteSpace(liveMarker))
+                {
+                    Console.WriteLine(liveMarker);
+                    Console.Out.Flush();
+                }
                 if (!string.IsNullOrWhiteSpace(worktreeMarker))
                 {
                     File.WriteAllText(worktreeMarker, Environment.CurrentDirectory, new UTF8Encoding(false));
