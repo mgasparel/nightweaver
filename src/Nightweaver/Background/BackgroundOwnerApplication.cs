@@ -78,8 +78,8 @@ internal static class BackgroundOwnerApplication
                 BackgroundWebHost? webHost = null;
                 var runtimeWasReady = false;
                 var controlServer = BackgroundControlProtocol.RunServerAsync(pipeName,
-                    request => HandleRequestAsync(request, options, paths, projectConfig, state,
-                        recordPath, () => webHost, cancellationToken),
+                    (request, requestToken) => HandleRequestAsync(request, options, paths, projectConfig, state,
+                        recordPath, () => webHost, requestToken),
                     serverLifetime.Token,
                     request => ApplyControlAction(request, options.RunId, shutdownSignals));
                 _ = WatchControlServerAsync(controlServer, state, recordPath, shutdownSignals, serverLifetime.Token);
@@ -169,13 +169,14 @@ internal static class BackgroundOwnerApplication
         if (request.Operation is not ("stop" or "force") || request.RunId != options.RunId)
             return new BackgroundControlResponse(false, state.Current, "control request identity or operation is invalid");
 
-        state.Update(record => record with
+        var stoppingRecord = state.Current with
         {
             State = "stopping",
             Message = request.Operation == "force" ? "force stop requested" : "graceful drain requested"
-        });
-        await PersistAsync(recordPath, state).ConfigureAwait(false);
-        return new BackgroundControlResponse(true, state.Current, null);
+        };
+        await BackgroundOwnerRecord.WriteAsync(recordPath, stoppingRecord, cancellationToken).ConfigureAwait(false);
+        state.Update(_ => stoppingRecord);
+        return new BackgroundControlResponse(true, stoppingRecord, null);
     }
 
     private static void ApplyControlAction(BackgroundControlRequest request, string runId,
@@ -184,12 +185,11 @@ internal static class BackgroundOwnerApplication
         if (request.Operation is not ("stop" or "force") || request.RunId != runId) return;
         if (request.Operation == "force")
         {
-            shutdownSignals.RequestStop();
-            shutdownSignals.RequestStop();
+            shutdownSignals.RequestForceStop();
         }
         else
         {
-            shutdownSignals.RequestStop();
+            shutdownSignals.RequestGracefulStop();
         }
     }
 
@@ -235,7 +235,7 @@ internal static class BackgroundOwnerApplication
                 Message = $"Web Console exited unexpectedly with code {exitCode}; runtime is stopping and will require manual restart"
             });
             await BackgroundOwnerRecord.WriteAsync(recordPath, state.Current, CancellationToken.None).ConfigureAwait(false);
-            shutdownSignals.RequestStop();
+            shutdownSignals.RequestGracefulStop();
         }
         catch (Exception exception) when (exception is ObjectDisposedException or IOException) { }
     }
@@ -249,7 +249,7 @@ internal static class BackgroundOwnerApplication
             if (cancellationToken.IsCancellationRequested) return;
             state.Update(record => record with { State = "degraded", Message = "local control server stopped unexpectedly" });
             await BackgroundOwnerRecord.WriteAsync(recordPath, state.Current, CancellationToken.None).ConfigureAwait(false);
-            shutdownSignals.RequestStop();
+            shutdownSignals.RequestGracefulStop();
         }
         catch (Exception exception) when (exception is OperationCanceledException or IOException) { }
     }

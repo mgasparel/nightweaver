@@ -9,6 +9,7 @@ internal sealed record BackgroundControlResponse(bool Accepted, BackgroundOwnerR
 internal static class BackgroundControlProtocol
 {
     private const int MaximumMessageBytes = 64 * 1024;
+    private static readonly TimeSpan DefaultClientTimeout = TimeSpan.FromSeconds(5);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -16,10 +17,12 @@ internal static class BackgroundControlProtocol
     };
 
     internal static async Task RunServerAsync(string pipeName,
-        Func<BackgroundControlRequest, Task<BackgroundControlResponse>> handle,
+        Func<BackgroundControlRequest, CancellationToken, Task<BackgroundControlResponse>> handle,
         CancellationToken cancellationToken,
-        Action<BackgroundControlRequest>? afterResponse = null)
+        Action<BackgroundControlRequest>? afterResponse = null,
+        TimeSpan? clientTimeout = null)
     {
+        var connectionTimeout = clientTimeout ?? DefaultClientTimeout;
         while (!cancellationToken.IsCancellationRequested)
         {
             await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
@@ -28,13 +31,29 @@ internal static class BackgroundControlProtocol
             try
             {
                 await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
-                var request = await ReadAsync<BackgroundControlRequest>(pipe, cancellationToken).ConfigureAwait(false);
-                var response = request is null
-                    ? new BackgroundControlResponse(false, null, "invalid control request")
-                    : await handle(request).ConfigureAwait(false);
-                await WriteAsync(pipe, response, cancellationToken).ConfigureAwait(false);
-                await pipe.FlushAsync(cancellationToken).ConfigureAwait(false);
-                if (request is not null) afterResponse?.Invoke(request);
+                using var clientLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                clientLifetime.CancelAfter(connectionTimeout);
+                BackgroundControlRequest? acceptedAction = null;
+                try
+                {
+                    var request = await ReadAsync<BackgroundControlRequest>(pipe, clientLifetime.Token).ConfigureAwait(false);
+                    var response = request is null
+                        ? new BackgroundControlResponse(false, null, "invalid control request")
+                        : await handle(request, clientLifetime.Token).ConfigureAwait(false);
+                    if (request is { Operation: "stop" or "force" } && response.Accepted)
+                        acceptedAction = request;
+                    await WriteAsync(pipe, response, clientLifetime.Token).ConfigureAwait(false);
+                    await pipe.FlushAsync(clientLifetime.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
+                catch (OperationCanceledException) when (clientLifetime.IsCancellationRequested) { }
+                catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException) { }
+                finally
+                {
+                    // A valid stop request remains accepted if its peer disconnects while reading the reply.
+                    if (acceptedAction is not null && !cancellationToken.IsCancellationRequested)
+                        afterResponse?.Invoke(acceptedAction);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
             catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException) { }

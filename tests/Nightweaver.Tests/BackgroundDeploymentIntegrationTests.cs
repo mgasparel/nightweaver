@@ -121,6 +121,17 @@ public sealed class BackgroundDeploymentIntegrationTests
             {
                 await WaitForStateAsync(cli, caller, env, "stopping", TimeSpan.FromSeconds(15));
                 Assert.False(stop.HasExited, "graceful stop waits for the active native Agent turn");
+                var firstAgentIdentityPath = Path.Combine(pidDirectory, firstTask + ".pid");
+                await WaitForFileAsync(firstAgentIdentityPath, TimeSpan.FromSeconds(10));
+                var firstAgentIdentity = File.ReadAllText(firstAgentIdentityPath);
+                var pipeName = BackgroundIdentity.PipeName(new Nightweaver.Configuration.HostPaths(host),
+                    Nightweaver.Configuration.ProjectSlug.Parse("demo"));
+                var repeatedStop = await BackgroundControlProtocol.SendAsync(pipeName,
+                    new BackgroundControlRequest("stop", ownerBefore.GetProperty("run_id").GetString()!),
+                    TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+                Assert.True(repeatedStop.Accepted, repeatedStop.Error);
+                AssertAgentIdentityAlive(firstAgentIdentity);
+                Assert.False(File.Exists(firstRelease), "repeated graceful stop must leave the gated Agent alive");
                 File.WriteAllText(firstRelease, "continue after graceful drain request");
                 var stopResult = await stop.WaitAsync(TimeSpan.FromSeconds(90));
                 Assert.True(stopResult.ExitCode == 0, stopResult.StandardErrorText);
@@ -409,6 +420,16 @@ public sealed class BackgroundDeploymentIntegrationTests
             Assert.NotEqual(startTicks, process.StartTime.ToUniversalTime().Ticks);
         }
         catch (ArgumentException) { }
+    }
+
+    private static void AssertAgentIdentityAlive(string identity)
+    {
+        var parts = identity.Split('|');
+        var processId = int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture);
+        var startTicks = long.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture);
+        using var process = Process.GetProcessById(processId);
+        Assert.Equal(startTicks, process.StartTime.ToUniversalTime().Ticks);
+        Assert.False(process.HasExited);
     }
 
     private static void ConfigureLocalDeliveryOrigin(BeadsFixture target)

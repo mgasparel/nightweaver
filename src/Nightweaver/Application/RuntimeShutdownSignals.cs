@@ -20,17 +20,36 @@ internal sealed class RuntimeShutdownSignals : IDisposable
     {
         if (Interlocked.CompareExchange(ref signalCount, 1, 0) == 0)
         {
-            StopGate.RequestStop();
-            firstStop.Cancel();
+            BeginGracefulStop();
             return;
         }
 
+        RequestForceStop();
+    }
+
+    /// <summary>Requests a graceful drain once without interpreting duplicate owner events as force signals.</summary>
+    internal void RequestGracefulStop()
+    {
+        if (Interlocked.CompareExchange(ref signalCount, 1, 0) != 0) return;
+        BeginGracefulStop();
+    }
+
+    /// <summary>Closes active Agent Jobs immediately, preserving the nonwaiting force-stop path.</summary>
+    internal void RequestForceStop()
+    {
+        Interlocked.CompareExchange(ref signalCount, 1, 0);
         if (Interlocked.CompareExchange(ref forceStopStarted, 1, 0) != 0)
             return;
 
         _ = StopGate.RequestForceStop();
         TryStartDeferredRecoveryDiagnostic();
         terminateProcess(ExitCodes.InspectionFailure);
+    }
+
+    private void BeginGracefulStop()
+    {
+        StopGate.RequestStop();
+        firstStop.Cancel();
     }
 
     private static void TryStartDeferredRecoveryDiagnostic()
