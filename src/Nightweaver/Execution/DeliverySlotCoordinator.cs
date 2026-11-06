@@ -412,8 +412,28 @@ internal sealed class DeliverySlotCoordinator
                     return Result(DeliverySlotDisposition.StoppedAtUnsupportedOutcome, after, role, lastStage, false,
                         $"The {AgentRoles.ToConfigKey(role)} stage reached unsupported verified state '{after.Stage ?? "(none)"}'; the slot stopped without releasing its claim.");
 
-                var nextReadiness = await reader.ReadReadinessAsync(repository, afterInventory, project.RecoveryActor,
-                    cancellationToken).ConfigureAwait(false);
+                var (readinessInventory, nextReadiness) = await reader.ReadSnapshotWithReadinessAsync(repository,
+                    project.RecoveryActor, cancellationToken).ConfigureAwait(false);
+                if (!readinessInventory.ById.TryGetValue(beadId, out var readinessBead))
+                    return Result(DeliverySlotDisposition.Failed, after, role, lastStage, false,
+                        "Bead disappeared from the refreshed interstage readiness snapshot; no follow-on Agent was launched.");
+
+                BeadWorkflowState readinessState;
+                try { readinessState = BeadWorkflowState.Parse(readinessBead); }
+                catch (FormatException exception)
+                {
+                    return Result(DeliverySlotDisposition.Failed, null, role, lastStage, false,
+                        $"Bead workflow became invalid in the refreshed interstage readiness snapshot: {exception.Message}");
+                }
+
+                if (readinessBead.Status != "in_progress"
+                    || !string.Equals(readinessBead.Assignee, project.RecoveryActor, StringComparison.Ordinal))
+                    return Result(DeliverySlotDisposition.Failed, readinessState, role, lastStage, false,
+                        $"Claim ownership changed in the refreshed interstage readiness snapshot; observed status '{readinessBead.Status}' and assignee '{readinessBead.Assignee ?? "(none)"}'.");
+                if (readinessState != after)
+                    return Result(DeliverySlotDisposition.Failed, readinessState, role, lastStage, false,
+                        "Bead workflow changed in the refreshed interstage readiness snapshot; refusing follow-on dispatch or claim handoff.");
+
                 if (!nextReadiness.RecoverableOwnedReady.Contains(beadId))
                     return Result(DeliverySlotDisposition.Failed, after, role, lastStage, false,
                         "Bead is no longer in bd's recoverable-owned ready set before the next role; no follow-on Agent was launched.");

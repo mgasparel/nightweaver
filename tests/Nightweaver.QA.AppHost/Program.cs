@@ -6,23 +6,50 @@ using Nightweaver.Execution;
 using Nightweaver.Inspection;
 using Nightweaver.Telemetry;
 using Nightweaver.Tests.AgentInvocationFixture;
+using Nightweaver.Tests.ManualDeliveryPilotFixture;
 
 var fixture = Path.Combine(Path.GetTempPath(), "nightweaver-qa-" + Guid.NewGuid().ToString("N"));
+var repository = Path.Combine(fixture, "repo");
+var userHome = Path.Combine(fixture, "home");
+var config = Path.Combine(fixture, "project.json");
+var nightweaverRoot = fixture;
+var manualScenario = string.Equals(Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO"), "manual-delivery", StringComparison.Ordinal);
+var manualManifestPointer = Path.Combine(Environment.CurrentDirectory, ".manual-delivery-manifest.json");
+ManualDeliveryPilotFixture? manualPilot = null;
 FactoryTelemetryPublisher? telemetry = null;
 Task<AgentExecutionResult>[] telemetryRuns = [];
 string[] telemetryReleaseFiles = [];
 try
 {
-    var repository = Path.Combine(fixture, "repo");
-    Directory.CreateDirectory(repository);
-    var userHome = Path.Combine(fixture, "home");
-    Directory.CreateDirectory(userHome);
-    var config = Path.Combine(fixture, "project.json");
-    File.WriteAllText(config, JsonSerializer.Serialize(new { name = "qa", target_repository = new { path = repository } }));
-
     var builder = DistributedApplication.CreateBuilder(args);
+    if (manualScenario)
+    {
+        manualPilot = await ManualDeliveryPilotFixture.CreateAsync(
+            agentInvocationFixturePath: typeof(FixtureMarker).Assembly.Location,
+            cancellationToken: CancellationToken.None);
+        fixture = manualPilot.Root;
+        repository = manualPilot.Repository;
+        userHome = manualPilot.UserHome;
+        config = manualPilot.ConfigPath;
+        nightweaverRoot = manualPilot.NightweaverRoot;
+        await File.WriteAllTextAsync(manualManifestPointer,
+            JsonSerializer.Serialize(new { manifest = manualPilot.ManifestPath }),
+            new UTF8Encoding(false), CancellationToken.None);
+    }
+
     builder.OnBeforeStart(async (_, cancellationToken) =>
     {
+        if (manualScenario)
+        {
+            var runtime = manualPilot!.StartRuntime(typeof(ProjectConfigLoader).Assembly.Location);
+            await manualPilot.WaitForGateAsync(manualPilot.ParentlessTaskId, TimeSpan.FromMinutes(2), cancellationToken);
+            Console.WriteLine($"Manual Delivery pilot runtime PID {runtime.Id}; fixture manifest {manualManifestPointer}");
+            return;
+        }
+
+        Directory.CreateDirectory(repository);
+        Directory.CreateDirectory(userHome);
+        File.WriteAllText(config, JsonSerializer.Serialize(new { name = "qa", target_repository = new { path = repository } }));
         await RunAsync("git", repository, userHome, cancellationToken, "init", "-b", "main");
         await RunAsync("bd", repository, userHome, cancellationToken, "init", "--prefix", "qa", "--non-interactive", "--skip-agents", "--skip-hooks");
         await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "QA fixture control", "--type", "task");
@@ -101,7 +128,7 @@ try
     builder.AddProject<Projects.Nightweaver_Web>("web")
         // Publish the direct local binding checked by the mutation-origin policy.
         .WithHttpEndpoint(name: "http", isProxied: false)
-        .WithEnvironment("Nightweaver__Root", fixture)
+        .WithEnvironment("Nightweaver__Root", nightweaverRoot)
         .WithEnvironment("Nightweaver__ConfigPath", config)
         // The app's bd subprocesses must resolve configuration and credentials only
         // inside this disposable fixture, just like the seed commands above.
@@ -142,6 +169,29 @@ finally
         foreach (var slot in new[] { ("delivery-1", "qa-live-1"), ("delivery-2", "qa-live-2") })
             telemetry.Release("delivery", slot.Item1, slot.Item2);
         await telemetry.DisposeAsync();
+    }
+
+    if (manualPilot is not null)
+    {
+        try
+        {
+            manualPilot.ReleaseGate(manualPilot.ParentlessTaskId);
+            await manualPilot.StopRuntimeAsync(force: false, TimeSpan.FromSeconds(30));
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"Manual Delivery pilot runtime cleanup did not complete gracefully: {exception.Message}");
+            Environment.ExitCode = 1;
+        }
+        try { await manualPilot.DisposeAsync(); }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"Manual Delivery pilot fixture cleanup failed: {exception.Message}");
+            Environment.ExitCode = 1;
+        }
+        try { File.Delete(manualManifestPointer); }
+        catch (IOException exception) { Console.Error.WriteLine($"Could not remove pilot manifest pointer: {exception.Message}"); Environment.ExitCode = 1; }
+        catch (UnauthorizedAccessException exception) { Console.Error.WriteLine($"Could not remove pilot manifest pointer: {exception.Message}"); Environment.ExitCode = 1; }
     }
 
     for (var attempt = 0; attempt < 10 && Directory.Exists(fixture); attempt++)

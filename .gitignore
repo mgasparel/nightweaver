@@ -21,3 +21,4 @@ tmp/
 # Beads (stealth mode + workspace gate locks)
 .beads/
 *.gate.lock*
+.manual-delivery-manifest.json

@@ -388,6 +388,186 @@ public sealed class DeliverySlotCoordinatorTests
         Assert.Equal(fixture.RecoveryActor, fixture.ReadBead(bead).Assignee);
     }
 
+    [Fact]
+    public async Task SiblingTransitionBetweenInterstageInventoryAndReadinessRefreshesBeforeNextRole()
+    {
+        using var fixture = new FastSlotFixture();
+        var bead = fixture.CreateTask();
+        var sibling = fixture.CreateTask();
+        var roles = new List<AgentRole>();
+        var mutateAfterImplementer = false;
+        var siblingMutated = false;
+        var runner = new MutatingProcessRunner(fixture.Runner,
+            request => mutateAfterImplementer && request.FileName == "bd"
+                && request.Arguments.Contains("ready", StringComparer.Ordinal)
+                && request.Arguments.Contains("--unassigned", StringComparer.Ordinal),
+            () =>
+            {
+                fixture.SetStage(sibling, "stage:review");
+                siblingMutated = true;
+                return Task.CompletedTask;
+            },
+            mutateBefore: true);
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            fixture.Advance(bead, role);
+            if (role == AgentRole.Implementer) mutateAfterImplementer = true;
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, runner);
+
+        Assert.True(siblingMutated, "The interstage sibling transition must occur at the intended readiness boundary.");
+        Assert.True(outcome.MergeReady, outcome.Diagnostic);
+        Assert.Equal([AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa], roles);
+        Assert.Equal("stage:review", fixture.ReadState(sibling).Stage);
+        Assert.Single(fixture.ClaimWrites(bead));
+        Assert.Empty(fixture.ClaimWrites(sibling));
+    }
+
+    [Fact]
+    public async Task RepeatedSiblingTransitionsFailClosedAfterOneInterstageRefresh()
+    {
+        using var fixture = new FastSlotFixture();
+        var bead = fixture.CreateTask();
+        var sibling = fixture.CreateTask();
+        var roles = new List<AgentRole>();
+        var mutateAfterImplementer = false;
+        var siblingStage = false;
+        var siblingMutations = 0;
+        var runner = new MutatingProcessRunner(fixture.Runner,
+            request => mutateAfterImplementer && request.FileName == "bd"
+                && request.Arguments.Contains("ready", StringComparer.Ordinal)
+                && request.Arguments.Contains("--unassigned", StringComparer.Ordinal),
+            () =>
+            {
+                siblingStage = !siblingStage;
+                fixture.SetStage(sibling, siblingStage ? "stage:review" : "stage:qa");
+                siblingMutations++;
+                return Task.CompletedTask;
+            },
+            mutateBefore: true,
+            mutateOnEveryMatch: true);
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            fixture.Advance(bead, role);
+            if (role == AgentRole.Implementer) mutateAfterImplementer = true;
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, runner);
+
+        Assert.Equal(DeliverySlotDisposition.Failed, outcome.Disposition);
+        Assert.Contains("readiness fields disagree with the complete inventory snapshot", outcome.Diagnostic,
+            StringComparison.Ordinal);
+        Assert.Equal([AgentRole.Implementer], roles);
+        Assert.False(outcome.ClaimHandoffCompleted);
+        Assert.Single(fixture.ClaimWrites(bead));
+        Assert.Equal("in_progress", fixture.ReadBead(bead).Status);
+        Assert.Equal(fixture.RecoveryActor, fixture.ReadBead(bead).Assignee);
+        Assert.Empty(fixture.ClaimWrites(sibling));
+        Assert.Equal(2, siblingMutations);
+    }
+
+    [Theory]
+    [InlineData("owner")]
+    [InlineData("status")]
+    [InlineData("stage")]
+    [InlineData("pause")]
+    [InlineData("repair")]
+    public async Task RefreshedSnapshotTargetMutationPreventsNextRoleAndPreservesClaim(string mutation)
+    {
+        using var fixture = new FastSlotFixture();
+        var bead = fixture.CreateTask();
+        var sibling = fixture.CreateTask();
+        var roles = new List<AgentRole>();
+        var mutateAfterImplementer = false;
+        var runner = new MutatingProcessRunner(fixture.Runner,
+            request => mutateAfterImplementer && request.FileName == "bd"
+                && request.Arguments.Contains("ready", StringComparer.Ordinal)
+                && request.Arguments.Contains("--unassigned", StringComparer.Ordinal),
+            () =>
+            {
+                fixture.SetStage(sibling, "stage:review");
+                switch (mutation)
+                {
+                    case "owner":
+                        return fixture.SimulateCompetingClaimAsync(bead);
+                    case "status":
+                        fixture.ReleaseClaim(bead);
+                        return Task.CompletedTask;
+                    case "stage":
+                        fixture.SetStage(bead, "stage:qa");
+                        return Task.CompletedTask;
+                    case "pause":
+                        fixture.Pause(bead);
+                        return Task.CompletedTask;
+                    case "repair":
+                        fixture.SetRepairCycles(bead, fixture.ReadState(bead).RepairCycles + 1);
+                        return Task.CompletedTask;
+                    default:
+                        throw new InvalidOperationException($"Unknown target mutation '{mutation}'.");
+                }
+            },
+            mutateBefore: true);
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            fixture.Advance(bead, role);
+            if (role == AgentRole.Implementer) mutateAfterImplementer = true;
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, runner);
+
+        Assert.Equal(DeliverySlotDisposition.Failed, outcome.Disposition);
+        Assert.Equal([AgentRole.Implementer], roles);
+        Assert.False(outcome.ClaimHandoffCompleted);
+        Assert.Single(fixture.ClaimWrites(bead));
+        Assert.Equal("stage:review", fixture.ReadState(sibling).Stage);
+        if (mutation == "owner")
+        {
+            Assert.Equal("in_progress", fixture.ReadBead(bead).Status);
+            Assert.Equal("other:worker", fixture.ReadBead(bead).Assignee);
+        }
+        else if (mutation == "status")
+        {
+            Assert.Equal("open", fixture.ReadBead(bead).Status);
+            Assert.Null(fixture.ReadBead(bead).Assignee);
+        }
+        else
+        {
+            Assert.Equal("in_progress", fixture.ReadBead(bead).Status);
+            Assert.Equal(fixture.RecoveryActor, fixture.ReadBead(bead).Assignee);
+        }
+    }
+
+    [Fact]
+    public async Task MissingRecoverableReadinessMembershipPreventsNextRoleAndPreservesOwnedClaim()
+    {
+        using var fixture = new FastSlotFixture();
+        var bead = fixture.CreateTask();
+        var roles = new List<AgentRole>();
+        var afterImplementer = false;
+        var runner = new MembershipSuppressingProcessRunner(fixture.Runner,
+            request => afterImplementer && SlotFixture.IsRecoverableReadiness(request));
+
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roles.Add(role);
+            fixture.Advance(bead, role);
+            if (role == AgentRole.Implementer) afterImplementer = true;
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, runner);
+
+        Assert.Equal(DeliverySlotDisposition.Failed, outcome.Disposition);
+        Assert.Contains("no longer in bd's recoverable-owned ready set", outcome.Diagnostic!, StringComparison.Ordinal);
+        Assert.Equal([AgentRole.Implementer], roles);
+        Assert.False(outcome.ClaimHandoffCompleted);
+        Assert.Single(fixture.ClaimWrites(bead));
+        Assert.Equal("in_progress", fixture.ReadBead(bead).Status);
+        Assert.Equal(fixture.RecoveryActor, fixture.ReadBead(bead).Assignee);
+    }
+
     [Theory]
     [InlineData("operational")]
     [InlineData("operational-cancelled")]
@@ -755,23 +935,16 @@ public sealed class DeliverySlotCoordinatorTests
     }
 
     [Theory]
-    [InlineData("admission", 5)]
-    [InlineData("reviewer-rejection", 8)]
-    [InlineData("qa-rejection", 6)]
-    public async Task RealBudgetEscalatorRejectsWorkflowDriftBeforeItsInitialRead(string entry, int inventoryRead)
+    [InlineData("admission")]
+    [InlineData("reviewer-rejection")]
+    [InlineData("qa-rejection")]
+    public async Task RealBudgetEscalatorRejectsWorkflowDriftBeforeItsInitialRead(string entry)
     {
         using var fixture = new FastSlotFixture(maxRepairCycles: 0);
         var bead = entry == "qa-rejection" ? fixture.CreateTask("stage:qa") : fixture.CreateTask();
         if (entry == "admission") fixture.SetRepairCycles(bead, 1);
         var runtime = fixture.CreateRuntimeSentinels(bead);
         var roles = new List<AgentRole>();
-        var inventoryResponses = 0;
-        var runner = new MutatingProcessRunner(fixture.Runner, request => SlotFixture.IsInventoryRead(request)
-            && ++inventoryResponses == inventoryRead, () =>
-        {
-            fixture.SetRepairCycles(bead, fixture.ReadState(bead).RepairCycles + 1);
-            return Task.CompletedTask;
-        }, mutateBefore: true);
 
         var outcome = await fixture.RunAsync(bead, (role, _) =>
         {
@@ -779,7 +952,14 @@ public sealed class DeliverySlotCoordinatorTests
             if (role == AgentRole.Implementer) fixture.Advance(bead, role);
             else fixture.Reject(bead, role, "Verified Reviewer rejection finding.");
             return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
-        }, runner);
+        }, escalate: async request =>
+        {
+            // The coordinator has completed its read-only preflight. Drift exactly at the
+            // escalation handoff, before NeedsHumanEscalator's first snapshot, must still refuse.
+            fixture.SetRepairCycles(bead, fixture.ReadState(bead).RepairCycles + 1);
+            return await new NeedsHumanEscalator(fixture.Runner).EscalateAsync(
+                fixture.Host, fixture.Project, fixture.TargetRepository, request, CancellationToken.None);
+        });
 
         Assert.Equal(DeliverySlotDisposition.Failed, outcome.Disposition);
         Assert.Contains("changed before needs-human escalation", outcome.Diagnostic!, StringComparison.Ordinal);
@@ -796,7 +976,7 @@ public sealed class DeliverySlotCoordinatorTests
         Assert.Equal(fixture.RecoveryActor, fixture.ReadBead(bead).Assignee);
         Assert.Single(fixture.ClaimWrites(bead));
         AssertRuntimeSentinelsRemain(runtime);
-        AssertNoEscalationCleanupWrites(runner.Requests);
+        AssertNoEscalationCleanupWrites(fixture.Runner.Requests);
     }
 
     private static void AssertRuntimeSentinelsRemain((string Worktree, string Temporary) runtime)
@@ -1183,6 +1363,8 @@ public sealed class DeliverySlotCoordinatorTests
         internal HostPaths Host { get; }
         internal FastBeadsProcessRunner Runner { get; }
         private ValidatedTargetRepository Repository => new(target.Path, "main");
+        internal ProjectConfig Project => project;
+        internal ValidatedTargetRepository TargetRepository => Repository;
         internal List<BeadWorkflowState> ExpectedStates { get; } = [];
 
         internal string RecoveryActor => project.RecoveryActor;
@@ -1498,7 +1680,8 @@ public sealed class DeliverySlotCoordinatorTests
         IProcessRunner inner,
         Func<ProcessRequest, bool> shouldMutate,
         Func<Task> mutate,
-        bool mutateBefore = false) : IProcessRunner
+        bool mutateBefore = false,
+        bool mutateOnEveryMatch = false) : IProcessRunner
     {
         private int didMutate;
         private readonly List<ProcessRequest> requests = [];
@@ -1507,12 +1690,23 @@ public sealed class DeliverySlotCoordinatorTests
         public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
             requests.Add(request);
-            var applyMutation = shouldMutate(request) && Interlocked.Exchange(ref didMutate, 1) == 0;
+            var applyMutation = shouldMutate(request)
+                && (mutateOnEveryMatch || Interlocked.Exchange(ref didMutate, 1) == 0);
             if (applyMutation && mutateBefore) await mutate();
             var result = await inner.RunAsync(request, cancellationToken);
             if (applyMutation && !mutateBefore) await mutate();
             return result;
         }
+    }
+
+    private sealed class MembershipSuppressingProcessRunner(
+        IProcessRunner inner,
+        Func<ProcessRequest, bool> shouldSuppress) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken) =>
+            shouldSuppress(request)
+                ? Task.FromResult(new ProcessResult(0, "[]", string.Empty))
+                : inner.RunAsync(request, cancellationToken);
     }
 
     private sealed class FailingCommentsProcessRunner(IProcessRunner inner, string beadId) : IProcessRunner

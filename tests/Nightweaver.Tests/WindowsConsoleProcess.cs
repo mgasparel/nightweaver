@@ -37,7 +37,14 @@ internal sealed class WindowsConsoleProcess : IDisposable
 
     internal int Id => process.Id;
     internal bool HasExited => process.HasExited;
+    internal int ExitCode => process.ExitCode;
     internal string? OutputLogPath { get; }
+
+    internal void KillEntireProcessTree()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!process.HasExited) process.Kill(entireProcessTree: true);
+    }
 
     internal static WindowsConsoleProcess Start(string executable, IReadOnlyList<string> arguments,
         string workingDirectory, IReadOnlyDictionary<string, string?> environment, string? outputLogPath = null)
@@ -45,6 +52,7 @@ internal sealed class WindowsConsoleProcess : IDisposable
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("A Windows console process is required for this integration test.");
 
+        executable = ResolveExecutablePath(executable);
         var commandLine = new StringBuilder(QuoteArgument(executable));
         foreach (var argument in arguments)
             commandLine.Append(' ').Append(QuoteArgument(argument));
@@ -121,7 +129,7 @@ internal sealed class WindowsConsoleProcess : IDisposable
         }
         if (!GetExitCodeProcess(nativeProcessHandle, out var exitCode))
             throw new Win32Exception(Marshal.GetLastWin32Error(), $"Could not read exit code for console process {process.Id}.");
-        return checked((int)exitCode);
+        return unchecked((int)exitCode);
     }
 
     public void Dispose()
@@ -158,6 +166,26 @@ internal sealed class WindowsConsoleProcess : IDisposable
             block.Append(key).Append('=').Append(value).Append('\0');
         block.Append('\0');
         return block.ToString();
+    }
+
+    private static string ResolveExecutablePath(string executable)
+    {
+        if (Path.IsPathFullyQualified(executable)) return executable;
+        if (executable.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0)
+            return Path.GetFullPath(executable);
+
+        string[] extensions = Path.HasExtension(executable) ? [string.Empty] : [string.Empty, ".exe", ".cmd", ".bat"];
+        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(directory)) continue;
+            foreach (var extension in extensions)
+            {
+                var candidate = Path.Combine(directory.Trim('"'), executable + extension);
+                if (File.Exists(candidate)) return Path.GetFullPath(candidate);
+            }
+        }
+
+        throw new FileNotFoundException($"Could not find executable '{executable}' on PATH.");
     }
 
     private static string QuoteArgument(string argument)

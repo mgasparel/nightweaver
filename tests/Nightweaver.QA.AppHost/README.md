@@ -41,6 +41,23 @@ Use headless Playwright on the same URL from `aspire describe`. Exercise each ac
 
 Run the full fixture interaction checks with `node workspace-qa.mjs`; this covers the existing workspace and mutation flows in addition to the invocation stream check.
 
+## Manual continuous-runtime pilot
+
+The manual Delivery scenario starts the actual Nightweaver continuous CLI against a disposable Beads tracker and bare Git origin. Web and the CLI share the fixture's nested Nightweaver root and project config. Two native Agent invocations pause at fixture gates so the browser can inspect live output and process identity before releasing them.
+
+Start the isolated AppHost with the manual scenario selected, then use the dynamic `web` HTTP endpoint reported by `aspire describe`:
+
+```powershell
+$env:NIGHTWEAVER_QA_SCENARIO = 'manual-delivery'
+aspire start --isolated --non-interactive --apphost .\Nightweaver.QA.AppHost.csproj
+aspire wait web --non-interactive
+aspire describe --format Json --non-interactive
+$env:NIGHTWEAVER_QA_URL = '<web http endpoint URL from aspire describe>'
+node manual-delivery-qa.mjs
+```
+
+The Playwright script verifies the live factory snapshot, opens the gated invocation stream, disconnects the browser while the native Agent remains held, and confirms that the runtime identity and process continue. It then checks the real same-origin `Send & Resume` and `Reset Budget & Retry` POST responses, confirms the retry reset and native process ID, and waits for the parentless and linked tasks to close through the real Merger. It retries only the documented transient 409 returned when a Bead changes during its workspace read, with a bounded consecutive-conflict limit. The script releases both gates in `finally`; stop the same AppHost afterward using the cleanup command below.
+
 Run scripts from this directory so `playwright` resolves from its local installation. The `web-browser-logs` dashboard resource captures logs from its own tracked browser session, not arbitrary Playwright sessions.
 
 ## Cleanup

@@ -566,12 +566,17 @@ internal static class Program
 
     private static int RunStageAction(string action)
     {
-        Console.OpenStandardInput().CopyTo(Stream.Null);
+        using var dispatchBytes = new MemoryStream();
+        Console.OpenStandardInput().CopyTo(dispatchBytes);
+        var dispatchPrompt = Encoding.UTF8.GetString(dispatchBytes.ToArray());
         var beadId = Environment.GetEnvironmentVariable("NIGHTWEAVER_BEAD_ID")
             ?? throw new InvalidOperationException("NIGHTWEAVER_BEAD_ID is missing.");
         var mergerBeadId = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_MERGER_BEAD_ID");
         if (string.Equals(beadId, mergerBeadId, StringComparison.Ordinal))
             action = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_MERGER_ACTION") ?? action;
+        if (action == "manual-delivery-pilot"
+            && dispatchPrompt.Split('\n').Any(line => line.Trim() == "Stage: stage:merge"))
+            action = "merger-verified-merge";
         var pidPath = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_FILE");
         var pidDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PID_DIRECTORY");
         if (!string.IsNullOrWhiteSpace(pidDirectory))
@@ -589,6 +594,79 @@ internal static class Program
 
         switch (action)
         {
+            case "manual-delivery-pilot":
+            {
+                var stage = dispatchPrompt.Split('\n')
+                    .FirstOrDefault(line => line.StartsWith("Stage: ", StringComparison.Ordinal))?["Stage: ".Length..]
+                    ?? "(none)";
+                var evidencePath = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_EVIDENCE")
+                    ?? throw new InvalidOperationException("The manual pilot evidence path is missing.");
+                var gateDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_GATE_DIRECTORY")
+                    ?? throw new InvalidOperationException("The manual pilot gate directory is missing.");
+                var gateBead = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_GATE_BEAD");
+                var secondGateBead = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_GATE_BEAD2");
+                var role = stage switch
+                {
+                    "stage:implement" => "implementer",
+                    "stage:review" => "reviewer",
+                    "stage:qa" => "qa",
+                    _ => throw new InvalidOperationException($"The manual pilot received unsupported stage '{stage}'.")
+                };
+                var headBefore = Run("git", ["rev-parse", "HEAD"]);
+                var record = JsonSerializer.Serialize(new
+                {
+                    bead_id = beadId,
+                    role,
+                    stage,
+                    pid = Environment.ProcessId,
+                    started_at = DateTimeOffset.UtcNow,
+                    cwd = Environment.CurrentDirectory,
+                    head_before = headBefore.Trim()
+                });
+                Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
+                File.AppendAllText(evidencePath, record + Environment.NewLine, new UTF8Encoding(false));
+                Console.WriteLine($"manual-delivery-live bead={beadId} role={role} stage={stage} head={headBefore.Trim()}");
+                Console.Out.Flush();
+
+                if (role == "implementer")
+                {
+                    if (string.Equals(beadId, gateBead, StringComparison.Ordinal)
+                        || string.Equals(beadId, secondGateBead, StringComparison.Ordinal))
+                    {
+                        Directory.CreateDirectory(gateDirectory);
+                        File.WriteAllText(Path.Combine(gateDirectory, beadId + ".started"), Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), new UTF8Encoding(false));
+                        WaitForFile(Path.Combine(gateDirectory, beadId + ".release"), TimeSpan.FromMinutes(5));
+                    }
+
+                    var currentBead = ReadFixtureBead(beadId);
+                    var repairCycles = currentBead.TryGetProperty("metadata", out var metadata)
+                        && metadata.TryGetProperty("repair_cycles", out var currentCycles) ? currentCycles.GetInt32() : 0;
+                    var output = Path.Combine(Environment.CurrentDirectory, "manual-delivery-" + beadId + ".txt");
+                    File.WriteAllText(output,
+                        $"Committed by the isolated native pilot for {beadId}; repair cycle {repairCycles}.\n",
+                        new UTF8Encoding(false));
+                    Run("git", ["add", Path.GetFileName(output)]);
+                    Run("git", ["commit", "-m", $"manual Delivery pilot implementation {beadId} cycle {repairCycles}"]);
+                    var branch = Run("git", ["branch", "--show-current"]).Trim();
+                    Run("git", ["push", "origin", $"HEAD:refs/heads/{branch}"]);
+                }
+                else if (role == "reviewer")
+                {
+                    var rejectionBead = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_REJECT_BEAD");
+                    var state = ReadFixtureBead(beadId);
+                    var repairCycles = state.TryGetProperty("metadata", out var metadata)
+                        && metadata.TryGetProperty("repair_cycles", out var cycles) ? cycles.GetInt32() : 0;
+                    if (string.Equals(beadId, rejectionBead, StringComparison.Ordinal) && repairCycles == 0)
+                        Run("bd", ["comments", "add", beadId, "Blocking finding: first pilot review requires the missing edge case; implement the correction before approval."]);
+                    else
+                        Run("bd", ["comments", "add", beadId, "Reviewer evidence: pilot change is ready for QA."]);
+                }
+                else
+                {
+                    Run("bd", ["comments", "add", beadId, "QA evidence: disposable native pilot behavior matches the task acceptance criteria."]);
+                }
+                break;
+            }
             case "slot-implement":
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "delivery-slot.txt"), "slot implementation\n");
                 Directory.CreateDirectory(Path.Combine(Environment.CurrentDirectory, ".nightweaver-ignored"));
@@ -852,15 +930,24 @@ internal static class Program
                 }
                 var defaultBranch = Environment.GetEnvironmentVariable("NIGHTWEAVER_DEFAULT_BRANCH") ?? "main";
                 var branch = Run("git", ["branch", "--show-current"]).Trim();
+                if (Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION") == "manual-delivery-pilot")
+                {
+                    Run("git", ["fetch", "origin", defaultBranch]);
+                    Run("git", ["rebase", $"origin/{defaultBranch}"]);
+                }
                 Run("git", ["fetch", "origin", defaultBranch]);
                 var head = Run("git", ["rev-parse", "HEAD"]).Trim();
                 var defaultHead = Run("git", ["rev-parse", $"origin/{defaultBranch}"]).Trim();
                 if (!IsAncestor(defaultHead, head))
                     throw new InvalidOperationException("Fixture branch is not synchronized with its configured default branch.");
 
-                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "merger-verified.txt"),
-                    "fixture merge after synchronized current-head checks\n", new UTF8Encoding(false));
-                Run("git", ["add", "merger-verified.txt"]);
+                var pilotMerger = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION") == "manual-delivery-pilot";
+                var mergerFile = pilotMerger ? $"merger-verified-{beadId}.txt" : "merger-verified.txt";
+                var mergerContent = pilotMerger
+                    ? $"fixture merge after synchronized current-head checks for {beadId}\n"
+                    : "fixture merge after synchronized current-head checks\n";
+                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, mergerFile), mergerContent, new UTF8Encoding(false));
+                Run("git", ["add", mergerFile]);
                 Run("git", ["commit", "-m", "fixture verified Merger change"]);
                 head = Run("git", ["rev-parse", "HEAD"]).Trim();
                 Run("git", ["push", "--force-with-lease", "origin", $"HEAD:refs/heads/{branch}"]);
