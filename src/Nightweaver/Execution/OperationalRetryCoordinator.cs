@@ -180,6 +180,15 @@ internal sealed class OperationalRetryCoordinator
         if (ContinuousAgentLaunchContext.StopRequested)
             return StoppedForDrain(latest, attemptCount);
 
+        // Materialization writes multiple durable tracker records and is not replay-safe,
+        // even when failure happened before a discovered-from edge became observable.
+        if (role == AgentRole.Planner && session.InitialState.Stage == "stage:plan-approved")
+            throw new AgentStageInputException(
+                $"Planning materialization for Bead '{beadId}' requires explicit recovery after attempt {attemptCount}: "
+                + $"{latest.Failure!.Kind}: {latest.Failure.Reason}; invocation '{latest.InvocationId}'; log '{latest.LogFilePath}'. "
+                + $"{string.Join("; ", latest.Diagnostics)} Claim and runtime evidence are retained. "
+                + "Inspect existing tasks and discovered-from relationships before guarded finalization; do not replay the Planner.");
+
         AgentStageResult previous = latest;
         DuplicateFailureClassificationResult? lastClassification = null;
         while (true)

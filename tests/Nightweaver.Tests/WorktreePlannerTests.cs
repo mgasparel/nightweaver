@@ -10,6 +10,21 @@ public sealed class WorktreePlannerTests
     private static readonly string[] CleanupReasons = ["closed", "planned"];
     private static readonly string[] PlannedReason = ["planned"];
 
+    [Theory]
+    [InlineData("planned")]
+    [InlineData("stage:plan-approved")]
+    public void InterruptedMaterializationProtectsTmpEvenWithoutRegisteredWorktree(string label)
+    {
+        using var temp = new TempDirectory();
+        var inventory = BeadsReader.Parse(JsonSerializer.Serialize(new[]
+        { new { id = "product", status = "in_progress", issue_type = "bug", priority = 2,
+            created_at = "2026-01-01T00:00:00Z", assignee = "actor", labels = new[] { label } } }));
+        var plan = StartupPlanner.Plan("actor", inventory, [], Root(temp.Path), Root(temp.Path + "-tmp", "product"));
+        Assert.Empty(plan.Releases);
+        Assert.Empty(plan.OrphanTmp);
+        Assert.Contains(plan.Diagnostics, d => d.Code == StartupDiagnosticCode.PlanningMaterializationRecoveryRequired);
+    }
+
     [Fact]
     public void OnlyRoleMatchedCompletedProductAndDeliveryWorktreesAreRemoved()
     {
@@ -47,7 +62,7 @@ public sealed class WorktreePlannerTests
     }
 
     [Fact]
-    public void ExactProjectClaimIsProjectedReleasedBeforeCompletedPlanningCleanup()
+    public void ClaimedPlannedProductRequiresRecoveryAndRetainsItsEnvironment()
     {
         using var temp = new TempDirectory();
         var root = temp.Path;
@@ -55,9 +70,13 @@ public sealed class WorktreePlannerTests
         var plan = StartupPlanner.Plan("nightweaver:demo", inventory, [Entry(root, "product")],
             Root(root, "product"), Root(root + "-tmp", "product"));
 
-        Assert.Single(plan.Releases);
-        Assert.Single(plan.Removals);
-        Assert.Single(plan.OrphanTmp);
+        Assert.Empty(plan.Releases);
+        Assert.Empty(plan.Removals);
+        Assert.Empty(plan.OrphanTmp);
+        var retained = Assert.Single(plan.SurvivingWorktrees);
+        Assert.True(retained.ProtectsTmp);
+        Assert.False(retained.Reusable);
+        Assert.Contains(plan.Diagnostics, diagnostic => diagnostic.Code == StartupDiagnosticCode.PlanningMaterializationRecoveryRequired);
         Assert.Equal("in_progress", inventory.ById["product"].Status);
     }
 

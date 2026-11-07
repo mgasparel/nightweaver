@@ -15,7 +15,7 @@ internal enum StartupDiagnosticCode
     ForeignInProgressClaim, UnassignedInProgressClaim, UnsafeRuntimePath, MissingBead, LockedWorktree,
     MissingRegisteredPath, PrunableRegistration, UnsupportedBeadStatus, UnregisteredWorktreeDirectory,
     AmbiguousWorktreeIdentity, UnusableRuntimePath, PausedWorktreeRetained, TmpCleanupDeferred,
-    UnsupportedWorktreeIdentity, UnknownTmpIdentity
+    UnsupportedWorktreeIdentity, UnknownTmpIdentity, PlanningMaterializationRecoveryRequired
 }
 internal sealed record StartupDiagnostic(string BeadId, StartupDiagnosticCode Code, string? Assignee = null, string? Path = null, string? Reason = null);
 internal sealed record RemoveWorktree(string BeadId, GitWorktreeSnapshot Registration, DirectoryState Presence, IReadOnlyList<string> Reasons)

@@ -104,6 +104,8 @@ internal sealed class AgentStageCoordinator
         if (expectedState is not null && initial.State != expectedState)
             throw new AgentStageInputException($"Bead '{beadId}' workflow state changed before stage opening; refusing to dispatch against stale verified state.");
 
+        await EnsureNoMaterializedChildrenAsync(repository, role, initial.State, cancellationToken);
+
         var purpose = role is AgentRole.Planner or AgentRole.PlanChallenger
             ? WorktreePurpose.Planning : WorktreePurpose.Delivery;
         var worktree = await provision(hostPaths, project.Name, repository, beadId, purpose, cancellationToken);
@@ -115,11 +117,22 @@ internal sealed class AgentStageCoordinator
             && !string.Equals(fresh.Bead.Assignee, initial.Bead.Assignee, StringComparison.Ordinal)))
             throw new AgentStageInputException($"Bead '{beadId}' workflow state changed during provisioning; refusing to dispatch a stale stage.");
 
+        await EnsureNoMaterializedChildrenAsync(repository, role, fresh.State, cancellationToken);
+
         _ = ParseProvisionedHead(worktree.HeadSha);
         return new AgentStageSession(hostPaths, project, sessionRepository, beadId, role, purpose, worktree,
             fresh.State, fresh.Bead.Assignee,
             new AgentDispatchContext(fresh.State.Id, fresh.State.IssueType, fresh.State.Stage, fresh.State.RepairCycles),
             worktree.WasDirty);
+    }
+
+    private async Task EnsureNoMaterializedChildrenAsync(ValidatedTargetRepository repository,
+        AgentRole role, BeadWorkflowState state, CancellationToken cancellationToken)
+    {
+        if (role != AgentRole.Planner || state.Stage != "stage:plan-approved") return;
+        var dependencies = await beadsReader.ReadUpDependenciesAsync(repository, state.Id, cancellationToken);
+        if (dependencies.Any(edge => edge.Type == "discovered-from" && edge.DependsOnId == state.Id))
+            throw new AgentStageInputException($"Bead '{state.Id}' already has materialized children; explicit recovery is required before dispatch to prevent duplicate tasks.");
     }
 
     internal async Task<AgentStageResult> RunAttemptAsync(

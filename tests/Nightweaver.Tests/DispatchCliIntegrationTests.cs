@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Diagnostics;
 using Nightweaver.Inspection;
+using Nightweaver.Planning;
 
 namespace Nightweaver.Tests;
 
@@ -61,6 +62,117 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         Assert.Equal(rootBranch, target.Run("git", ["branch", "--show-current"]).Trim());
         Assert.Equal(rootStatus, target.Run("git", ["status", "--porcelain"]));
     }
+
+    [Fact]
+    public async Task PublishedDispatchMaterializesApprovedPlanAndReleasesClaimExactlyOnce()
+    {
+        using var fixture = new LiveDispatchFixture(published);
+        var product = fixture.Target.Create("Approved materialization", type: "bug");
+        fixture.Target.Run("bd", ["update", product, "--add-label", "stage:plan-approved"]);
+        var baseline = ReadInventory(fixture.Target).ById.Keys.ToHashSet(StringComparer.Ordinal);
+        var result = await fixture.RunAsync(["dispatch", product, "--project", "demo"], "planned-materialization");
+        Assert.True(result.ExitCode == 0, result.StandardErrorText);
+        AssertSuccessfulHandoff(fixture.Target, product, "planned");
+        Assert.DoesNotContain("stage:plan-approved", ReadBead(fixture.Target, product).Labels);
+        var inventory = BeadsReader.Parse(fixture.Target.Run("bd", BeadsCommand.Create(fixture.Target.Path).Arguments));
+        var child = Assert.Single(inventory.ById.Values, bead => bead.IssueType == "task" && !baseline.Contains(bead.Id));
+        Assert.Equal("open", child.Status);
+        var dependencies = fixture.Target.Run("bd", ["dep", "list", product, "--direction", "up", "--json"]);
+        Assert.Contains(child.Id, dependencies, StringComparison.Ordinal);
+        Assert.Contains("discovered-from", dependencies, StringComparison.Ordinal);
+        var repeated = await fixture.RunAsync(["dispatch", product, "--project", "demo"], "planned-materialization");
+        Assert.Equal(1, repeated.ExitCode);
+        inventory = BeadsReader.Parse(fixture.Target.Run("bd", BeadsCommand.Create(fixture.Target.Path).Arguments));
+        Assert.Single(inventory.ById.Values, bead => bead.IssueType == "task" && !baseline.Contains(bead.Id));
+    }
+
+    [Fact]
+    public async Task PlannedHandoffRefusesChangedOwnerAndPreservesEvidence()
+    {
+        using var fixture = new LiveDispatchFixture(published);
+        var product = fixture.Target.Create("Materialization owner race", type: "bug");
+        fixture.Target.Run("bd", ["update", product, "--add-label", "stage:plan-approved"]);
+        var result = await fixture.RunAsync(["dispatch", product, "--project", "demo"], "planned-stolen-owner");
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("claim ownership changed before handoff", result.StandardErrorText, StringComparison.Ordinal);
+        var bead = ReadBead(fixture.Target, product);
+        Assert.Equal("in_progress", bead.Status);
+        Assert.Equal("other-owner", bead.Assignee);
+        Assert.Contains("planned", bead.Labels);
+        Assert.True(Directory.Exists(fixture.WorktreePath(product)));
+    }
+
+    [Theory]
+    [InlineData("planned-materialization-nonzero", "planned", "NonZeroExit")]
+    [InlineData("partial-materialization", "stage:plan-approved", "NonZeroExit")]
+    [InlineData("planned-without-link", "planned", "IllegalBeadTransition")]
+    public async Task FailedMaterializationRetainsEvidenceAndNeverReplays(string action, string label, string failure)
+    {
+        using var fixture = new LiveDispatchFixture(published, retries: 2);
+        var product = fixture.Target.Create("Interrupted materialization", type: "feature");
+        fixture.Target.Run("bd", ["update", product, "--add-label", "stage:plan-approved"]);
+        var baseline = ReadInventory(fixture.Target).ById.Keys.ToHashSet(StringComparer.Ordinal);
+        var result = await fixture.RunAsync(["dispatch", product, "--project", "demo"], action);
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("requires explicit recovery after attempt 1", result.StandardErrorText, StringComparison.Ordinal);
+        Assert.Contains(failure, result.StandardErrorText, StringComparison.Ordinal);
+        Assert.Contains("log '", result.StandardErrorText, StringComparison.Ordinal);
+        Assert.DoesNotContain("Cannot escalate", result.StandardErrorText, StringComparison.Ordinal);
+        Assert.DoesNotContain("Attempt 2/", result.StandardOutputText, StringComparison.Ordinal);
+        var inventory = ReadInventory(fixture.Target);
+        var bead = inventory.ById[product];
+        Assert.Equal("in_progress", bead.Status);
+        Assert.Equal("nightweaver:demo", bead.Assignee);
+        Assert.Contains(label, bead.Labels);
+        var child = Assert.Single(inventory.ById.Values, b => !baseline.Contains(b.Id));
+        Assert.Equal("task", child.IssueType);
+        Assert.True(Directory.Exists(fixture.WorktreePath(product)));
+        Assert.Single(Directory.EnumerateFiles(Path.Combine(fixture.Host, "logs", "demo", product), "*.log"));
+        var root = Path.GetDirectoryName(fixture.WorktreePath(product))!;
+        var tmpRoot = Path.Combine(fixture.Host, "tmp", "demo");
+        var startup = StartupPlanner.Plan("nightweaver:demo", inventory,
+            [new GitWorktreeSnapshot(fixture.WorktreePath(product), fixture.WorktreePath(product), null, null, true, false, false, null, false, null)], RuntimeRoot(root, product),
+            RuntimeRoot(tmpRoot, product));
+        Assert.DoesNotContain(startup.Releases, release => release.BeadId == product);
+        Assert.Empty(startup.Removals);
+        Assert.Empty(startup.OrphanTmp);
+        Assert.False(Assert.Single(startup.SurvivingWorktrees).Reusable);
+        Assert.Contains(startup.Diagnostics, d => d.Code == StartupDiagnosticCode.PlanningMaterializationRecoveryRequired);
+        // Launch an unrelated native dispatch to exercise live startup recovery and cleanup,
+        // rather than relying only on the pure StartupPlan projection above.
+        var tmpPath = Path.Combine(tmpRoot, product);
+        Directory.CreateDirectory(tmpPath);
+        var sentinel = Path.Combine(tmpPath, "recovery-evidence.txt");
+        File.WriteAllText(sentinel, "retain interrupted materialization");
+        var unrelated = fixture.Target.Create("Unrelated dispatch after materialization failure", type: "task");
+        baseline.Add(unrelated);
+        var restarted = await fixture.RunAsync(["dispatch", unrelated, "--project", "demo"], "review");
+        Assert.True(restarted.ExitCode == 0, restarted.StandardErrorText);
+        var afterStartup = ReadBead(fixture.Target, product);
+        Assert.Equal("in_progress", afterStartup.Status);
+        Assert.Equal("nightweaver:demo", afterStartup.Assignee);
+        Assert.Contains(label, afterStartup.Labels);
+        Assert.True(Directory.Exists(fixture.WorktreePath(product)));
+        Assert.Equal("retain interrupted materialization", File.ReadAllText(sentinel));
+        Assert.Single(ReadInventory(fixture.Target).ById.Values, b => !baseline.Contains(b.Id));
+
+        if (label == "stage:plan-approved")
+        {
+            // Even an explicit release cannot authorize replay over existing children.
+            fixture.Target.Run("bd", ["update", product, "--status", "open", "--assignee", "",
+                "--if-assignee", "nightweaver:demo", "--if-status", "in_progress"]);
+            var retry = await fixture.RunAsync(["dispatch", product, "--project", "demo"], "planned-materialization");
+            Assert.Equal(1, retry.ExitCode);
+            Assert.Contains("already has materialized children", retry.StandardErrorText, StringComparison.Ordinal);
+            Assert.Single(ReadInventory(fixture.Target).ById.Values, b => !baseline.Contains(b.Id));
+        }
+    }
+
+    private static RuntimeDirectorySnapshot RuntimeRoot(string root, string id) =>
+        new(root, DirectoryState.Present, [new(id, Path.Combine(root, id), DirectoryState.Present)]);
+
+    private static BeadsInventory ReadInventory(BeadsFixture target) =>
+        BeadsReader.Parse(target.Run("bd", BeadsCommand.Create(target.Path).Arguments));
 
     [Fact]
     public async Task PublishedDispatchEscalatesAnAgentThatExitsWithoutAValidTransition()
@@ -614,14 +726,14 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         internal string Config { get; }
         internal string AliasRoot { get; }
 
-        internal LiveDispatchFixture(PublishedCliArtifactFixture published)
+        internal LiveDispatchFixture(PublishedCliArtifactFixture published, int retries = 0)
         {
             this.published = published;
             Host = temp.CreateDirectory("nightweaver host with spaces");
             Caller = temp.CreateDirectory("unrelated caller with spaces");
             AliasRoot = temp.CreateDirectory("repository aliases");
             published.CopyPublishedAppTo(Host);
-            Config = AddProject(Host, "demo");
+            Config = AddProject(Host, "demo", retries: retries);
             Target.Run("git", ["config", "user.name", "Nightweaver Dispatch Fixture"]);
             Target.Run("git", ["config", "user.email", "fixture@example.invalid"]);
             File.WriteAllText(Path.Combine(Target.Path, "README.md"), "dispatch base\n", new UTF8Encoding(false));
@@ -670,7 +782,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
             return ProcessTool.Start(executable, arguments, Caller, environment);
         }
 
-        internal string AddProject(string host, string project, string? targetPath = null)
+        internal string AddProject(string host, string project, string? targetPath = null, int retries = 0)
         {
             Directory.CreateDirectory(Path.Combine(host, "projects"));
             var prompts = Path.Combine(host, "prompts");
@@ -683,7 +795,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
             {
                 name = project,
                 target_repository = new { path = targetPath ?? Target.Path, default_branch = "main" },
-                limits = new { max_operational_retries = 0 },
+                limits = new { max_operational_retries = retries },
                 agent_defaults = new { cli = "claude", effort = "low", timeout_minutes = 1 }
             });
             File.WriteAllText(config, json, new UTF8Encoding(false));

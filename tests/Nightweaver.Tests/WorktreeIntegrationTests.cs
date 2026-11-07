@@ -214,7 +214,9 @@ internal sealed class StartupSweepFixture : IDisposable
         var seeds = new[]
         {
             new { title = "closed", status = "closed", labels = Array.Empty<string>() },
-            new { title = "planned", status = "in_progress", labels = new[] { "planned" } },
+            // Completed Planning has passed verification and guarded claim handoff.
+            // A still-claimed planned Product instead requires explicit recovery.
+            new { title = "planned", status = "open", labels = new[] { "planned" } },
             new { title = "paused", status = "in_progress", labels = new[] { "product-decision-required" } },
             new { title = "needs human", status = "in_progress", labels = new[] { "needs-human" } },
             new { title = "active", status = "in_progress", labels = Array.Empty<string>() },
@@ -229,7 +231,7 @@ internal sealed class StartupSweepFixture : IDisposable
             seed.title, seed.status, seed.labels,
             issue_type = seed.title == "planned" ? "feature" : "task",
             priority = 2,
-            assignee = seed.status == "closed" ? null : "nightweaver:demo"
+            assignee = seed.status == "closed" || seed.title == "planned" ? null : "nightweaver:demo"
         }))));
         Target.Run("bd", ["import", seedFile, "--json"]);
         seededIds = BeadsReader.Parse(Target.Run("bd", BeadsCommand.Create(Target.Path).Arguments)).ById.Values

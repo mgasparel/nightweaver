@@ -863,11 +863,19 @@ internal static class Program
                 UpdateLabels(beadId, "stage:plan-challenge", "stage:plan-approved");
                 break;
             case "planned-materialization":
+            case "planned-materialization-nonzero":
+            case "partial-materialization":
+            case "planned-without-link":
+            case "planned-stolen-owner":
             {
                 using var created = JsonDocument.Parse(Run("bd", ["create", "--title", "Fixture plan bead", "--type", "task", "--json"]));
                 var childId = created.RootElement.GetProperty("id").GetString()!;
-                Run("bd", ["dep", "add", childId, beadId, "--type", "discovered-from"]);
+                if (action != "planned-without-link")
+                    Run("bd", ["dep", "add", childId, beadId, "--type", "discovered-from"]);
+                if (action == "partial-materialization") return 19;
                 UpdateLabels(beadId, "stage:plan-approved", "planned");
+                if (action == "planned-materialization-nonzero") return 19;
+                if (action == "planned-stolen-owner") Run("bd", ["update", beadId, "--assignee", "other-owner"]);
                 break;
             }
             case "review":

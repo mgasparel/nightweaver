@@ -8,6 +8,27 @@ namespace Nightweaver.Tests;
 public sealed class AuthorityMatrixTests
 {
     [Fact]
+    public void PlannedProductRetainingDispatchClaimIsAcceptedBeforeHandoff()
+    {
+        var before = State("product", "bug", "stage:plan-approved", status: "in_progress");
+        var after = State("product", "bug", status: "in_progress", labels: ["planned"]);
+        var result = AuthorityMatrix.Validate(AgentRole.Planner, before, after,
+            Beads(State("task", "task")), [new("task", "product", "discovered-from")]);
+        Assert.True(result.IsLegal, result.Reason);
+    }
+
+    [Fact]
+    public void PlannerCannotReleaseDispatchStatusBeforeVerification()
+    {
+        var before = State("product", "bug", "stage:plan-approved", status: "in_progress");
+        var after = State("product", "bug", status: "open", labels: ["planned"]);
+        var result = AuthorityMatrix.Validate(AgentRole.Planner, before, after,
+            Beads(State("task", "task")), [new("task", "product", "discovered-from")]);
+        Assert.False(result.IsLegal);
+        Assert.Contains("retain", result.Reason!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PlannedProductCanCarryNeedsHumanAfterStartupCleanupFailure()
     {
         var state = State("planned-product", "feature", labels: ["planned", "needs-human"]);

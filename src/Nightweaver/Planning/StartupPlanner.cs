@@ -11,6 +11,12 @@ internal static class StartupPlanner
         foreach (var bead in inventory.ById.Values.OrderBy(bead => bead.Id, StringComparer.Ordinal))
         {
             if (bead.Status != "in_progress") continue;
+            if (RequiresMaterializationRecovery(bead))
+            {
+                diagnostics.Add(new(bead.Id, StartupDiagnosticCode.PlanningMaterializationRecoveryRequired,
+                    bead.Assignee, Reason: "Interrupted Planning materialization requires explicit recovery; preserve claim, worktree and tmp, inspect existing tasks, and do not replay Planner."));
+                continue;
+            }
             if (string.Equals(bead.Assignee, recoveryActor, StringComparison.Ordinal))
                 releases.Add(new ReleaseClaim(bead.Id, recoveryActor));
             else
@@ -28,7 +34,7 @@ internal static class StartupPlanner
         var removals = new List<RemoveWorktree>();
         var survivors = new List<RetainedWorktree>();
         var orphans = new List<DeleteOrphanTmp>();
-        var protectedIds = new HashSet<string>(RuntimePaths.Comparer);
+        var protectedIds = new HashSet<string>(inventory.ById.Values.Where(RequiresMaterializationRecovery).Select(bead => bead.Id), RuntimePaths.Comparer);
         void Diagnostic(string id, StartupDiagnosticCode code, string path, string? reason = null) =>
             diagnostics.Add(new(id, code, Path: path, Reason: reason));
 
@@ -69,7 +75,8 @@ internal static class StartupPlanner
 
             var certain = hasBead && exactPath && !entry.Locked && !entry.Prunable
                 && presence == DirectoryState.Present && !ambiguous;
-            if (certain && bead is not null && StartupEnvironmentClassifier.IsCompletedWorktreeOwner(bead, recoveryActor, entry))
+            var recoveryRequired = bead is not null && RequiresMaterializationRecovery(bead);
+            if (certain && !recoveryRequired && bead is not null && StartupEnvironmentClassifier.IsCompletedWorktreeOwner(bead, recoveryActor, entry))
             {
                 var reason = bead.IssueType is "feature" or "bug" ? "planned" : "closed";
                 removals.Add(new(id, entry, presence, Array.AsReadOnly([reason])));
@@ -89,7 +96,7 @@ internal static class StartupPlanner
 
             // Every still-registered path protects its tmp, including missing or prunable records.
             protectedIds.Add(id);
-            var reusable = certain && supported && bead?.Status != "closed" && !paused;
+            var reusable = certain && supported && bead?.Status != "closed" && !paused && !recoveryRequired;
             survivors.Add(new(id, entry, presence, reusable, ProtectsTmp: true, paused));
         }
 
@@ -181,4 +188,11 @@ internal static class StartupPlanner
 
         return IsSameOrAncestor(left, right) || IsSameOrAncestor(right, left);
     }
+
+    // A held claim at this boundary cannot distinguish verified completion from
+    // partial tracker writes or a crash before verification. Labels alone are insufficient.
+    private static bool RequiresMaterializationRecovery(BeadSnapshot bead) =>
+        bead.IssueType is "feature" or "bug" && bead.Status == "in_progress"
+        && (bead.Labels.Contains("stage:plan-approved", StringComparer.Ordinal)
+            || bead.Labels.Contains("planned", StringComparer.Ordinal));
 }

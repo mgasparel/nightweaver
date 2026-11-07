@@ -124,8 +124,8 @@ internal static class AuthorityMatrix
         {
             if (!after.Planned || after.Stage is not null || after.ProductDecisionRequired)
                 return AuthorityMatrixResult.Illegal("Planner from stage:plan-approved must transition to planned with no stage or pause label.");
-            if (after.Status != "open")
-                return AuthorityMatrixResult.Illegal("A planned Product Bead must have open status.");
+            if (after.Status != before.Status || after.Status is not ("open" or "in_progress"))
+                return AuthorityMatrixResult.Illegal("Planner must retain the Product status until Orchestrator claim handoff.");
             if (after.RepairCycles != before.RepairCycles)
                 return CounterUnchanged(before, after);
             if (dependencies is null)
