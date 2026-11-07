@@ -3,7 +3,7 @@ import { readFile, unlink, writeFile } from 'node:fs/promises';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
-import { findNewDirtyWorktreeDiagnostic, matchConsole409Errors } from './manual-delivery-qa-helpers.mjs';
+import { findNewDirtyWorktreeDiagnostic, isTransientWorkspaceReadConflict, matchConsole409Errors, requireForeignClaimId } from './manual-delivery-qa-helpers.mjs';
 
 const baseUrl = process.env.NIGHTWEAVER_QA_URL;
 if (!baseUrl) throw new Error('Set NIGHTWEAVER_QA_URL to the http URL reported by aspire describe.');
@@ -11,6 +11,7 @@ if (!baseUrl) throw new Error('Set NIGHTWEAVER_QA_URL to the http URL reported b
 const pointerPath = join(process.cwd(), '.manual-delivery-manifest.json');
 const pointer = JSON.parse(await readFile(pointerPath, 'utf8'));
 const manifest = JSON.parse(await readFile(pointer.manifest, 'utf8'));
+const foreignClaimId = requireForeignClaimId(manifest);
 const gateRelease = join(manifest.gateDirectory, `${manifest.tasks.parentless}.release`);
 const retryRelease = join(manifest.gateDirectory, `${manifest.tasks.paused}.release`);
 const sentinelPath = join(manifest.nightweaverRoot, 'worktrees', 'manualqa', manifest.tasks.paused,
@@ -74,6 +75,20 @@ const getDetail = async (request, id) => {
   }
   return response.json();
 };
+const getDetailWithWorkspaceReadRetry = async (request, id) => {
+  let consecutiveReadConflicts = 0;
+  while (true) {
+    try { return await getDetail(request, id); }
+    catch (error) {
+      if (!isTransientWorkspaceReadConflict(error)) throw error;
+      consecutiveReadConflicts++;
+      transientWorkspaceReadConflicts++;
+      if (consecutiveReadConflicts > 20)
+        throw new Error(`Bead ${id} had more than 20 consecutive workflow-change conflicts while reading its workspace.`);
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+};
 const factoryState = async () => {
   const response = await fetch(new URL('/api/factory/state', baseUrl));
   if (!response.ok) throw new Error(`Factory state returned ${response.status()}.`);
@@ -133,25 +148,8 @@ const waitForFile = async (path, timeoutMs = 120000) => {
 };
 const waitForClosed = async (request, id, timeoutMs = 300000) => {
   const deadline = Date.now() + timeoutMs;
-  let consecutiveReadConflicts = 0;
   while (Date.now() < deadline) {
-    let detail;
-    try { detail = await getDetail(request, id); }
-    catch (error) {
-      const transientWorkspaceReadConflict = error?.status === 409
-        && error.problem?.title === 'Bead changed'
-        && ['The Bead workflow changed while its workspace was being read. Refresh and try again.',
-          'The Bead disappeared or its workflow changed while its workspace was being read. Refresh and try again.']
-          .includes(error.problem?.detail);
-      if (!transientWorkspaceReadConflict) throw error;
-      consecutiveReadConflicts++;
-      transientWorkspaceReadConflicts++;
-      if (consecutiveReadConflicts > 20)
-        throw new Error(`Bead ${id} had more than 20 consecutive workflow-change conflicts while reading its workspace.`);
-      await new Promise(resolve => setTimeout(resolve, 100));
-      continue;
-    }
-    consecutiveReadConflicts = 0;
+    const detail = await getDetailWithWorkspaceReadRetry(request, id);
     if (detail.bead.status === 'closed') return detail;
     await new Promise(resolve => setTimeout(resolve, 250));
   }
@@ -330,7 +328,9 @@ try {
     throw new Error('The crash scenario did not record the guarded Retry action before restart.');
   const commentIdsBeforeCrash = new Set(pausedBeforeCrash.comments.map(comment => comment.id));
   console.log(`Crash recovery boundary is guarded Retry comment ${retryActionBeforeCrash.id}.`);
-  const foreignBeforeCrash = manifest.tasks.foreignClaim ? await getDetail(page.request, manifest.tasks.foreignClaim) : null;
+  const foreignBeforeCrash = await getDetail(page.request, foreignClaimId);
+  if (foreignBeforeCrash.bead.status !== 'in_progress' || foreignBeforeCrash.bead.assignee !== 'foreign:operator')
+    throw new Error(`The manifest foreign claim must begin as in_progress/foreign:operator: ${JSON.stringify(foreignBeforeCrash.bead)}.`);
   const oldRuntimePid = Number((await readFile(manifest.runtimeProcessId, 'utf8')).trim());
   const oldRuntimeId = retryFactory.snapshot.runtime_id;
   const kill = spawnSync('taskkill.exe', ['/PID', String(oldRuntimePid), '/T', '/F'], { encoding: 'utf8', windowsHide: true });
@@ -342,12 +342,11 @@ try {
   if (await readFile(sentinelPath, 'utf8') !== sentinelContents
       || execFileSync('git', ['-C', worktree, 'branch', '--show-current'], { encoding: 'utf8' }).trim() !== retainedBranch)
     throw new Error('The runtime crash changed the retained worktree sentinel or owned branch.');
-  if (foreignBeforeCrash) {
-    const foreignAfterCrash = await getDetail(page.request, manifest.tasks.foreignClaim);
-    if (foreignAfterCrash.bead.status !== foreignBeforeCrash.bead.status
-        || foreignAfterCrash.bead.assignee !== foreignBeforeCrash.bead.assignee)
-      throw new Error('The runtime crash changed the foreign-owned Bead claim.');
-  }
+  const foreignAfterCrash = await getDetail(page.request, foreignClaimId);
+  if (foreignAfterCrash.bead.status !== foreignBeforeCrash.bead.status
+      || foreignAfterCrash.bead.assignee !== foreignBeforeCrash.bead.assignee)
+    throw new Error('The runtime crash changed the foreign-owned Bead claim.');
+  console.log(`Foreign claim ${foreignClaimId} preserved across runtime crash: ${foreignAfterCrash.bead.status}/${foreignAfterCrash.bead.assignee}.`);
   await writeFile(manifest.runtimeRestartRequest, 'restart\n', 'utf8');
   const restartedPid = await waitForRestartAck(oldRuntimePid);
   const restarted = await waitForLiveFactoryState(60000);
@@ -356,16 +355,15 @@ try {
   if (await readFile(sentinelPath, 'utf8') !== sentinelContents
       || execFileSync('git', ['-C', worktree, 'branch', '--show-current'], { encoding: 'utf8' }).trim() !== retainedBranch)
     throw new Error('The restarted runtime changed the retained worktree sentinel or owned branch.');
-  if (foreignBeforeCrash) {
-    const foreignAfterRestart = await getDetail(page.request, manifest.tasks.foreignClaim);
-    if (foreignAfterRestart.bead.status !== foreignBeforeCrash.bead.status
-        || foreignAfterRestart.bead.assignee !== foreignBeforeCrash.bead.assignee)
-      throw new Error('Runtime restart changed the foreign-owned Bead claim.');
-  }
+  const foreignAfterRestart = await getDetail(page.request, foreignClaimId);
+  if (foreignAfterRestart.bead.status !== foreignBeforeCrash.bead.status
+      || foreignAfterRestart.bead.assignee !== foreignBeforeCrash.bead.assignee)
+    throw new Error('Runtime restart changed the foreign-owned Bead claim.');
+  console.log(`Foreign claim ${foreignClaimId} preserved across runtime restart: ${foreignAfterRestart.bead.status}/${foreignAfterRestart.bead.assignee}.`);
   // Startup recovery may release the interrupted claim before normal discovery
   // claims it again. The transient Bead read is diagnostic only; assert the new
   // runtime's native Agent and the eventual fail-closed pause below.
-  const startupRecoveryObservation = await getDetail(page.request, manifest.tasks.paused);
+  const startupRecoveryObservation = await getDetailWithWorkspaceReadRetry(page.request, manifest.tasks.paused);
   console.log(`Post-restart startup recovery observed ${startupRecoveryObservation.bead.status}/${startupRecoveryObservation.bead.assignee ?? 'unassigned'} before native rediscovery.`);
   const restartedAgentPid = await waitForGatePidChange(
     join(manifest.gateDirectory, `${manifest.tasks.paused}.started`), retryAgentPid);

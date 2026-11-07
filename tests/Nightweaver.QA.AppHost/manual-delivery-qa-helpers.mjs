@@ -13,6 +13,18 @@ export const findNewDirtyWorktreeDiagnostic = (comments, knownCommentIds) => {
   return { comment, diagnostic: JSON.parse(comment.body) };
 };
 
+export const requireForeignClaimId = manifest => {
+  if (typeof manifest.foreignClaim !== 'string' || manifest.foreignClaim.trim() === '')
+    throw new Error('Manual Delivery QA manifest must contain a non-empty root foreignClaim ID.');
+  return manifest.foreignClaim;
+};
+
+export const isTransientWorkspaceReadConflict = error => error?.status === 409
+  && error.problem?.title === 'Bead changed'
+  && ['The Bead workflow changed while its workspace was being read. Refresh and try again.',
+    'The Bead disappeared or its workflow changed while its workspace was being read. Refresh and try again.']
+    .includes(error.problem?.detail);
+
 export const matchConsole409Errors = (consoleErrors, validatedResponses, maxDistanceMs = 2000) => {
   const availableResponses = [...validatedResponses];
   const matches = [];
