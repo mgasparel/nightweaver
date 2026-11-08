@@ -1062,6 +1062,10 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         var capacityBead = target.CreateBead("Delivery capacity holder", "task", "stage:implement");
         var dependency = target.CreateBead("Resumed dependency", "task");
         var resumedBead = target.CreateBead("Resumed delivery plan", "task", "stage:implement", "needs-human");
+        // Creation sequence does not guarantee selection order when CreatedAt values tie.
+        target.RunTarget("bd", ["update", capacityBead, "--priority", "0"]);
+        target.RunTarget("bd", ["update", dependency, "--priority", "1"]);
+        target.RunTarget("bd", ["update", resumedBead, "--priority", "2"]);
         target.RunTarget("bd", ["update", resumedBead, "--set-metadata", "repair_cycles=2"]);
         target.RunTarget("bd", ["dep", "add", resumedBead, dependency]);
 
