@@ -293,15 +293,21 @@ internal sealed class BeadsFixture : IDisposable
         return fixture;
     });
     private readonly TempDirectory temp = new();
+    private readonly ConcurrentDictionary<string, int> toolRunCounts = new(StringComparer.OrdinalIgnoreCase);
     internal string Path { get; }
     internal string Root => temp.Path;
     internal string UserHome { get; }
     internal IReadOnlyDictionary<string, string?> Environment { get; }
     internal string ControlBeadId { get; }
+    internal IReadOnlyDictionary<string, int> ToolRunCounts => toolRunCounts.ToDictionary(pair => pair.Key, pair => pair.Value,
+        StringComparer.OrdinalIgnoreCase);
 
     internal BeadsFixture(string relativePath = "repo") : this(relativePath, initializeTemplate: false) { }
+    internal BeadsFixture(string relativePath, string preparedTemplatePath, string controlBeadId)
+        : this(relativePath, initializeTemplate: false, preparedTemplatePath, controlBeadId) { }
 
-    private BeadsFixture(string relativePath = "repo", bool initializeTemplate = false)
+    private BeadsFixture(string relativePath = "repo", bool initializeTemplate = false,
+        string? preparedTemplatePath = null, string? preparedControlBeadId = null)
     {
         Path = temp.CreateDirectory(relativePath);
         UserHome = temp.CreateDirectory("isolated user");
@@ -315,9 +321,18 @@ internal sealed class BeadsFixture : IDisposable
         Environment = environment;
         if (!initializeTemplate)
         {
-            var template = Template.Value;
-            TestDirectoryTemplate.Copy(template.Path, Path);
-            ControlBeadId = template.ControlBeadId;
+            if (preparedTemplatePath is null)
+            {
+                var template = Template.Value;
+                TestDirectoryTemplate.Copy(template.Path, Path);
+                ControlBeadId = template.ControlBeadId;
+            }
+            else
+            {
+                TestDirectoryTemplate.Copy(preparedTemplatePath, Path);
+                ControlBeadId = preparedControlBeadId
+                    ?? throw new ArgumentException("A prepared Beads template requires its control Bead id.", nameof(preparedControlBeadId));
+            }
             return;
         }
 
@@ -341,6 +356,7 @@ internal sealed class BeadsFixture : IDisposable
 
     internal string Run(string tool, IReadOnlyList<string> args)
     {
+        toolRunCounts.AddOrUpdate(tool, 1, static (_, count) => count + 1);
         var result = new SystemProcessRunner().RunAsync(new ProcessRequest(tool, args, Path, Environment, TimeSpan.FromSeconds(30)), CancellationToken.None).GetAwaiter().GetResult();
         if (result.ExitCode != 0) throw new InvalidOperationException($"Required real-tool fixture prerequisite {tool} failed (exit {result.ExitCode}): {result.StandardError}{result.StandardOutput}");
         return result.StandardOutput;

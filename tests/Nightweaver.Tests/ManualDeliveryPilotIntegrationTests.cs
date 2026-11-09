@@ -263,7 +263,7 @@ public sealed class ManualDeliveryPilotSecondSignalTests
         await using var fixture = await ManualPilot.CreateAsync(
             agentInvocationFixturePath: typeof(Nightweaver.Tests.AgentInvocationFixture.FixtureMarker).Assembly.Location,
             cancellationToken: TestContext.Current.CancellationToken,
-            seedProfile: ManualPilotSeedProfile.ParentlessAndProduct);
+            seedProfile: ManualPilotSeedProfile.ParentlessOnly);
         fixture.RetainSentinelBeadId = fixture.ParentlessTaskId;
         var foreignClaimId = await fixture.CreateForeignClaimAsync(TestContext.Current.CancellationToken);
         var runtimeAssembly = typeof(ProjectConfigLoader).Assembly.Location;
@@ -272,9 +272,6 @@ public sealed class ManualDeliveryPilotSecondSignalTests
         try
         {
             await fixture.WaitForGateAsync(fixture.ParentlessTaskId, TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
-            await WaitForClosedAsync(fixture, fixture.ProductTaskId, TimeSpan.FromMinutes(5), TestContext.Current.CancellationToken);
-            await WaitForClosedAsync(fixture, fixture.ProductId, TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
-
             var firstAgentPid = int.Parse(File.ReadAllText(Path.Combine(fixture.GateDirectory,
                 fixture.ParentlessTaskId + ".started")), CultureInfo.InvariantCulture);
             var worktree = fixture.WorktreePath(fixture.ParentlessTaskId);

@@ -97,7 +97,7 @@ public sealed class ContinuousDiscoveryCoordinatorTests
         var ticks = Channel.CreateUnbounded<bool>();
         var recovered = NewSignal();
         var reads = 0;
-        var error = new StringWriter();
+        var error = new ChannelLineWriter();
         var coordinator = CreateCoordinator(_ =>
         {
             var read = Interlocked.Increment(ref reads);
@@ -107,9 +107,10 @@ public sealed class ContinuousDiscoveryCoordinatorTests
         }, completions.Reader, ticks.Reader, error);
 
         var run = coordinator.RunAsync(lifetime.Token);
-        await WaitForReadAsync().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var diagnostic = await error.Lines.ReadAsync(TestContext.Current.CancellationToken)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Assert.Equal(1, Volatile.Read(ref reads));
-        Assert.Contains("a later trigger will reread current tracker state", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("a later trigger will reread current tracker state", diagnostic, StringComparison.Ordinal);
 
         ticks.Writer.TryWrite(true);
         await recovered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
@@ -117,11 +118,6 @@ public sealed class ContinuousDiscoveryCoordinatorTests
         lifetime.Cancel();
         await run.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
-        async Task WaitForReadAsync()
-        {
-            while (Volatile.Read(ref reads) == 0)
-                await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
     }
 
     [Fact]

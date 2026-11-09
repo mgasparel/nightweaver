@@ -4,4 +4,7 @@
     <AssemblyName>AgentInvocationFixture</AssemblyName>
     <RootNamespace>Nightweaver.Tests.AgentInvocationFixture</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Nightweaver.Tests/WindowsConsoleProcess.cs" Link="WindowsConsoleProcess.cs" />
+  </ItemGroup>
 </Project>

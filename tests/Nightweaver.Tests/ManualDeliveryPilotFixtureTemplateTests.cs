@@ -21,6 +21,12 @@ public sealed class ManualDeliveryPilotFixtureTemplateTests
         Assert.NotEqual(first.Repository, second.Repository);
         Assert.NotEqual(first.Origin, second.Origin);
         Assert.Equal(first.ParentlessTaskId, second.ParentlessTaskId);
+        Assert.NotNull(first.ParentlessTaskId);
+        Assert.True(string.IsNullOrEmpty(first.ProductId));
+        Assert.True(string.IsNullOrEmpty(first.ProductTaskId));
+        Assert.NotNull(second.ParentlessTaskId);
+        Assert.True(string.IsNullOrEmpty(second.ProductId));
+        Assert.True(string.IsNullOrEmpty(second.ProductTaskId));
 
         var secondMainBefore = (await second.ReadOriginRefAsync("refs/heads/main", TestContext.Current.CancellationToken)).Trim();
         var pushUrl = await first.RunToolForTestAsync("git", ["config", "--get", "remote.origin.pushurl"],

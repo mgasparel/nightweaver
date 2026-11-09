@@ -6,10 +6,9 @@ using Nightweaver.Planning;
 
 namespace Nightweaver.Tests;
 
-public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture published)
+internal static class DispatchScenarioSupport
 {
-    [Fact]
-    public async Task PublishedDispatchRunsInferredAndExplicitStagesAndRefusesIneligibleWork()
+    internal static async Task PublishedDispatchRunsInferredAndExplicitStagesAndRefusesIneligibleWork(PublishedCliArtifactFixture published)
     {
         Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
         using var fixture = new LiveDispatchFixture(published);
@@ -63,8 +62,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         Assert.Equal(rootStatus, target.Run("git", ["status", "--porcelain"]));
     }
 
-    [Fact]
-    public async Task PublishedDispatchMaterializesApprovedPlanAndReleasesClaimExactlyOnce()
+    internal static async Task PublishedDispatchMaterializesApprovedPlanAndReleasesClaimExactlyOnce(PublishedCliArtifactFixture published)
     {
         using var fixture = new LiveDispatchFixture(published);
         var product = fixture.Target.Create("Approved materialization", type: "bug");
@@ -86,8 +84,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         Assert.Single(inventory.ById.Values, bead => bead.IssueType == "task" && !baseline.Contains(bead.Id));
     }
 
-    [Fact]
-    public async Task PlannedHandoffRefusesChangedOwnerAndPreservesEvidence()
+    internal static async Task PlannedHandoffRefusesChangedOwnerAndPreservesEvidence(PublishedCliArtifactFixture published)
     {
         using var fixture = new LiveDispatchFixture(published);
         var product = fixture.Target.Create("Materialization owner race", type: "bug");
@@ -102,11 +99,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         Assert.True(Directory.Exists(fixture.WorktreePath(product)));
     }
 
-    [Theory]
-    [InlineData("planned-materialization-nonzero", "planned", "NonZeroExit")]
-    [InlineData("partial-materialization", "stage:plan-approved", "NonZeroExit")]
-    [InlineData("planned-without-link", "planned", "IllegalBeadTransition")]
-    public async Task FailedMaterializationRetainsEvidenceAndNeverReplays(string action, string label, string failure)
+    internal static async Task FailedMaterializationRetainsEvidenceAndNeverReplays(PublishedCliArtifactFixture published, string action, string label, string failure)
     {
         using var fixture = new LiveDispatchFixture(published, retries: 2);
         var product = fixture.Target.Create("Interrupted materialization", type: "feature");
@@ -174,8 +167,48 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
     private static BeadsInventory ReadInventory(BeadsFixture target) =>
         BeadsReader.Parse(target.Run("bd", BeadsCommand.Create(target.Path).Arguments));
 
-    [Fact]
-    public async Task PublishedDispatchEscalatesAnAgentThatExitsWithoutAValidTransition()
+    internal static Task DispatchTargetCopiesKeepTrackerAndGitOriginChangesInsideTheirOwnRoot()
+    {
+        if (!OperatingSystem.IsWindows()) return Task.CompletedTask;
+
+        using var first = DispatchRepositoryTemplate.CreateCopy("first dispatch target");
+        using var second = DispatchRepositoryTemplate.CreateCopy("second dispatch target");
+        Assert.NotEqual(first.Target.Path, second.Target.Path);
+        Assert.NotEqual(first.Origin, second.Origin);
+        Assert.Equal(first.Target.ControlBeadId, second.Target.ControlBeadId);
+        var seedSetupCounts = DispatchRepositoryTemplate.SeedToolRunCounts;
+        var firstCopySetupCounts = first.Target.ToolRunCounts;
+        var secondCopySetupCounts = second.Target.ToolRunCounts;
+        Assert.Equal(7, seedSetupCounts.GetValueOrDefault("git"));
+        Assert.Equal(1, firstCopySetupCounts.GetValueOrDefault("git"));
+        Assert.Equal(1, secondCopySetupCounts.GetValueOrDefault("git"));
+        Assert.False(firstCopySetupCounts.ContainsKey("bd"));
+        Assert.False(secondCopySetupCounts.ContainsKey("bd"));
+        TestContext.Current.TestOutputHelper?.WriteLine(
+            $"Dispatch template setup tools: seed git={seedSetupCounts.GetValueOrDefault("git")}; " +
+            $"copy one git origin rewrite each; no per-copy bd setup.");
+
+        var firstMainBefore = first.Target.Run("git", ["--git-dir", first.Origin, "rev-parse", "refs/heads/main"]).Trim();
+        var secondMainBefore = second.Target.Run("git", ["--git-dir", second.Origin, "rev-parse", "refs/heads/main"]).Trim();
+        Assert.Equal(firstMainBefore, secondMainBefore);
+
+        var onlyFirst = first.Target.Create("Dispatch template mutation only in first copy");
+        Assert.DoesNotContain(onlyFirst, ReadInventory(second.Target).ById.Keys);
+
+        var marker = Path.Combine(first.Target.Path, "independent-dispatch-origin.txt");
+        File.WriteAllText(marker, "first dispatch origin only\n", new System.Text.UTF8Encoding(false));
+        first.Target.Run("git", ["add", "--", "independent-dispatch-origin.txt"]);
+        first.Target.Run("git", ["commit", "-m", "verify independent dispatch origin"]);
+        first.Target.Run("git", ["push", "origin", "main"]);
+
+        var firstMainAfter = first.Target.Run("git", ["--git-dir", first.Origin, "rev-parse", "refs/heads/main"]).Trim();
+        var secondMainAfter = second.Target.Run("git", ["--git-dir", second.Origin, "rev-parse", "refs/heads/main"]).Trim();
+        Assert.NotEqual(firstMainBefore, firstMainAfter);
+        Assert.Equal(secondMainBefore, secondMainAfter);
+        return Task.CompletedTask;
+    }
+
+    internal static async Task PublishedDispatchEscalatesAnAgentThatExitsWithoutAValidTransition(PublishedCliArtifactFixture published)
     {
         Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
         using var fixture = new LiveDispatchFixture(published);
@@ -195,8 +228,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         Assert.Equal(2, Directory.EnumerateFiles(Path.Combine(fixture.Host, "logs", "demo", beadId), "*.log").Count());
     }
 
-    [Fact]
-    public async Task PublishedStartupRemovesOnlyCompletedManagedWorktreesAndKeepsBranchesAndSurvivors()
+    internal static async Task PublishedStartupRemovesOnlyCompletedManagedWorktreesAndKeepsBranchesAndSurvivors(PublishedCliArtifactFixture published)
     {
         Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
         using var fixture = new LiveDispatchFixture(published);
@@ -249,8 +281,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         Assert.Contains(deletedPath, dispatch.StandardErrorText, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task PublishedStartupRechecksPauseBeforeRemovingAPlannedWorktree()
+    internal static async Task PublishedStartupRechecksPauseBeforeRemovingAPlannedWorktree(PublishedCliArtifactFixture published)
     {
         Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
         using var fixture = new LiveDispatchFixture(published);
@@ -279,8 +310,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         Assert.Contains(fixture.WorktreePath(planning), dispatch.StandardErrorText, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task PublishedStartupRetainsAndEscalatesOnlyFailedRemovalThenContinuesDispatch()
+    internal static async Task PublishedStartupRetainsAndEscalatesOnlyFailedRemovalThenContinuesDispatch(PublishedCliArtifactFixture published)
     {
         Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
         using var fixture = new LiveDispatchFixture(published);
@@ -327,8 +357,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         Assert.Contains("stage:review", ReadBead(target, unrelated).Labels);
     }
 
-    [Fact]
-    public async Task PublishedStartupStopsWhenRequiredCleanupEscalationCannotBePersisted()
+    internal static async Task PublishedStartupStopsWhenRequiredCleanupEscalationCannotBePersisted(PublishedCliArtifactFixture published)
     {
         Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
         using var fixture = new LiveDispatchFixture(published);
@@ -370,8 +399,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         target.Run("git", ["worktree", "add", "-b", "nightweaver/" + beadId, path, "HEAD"]);
     }
 
-    [Fact]
-    public async Task PublishedDispatchExcludesCompetingProjectsAcrossHostRootsAndRecoversAfterProcessDeath()
+    internal static async Task PublishedDispatchExcludesCompetingProjectsAcrossHostRootsAndRecoversAfterProcessDeath(PublishedCliArtifactFixture published)
     {
         Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
         using var fixture = new LiveDispatchFixture(published);
@@ -390,25 +418,31 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
             status: "in_progress", type: "task");
         if (aliasCreated.ExitCode == 0) _ = fixture.AddProject(fixture.Host, "alias", aliasPath);
         var remoteHost = fixture.AddHost("second published host", "remote", "demo");
+        var sameHostBefore = SnapshotOtherProjectRuntime(fixture.Host, "other");
+        var remoteHostBefore = Snapshot.FileTree(remoteHost);
 
         var startedFile = fixture.GateFile("winner started");
         var releaseFile = fixture.GateFile("winner release");
         using var winner = fixture.StartAt(fixture.Host, "demo", ["dispatch", beadId, "--project", "demo"],
             "pool-implement-gated", startedFile, releaseFile);
         await winner.WaitForFileAsync(startedFile, TimeSpan.FromSeconds(30));
-        Assert.Equal("in_progress", ReadBead(fixture.Target, beadId).Status);
-        Assert.Equal("nightweaver:demo", ReadBead(fixture.Target, beadId).Assignee);
+        var winnerObservation = CaptureLogicalObservation(fixture.Target);
+        var winnerBead = winnerObservation.Inventory.ById[beadId];
+        Assert.Equal("in_progress", winnerBead.Status);
+        Assert.Equal("nightweaver:demo", winnerBead.Assignee);
+        var logicalBeforeLosers = winnerObservation.CanonicalState;
+        RecordCompetingBoundary("winner gate", fixture, winner, beadId, winnerObservation);
 
-        var logicalBeforeLosers = CaptureLogicalState(fixture.Target);
-        var sameHostBefore = SnapshotOtherProjectRuntime(fixture.Host, "other");
-        var remoteHostBefore = Snapshot.FileTree(remoteHost);
         var sameHostLoser = await fixture.RunAtAsync(fixture.Host, "other",
             ["dispatch", sameHostClaim, "--project", "other"], "noop");
         Assert.Equal(1, sameHostLoser.ExitCode);
         Assert.Contains("another Nightweaver Orchestrator already owns", sameHostLoser.StandardErrorText, StringComparison.Ordinal);
-        Assert.Equal("in_progress", ReadBead(fixture.Target, sameHostClaim).Status);
-        Assert.Equal("nightweaver:other", ReadBead(fixture.Target, sameHostClaim).Assignee);
-        Assert.Equal(logicalBeforeLosers, CaptureLogicalState(fixture.Target));
+        var afterSameHostLoser = CaptureLogicalObservation(fixture.Target);
+        var sameHostBead = afterSameHostLoser.Inventory.ById[sameHostClaim];
+        Assert.Equal("in_progress", sameHostBead.Status);
+        Assert.Equal("nightweaver:other", sameHostBead.Assignee);
+        RecordCompetingBoundary("same-host loser", fixture, winner, beadId, afterSameHostLoser);
+        Assert.Equal(logicalBeforeLosers, afterSameHostLoser.CanonicalState);
         Assert.Equal(sameHostBefore, SnapshotOtherProjectRuntime(fixture.Host, "other"));
 
         if (aliasCreated.ExitCode == 0)
@@ -417,25 +451,34 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
                 ["dispatch", aliasClaim, "--project", "alias"], "noop");
             Assert.Equal(1, aliasLoser.ExitCode);
             Assert.Contains("another Nightweaver Orchestrator already owns", aliasLoser.StandardErrorText, StringComparison.Ordinal);
-            Assert.Equal("in_progress", ReadBead(fixture.Target, aliasClaim).Status);
-            Assert.Equal("nightweaver:alias", ReadBead(fixture.Target, aliasClaim).Assignee);
-            Assert.Equal(logicalBeforeLosers, CaptureLogicalState(fixture.Target));
+            var afterAliasLoser = CaptureLogicalObservation(fixture.Target);
+            var aliasBead = afterAliasLoser.Inventory.ById[aliasClaim];
+            Assert.Equal("in_progress", aliasBead.Status);
+            Assert.Equal("nightweaver:alias", aliasBead.Assignee);
+            RecordCompetingBoundary("repository-alias loser", fixture, winner, beadId, afterAliasLoser);
+            Assert.Equal(logicalBeforeLosers, afterAliasLoser.CanonicalState);
         }
 
         var remoteLoser = await fixture.RunAtAsync(remoteHost, "remote",
             ["dispatch", remoteClaim, "--project", "remote"], "noop");
         Assert.Equal(1, remoteLoser.ExitCode);
         Assert.Contains("another Nightweaver Orchestrator already owns", remoteLoser.StandardErrorText, StringComparison.Ordinal);
-        Assert.Equal("in_progress", ReadBead(fixture.Target, remoteClaim).Status);
-        Assert.Equal("nightweaver:remote", ReadBead(fixture.Target, remoteClaim).Assignee);
-        Assert.Equal(logicalBeforeLosers, CaptureLogicalState(fixture.Target));
+        var afterRemoteLoser = CaptureLogicalObservation(fixture.Target);
+        var remoteBead = afterRemoteLoser.Inventory.ById[remoteClaim];
+        Assert.Equal("in_progress", remoteBead.Status);
+        Assert.Equal("nightweaver:remote", remoteBead.Assignee);
+        RecordCompetingBoundary("remote-host loser", fixture, winner, beadId, afterRemoteLoser);
+        Assert.Equal(logicalBeforeLosers, afterRemoteLoser.CanonicalState);
         Assert.Equal(remoteHostBefore, Snapshot.FileTree(remoteHost));
 
         var dryRun = await fixture.RunAtAsync(fixture.Host, "demo", ["--project", "demo", "--dry-run"], "noop");
         Assert.Equal(0, dryRun.ExitCode);
-        Assert.Equal(logicalBeforeLosers, CaptureLogicalState(fixture.Target));
-        Assert.Equal("in_progress", ReadBead(fixture.Target, beadId).Status);
-        Assert.Equal("nightweaver:demo", ReadBead(fixture.Target, beadId).Assignee);
+        var afterDryRun = CaptureLogicalObservation(fixture.Target);
+        var dryRunBead = afterDryRun.Inventory.ById[beadId];
+        Assert.Equal("in_progress", dryRunBead.Status);
+        Assert.Equal("nightweaver:demo", dryRunBead.Assignee);
+        RecordCompetingBoundary("dry-run", fixture, winner, beadId, afterDryRun);
+        Assert.Equal(logicalBeforeLosers, afterDryRun.CanonicalState);
 
         winner.KillTree();
         _ = await winner.WaitAsync(TimeSpan.FromSeconds(15));
@@ -446,14 +489,14 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
             $"Second-host recovery failed (exit {secondHostRecovery.ExitCode}).\nstdout:\n{secondHostRecovery.StandardOutputText}\nstderr:\n{secondHostRecovery.StandardErrorText}");
         Assert.Contains("role 'implementer' (inferred)", secondHostRecovery.StandardOutputText, StringComparison.Ordinal);
         Assert.Contains("Succeeded:", secondHostRecovery.StandardOutputText, StringComparison.Ordinal);
-        Assert.Equal("open", ReadBead(fixture.Target, beadId).Status);
-        Assert.Null(ReadBead(fixture.Target, beadId).Assignee);
-        Assert.Contains("stage:review", ReadBead(fixture.Target, beadId).Labels);
+        var recoveredBead = CaptureLogicalObservation(fixture.Target).Inventory.ById[beadId];
+        Assert.Equal("open", recoveredBead.Status);
+        Assert.Null(recoveredBead.Assignee);
+        Assert.Contains("stage:review", recoveredBead.Labels);
         Assert.True(Directory.Exists(Path.Combine(fixture.Host, "worktrees", "demo", beadId)));
     }
 
-    [Fact]
-    public async Task PublishedDispatchRecoversOnlyExactProjectClaimsAndAdmitsFromFreshReadiness()
+    internal static async Task PublishedDispatchRecoversOnlyExactProjectClaimsAndAdmitsFromFreshReadiness(PublishedCliArtifactFixture published)
     {
         Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
         using var fixture = new LiveDispatchFixture(published);
@@ -522,8 +565,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
             string.Join("\n", Snapshot.FileTree(otherWorktree), Snapshot.FileTree(otherTmp)));
     }
 
-    [Fact]
-    public async Task PublishedDispatchStopsOnRequiredTrackerAndSharedRootFailures()
+    internal static async Task PublishedDispatchStopsOnRequiredTrackerAndSharedRootFailures(PublishedCliArtifactFixture published)
     {
         Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
         using var fixture = new LiveDispatchFixture(published);
@@ -564,8 +606,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         Assert.False(Directory.Exists(fixture.WorktreePath(rootFailureBead)));
     }
 
-    [Fact]
-    public async Task PublishedRecoveryRereadsGuardMismatchAndUncertainWritesWithoutReplay()
+    internal static async Task PublishedRecoveryRereadsGuardMismatchAndUncertainWritesWithoutReplay(PublishedCliArtifactFixture published)
     {
         Assert.True(OperatingSystem.IsWindows(), "Live dispatch integration requires Windows Job Objects and native fixture apphosts.");
         using var fixture = new LiveDispatchFixture(published);
@@ -669,6 +710,67 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         return CanonicalJson(document.RootElement);
     }
 
+    private static DispatchLogicalObservation CaptureLogicalObservation(BeadsFixture target)
+    {
+        var lines = target.Run("bd", ["--readonly", "--sandbox", "export", "--all"])
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        using var document = JsonDocument.Parse("[" + string.Join(',', lines) + "]");
+        return new(BeadsReader.Parse(document.RootElement.GetRawText()), CanonicalJson(document.RootElement));
+    }
+
+    private static void RecordCompetingBoundary(string boundary, LiveDispatchFixture fixture, RunningProcess winner,
+        string beadId, DispatchLogicalObservation observation)
+    {
+        var processIdentity = "unavailable";
+        var exited = "unavailable";
+        try
+        {
+            using var process = Process.GetProcessById(winner.Id);
+            processIdentity = process.StartTime.ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+            exited = process.HasExited.ToString();
+        }
+        catch (Exception exception)
+        {
+            processIdentity = $"{exception.GetType().Name}: {exception.Message}";
+        }
+
+        var telemetryPath = Path.Combine(fixture.Host, "telemetry", "demo", "factory.json");
+        var runtime = "factory snapshot not published by one-shot dispatch";
+        try
+        {
+            if (File.Exists(telemetryPath))
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(telemetryPath));
+                var root = document.RootElement;
+                var runtimeId = root.TryGetProperty("runtime_id", out var runtimeIdElement) ? runtimeIdElement.ToString() : "unknown";
+                var runtimeStatus = root.TryGetProperty("runtime_status", out var statusElement) ? statusElement.ToString() : "unknown";
+                var invocations = new List<string>();
+                foreach (var slot in root.GetProperty("delivery").GetProperty("slots").EnumerateArray())
+                {
+                    if (!slot.TryGetProperty("invocation", out var invocation) || invocation.ValueKind != JsonValueKind.Object
+                        || !invocation.TryGetProperty("bead_id", out var idElement)
+                        || !string.Equals(idElement.GetString(), beadId, StringComparison.Ordinal)) continue;
+                    invocations.Add(invocation.GetRawText());
+                }
+                runtime = $"runtime={runtimeId}/{runtimeStatus}; bead-invocations=[{string.Join(';', invocations)}]";
+            }
+        }
+        catch (Exception exception)
+        {
+            runtime = $"telemetry-error={exception.GetType().Name}: {exception.Message}";
+        }
+
+        var bead = observation.Inventory.ById.TryGetValue(beadId, out var observedBead)
+            ? $"{observedBead.Status}/{observedBead.Assignee ?? "(none)"}"
+            : "missing";
+        TestContext.Current.TestOutputHelper?.WriteLine(
+            $"dispatch boundary={boundary}; at={DateTimeOffset.UtcNow:O}; winnerRuntimePid={winner.Id}; " +
+            $"winnerProcessStart={processIdentity}; winnerExited={exited}; bead={bead}; {runtime}; " +
+            $"winnerStdoutTail={Tail(winner.StandardOutputSnapshot)}; winnerStderrTail={Tail(winner.StandardErrorSnapshot)}");
+    }
+
+    private static string Tail(string value, int length = 1200) => value.Length <= length ? value : value[^length..];
+
     private static string SnapshotOtherProjectRuntime(string host, string project) => string.Join("\n",
         Snapshot.Location(Path.Combine(host, "worktrees", project)),
         Snapshot.Location(Path.Combine(host, "tmp", project)),
@@ -704,6 +806,8 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         _ => throw new InvalidOperationException($"Unsupported JSON value kind {element.ValueKind}")
     };
 
+    private sealed record DispatchLogicalObservation(BeadsInventory Inventory, string CanonicalState);
+
     private static void AssertRetainedExecution(LiveDispatchFixture fixture, string beadId)
     {
         Assert.True(Directory.Exists(fixture.WorktreePath(beadId)));
@@ -714,13 +818,13 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
     private sealed class LiveDispatchFixture : IDisposable
     {
         private readonly TempDirectory temp = new();
+        private readonly DispatchRepositoryCopy targetCopy;
         private readonly string fakeCliDirectory;
         private readonly string bdShimDirectory;
         private readonly string realBdPath;
         private readonly PublishedCliArtifactFixture published;
-        private readonly string origin;
 
-        internal BeadsFixture Target { get; } = new("target repository with spaces");
+        internal BeadsFixture Target { get; }
         internal string Host { get; }
         internal string Caller { get; }
         internal string Config { get; }
@@ -729,21 +833,13 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         internal LiveDispatchFixture(PublishedCliArtifactFixture published, int retries = 0)
         {
             this.published = published;
+            targetCopy = DispatchRepositoryTemplate.CreateCopy("target repository with spaces");
+            Target = targetCopy.Target;
             Host = temp.CreateDirectory("nightweaver host with spaces");
             Caller = temp.CreateDirectory("unrelated caller with spaces");
             AliasRoot = temp.CreateDirectory("repository aliases");
             published.CopyPublishedAppTo(Host);
             Config = AddProject(Host, "demo", retries: retries);
-            Target.Run("git", ["config", "user.name", "Nightweaver Dispatch Fixture"]);
-            Target.Run("git", ["config", "user.email", "fixture@example.invalid"]);
-            File.WriteAllText(Path.Combine(Target.Path, "README.md"), "dispatch base\n", new UTF8Encoding(false));
-            Target.Run("git", ["add", "README.md"]);
-            Target.Run("git", ["commit", "-m", "dispatch fixture base"]);
-            origin = Path.Combine(Target.Root, "bare origin.git");
-            Directory.CreateDirectory(origin);
-            Target.Run("git", ["init", "--bare", origin]);
-            Target.Run("git", ["remote", "add", "origin", origin]);
-            Target.Run("git", ["push", "--set-upstream", "origin", "main"]);
 
             fakeCliDirectory = temp.CreateDirectory("native fake agent cli");
             CopyFixtureCli("AgentInvocationFixture.exe");
@@ -861,7 +957,7 @@ public sealed class DispatchCliIntegrationTests(PublishedCliArtifactFixture publ
         public void Dispose()
         {
             temp.Dispose();
-            Target.Dispose();
+            targetCopy.Dispose();
         }
     }
 }

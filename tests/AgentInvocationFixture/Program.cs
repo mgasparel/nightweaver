@@ -4,6 +4,10 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Diagnostics;
+using System.IO.Pipes;
+using System.ComponentModel;
+using Microsoft.Win32.SafeHandles;
+using Nightweaver.Tests;
 
 namespace Nightweaver.Tests.AgentInvocationFixture;
 
@@ -14,9 +18,26 @@ internal static class Program
     private const uint CreateNoWindow = 0x08000000;
     private const uint StartfUseStdHandles = 0x00000100;
     private const uint ControlBreakEvent = 1;
+    private const uint GenericRead = 0x80000000;
+    private const uint GenericWrite = 0x40000000;
+    private const uint FileShareRead = 1;
+    private const uint FileShareWrite = 2;
+    private const uint OpenExisting = 3;
+    private const uint FileAttributeNormal = 0x80;
 
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--native-handle-probe")
+            return RunNativeHandleProbeCoordinator(args);
+        if (args.Length > 0 && args[0] == "--native-handle-child")
+            return RunNativeHandleProbeChild(args);
+        if (args.Length > 0 && args[0] == "--native-helper-stdio-child")
+            return RunNativeHelperStdioChild(args);
+        if (args.Length > 0 && args[0] == "--native-helper-inspect-child")
+            return RunNativeHelperInspectChild(args);
+        if (args.Length > 0 && args[0] == "--native-helper-no-log-child")
+            return RunNativeHelperNoLogChild(args);
+
         if (args.Length > 0 && args[0].StartsWith("--evidence-", StringComparison.Ordinal))
             return RunEvidenceProbe(args);
 
@@ -139,6 +160,492 @@ internal static class Program
                 return 66;
         }
     }
+
+    private static int RunNativeHandleProbeCoordinator(string[] args)
+    {
+        if (args.Length is < 3 or > 4) return 67;
+        var root = Path.GetFullPath(args[1]);
+        var nonce = args[2];
+        var injectFailureAfterPeek = args.Length == 4 && args[3] == "fail-after-peek";
+        Directory.CreateDirectory(root);
+        if (args.Length == 4 && args[3] == "semantics")
+            return RunNativeHelperSemantics(root, nonce);
+        var report = new NativeHandleProbeReport { Nonce = nonce };
+        var exitCode = 0;
+        try
+        {
+            report.NoChildWriterOpen = ObserveNoChildWriterOpen();
+            report.NoChildWriterClosed = ObserveNoChildWriterClosed();
+            report.NonInheritableChild = NewObservation(root, "noninheritable", HandleInheritability.None);
+            ObserveChild(root, nonce, report.NonInheritableChild, HandleInheritability.None, injectFailureAfterPeek);
+            report.InheritableChild = NewObservation(root, "inheritable", HandleInheritability.Inheritable);
+            ObserveChild(root, nonce, report.InheritableChild, HandleInheritability.Inheritable, false);
+        }
+        catch (Exception exception)
+        {
+            report.Error = exception.ToString();
+            Console.Error.WriteLine(exception);
+            exitCode = 2;
+        }
+
+        try { WriteNativeHandleProbeReport(root, report); }
+        catch (Exception exception)
+        {
+            report.ReportWriteError = exception.ToString();
+            Console.Error.WriteLine(exception);
+            exitCode = 2;
+        }
+        return exitCode;
+    }
+
+    private static NativePipePeek ObserveNoChildWriterOpen()
+    {
+        using var pipe = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+        return Peek(pipe.SafePipeHandle);
+    }
+
+    private static NativePipePeek ObserveNoChildWriterClosed()
+    {
+        using var pipe = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+        pipe.DisposeLocalCopyOfClientHandle();
+        return Peek(pipe.SafePipeHandle);
+    }
+
+    private static NativeHandleChildObservation NewObservation(string root, string mode,
+        HandleInheritability inheritability) => new()
+    {
+        Mode = mode,
+        WriterWasInheritable = inheritability == HandleInheritability.Inheritable,
+        ChildLogPath = Path.Combine(root, $"{mode}.child.log")
+    };
+
+    private static void ObserveChild(string root, string nonce, NativeHandleChildObservation observation,
+        HandleInheritability inheritability, bool injectFailureAfterPeek)
+    {
+        var readyPath = Path.Combine(root, $"{observation.Mode}.ready.json");
+        var releasePath = Path.Combine(root, $"{observation.Mode}.release");
+        var executable = Environment.ProcessPath
+            ?? throw new InvalidOperationException("The fixture coordinator has no process path.");
+        var pipe = new AnonymousPipeServerStream(PipeDirection.In, inheritability);
+        WindowsConsoleProcess? child = null;
+        Exception? observationFailure = null;
+        try
+        {
+            if (injectFailureAfterPeek) Directory.CreateDirectory(releasePath);
+            child = WindowsConsoleProcess.Start(executable,
+                ["--native-handle-child", readyPath, releasePath, nonce], root,
+                new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase), observation.ChildLogPath);
+            WaitForFile(readyPath, TimeSpan.FromSeconds(20));
+            observation.Ready = JsonSerializer.Deserialize<NativeHandleChildReady>(File.ReadAllText(readyPath))
+                ?? throw new InvalidDataException("Native handle child readiness report was empty.");
+            if (observation.Ready.Nonce != nonce) throw new InvalidDataException("Native handle child readiness nonce did not match.");
+            if (observation.Ready.ProcessId != child.Id) throw new InvalidDataException("Native handle child PID did not match the helper process.");
+
+            observation.SameChildAliveBeforePeek = IsSameProcessAlive(observation.Ready.ProcessId,
+                observation.Ready.StartTimeUtcTicks);
+            pipe.DisposeLocalCopyOfClientHandle();
+            observation.WriterClosedBeforePeek = true;
+            observation.WhileAlive = Peek(pipe.SafePipeHandle);
+            observation.SameChildAliveAfterPeek = IsSameProcessAlive(observation.Ready.ProcessId,
+                observation.Ready.StartTimeUtcTicks);
+            if (injectFailureAfterPeek)
+                throw new InvalidOperationException("Injected probe infrastructure failure after the live-child Peek.");
+
+            File.WriteAllText(releasePath, nonce, new UTF8Encoding(false));
+            observation.ExitCode = child.WaitAsync(TimeSpan.FromSeconds(20)).GetAwaiter().GetResult();
+            observation.ChildExited = child.HasExited;
+            observation.AfterExit = Peek(pipe.SafePipeHandle);
+        }
+        catch (Exception exception) { observationFailure = exception; }
+        finally
+        {
+            if (child is not null)
+            {
+                try
+                {
+                    if (!child.HasExited)
+                    {
+                        try
+                        {
+                            File.WriteAllText(releasePath, nonce, new UTF8Encoding(false));
+                            observation.ExitCode = child.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                        }
+                        catch (Exception exception) { AppendCleanupError(observation, "release/wait", exception); }
+
+                        if (!child.HasExited)
+                        {
+                            try
+                            {
+                                child.KillEntireProcessTree();
+                                observation.ExitCode = child.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                            }
+                            catch (Exception exception) { AppendCleanupError(observation, "kill/wait", exception); }
+                        }
+                    }
+                    observation.ChildExited |= child.HasExited;
+                }
+                catch (Exception exception) { AppendCleanupError(observation, "exit observation", exception); }
+
+                try { child.Dispose(); }
+                catch (Exception exception) { AppendCleanupError(observation, "dispose", exception); }
+                if (observation.Ready is not null)
+                {
+                    try
+                    {
+                        observation.ChildGoneAfterCleanup = !IsSameProcessAlive(observation.Ready.ProcessId,
+                            observation.Ready.StartTimeUtcTicks);
+                    }
+                    catch (Exception exception) { AppendCleanupError(observation, "owned-child confirmation", exception); }
+                }
+            }
+
+            if (!observation.WriterClosedBeforePeek)
+            {
+                try
+                {
+                    pipe.DisposeLocalCopyOfClientHandle();
+                    observation.WriterClosedBeforePeek = true;
+                }
+                catch (Exception exception) { AppendCleanupError(observation, "close parent writer", exception); }
+            }
+            try { pipe.Dispose(); }
+            catch (Exception exception) { AppendCleanupError(observation, "dispose pipe", exception); }
+        }
+
+        if (observationFailure is not null)
+        {
+            observation.Error = observationFailure.ToString();
+            throw new AggregateException("The probe observation failed; partial state and cleanup are retained.",
+                observationFailure);
+        }
+        if (observation.CleanupError is not null)
+            throw new IOException($"Probe cleanup failed for {observation.Mode}: {observation.CleanupError}");
+    }
+
+    private static void AppendCleanupError(NativeHandleChildObservation observation, string phase, Exception exception)
+    {
+        var entry = $"{phase}: {exception}";
+        observation.CleanupError = observation.CleanupError is null
+            ? entry
+            : observation.CleanupError + Environment.NewLine + entry;
+    }
+
+    private static bool IsSameProcessAlive(int processId, long expectedStartTimeUtcTicks)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited && process.StartTime.ToUniversalTime().Ticks == expectedStartTimeUtcTicks;
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private static NativePipePeek Peek(SafePipeHandle readHandle)
+    {
+        var success = PeekNamedPipe(readHandle, IntPtr.Zero, 0, out var bytesRead,
+            out var totalBytesAvailable, out var bytesLeftThisMessage);
+        var error = success ? 0 : Marshal.GetLastWin32Error();
+        return new NativePipePeek(success, bytesRead, totalBytesAvailable, bytesLeftThisMessage, error);
+    }
+
+    private static int RunNativeHandleProbeChild(string[] args)
+    {
+        if (args.Length != 4) return 67;
+        var readyPath = Path.GetFullPath(args[1]);
+        var releasePath = Path.GetFullPath(args[2]);
+        var nonce = args[3];
+        var ready = new NativeHandleChildReady(Environment.ProcessId,
+            Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks, nonce);
+        File.WriteAllText(readyPath, JsonSerializer.Serialize(ready), new UTF8Encoding(false));
+        WaitForFile(releasePath, TimeSpan.FromSeconds(30));
+        return string.Equals(File.ReadAllText(releasePath), nonce, StringComparison.Ordinal) ? 0 : 68;
+    }
+
+    private static void WriteNativeHandleProbeReport(string root, NativeHandleProbeReport report)
+        => File.WriteAllText(Path.Combine(root, "probe-report.json"), JsonSerializer.Serialize(report), new UTF8Encoding(false));
+
+    private static int RunNativeHelperSemantics(string root, string nonce)
+    {
+        var report = new NativeHelperSemanticsReport { Nonce = nonce };
+        var overrideKey = $"NIGHTWEAVER_HELPER_OVERRIDE_{nonce}";
+        var removalKey = $"NIGHTWEAVER_HELPER_REMOVAL_{nonce}";
+        var previousOverride = Environment.GetEnvironmentVariable(overrideKey);
+        var previousRemoval = Environment.GetEnvironmentVariable(removalKey);
+        Environment.SetEnvironmentVariable(overrideKey, "coordinator-default");
+        Environment.SetEnvironmentVariable(removalKey, "must-be-removed");
+        try
+        {
+            report.MissingExecutableError = CaptureLaunchFailure(root,
+                Path.Combine(root, "missing-fully-qualified.exe"), Path.Combine(root, "missing-executable.log"));
+            report.InvalidLogError = CaptureLaunchFailure(root, GetFixtureExecutable(),
+                Path.Combine(root, "missing-log-directory", "invalid.log"));
+            report.InvalidLogDestinationAbsent = !File.Exists(Path.Combine(root, "missing-log-directory", "invalid.log"));
+            report.MissingExecutableLogClosed = VerifyOwnedLogCanBeRenamedAndDeleted(
+                Path.Combine(root, "missing-executable.log"));
+
+            var workingDirectory = Path.Combine(root, "work directory with spaces");
+            Directory.CreateDirectory(workingDirectory);
+            var reportPath = Path.Combine(root, "stdio-child.json");
+            var logPath = Path.Combine(root, "stdio-child.log");
+            var stdioChildId = 0;
+            using (var child = WindowsConsoleProcess.Start(GetFixtureExecutable(),
+                       ["--native-helper-stdio-child", reportPath, "argument with spaces", "quoted\"argument", nonce],
+                       workingDirectory,
+                       new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                       {
+                           [overrideKey] = "overridden value",
+                           [removalKey] = null
+                       }, logPath))
+            {
+                stdioChildId = child.Id;
+                report.StdioChildId = stdioChildId;
+                using var runningChild = Process.GetProcessById(child.Id);
+                report.StdioChildStartTicks = runningChild.StartTime.ToUniversalTime().Ticks;
+                report.StdioExitCode = child.WaitAsync(TimeSpan.FromSeconds(20)).GetAwaiter().GetResult();
+            }
+            report.StdioChildGone = !IsSameProcessAlive(stdioChildId, report.StdioChildStartTicks);
+            report.StdioChild = JsonSerializer.Deserialize<NativeHelperStdioChildReport>(File.ReadAllText(reportPath));
+            report.MergedOutput = File.ReadAllText(logPath);
+            report.StdioLogClosed = VerifyOwnedLogCanBeRenamedAndDeleted(logPath);
+
+            report.ZeroInput = ObserveInputHandle(root, "zero", IntPtr.Zero);
+            report.InvalidInput = ObserveInputHandle(root, "invalid", new IntPtr(-1));
+            var currentInput = GetStdHandle(-10);
+            if (currentInput == IntPtr.Zero || currentInput == new IntPtr(-1))
+                throw new InvalidOperationException("The isolated coordinator has no valid redirected stdin for handle observations.");
+            if (!DuplicateHandle(GetCurrentProcess(), currentInput, GetCurrentProcess(), out var nonInheritableInput,
+                    0, inheritHandle: false, 2))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not create noninheritable stdin observation handle.");
+            try { report.NonInheritableInput = ObserveInputHandle(root, "noninheritable", nonInheritableInput); }
+            finally { _ = CloseHandle(nonInheritableInput); }
+
+            report.ConsoleInput = ObserveConsoleInput(root);
+
+            var noLogReportPath = Path.Combine(root, "no-log-child.json");
+            var noLogPath = Path.Combine(root, "no-log-child.log");
+            using (var noLogChild = WindowsConsoleProcess.Start(GetFixtureExecutable(),
+                       ["--native-helper-no-log-child", noLogReportPath, "no-log argument with spaces",
+                           "quoted\"no-log", overrideKey, removalKey], workingDirectory,
+                       new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                       {
+                           [overrideKey] = "no-log override",
+                           [removalKey] = null
+                       }))
+                report.NoLogExitCode = noLogChild.WaitAsync(TimeSpan.FromSeconds(20)).GetAwaiter().GetResult();
+            report.NoLogChild = JsonSerializer.Deserialize<NativeHelperNoLogChildReport>(File.ReadAllText(noLogReportPath));
+            report.NoLogLogAbsent = !File.Exists(noLogPath);
+        }
+        catch (Exception exception) { report.Error = exception.ToString(); }
+        finally
+        {
+            Environment.SetEnvironmentVariable(overrideKey, previousOverride);
+            Environment.SetEnvironmentVariable(removalKey, previousRemoval);
+            File.WriteAllText(Path.Combine(root, "semantics-report.json"),
+                JsonSerializer.Serialize(report), new UTF8Encoding(false));
+        }
+        Console.Error.WriteLine(report.Error ?? "Native helper semantics probe completed.");
+        return report.Error is null ? 0 : 2;
+    }
+
+    private static int? CaptureLaunchFailure(string root, string executable, string logPath)
+    {
+        try
+        {
+            using var unexpected = WindowsConsoleProcess.Start(executable, [], root,
+                new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase), logPath);
+            _ = unexpected.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+            return null;
+        }
+        catch (Win32Exception exception) { return exception.NativeErrorCode; }
+    }
+
+    private static bool VerifyOwnedLogCanBeRenamedAndDeleted(string path)
+    {
+        if (!File.Exists(path)) return false;
+        using (File.Open(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) { }
+        var renamed = path + ".renamed";
+        File.Move(path, renamed);
+        File.Delete(renamed);
+        return !File.Exists(path) && !File.Exists(renamed);
+    }
+
+    private static NativeHelperInputObservation ObserveInputHandle(string root, string mode, IntPtr inputHandle)
+    {
+        var original = GetStdHandle(-10);
+        if (!SetStdHandle(-10, inputHandle))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), $"Could not set {mode} stdin observation handle.");
+        try
+        {
+            var reportPath = Path.Combine(root, $"stdin-{mode}.json");
+            var logPath = Path.Combine(root, $"stdin-{mode}.log");
+            using (var child = WindowsConsoleProcess.Start(GetFixtureExecutable(),
+                       ["--native-helper-inspect-child", reportPath, mode], root,
+                       new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase), logPath))
+                if (child.WaitAsync(TimeSpan.FromSeconds(20)).GetAwaiter().GetResult() != 0)
+                    throw new InvalidOperationException($"The {mode} stdin observation child failed.");
+            return JsonSerializer.Deserialize<NativeHelperInputObservation>(File.ReadAllText(reportPath))
+                ?? throw new InvalidDataException($"The {mode} stdin observation was empty.");
+        }
+        finally
+        {
+            _ = SetStdHandle(-10, original);
+        }
+    }
+
+    private static NativeHelperInputObservation ObserveConsoleInput(string root)
+    {
+        var original = GetStdHandle(-10);
+        var allocated = false;
+        try
+        {
+            if (!GetConsoleMode(original, out _))
+            {
+                _ = FreeConsole();
+                if (!AllocConsole()) throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not allocate an isolated console for stdin observation.");
+                allocated = true;
+            }
+            var consoleInput = CreateFileW("CONIN$", GenericRead | GenericWrite,
+                FileShareRead | FileShareWrite, IntPtr.Zero, OpenExisting, FileAttributeNormal, IntPtr.Zero);
+            if (consoleInput == new IntPtr(-1))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open isolated console stdin.");
+            try
+            {
+                var sourceIsConsole = GetConsoleMode(consoleInput, out _);
+                return ObserveInputHandle(root, "console", consoleInput) with
+                {
+                    SourceConsoleModeSucceeded = sourceIsConsole
+                };
+            }
+            finally { _ = CloseHandle(consoleInput); }
+        }
+        finally
+        {
+            _ = SetStdHandle(-10, original);
+            if (allocated) _ = FreeConsole();
+        }
+    }
+
+    private static string GetFixtureExecutable()
+    {
+        var fixtureAssembly = typeof(FixtureMarker).Assembly.Location;
+        var executable = Path.ChangeExtension(fixtureAssembly, ".exe");
+        return File.Exists(executable) ? executable : throw new FileNotFoundException("The fixture apphost is missing.", executable);
+    }
+
+    private static int RunNativeHelperStdioChild(string[] args)
+    {
+        if (args.Length != 5) return 67;
+        using var input = Console.OpenStandardInput();
+        using var inputBytes = new MemoryStream();
+        input.CopyTo(inputBytes);
+        var report = new NativeHelperStdioChildReport(args[2..4],
+            Path.GetFullPath(Environment.CurrentDirectory),
+            Environment.GetEnvironmentVariable($"NIGHTWEAVER_HELPER_OVERRIDE_{args[4]}"),
+            Environment.GetEnvironmentVariable($"NIGHTWEAVER_HELPER_REMOVAL_{args[4]}"),
+            Encoding.UTF8.GetString(inputBytes.ToArray()));
+        File.WriteAllText(args[1], JsonSerializer.Serialize(report), new UTF8Encoding(false));
+        Console.Out.WriteLine($"stdout-sentinel:{args[4]}");
+        Console.Out.Flush();
+        Console.Error.WriteLine($"stderr-sentinel:{args[4]}");
+        Console.Error.Flush();
+        return 0;
+    }
+
+    private static int RunNativeHelperNoLogChild(string[] args)
+    {
+        if (args.Length != 6) return 67;
+        var report = new NativeHelperNoLogChildReport(args[2..4], Environment.CurrentDirectory,
+            Environment.GetEnvironmentVariable(args[4]), Environment.GetEnvironmentVariable(args[5]));
+        File.WriteAllText(args[1], JsonSerializer.Serialize(report), new UTF8Encoding(false));
+        return 0;
+    }
+
+    private static int RunNativeHelperInspectChild(string[] args)
+    {
+        if (args.Length < 2) return 67;
+        var input = GetStdHandle(-10);
+        var information = GetHandleInformation(input, out var flags);
+        var console = GetConsoleMode(input, out _);
+        var report = new NativeHelperInputObservation(args.Length >= 3 ? args[2] : "no-log",
+            input.ToInt64(), information, console, information ? flags : null,
+            Environment.CurrentDirectory,
+            Environment.GetEnvironmentVariable(args.Length >= 4 ? args[3] : string.Empty),
+            Environment.GetEnvironmentVariable(args.Length >= 5 ? args[4] : string.Empty));
+        File.WriteAllText(args[1], JsonSerializer.Serialize(report), new UTF8Encoding(false));
+        return 0;
+    }
+
+    private sealed class NativeHelperSemanticsReport
+    {
+        public string Nonce { get; set; } = string.Empty;
+        public int? MissingExecutableError { get; set; }
+        public int? InvalidLogError { get; set; }
+        public bool MissingExecutableLogClosed { get; set; }
+        public bool InvalidLogDestinationAbsent { get; set; }
+        public NativeHelperStdioChildReport? StdioChild { get; set; }
+        public int? StdioChildId { get; set; }
+        public long StdioChildStartTicks { get; set; }
+        public int? StdioExitCode { get; set; }
+        public bool StdioChildGone { get; set; }
+        public string? MergedOutput { get; set; }
+        public bool StdioLogClosed { get; set; }
+        public NativeHelperInputObservation? ZeroInput { get; set; }
+        public NativeHelperInputObservation? InvalidInput { get; set; }
+        public NativeHelperInputObservation? NonInheritableInput { get; set; }
+        public NativeHelperInputObservation? ConsoleInput { get; set; }
+        public int? NoLogExitCode { get; set; }
+        public NativeHelperNoLogChildReport? NoLogChild { get; set; }
+        public bool NoLogLogAbsent { get; set; }
+        public string? Error { get; set; }
+    }
+
+    private sealed record NativeHelperStdioChildReport(string[] Arguments, string WorkingDirectory,
+        string? OverrideValue, string? RemovedValue, string StandardInput);
+    private sealed record NativeHelperNoLogChildReport(string[] Arguments, string WorkingDirectory,
+        string? OverrideValue, string? RemovedValue);
+    private sealed record NativeHelperInputObservation(string Mode, long RawHandle, bool HandleInformationSucceeded,
+        bool ConsoleModeSucceeded, uint? HandleFlags, string? CurrentDirectory, string? EnvironmentValue,
+        string? RemovedEnvironmentValue, bool? SourceConsoleModeSucceeded = null);
+
+    private sealed record NativePipePeek(bool Success, uint BytesRead, uint TotalBytesAvailable,
+        uint BytesLeftThisMessage, int Error);
+    private sealed record NativeHandleChildReady(int ProcessId, long StartTimeUtcTicks, string Nonce);
+    private sealed class NativeHandleChildObservation
+    {
+        public string Mode { get; set; } = string.Empty;
+        public bool WriterWasInheritable { get; set; }
+        public NativeHandleChildReady? Ready { get; set; }
+        public bool WriterClosedBeforePeek { get; set; }
+        public bool SameChildAliveBeforePeek { get; set; }
+        public NativePipePeek? WhileAlive { get; set; }
+        public bool SameChildAliveAfterPeek { get; set; }
+        public bool ChildExited { get; set; }
+        public int? ExitCode { get; set; }
+        public NativePipePeek? AfterExit { get; set; }
+        public string ChildLogPath { get; set; } = string.Empty;
+        public string? Error { get; set; }
+        public string? CleanupError { get; set; }
+        public bool ChildGoneAfterCleanup { get; set; }
+    }
+
+    private sealed class NativeHandleProbeReport
+    {
+        public string Nonce { get; set; } = string.Empty;
+        public NativePipePeek? NoChildWriterOpen { get; set; }
+        public NativePipePeek? NoChildWriterClosed { get; set; }
+        public NativeHandleChildObservation? NonInheritableChild { get; set; }
+        public NativeHandleChildObservation? InheritableChild { get; set; }
+        public string? Error { get; set; }
+        public string? ReportWriteError { get; set; }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PeekNamedPipe(SafePipeHandle pipe, IntPtr buffer, uint bufferSize,
+        out uint bytesRead, out uint totalBytesAvailable, out uint bytesLeftThisMessage);
 
     private static int RunOutcomeClassifier()
     {
@@ -1674,6 +2181,35 @@ internal static class Program
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr GetStdHandle(int standardHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetStdHandle(int standardHandle, IntPtr handle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetHandleInformation(IntPtr handle, out uint flags);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetConsoleMode(IntPtr handle, out uint mode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr sourceHandle,
+        IntPtr targetProcess, out IntPtr targetHandle, uint desiredAccess,
+        [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint options);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AllocConsole();
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateFileW")]
+    private static extern IntPtr CreateFileW(string fileName, uint desiredAccess, uint shareMode,
+        IntPtr securityAttributes, uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateProcessW")]
     [return: MarshalAs(UnmanagedType.Bool)]
