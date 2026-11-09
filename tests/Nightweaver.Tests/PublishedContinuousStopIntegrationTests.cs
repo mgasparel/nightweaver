@@ -691,9 +691,15 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
             restartRuntimeLogPath);
         var restartedStartTicks = RecordRuntimeIdentity(Path.Combine(gateDirectory, "restart-runtime.identity"), restarted);
         var stopLogOffset = 0L;
+        (string BeadId, Process Process)[] restartedAgents = [];
         try
         {
             await WaitForStageLaunchCountAsync(stageLaunchLog, beadIds.Length * 2, restarted, TimeSpan.FromSeconds(90));
+            restartedAgents = ReadStageLaunchLines(stageLaunchLog).Skip(beadIds.Length)
+                .Select(ReadFixtureProcessFromLaunchRecord).ToArray();
+            Assert.Equal(beadIds.Length, restartedAgents.Length);
+            Assert.Equal(beadIds.OrderBy(id => id, StringComparer.Ordinal),
+                restartedAgents.Select(agent => agent.BeadId).OrderBy(id => id, StringComparer.Ordinal));
             foreach (var beadId in beadIds)
             {
                 var observationPath = Path.Combine(restartMarkerDirectory, beadId + ".restart");
@@ -716,17 +722,45 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
             target.SendConsoleBreak(restarted.Id);
             await WaitForGracefulStopAcceptedAsync(restarted, restartRuntimeLogPath, stopLogOffset, restartedStartTicks,
                 stopDeadline, TestContext.Current.CancellationToken);
-            foreach (var beadId in beadIds)
-                File.WriteAllText(Path.Combine(releaseDirectory, beadId + ".release"), "finish restart observation", new UTF8Encoding(false));
-            var remainingStopBudget = stopDeadline - DateTime.UtcNow;
-            if (remainingStopBudget <= TimeSpan.Zero)
-                throw new TimeoutException("Restarted runtime accepted graceful stop after the 30-second shutdown budget expired.");
-            _ = await restarted.WaitAsync(remainingStopBudget, TestContext.Current.CancellationToken);
+            var forceDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            if (forceDeadline > stopDeadline)
+                forceDeadline = stopDeadline;
+            var forceSignalSent = false;
+            if (!restarted.HasExited)
+            {
+                try
+                {
+                    target.SendConsoleBreak(restarted.Id);
+                    forceSignalSent = true;
+                }
+                catch (InvalidOperationException) when (IsSameOwnedRuntimeExited(restarted, restartedStartTicks))
+                {
+                }
+            }
+
+            var remainingForceBudget = forceDeadline - DateTime.UtcNow;
+            if (remainingForceBudget <= TimeSpan.Zero)
+                throw new TimeoutException("Restarted runtime did not exit within the five-second force-stop budget.");
+            var restartedExitCode = await restarted.WaitAsync(remainingForceBudget, TestContext.Current.CancellationToken);
+            Assert.Equal(forceSignalSent ? 1 : 0, restartedExitCode);
+
+            foreach (var agent in restartedAgents)
+            {
+                remainingForceBudget = forceDeadline - DateTime.UtcNow;
+                if (remainingForceBudget <= TimeSpan.Zero)
+                    throw new TimeoutException("Restarted runtime's owned Agents did not exit within the five-second force-stop budget.");
+                await agent.Process.WaitForExitAsync(TestContext.Current.CancellationToken)
+                    .WaitAsync(remainingForceBudget, TestContext.Current.CancellationToken);
+                Assert.True(agent.Process.HasExited,
+                    $"Restarted runtime force stop must close owned Agent {agent.BeadId} (PID {agent.Process.Id}).");
+            }
         }
         finally
         {
             foreach (var beadId in beadIds)
                 File.WriteAllText(Path.Combine(releaseDirectory, beadId + ".release"), "test cleanup", new UTF8Encoding(false));
+            foreach (var agent in restartedAgents)
+                agent.Process.Dispose();
             if (!restarted.HasExited)
             {
                 try { target.SendConsoleBreak(restarted.Id); }
@@ -785,6 +819,22 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         File.WriteAllText(path,
             $"pid={runtime.Id}|startUtcTicks={startTicks}|runtimeLog={runtime.OutputLogPath}", new UTF8Encoding(false));
         return startTicks;
+    }
+
+    private static bool IsSameOwnedRuntimeExited(WindowsConsoleProcess runtime, long expectedStartTicks)
+    {
+        if (!runtime.HasExited)
+            return false;
+
+        try
+        {
+            using var current = Process.GetProcessById(runtime.Id);
+            return current.StartTime.ToUniversalTime().Ticks == expectedStartTicks;
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
     }
 
     private static string ReadRuntimeLogFromOffset(string path, long offset)
