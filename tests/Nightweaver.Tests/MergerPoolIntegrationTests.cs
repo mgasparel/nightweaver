@@ -74,74 +74,119 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         MergerRoleRunner roleRunner = (host, config, targetRepository, requestedBead, role, actor, expectedState, token, progress) =>
             retries.RunAsync(host, config, targetRepository, requestedBead, role, actor, token, progress, expectedState);
         var slot = new MergerSlotCoordinator(processRunner, roleRunner);
+        using var mergerLifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var pool = new MergerPoolCoordinator(target.Host, project, repository, processRunner, runSlot: slot.RunAsync,
-            slotLifetimeToken: TestContext.Current.CancellationToken);
+            slotLifetimeToken: mergerLifetime.Token);
 
-        var evaluation = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
-        var admission = Assert.Single(evaluation.Admitted);
-        Assert.Equal(beadId, admission.BeadId);
-        var completion = await admission.Completion.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
-        var resultLog = completion.Outcome?.Stage?.StageResult.LogFilePath;
-        var resultLogContents = resultLog is not null && File.Exists(resultLog) ? File.ReadAllText(resultLog) : "(no stage log)";
+        Task[] admissionTasks = [];
+        var testSucceeded = false;
+        Exception? cleanupFailure = null;
+        try
+        {
+            var evaluation = await pool.EvaluateAsync(mergerLifetime.Token);
+            var admissions = evaluation.Admitted.ToArray();
+            admissionTasks = admissions.Select(admission => (Task)admission.Completion).ToArray();
+            var admission = Assert.Single(admissions);
+            Assert.Equal(beadId, admission.BeadId);
+            var completion = await admission.Completion.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+            var resultLog = completion.Outcome?.Stage?.StageResult.LogFilePath;
+            var resultLogContents = resultLog is not null && File.Exists(resultLog) ? File.ReadAllText(resultLog) : "(no stage log)";
 
-        Assert.Equal(MergerSlotDisposition.Merged, completion.Outcome?.Disposition);
-        Assert.True(completion.MergeCompleted,
-            $"outcome={completion.Outcome?.Disposition}; diagnostic={completion.Diagnostic}; exception={completion.Exception}; "
-            + $"retryFailure={completion.Outcome?.Stage?.StageResult.Failure?.Reason}; "
-            + $"escalation={completion.Outcome?.Stage?.Escalation?.Failures.Count}; log={resultLogContents}");
-        Assert.True(completion.LocalCapacityReleased);
-        Assert.Empty(pool.ActiveReservations);
-        var finalBead = target.ReadBead(beadId);
-        var finalState = BeadWorkflowState.Parse(finalBead);
-        Assert.Equal("closed", finalBead.Status);
-        Assert.Null(finalBead.Assignee);
-        Assert.Equal("stage:merge", finalState.Stage);
-        Assert.Equal(0, finalState.RepairCycles);
-        Assert.Equal("closed", target.ReadBead(productId).Status);
-        Assert.False(Directory.Exists(worktree.Path), completion.Diagnostic ?? "The owned completed worktree was not removed.");
-        Assert.Empty(target.RunTarget("git", ["branch", "--list", originalBranch]));
-        Assert.False(Directory.Exists(Path.Combine(target.Host.TmpRoot(project.Name), beadId)));
-        Assert.True(resultLog is not null && File.Exists(resultLog), "The invocation log was removed with the worktree.");
-        var remoteMain = target.RunTarget("git", ["ls-remote", "origin", "refs/heads/main"])
-            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).First();
-        Assert.NotEqual(originalHead, remoteMain);
-        Assert.Empty(target.RunTarget("git", ["ls-remote", "origin", $"refs/heads/nightweaver/{beadId}"]));
+            Assert.Equal(MergerSlotDisposition.Merged, completion.Outcome?.Disposition);
+            Assert.True(completion.MergeCompleted,
+                $"outcome={completion.Outcome?.Disposition}; diagnostic={completion.Diagnostic}; exception={completion.Exception}; "
+                + $"retryFailure={completion.Outcome?.Stage?.StageResult.Failure?.Reason}; "
+                + $"escalation={completion.Outcome?.Stage?.Escalation?.Failures.Count}; log={resultLogContents}");
+            Assert.True(completion.LocalCapacityReleased);
+            Assert.Empty(pool.ActiveReservations);
+            var finalBead = target.ReadBead(beadId);
+            var finalState = BeadWorkflowState.Parse(finalBead);
+            Assert.Equal("closed", finalBead.Status);
+            Assert.Null(finalBead.Assignee);
+            Assert.Equal("stage:merge", finalState.Stage);
+            Assert.Equal(0, finalState.RepairCycles);
+            Assert.Equal("closed", target.ReadBead(productId).Status);
+            Assert.False(Directory.Exists(worktree.Path), completion.Diagnostic ?? "The owned completed worktree was not removed.");
+            Assert.Empty(target.RunTarget("git", ["branch", "--list", originalBranch]));
+            Assert.False(Directory.Exists(Path.Combine(target.Host.TmpRoot(project.Name), beadId)));
+            Assert.True(resultLog is not null && File.Exists(resultLog), "The invocation log was removed with the worktree.");
+            var remoteMain = target.RunTarget("git", ["ls-remote", "origin", "refs/heads/main"])
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).First();
+            Assert.NotEqual(originalHead, remoteMain);
+            Assert.Empty(target.RunTarget("git", ["ls-remote", "origin", $"refs/heads/nightweaver/{beadId}"]));
 
-        using (var comments = JsonDocument.Parse(target.ReadComments(beadId)))
-            Assert.Contains(StringValues(comments.RootElement), value => value.Contains(
-                $"nightweaver-merge-v1 pull_request={AgentStageTargetFixture.FixturePullRequestUrl} checked_head={remoteMain} required_checks=passed merge_method=squash merge_commit={remoteMain}",
-                StringComparison.Ordinal));
+            using (var comments = JsonDocument.Parse(target.ReadComments(beadId)))
+                Assert.Contains(StringValues(comments.RootElement), value => value.Contains(
+                    $"nightweaver-merge-v1 pull_request={AgentStageTargetFixture.FixturePullRequestUrl} checked_head={remoteMain} required_checks=passed merge_method=squash merge_commit={remoteMain}",
+                    StringComparison.Ordinal));
 
-        var ghCommands = File.ReadAllLines(ghLog).Select(line => JsonSerializer.Deserialize<string[]>(line)!).ToArray();
-        var checksIndex = Array.FindIndex(ghCommands, command => command.Length >= 2 && command[0] == "pr" && command[1] == "checks");
-        var mergeIndex = Array.FindIndex(ghCommands, command => command.Length >= 2 && command[0] == "pr" && command[1] == "merge");
-        Assert.True(checksIndex >= 0, "The native fixture did not wait for the pull request checks.");
-        Assert.True(mergeIndex > checksIndex, "The native fixture attempted to merge before checks passed.");
-        Assert.Contains("--watch", ghCommands[checksIndex]);
-        Assert.Contains("--squash", ghCommands[mergeIndex]);
-        Assert.Contains("--delete-branch", ghCommands[mergeIndex]);
-        Assert.Contains(processRunner.Requests, request => request.FileName == "git"
-            && request.Arguments.SequenceEqual(["config", "--get", "remote.origin.url"], StringComparer.Ordinal)
-            && request.WorkingDirectory == target.Path);
-        var verifierViews = processRunner.Requests.Where(request => request.FileName == "gh"
-            && request.Arguments.Count >= 2 && request.Arguments[0] == "pr" && request.Arguments[1] == "view"
-            && request.Arguments.Contains("--repo", StringComparer.Ordinal)).ToArray();
-        Assert.Equal(2, verifierViews.Length);
-        Assert.All(verifierViews, request => Assert.Equal("github.com/nightweaver-fixture/target",
-            request.Arguments[request.Arguments.ToList().IndexOf("--repo") + 1]));
-        Assert.Contains(processRunner.Requests, request => request.FileName == "gh"
-            && request.Arguments.Count >= 2 && request.Arguments[0] == "pr" && request.Arguments[1] == "checks"
-            && request.Arguments.Contains("--required", StringComparer.Ordinal)
-            && request.Arguments.Contains("github.com/nightweaver-fixture/target", StringComparer.Ordinal));
-        Assert.True(File.Exists(pidFile));
-        AssertFixtureExited(pidFile);
-        var claimWrites = AgentStageTargetFixture.ClaimWrites(processRunner.Requests, beadId);
-        Assert.Equal(2, claimWrites.Length);
-        Assert.Equal("open", AgentStageTargetFixture.ClaimWriteStatus(claimWrites[0]));
-        Assert.Equal("in_progress", AgentStageTargetFixture.ClaimWriteStatus(claimWrites[1]));
-        Assert.Contains("closed", claimWrites[1].Arguments);
-        Assert.False(target.LoseVerifiedTaskCloseResponseAfterCommitOnce,
-            "The fixture did not exercise a lost guarded-close response after the tracker committed it.");
+            var ghCommands = File.ReadAllLines(ghLog).Select(line => JsonSerializer.Deserialize<string[]>(line)!).ToArray();
+            var checksIndex = Array.FindIndex(ghCommands, command => command.Length >= 2 && command[0] == "pr" && command[1] == "checks");
+            var mergeIndex = Array.FindIndex(ghCommands, command => command.Length >= 2 && command[0] == "pr" && command[1] == "merge");
+            Assert.True(checksIndex >= 0, "The native fixture did not wait for the pull request checks.");
+            Assert.True(mergeIndex > checksIndex, "The native fixture attempted to merge before checks passed.");
+            Assert.Contains("--watch", ghCommands[checksIndex]);
+            Assert.Contains("--squash", ghCommands[mergeIndex]);
+            Assert.Contains("--delete-branch", ghCommands[mergeIndex]);
+            Assert.Contains(processRunner.Requests, request => request.FileName == "git"
+                && request.Arguments.SequenceEqual(["config", "--get", "remote.origin.url"], StringComparer.Ordinal)
+                && request.WorkingDirectory == target.Path);
+            var verifierViews = processRunner.Requests.Where(request => request.FileName == "gh"
+                && request.Arguments.Count >= 2 && request.Arguments[0] == "pr" && request.Arguments[1] == "view"
+                && request.Arguments.Contains("--repo", StringComparer.Ordinal)).ToArray();
+            Assert.Equal(2, verifierViews.Length);
+            Assert.All(verifierViews, request => Assert.Equal("github.com/nightweaver-fixture/target",
+                request.Arguments[request.Arguments.ToList().IndexOf("--repo") + 1]));
+            Assert.Contains(processRunner.Requests, request => request.FileName == "gh"
+                && request.Arguments.Count >= 2 && request.Arguments[0] == "pr" && request.Arguments[1] == "checks"
+                && request.Arguments.Contains("--required", StringComparer.Ordinal)
+                && request.Arguments.Contains("github.com/nightweaver-fixture/target", StringComparer.Ordinal));
+            Assert.True(File.Exists(pidFile));
+            AssertFixtureExited(pidFile);
+            var claimWrites = AgentStageTargetFixture.ClaimWrites(processRunner.Requests, beadId);
+            Assert.Equal(2, claimWrites.Length);
+            Assert.Equal("open", AgentStageTargetFixture.ClaimWriteStatus(claimWrites[0]));
+            Assert.Equal("in_progress", AgentStageTargetFixture.ClaimWriteStatus(claimWrites[1]));
+            Assert.Contains("closed", claimWrites[1].Arguments);
+            Assert.False(target.LoseVerifiedTaskCloseResponseAfterCommitOnce,
+                "The fixture did not exercise a lost guarded-close response after the tracker committed it.");
+            testSucceeded = true;
+        }
+        finally
+        {
+            if (!testSucceeded)
+                target.PreserveForFailure();
+
+            try
+            {
+                mergerLifetime.Cancel();
+            }
+            catch (Exception cancellationException)
+            {
+                cleanupFailure = cancellationException;
+            }
+            if (admissionTasks.Length > 0)
+            {
+                try
+                {
+                    await Task.WhenAll(admissionTasks).WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+                }
+                catch (Exception cleanupException)
+                {
+                    cleanupFailure ??= cleanupException;
+                }
+            }
+            if (cleanupFailure is not null)
+            {
+                target.PreserveForFailure();
+                TestContext.Current.TestOutputHelper?.WriteLine(
+                    $"Native Merger admission cleanup failed within its bounded wait; fixture preserved at {target.RootPath}; "
+                    + $"taskStates=[{string.Join(",", admissionTasks.Select(task => task.Status))}]; "
+                    + $"cleanup={cleanupFailure.GetType().Name}: {cleanupFailure.Message}");
+            }
+        }
+        if (testSucceeded && cleanupFailure is not null)
+            throw new InvalidOperationException("Native Merger admission cleanup failed after the test body completed.", cleanupFailure);
     }
 
     [Fact]
@@ -181,7 +226,14 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         var holdForcedDeliveryDiscoveryRead = 1;
         var deliveryStageRequestSequence = 0L;
         var deliveryStageRequestTrace = new ConcurrentQueue<(long Sequence, string BeadId, string Phase,
-            ProcessRequest Request, int? ExitCode, string? Error)>();
+            ProcessRequest Request, DateTimeOffset RecordedAtUtc, long Timestamp, TimeSpan? Elapsed,
+            int? ExitCode, string? StandardOutput, string? StandardError, string? Error)>();
+        var deliveryRoleTrace = new ConcurrentQueue<(string BeadId, AgentRole Role, string InvocationId,
+            string Action, string PidFile, string LogFilePath, string Phase, DateTimeOffset RecordedAtUtc,
+            long Timestamp, TimeSpan? Elapsed, AgentExecutionStatus? Status, int? ExitCode, string? Error)>();
+        var diagnosticGateTrace = new ConcurrentQueue<(string Gate, string Event, DateTimeOffset AtUtc, long Timestamp)>();
+        void RecordGate(string gate, string eventName) =>
+            diagnosticGateTrace.Enqueue((gate, eventName, DateTimeOffset.UtcNow, Stopwatch.GetTimestamp()));
         bool IsGuardedPublication(ProcessRequest request, string stage)
         {
             var arguments = request.Arguments;
@@ -214,8 +266,10 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         {
             if (IsGuardedPublication(request, "stage:implement"))
             {
+                RecordGate("mergerRepairPublication", "entered");
                 mergerRepairPublicationEntered.TrySetResult(true);
                 await releaseMergerRepairPublication.Task.WaitAsync(cancellationToken);
+                RecordGate("mergerRepairPublication", "released");
             }
             return await target.RunWithFixturePullRequestAsync(systemRunner, request, cancellationToken);
         }
@@ -233,23 +287,35 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
                     + $"{request.FileName} {string.Join(" ", request.Arguments)} cwd={request.WorkingDirectory}");
 
             var sequence = Interlocked.Increment(ref deliveryStageRequestSequence);
-            deliveryStageRequestTrace.Enqueue((sequence, beadIdForRequest, "started", request, null, null));
+            var startedAtUtc = DateTimeOffset.UtcNow;
+            var startedTimestamp = Stopwatch.GetTimestamp();
+            deliveryStageRequestTrace.Enqueue((sequence, beadIdForRequest, "started", request,
+                startedAtUtc, startedTimestamp, null, null, null, null, null));
 
             try
             {
                 if (IsGuardedPublication(request, "stage:merge"))
                 {
+                    RecordGate("deliveryMergePublication", "entered");
                     deliveryMergePublicationEntered.TrySetResult(true);
                     await releaseDeliveryMergePublication.Task.WaitAsync(cancellationToken);
+                    RecordGate("deliveryMergePublication", "released");
                 }
                 var result = await target.RunWithFixturePullRequestAsync(systemRunner, request, cancellationToken);
-                deliveryStageRequestTrace.Enqueue((sequence, beadIdForRequest, "completed", request, result.ExitCode, null));
+                var completedAtUtc = DateTimeOffset.UtcNow;
+                var completedTimestamp = Stopwatch.GetTimestamp();
+                deliveryStageRequestTrace.Enqueue((sequence, beadIdForRequest, "completed", request,
+                    completedAtUtc, completedTimestamp, Stopwatch.GetElapsedTime(startedTimestamp, completedTimestamp),
+                    result.ExitCode, result.StandardOutput, result.StandardError, null));
                 return result;
             }
             catch (Exception exception)
             {
-                deliveryStageRequestTrace.Enqueue((sequence, beadIdForRequest, "failed", request, null,
-                    $"{exception.GetType().Name}: {exception.Message}"));
+                var failedAtUtc = DateTimeOffset.UtcNow;
+                var failedTimestamp = Stopwatch.GetTimestamp();
+                deliveryStageRequestTrace.Enqueue((sequence, beadIdForRequest, "failed", request,
+                    failedAtUtc, failedTimestamp, Stopwatch.GetElapsedTime(startedTimestamp, failedTimestamp),
+                    null, null, null, $"{exception.GetType().Name}: {exception.Message}"));
                 throw;
             }
         }
@@ -274,6 +340,7 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             WorktreePurpose.Delivery, TestContext.Current.CancellationToken);
         var independentWorktree = await provisioner.ProvisionAsync(target.Host, project.Name, repository, independentDeliveryBeadId,
             WorktreePurpose.Delivery, TestContext.Current.CancellationToken);
+        target.RunTarget("bd", ["update", independentDeliveryBeadId, "--add-label", "needs-human"]);
         var independentGateDirectory = Directory.CreateDirectory(Path.Combine(target.RootPath, "independent-delivery-gate")).FullName;
         var independentStartedFile = Path.Combine(independentGateDirectory, "started.txt");
         var independentReleaseFile = Path.Combine(independentGateDirectory, "release.txt");
@@ -379,10 +446,42 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             deliveryRoles.Add(invocation.InvocationId, (context.BeadId, role));
             if (context.BeadId == beadId && Interlocked.Exchange(ref holdPrimaryDeliveryPrepare, 0) == 1)
             {
+                RecordGate("deliveryPrepare", "entered by runner");
                 deliveryPrepareEntered.TrySetResult(true);
                 await releaseDeliveryPrepare.Task.WaitAsync(cancellationToken);
+                RecordGate("deliveryPrepare", "resumed after release");
             }
             return invocation;
+        }
+
+        async Task<AgentExecutionResult> ExecuteAndTraceDeliveryAsync(string executingBeadId, AgentRole role,
+            string action, string pidFile, PreparedAgentInvocation invocation,
+            Func<Task<AgentExecutionResult>> execute)
+        {
+            var startedAtUtc = DateTimeOffset.UtcNow;
+            var startedTimestamp = Stopwatch.GetTimestamp();
+            deliveryRoleTrace.Enqueue((executingBeadId, role, invocation.InvocationId, action, pidFile,
+                invocation.LogFilePath, "started", startedAtUtc, startedTimestamp, null, null, null, null));
+            try
+            {
+                var result = await execute();
+                var completedAtUtc = DateTimeOffset.UtcNow;
+                var completedTimestamp = Stopwatch.GetTimestamp();
+                deliveryRoleTrace.Enqueue((executingBeadId, role, invocation.InvocationId, action, pidFile,
+                    invocation.LogFilePath, "completed", completedAtUtc, completedTimestamp,
+                    Stopwatch.GetElapsedTime(startedTimestamp, completedTimestamp), result.Status, result.ExitCode, null));
+                return result;
+            }
+            catch (Exception exception)
+            {
+                var failedAtUtc = DateTimeOffset.UtcNow;
+                var failedTimestamp = Stopwatch.GetTimestamp();
+                deliveryRoleTrace.Enqueue((executingBeadId, role, invocation.InvocationId, action, pidFile,
+                    invocation.LogFilePath, "failed", failedAtUtc, failedTimestamp,
+                    Stopwatch.GetElapsedTime(startedTimestamp, failedTimestamp), null, null,
+                    $"{exception.GetType().Name}: {exception.Message}"));
+                throw;
+            }
         }
 
         Task<AgentExecutionResult> ExecuteDelivery(HostPaths hostPaths, ProjectSlug projectSlug,
@@ -410,8 +509,10 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
                     independentEnvironment["NIGHTWEAVER_FIXTURE_STARTED_FILE"] = independentStartedFile;
                     independentEnvironment["NIGHTWEAVER_FIXTURE_RELEASE_FILE"] = independentReleaseFile;
                 }
-                return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
-                    target.CreateProcessLauncher(independentEnvironment), cancellationToken);
+                return ExecuteAndTraceDeliveryAsync(executingBeadId, role, independentAction,
+                    independentRolePidFile, invocation,
+                    () => AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
+                        target.CreateProcessLauncher(independentEnvironment), cancellationToken));
             }
             var action = role switch
             {
@@ -434,8 +535,9 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
                 ["NIGHTWEAVER_FIXTURE_TMP_SENTINEL"] = tmpSentinel,
                 ["NIGHTWEAVER_FIXTURE_RESUME_EVIDENCE"] = resumeEvidence
             };
-            return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
-                target.CreateProcessLauncher(environment), cancellationToken);
+            return ExecuteAndTraceDeliveryAsync(executingBeadId, role, action, pid, invocation,
+                () => AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
+                    target.CreateProcessLauncher(environment), cancellationToken));
         }
 
         DeliveryRoleRunner CreateDeliveryRole(RecordingProcessRunner processRunner)
@@ -455,26 +557,87 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         var releaseDelivery = NewSignal();
         var holdPrimaryDelivery = 1;
         var deliverySlotInvocations = new ConcurrentQueue<string>();
-        void WriteDeliveryStageTrace(string label, long afterSequence)
+        void WriteDeliveryStageTrace(string label, long afterSequence,
+            DateTimeOffset? waitStartedAtUtc = null, DateTimeOffset? waitEndedAtUtc = null)
         {
             var output = TestContext.Current.TestOutputHelper;
             var trace = deliveryStageRequestTrace.ToArray();
+            var traceTimestamp = Stopwatch.GetTimestamp();
             var startedRequests = trace
                 .Where(entry => entry.Sequence > afterSequence && entry.Phase == "started")
                 .OrderBy(entry => entry.Sequence)
                 .ToArray();
             output?.WriteLine($"ns-d9j stage trace {label}: requests={startedRequests.Length}, "
-                + $"sequenceRange={afterSequence + 1}..{Volatile.Read(ref deliveryStageRequestSequence)}");
+                + $"sequenceRange={afterSequence + 1}..{Volatile.Read(ref deliveryStageRequestSequence)}; "
+                + $"waitStartedUtc={waitStartedAtUtc?.ToString("O") ?? "n/a"}; "
+                + $"waitEndedUtc={waitEndedAtUtc?.ToString("O") ?? "n/a"}; "
+                + $"waitElapsed={(waitStartedAtUtc.HasValue && waitEndedAtUtc.HasValue ? waitEndedAtUtc.Value - waitStartedAtUtc.Value : TimeSpan.Zero)}");
             foreach (var started in startedRequests)
             {
                 var completion = trace.LastOrDefault(entry => entry.Sequence == started.Sequence
                     && entry.Phase != "started");
+                var elapsed = completion.Phase is null
+                    ? Stopwatch.GetElapsedTime(started.Timestamp, traceTimestamp)
+                    : completion.Elapsed!.Value;
                 output?.WriteLine(
                     $"ns-d9j stage request[{started.Sequence}]: slot={started.BeadId}; "
                     + $"{started.Request.FileName} {string.Join(" ", started.Request.Arguments)} "
                     + $"cwd={started.Request.WorkingDirectory} timeout={started.Request.Timeout}; "
+                    + $"startedUtc={started.RecordedAtUtc:O} endedUtc={(completion.Phase is null ? "pending" : completion.RecordedAtUtc.ToString("O"))} "
+                    + $"elapsed={elapsed}; "
                     + $"outcome={completion.Phase ?? "pending"} exitCode={completion.ExitCode?.ToString() ?? "n/a"} "
                     + $"error={completion.Error ?? "none"}");
+                if (completion.StandardOutput is not null)
+                    output?.WriteLine($"ns-d9j stage request[{started.Sequence}] stdout: {completion.StandardOutput}");
+                if (completion.StandardError is not null)
+                    output?.WriteLine($"ns-d9j stage request[{started.Sequence}] stderr: {completion.StandardError}");
+            }
+
+            foreach (var role in deliveryRoleTrace.ToArray().OrderBy(entry => entry.Timestamp))
+                output?.WriteLine($"ns-d9j role {role.Phase}: bead={role.BeadId} role={role.Role} action={role.Action} "
+                    + $"invocation={role.InvocationId} pidFile={role.PidFile} logFile={role.LogFilePath} "
+                    + $"atUtc={role.RecordedAtUtc:O} elapsed={role.Elapsed?.ToString() ?? "pending"} "
+                    + $"status={role.Status?.ToString() ?? "n/a"} exitCode={role.ExitCode?.ToString() ?? "n/a"} "
+                    + $"error={role.Error ?? "none"}; process={DescribeFixtureProcess(role.PidFile)}");
+
+            foreach (var gate in diagnosticGateTrace.ToArray().OrderBy(entry => entry.Timestamp))
+                output?.WriteLine($"ns-d9j gate {gate.Gate}: {gate.Event} atUtc={gate.AtUtc:O}");
+            output?.WriteLine($"ns-d9j handoffTrace={string.Join(" | ", handoffTrace)}");
+
+            foreach (var tool in trace.Where(entry => entry.Sequence > afterSequence
+                         && (entry.Phase is "completed" or "failed"))
+                         .GroupBy(entry => entry.Request.FileName, StringComparer.Ordinal)
+                         .OrderBy(group => group.Key, StringComparer.Ordinal))
+            {
+                var total = tool.Aggregate(TimeSpan.Zero,
+                    (duration, entry) => duration + entry.Elapsed.GetValueOrDefault());
+                output?.WriteLine($"ns-d9j tool total: tool={tool.Key} completedOrFailed={tool.Count()} elapsed={total}");
+            }
+        }
+        string DescribeFixtureProcess(string pidFile)
+        {
+            if (!File.Exists(pidFile))
+                return $"{pidFile}: pid handshake absent";
+
+            var identity = File.ReadAllText(pidFile).Split('|', StringSplitOptions.TrimEntries);
+            if (identity.Length != 2
+                || !int.TryParse(identity[0], System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var pid)
+                || !long.TryParse(identity[1], System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var expectedStartTicks))
+                return $"{pidFile}: invalid pid handshake {File.ReadAllText(pidFile)}";
+
+            try
+            {
+                using var process = Process.GetProcessById(pid);
+                var actualStartTicks = process.StartTime.ToUniversalTime().Ticks;
+                return $"{pidFile}: pid={pid} expectedStartTicks={expectedStartTicks} "
+                    + $"actualStartTicks={actualStartTicks} live={!process.HasExited} "
+                    + $"identityMatches={actualStartTicks == expectedStartTicks}";
+            }
+            catch (ArgumentException)
+            {
+                return $"{pidFile}: pid={pid} expectedStartTicks={expectedStartTicks} live=false";
             }
         }
         var deliveryOutcomes = Channel.CreateUnbounded<DeliverySlotOutcome>();
@@ -491,8 +654,10 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             if (requestedBead == beadId && Interlocked.Exchange(ref holdPrimaryDelivery, 0) == 1)
             {
                 handoffTrace.Enqueue("Delivery:reserved");
+                RecordGate("delivery", "entered by runner");
                 deliveryEntered.TrySetResult(true);
                 await releaseDelivery.Task.WaitAsync(token);
+                RecordGate("delivery", "resumed after release");
             }
             var previousSlot = deliveryRunnerSlotContext.Value;
             deliveryRunnerSlotContext.Value = requestedBead;
@@ -547,11 +712,6 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         try
         {
             await firstMergerPrepareEntered.Task.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
-            await WaitForFileAsync(independentStartedFile, TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
-            await WaitForFileAsync(independentPidFile, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-            var independentIdentity = File.ReadAllText(independentPidFile).Split('|', StringSplitOptions.TrimEntries);
-            using var independentAgent = Process.GetProcessById(int.Parse(independentIdentity[0], System.Globalization.CultureInfo.InvariantCulture));
-            Assert.False(independentAgent.HasExited, "The independent Delivery Agent exited before demonstrating concurrent native progress.");
             var heldMergerState = target.ReadState(beadId);
             Assert.Equal("in_progress", heldMergerState.Status);
             Assert.Equal("stage:merge", heldMergerState.Stage);
@@ -560,10 +720,6 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             Assert.Equal("open", queuedMerger.Status);
             Assert.Null(queuedMerger.Assignee);
             Assert.Equal("stage:merge", BeadWorkflowState.Parse(queuedMerger).Stage);
-            var independentDelivery = target.ReadBead(independentDeliveryBeadId);
-            Assert.Equal("in_progress", independentDelivery.Status);
-            Assert.Equal(project.RecoveryActor, independentDelivery.Assignee);
-            Assert.Equal("stage:implement", BeadWorkflowState.Parse(independentDelivery).Stage);
             target.RunTarget("bd", ["update", queuedMergerBeadId, "--add-label", "needs-human"]);
             releaseFirstMergerPrepare.TrySetResult(true);
 
@@ -574,6 +730,7 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             Assert.Equal(project.RecoveryActor, target.ReadBead(beadId).Assignee);
             Assert.Contains(mergerProcessRunner.Requests, request => IsGuardedPublication(request, "stage:implement"));
             releaseMergerRepairPublication.TrySetResult(true);
+            RecordGate("mergerRepairPublication", "released by test");
 
             var firstMerger = await mergerOutcomes.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
                 .WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
@@ -616,23 +773,123 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             Assert.Equal("Merger:RepairHandedOff", handoffTrace.First());
             var mergerRequestsAtHandoff = mergerProcessRunner.Requests.Count;
             releaseDelivery.TrySetResult(true);
+            RecordGate("delivery", "released by test");
 
             await deliveryPrepareEntered.Task.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
             var receivingDeliveryState = target.ReadState(beadId);
+            var receivingDeliveryBead = target.ReadBead(beadId);
+            var receivingDeliveryStateObservedAtUtc = DateTimeOffset.UtcNow;
             Assert.Equal("in_progress", receivingDeliveryState.Status);
             Assert.Equal("stage:implement", receivingDeliveryState.Stage);
-            Assert.Equal(project.RecoveryActor, target.ReadBead(beadId).Assignee);
+            Assert.Equal(project.RecoveryActor, receivingDeliveryBead.Assignee);
+            TestContext.Current.TestOutputHelper?.WriteLine(
+                $"ns-d9j bead phase before deliveryPrepare release: {receivingDeliveryState.Status}/{receivingDeliveryState.Stage}/{receivingDeliveryBead.Assignee} "
+                + $"observedUtc={receivingDeliveryStateObservedAtUtc:O}");
             var mergerRequestsAfterDeliveryPrepare = mergerProcessRunner.Requests;
             Assert.Equal(mergerRequestsAtHandoff, mergerRequestsAfterDeliveryPrepare.Count);
             releaseDeliveryPrepare.TrySetResult(true);
+            RecordGate("deliveryPrepare", "released by test");
 
-            await deliveryMergePublicationEntered.Task.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+            var publicationWaitStartedAtUtc = DateTimeOffset.UtcNow;
+            var publicationWaitStartedTimestamp = Stopwatch.GetTimestamp();
+            RecordGate("deliveryMergePublication", "wait started");
+            try
+            {
+                await deliveryMergePublicationEntered.Task.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+            }
+            catch (TimeoutException exception)
+            {
+                var timedOutAtUtc = DateTimeOffset.UtcNow;
+                var timedOutTimestamp = Stopwatch.GetTimestamp();
+                target.PreserveForFailure();
+                RecordGate("deliveryMergePublication", "wait timed out");
+                WriteDeliveryStageTrace("publication wait timeout", 0,
+                    publicationWaitStartedAtUtc, timedOutAtUtc);
+
+                var trace = deliveryStageRequestTrace.ToArray();
+                var gates = diagnosticGateTrace.ToArray();
+                var pidFiles = deliveryPidFiles.Concat(independentDeliveryPidFiles.ToArray()).Distinct(StringComparer.Ordinal).ToArray();
+                var diagnosticPath = Path.Combine(target.RootPath, "delivery-publication-timeout.txt");
+                using (var diagnostic = new StreamWriter(diagnosticPath, append: false, new System.Text.UTF8Encoding(false)))
+                {
+                    diagnostic.WriteLine($"fixtureRoot={target.RootPath}");
+                    diagnostic.WriteLine($"targetRoot={target.Path}");
+                    diagnostic.WriteLine($"hostRoot={target.Host.Root}");
+                    diagnostic.WriteLine($"hostLogsRoot={target.Host.LogsRoot(project.Name)}");
+                    diagnostic.WriteLine($"publicationWaitStartedUtc={publicationWaitStartedAtUtc:O}");
+                    diagnostic.WriteLine($"publicationWaitEndedUtc={timedOutAtUtc:O}");
+                    diagnostic.WriteLine($"publicationWaitElapsed={Stopwatch.GetElapsedTime(publicationWaitStartedTimestamp, timedOutTimestamp)}");
+                    diagnostic.WriteLine($"timeoutException={exception.GetType().Name}: {exception.Message}");
+                    diagnostic.WriteLine($"lastObservedBead={receivingDeliveryState.Status}/{receivingDeliveryState.Stage}/{receivingDeliveryBead.Assignee} "
+                        + $"observedUtc={receivingDeliveryStateObservedAtUtc:O}");
+                    diagnostic.WriteLine($"runtimeOutput={runtimeOutput}");
+                    diagnostic.WriteLine($"handoffTrace={string.Join(" | ", handoffTrace)}");
+                    diagnostic.WriteLine("gateEvents:");
+                    foreach (var gate in gates.OrderBy(gate => gate.Timestamp))
+                        diagnostic.WriteLine($"  {gate.AtUtc:O} {gate.Gate}: {gate.Event}");
+                    diagnostic.WriteLine("roleProcessIdentities:");
+                    foreach (var pidFile in pidFiles)
+                        diagnostic.WriteLine($"  {DescribeFixtureProcess(pidFile)}");
+                    diagnostic.WriteLine("roleInvocations:");
+                    foreach (var role in deliveryRoleTrace.ToArray().OrderBy(entry => entry.Timestamp))
+                        diagnostic.WriteLine($"  {role.Phase}: bead={role.BeadId} role={role.Role} action={role.Action} "
+                            + $"invocation={role.InvocationId} pidFile={role.PidFile} logFile={role.LogFilePath} "
+                            + $"atUtc={role.RecordedAtUtc:O} elapsed={role.Elapsed?.ToString() ?? "pending"} "
+                            + $"status={role.Status?.ToString() ?? "n/a"} exitCode={role.ExitCode?.ToString() ?? "n/a"} "
+                            + $"error={role.Error ?? "none"}");
+                    diagnostic.WriteLine("toolTotals:");
+                    foreach (var tool in trace.Where(entry => entry.Phase is "completed" or "failed")
+                                 .GroupBy(entry => entry.Request.FileName, StringComparer.Ordinal)
+                                 .OrderBy(group => group.Key, StringComparer.Ordinal))
+                    {
+                        var total = tool.Aggregate(TimeSpan.Zero,
+                            (duration, entry) => duration + entry.Elapsed.GetValueOrDefault());
+                        diagnostic.WriteLine($"  tool={tool.Key} completedOrFailed={tool.Count()} elapsed={total}");
+                    }
+                    diagnostic.WriteLine("stageProcessRequests:");
+                    foreach (var started in trace.Where(entry => entry.Phase == "started").OrderBy(entry => entry.Sequence))
+                    {
+                        var completion = trace.LastOrDefault(entry => entry.Sequence == started.Sequence
+                            && entry.Phase != "started");
+                        var elapsed = completion.Phase is null
+                            ? Stopwatch.GetElapsedTime(started.Timestamp, timedOutTimestamp)
+                            : completion.Elapsed!.Value;
+                        diagnostic.WriteLine($"  request={started.Sequence} slot={started.BeadId} outcome={completion.Phase ?? "pending"} "
+                            + $"startedUtc={started.RecordedAtUtc:O} endedUtc={(completion.Phase is null ? "pending" : completion.RecordedAtUtc.ToString("O"))} "
+                            + $"elapsed={elapsed} exitCode={completion.ExitCode?.ToString() ?? "n/a"} "
+                            + $"cwd={started.Request.WorkingDirectory} timeout={started.Request.Timeout} "
+                            + $"command={started.Request.FileName} {string.Join(" ", started.Request.Arguments)}");
+                        if (completion.StandardOutput is not null)
+                            diagnostic.WriteLine($"    stdout: {completion.StandardOutput}");
+                        if (completion.StandardError is not null)
+                            diagnostic.WriteLine($"    stderr: {completion.StandardError}");
+                        if (completion.Error is not null)
+                            diagnostic.WriteLine($"    error: {completion.Error}");
+                    }
+                }
+
+                TestContext.Current.TestOutputHelper?.WriteLine(
+                    $"delivery publication wait timed out before cleanup; fixture preserved at {target.RootPath}; "
+                    + $"diagnostic={diagnosticPath}; last observed bead={receivingDeliveryState.Status}/{receivingDeliveryState.Stage}; "
+                    + $"wait started={publicationWaitStartedAtUtc:O}, ended={timedOutAtUtc:O}");
+                throw;
+            }
+            var publicationWaitEndedAtUtc = DateTimeOffset.UtcNow;
+            RecordGate("deliveryMergePublication", "signal observed by test");
+            WriteDeliveryStageTrace("publication signal observed", 0,
+                publicationWaitStartedAtUtc, publicationWaitEndedAtUtc);
             var preMergePublication = target.ReadState(beadId);
+            var preMergePublicationBead = target.ReadBead(beadId);
+            var preMergePublicationObservedAtUtc = DateTimeOffset.UtcNow;
+            TestContext.Current.TestOutputHelper?.WriteLine(
+                $"ns-d9j bead phase before publication release: {preMergePublication.Status}/{preMergePublication.Stage}/{preMergePublicationBead.Assignee} "
+                + $"observedUtc={preMergePublicationObservedAtUtc:O}");
             Assert.Equal("in_progress", preMergePublication.Status);
             Assert.Equal("stage:qa", preMergePublication.Stage);
-            Assert.Equal(project.RecoveryActor, target.ReadBead(beadId).Assignee);
+            Assert.Equal(project.RecoveryActor, preMergePublicationBead.Assignee);
             Assert.Contains(deliveryProcessRunner.Requests, request => IsGuardedPublication(request, "stage:merge"));
             releaseDeliveryMergePublication.TrySetResult(true);
+            RecordGate("deliveryMergePublication", "released by test");
 
             var deliveryOutcome = await deliveryOutcomes.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
                 .WaitAsync(TimeSpan.FromSeconds(120), TestContext.Current.CancellationToken);
@@ -643,6 +900,21 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         Assert.Equal("in_progress", receivingMergerState.Status);
         Assert.Equal("stage:merge", receivingMergerState.Stage);
         Assert.Equal(project.RecoveryActor, target.ReadBead(beadId).Assignee);
+        target.RunTarget("bd", ["update", independentDeliveryBeadId, "--remove-label", "needs-human"]);
+        var independentActivation = await deliveryPool.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.All(independentActivation.Admitted,
+            admission => Assert.Equal(independentDeliveryBeadId, admission.BeadId));
+        await WaitForFileAsync(independentStartedFile, TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+        await WaitForFileAsync(independentPidFile, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var independentIdentity = File.ReadAllText(independentPidFile).Split('|', StringSplitOptions.TrimEntries);
+        using var independentAgent = Process.GetProcessById(int.Parse(independentIdentity[0], System.Globalization.CultureInfo.InvariantCulture));
+        Assert.False(independentAgent.HasExited, "The independent Delivery Agent exited before demonstrating concurrent native progress.");
+        Assert.Single(deliveryPool.ActiveReservations, reservation => reservation.BeadId == independentDeliveryBeadId);
+        Assert.Single(independentDeliveryPidFiles);
+        var independentDelivery = target.ReadBead(independentDeliveryBeadId);
+        Assert.Equal("in_progress", independentDelivery.Status);
+        Assert.Equal(project.RecoveryActor, independentDelivery.Assignee);
+        Assert.Equal("stage:implement", BeadWorkflowState.Parse(independentDelivery).Stage);
         var deliveryRequestsAtHandoff = deliveryProcessRunner.Requests.Count;
         deliveryStageRequestSequenceAtHandoff = Volatile.Read(ref deliveryStageRequestSequence);
         var requestCountBeforeForcedDiscovery = deliveryDiscoveryProcessRunner.Requests.Count;
@@ -730,6 +1002,14 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         });
         Assert.Equal(DeliverySlotDisposition.PausedForProductDecision, independentDeliveryOutcome.Disposition);
         Assert.True(independentDeliveryOutcome.ClaimHandoffCompleted, independentDeliveryOutcome.Diagnostic);
+        Assert.Collection(independentDeliveryPidFiles, _ => { }, _ => { });
+        var independentRoleLaunches = deliveryRoleTrace
+            .Where(entry => entry.BeadId == independentDeliveryBeadId && entry.Phase == "started")
+            .OrderBy(entry => entry.Timestamp)
+            .ToArray();
+        Assert.Collection(independentRoleLaunches,
+            implementer => Assert.Equal(AgentRole.Implementer, implementer.Role),
+            reviewer => Assert.Equal(AgentRole.Reviewer, reviewer.Role));
         Assert.Equal("open", independentDeliveryState.Status);
         Assert.Null(independentDeliveryState.Assignee);
         Assert.Equal("stage:review", independentDeliveryWorkflow.Stage);
