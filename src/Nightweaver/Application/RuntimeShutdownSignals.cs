@@ -7,11 +7,15 @@ internal sealed class RuntimeShutdownSignals : IDisposable
 {
     private readonly CancellationTokenSource firstStop = new();
     private readonly Action<int> terminateProcess;
+    private readonly Action? gracefulStopAccepted;
     private int signalCount;
     private int forceStopStarted;
 
-    internal RuntimeShutdownSignals(Action<int>? terminateProcess = null) =>
+    internal RuntimeShutdownSignals(Action<int>? terminateProcess = null, Action? gracefulStopAccepted = null)
+    {
         this.terminateProcess = terminateProcess ?? Environment.Exit;
+        this.gracefulStopAccepted = gracefulStopAccepted;
+    }
 
     internal ContinuousStopGate StopGate { get; } = new();
     internal CancellationToken FirstStopToken => firstStop.Token;
@@ -50,6 +54,8 @@ internal sealed class RuntimeShutdownSignals : IDisposable
     {
         StopGate.RequestStop();
         firstStop.Cancel();
+        try { gracefulStopAccepted?.Invoke(); }
+        catch (Exception) { }
     }
 
     private static void TryStartDeferredRecoveryDiagnostic()

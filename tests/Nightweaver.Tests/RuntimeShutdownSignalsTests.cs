@@ -60,4 +60,85 @@ public sealed class RuntimeShutdownSignalsTests
             await firstSignal.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
         }
     }
+
+    [Fact]
+    public void GracefulStopObserverRunsOnceAfterGateAndCancellation()
+    {
+        var observations = 0;
+        var observerSawAcceptedState = false;
+        RuntimeShutdownSignals? observedShutdown = null;
+        using var shutdown = new RuntimeShutdownSignals(gracefulStopAccepted: () =>
+        {
+            observations++;
+            observerSawAcceptedState = observedShutdown is { } current
+                && current.StopGate.IsStopRequested
+                && current.FirstStopToken.IsCancellationRequested;
+        });
+        observedShutdown = shutdown;
+        shutdown.RequestGracefulStop();
+        shutdown.RequestGracefulStop();
+
+        Assert.Equal(1, observations);
+        Assert.True(observerSawAcceptedState);
+    }
+
+    [Fact]
+    public void ForceFirstDoesNotNotifyGracefulStopObserver()
+    {
+        var observations = 0;
+        using var shutdown = new RuntimeShutdownSignals(_ => { }, () => observations++);
+
+        shutdown.RequestForceStop();
+
+        Assert.Equal(0, observations);
+    }
+
+    [Fact]
+    public async Task SecondSignalExitsWhileAcceptedStopObserverIsBlocked()
+    {
+        using var observerEntered = new ManualResetEventSlim();
+        using var releaseObserver = new ManualResetEventSlim();
+        using var forceExit = new ManualResetEventSlim();
+        using var shutdown = new RuntimeShutdownSignals(_ => forceExit.Set(), () =>
+        {
+            observerEntered.Set();
+            releaseObserver.Wait();
+        });
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var firstSignal = Task.Run(shutdown.RequestStop, cancellationToken);
+        Assert.True(observerEntered.Wait(TimeSpan.FromSeconds(5), cancellationToken),
+            "The accepted-stop observer did not enter after gate closure and cancellation.");
+
+        try
+        {
+            var secondSignal = Task.Run(shutdown.RequestStop, cancellationToken);
+            Assert.True(forceExit.Wait(TimeSpan.FromSeconds(5), cancellationToken),
+                "Force exit waited for a blocked accepted-stop observer.");
+            await secondSignal.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        }
+        finally
+        {
+            releaseObserver.Set();
+            await firstSignal.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        }
+    }
+
+    [Fact]
+    public void ThrowingAcceptedStopObserverDoesNotUndoGracefulOrForceStop()
+    {
+        var exits = new List<int>();
+        using var shutdown = new RuntimeShutdownSignals(exits.Add,
+            () => throw new InvalidOperationException("diagnostic output failed"));
+
+        shutdown.RequestGracefulStop();
+
+        Assert.True(shutdown.StopGate.IsStopRequested);
+        Assert.True(shutdown.FirstStopToken.IsCancellationRequested);
+        Assert.Empty(exits);
+
+        shutdown.RequestStop();
+
+        Assert.True(shutdown.StopGate.IsForceStopRequested);
+        Assert.Equal([1], exits);
+    }
 }

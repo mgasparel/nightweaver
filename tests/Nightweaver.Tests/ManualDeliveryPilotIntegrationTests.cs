@@ -192,19 +192,23 @@ public sealed class ManualDeliveryPilotIntegrationTests
         try
         {
             await fixture.WaitForGateAsync(fixture.ParentlessTaskId, TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
-            await WaitForClosedAsync(fixture, fixture.ProductTaskId, TimeSpan.FromMinutes(5), TestContext.Current.CancellationToken);
-            await WaitForClosedAsync(fixture, fixture.ProductId, TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
 
             var evidenceBefore = ReadEvidence(fixture.EvidencePath);
             Assert.Single(evidenceBefore, row => row.BeadId == fixture.ParentlessTaskId
                 && row.Role == "implementer");
             var agentPid = int.Parse(File.ReadAllText(Path.Combine(fixture.GateDirectory,
                 fixture.ParentlessTaskId + ".started")), CultureInfo.InvariantCulture);
+            var runtimeLogOffset = new FileInfo(fixture.RuntimeLogPath).Length;
             await fixture.SendRuntimeConsoleBreakAsync(TestContext.Current.CancellationToken);
-            await Task.Delay(300, TestContext.Current.CancellationToken);
+            await fixture.WaitForGracefulStopAcceptedAsync(runtimeLogOffset, TimeSpan.FromSeconds(30),
+                TestContext.Current.CancellationToken);
 
             Assert.False(runtime.HasExited, "The first real console signal must drain rather than kill the held runtime.");
             Assert.True(IsProcessRunning(agentPid), "The active native Agent must remain alive until the current turn settles.");
+            var evidenceDuringDrain = ReadEvidence(fixture.EvidencePath)
+                .Where(row => row.BeadId == fixture.ParentlessTaskId).ToArray();
+            Assert.Single(evidenceDuringDrain, row => row.Role == "implementer");
+            Assert.DoesNotContain(evidenceDuringDrain, row => row.Role != "implementer");
             var activeClaim = await fixture.ReadBeadAsync(fixture.ParentlessTaskId, TestContext.Current.CancellationToken);
             Assert.Equal("in_progress", activeClaim.GetProperty("status").GetString());
             Assert.Equal("nightweaver:manualqa", activeClaim.GetProperty("assignee").GetString());
@@ -219,7 +223,7 @@ public sealed class ManualDeliveryPilotIntegrationTests
             Assert.Contains("stage:review", drained.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
             var evidenceAfter = ReadEvidence(fixture.EvidencePath).Where(row => row.BeadId == fixture.ParentlessTaskId).ToArray();
             Assert.Single(evidenceAfter, row => row.Role == "implementer");
-            Assert.DoesNotContain(evidenceAfter, row => row.Role == "reviewer");
+            Assert.DoesNotContain(evidenceAfter, row => row.Role != "implementer");
         }
         catch (Exception exception)
         {

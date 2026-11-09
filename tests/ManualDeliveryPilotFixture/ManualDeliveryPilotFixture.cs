@@ -303,6 +303,31 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
         return reader.ReadToEnd();
     }
 
+    public async Task WaitForGracefulStopAcceptedAsync(long logOffset, TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        const string marker = "nightweaver: graceful stop accepted; draining current turns.";
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (RuntimeProcess is { HasExited: true } process)
+                throw new InvalidOperationException($"Pilot runtime exited ({process.ExitCode}) before acknowledging graceful stop: {ReadRuntimeLog()}");
+            if (ReadRuntimeLogFromOffset(logOffset).Contains(marker, StringComparison.Ordinal)) return;
+            await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+        }
+        throw new TimeoutException($"Pilot runtime did not acknowledge graceful stop within {timeout}. Runtime output: {ReadRuntimeLog()}");
+    }
+
+    private string ReadRuntimeLogFromOffset(long offset)
+    {
+        if (!File.Exists(RuntimeLogPath)) return string.Empty;
+        using var stream = new FileStream(RuntimeLogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        stream.Position = stream.Length < offset ? 0 : offset;
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
+
     public async Task<JsonElement> ReadBeadAsync(string beadId, CancellationToken cancellationToken = default)
     {
         using var document = JsonDocument.Parse(await RunToolAsync("bd", ["show", beadId, "--json"], Repository,

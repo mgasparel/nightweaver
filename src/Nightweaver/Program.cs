@@ -7,7 +7,11 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
-        using var shutdownSignals = new RuntimeShutdownSignals();
+        using var shutdownSignals = new RuntimeShutdownSignals(gracefulStopAccepted: static () =>
+        {
+            Console.Error.WriteLine("nightweaver: graceful stop accepted; draining current turns.");
+            Console.Error.Flush();
+        });
         ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
         {
             eventArgs.Cancel = true;
