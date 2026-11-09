@@ -1009,64 +1009,162 @@ internal static class Program
                 break;
             case "merger-verified-merge":
             {
+                var pilotMerger = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION") == "manual-delivery-pilot";
+                var diagnosticsEnabled = pilotMerger && ManualPilotMergerDiagnosticsEnabled();
+                if (diagnosticsEnabled)
+                    WriteManualPilotMergerDiagnostic(beadId, "invocation", "started", null, null, null, null);
                 var pilotGateBead = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_MERGER_GATE_BEAD");
                 if (string.Equals(beadId, pilotGateBead, StringComparison.Ordinal))
                 {
                     var pilotGateDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_MERGER_GATE_DIRECTORY")
                         ?? throw new InvalidOperationException("The manual pilot Merger gate directory is missing.");
-                    Directory.CreateDirectory(pilotGateDirectory);
-                    File.WriteAllText(Path.Combine(pilotGateDirectory, beadId + ".merger.started"),
-                        Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), new UTF8Encoding(false));
-                    WaitForFile(Path.Combine(pilotGateDirectory, beadId + ".merger.release"), TimeSpan.FromMinutes(5));
+                    RunManualPilotMergerStep(beadId, "initial-merger-gate", null, () =>
+                    {
+                        Directory.CreateDirectory(pilotGateDirectory);
+                        File.WriteAllText(Path.Combine(pilotGateDirectory, beadId + ".merger.started"),
+                            Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), new UTF8Encoding(false));
+                        WaitForFile(Path.Combine(pilotGateDirectory, beadId + ".merger.release"), TimeSpan.FromMinutes(5));
+                    });
                 }
                 var mergerStartedFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_MERGER_STARTED_FILE");
                 if (!string.IsNullOrWhiteSpace(mergerStartedFile))
                 {
                     var mergerReleaseFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_MERGER_RELEASE_FILE")
                         ?? throw new InvalidOperationException("Merger release file is missing.");
-                    File.WriteAllText(mergerStartedFile, beadId, new UTF8Encoding(false));
-                    WaitForFile(mergerReleaseFile, TimeSpan.FromMinutes(2));
+                    RunManualPilotMergerStep(beadId, "secondary-merger-gate", null, () =>
+                    {
+                        File.WriteAllText(mergerStartedFile, beadId, new UTF8Encoding(false));
+                        WaitForFile(mergerReleaseFile, TimeSpan.FromMinutes(2));
+                    });
                 }
                 var defaultBranch = Environment.GetEnvironmentVariable("NIGHTWEAVER_DEFAULT_BRANCH") ?? "main";
-                var branch = Run("git", ["branch", "--show-current"]).Trim();
-                if (Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION") == "manual-delivery-pilot")
+                var branch = pilotMerger
+                    ? RunManualPilotMergerStep(beadId, "read-owned-branch", null,
+                        () => Run("git", ["branch", "--show-current"]).Trim())
+                    : Run("git", ["branch", "--show-current"]).Trim();
+                var head = pilotMerger
+                    ? RunManualPilotMergerStep(beadId, "read-initial-head", null,
+                        () => Run("git", ["rev-parse", "HEAD"]).Trim())
+                    : string.Empty;
+                if (pilotMerger)
                 {
-                    Run("git", ["fetch", "origin", defaultBranch]);
-                    Run("git", ["rebase", $"origin/{defaultBranch}"]);
+                    RunManualPilotMergerStep(beadId, "fetch-default-before-rebase", head,
+                        () => Run("git", ["fetch", "origin", defaultBranch]));
+                    RunManualPilotMergerStep(beadId, "rebase-default", head,
+                        () => Run("git", ["rebase", $"origin/{defaultBranch}"]));
                 }
-                Run("git", ["fetch", "origin", defaultBranch]);
-                var head = Run("git", ["rev-parse", "HEAD"]).Trim();
-                var defaultHead = Run("git", ["rev-parse", $"origin/{defaultBranch}"]).Trim();
-                if (!IsAncestor(defaultHead, head))
+                if (pilotMerger)
+                {
+                    RunManualPilotMergerStep(beadId, "fetch-default-for-current-head-check", head,
+                        () => Run("git", ["fetch", "origin", defaultBranch]));
+                    head = RunManualPilotMergerStep(beadId, "read-current-head", head,
+                        () => Run("git", ["rev-parse", "HEAD"]).Trim());
+                }
+                else
+                {
+                    // Preserve the non-pilot fixture command sequence exactly.
+                    Run("git", ["fetch", "origin", defaultBranch]);
+                    head = Run("git", ["rev-parse", "HEAD"]).Trim();
+                }
+                var defaultHead = pilotMerger
+                    ? RunManualPilotMergerStep(beadId, "read-default-head", head,
+                        () => Run("git", ["rev-parse", $"origin/{defaultBranch}"]).Trim())
+                    : Run("git", ["rev-parse", $"origin/{defaultBranch}"]).Trim();
+                if (pilotMerger)
+                {
+                    RunManualPilotMergerStep(beadId, "verify-default-ancestor", head, () =>
+                    {
+                        if (!IsAncestor(defaultHead, head))
+                            throw new InvalidOperationException("Fixture branch is not synchronized with its configured default branch.");
+                    });
+                }
+                else if (!IsAncestor(defaultHead, head))
                     throw new InvalidOperationException("Fixture branch is not synchronized with its configured default branch.");
 
-                var pilotMerger = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION") == "manual-delivery-pilot";
                 var mergerFile = pilotMerger ? $"merger-verified-{beadId}.txt" : "merger-verified.txt";
                 var mergerContent = pilotMerger
                     ? $"fixture merge after synchronized current-head checks for {beadId}\n"
                     : "fixture merge after synchronized current-head checks\n";
-                File.WriteAllText(Path.Combine(Environment.CurrentDirectory, mergerFile), mergerContent, new UTF8Encoding(false));
-                Run("git", ["add", mergerFile]);
-                Run("git", ["commit", "-m", "fixture verified Merger change"]);
-                head = Run("git", ["rev-parse", "HEAD"]).Trim();
-                Run("git", ["push", "--force-with-lease", "origin", $"HEAD:refs/heads/{branch}"]);
+                if (pilotMerger)
+                {
+                    var preparedChange = RunManualPilotMergerStep(beadId, "validate-or-create-expected-change", head, () =>
+                        ManualPilotMergerChange.EnsureExpectedCommit(beadId, branch, Environment.CurrentDirectory,
+                            (workingDirectory, arguments) => RunManualPilotMergerStep(beadId,
+                                "git-" + string.Join('-', arguments), head,
+                                () => RunGitInDirectory(workingDirectory, arguments))));
+                    head = preparedChange.HeadSha;
+                    WriteManualPilotMergerDiagnostic(beadId,
+                        preparedChange.Reused ? "expected-commit-reused" : "expected-commit-created",
+                        "completed", head, null, null, null);
+                }
+                else
+                {
+                    File.WriteAllText(Path.Combine(Environment.CurrentDirectory, mergerFile), mergerContent, new UTF8Encoding(false));
+                    Run("git", ["add", mergerFile]);
+                    Run("git", ["commit", "-m", "fixture verified Merger change"]);
+                    head = Run("git", ["rev-parse", "HEAD"]).Trim();
+                }
+                if (pilotMerger)
+                    RunManualPilotMergerStep(beadId, "push-checked-branch", head,
+                        () => Run("git", ["push", "--force-with-lease", "origin", $"HEAD:refs/heads/{branch}"]));
+                else
+                    Run("git", ["push", "--force-with-lease", "origin", $"HEAD:refs/heads/{branch}"]);
+
+                var interruptBead = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_MERGER_INTERRUPT_BEAD");
+                var interruptDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_MERGER_INTERRUPT_DIRECTORY");
+                var interruptMarker = !string.IsNullOrWhiteSpace(interruptDirectory)
+                    ? Path.Combine(interruptDirectory, beadId + ".merger.interrupted-once") : null;
+                if (pilotMerger && string.Equals(beadId, interruptBead, StringComparison.Ordinal)
+                    && interruptMarker is not null && !File.Exists(interruptMarker))
+                {
+                    RunManualPilotMergerStep(beadId, "controlled-post-push-interruption", head, () =>
+                    {
+                        WriteFlushedText(interruptMarker, $"{head}\n{DateTimeOffset.UtcNow:O}\n");
+                        throw new InvalidOperationException("Controlled one-shot interruption after expected commit and branch push, before PR checks.");
+                    });
+                }
+
+                var retryGateBead = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_MERGER_RETRY_GATE_BEAD");
+                var retryGateDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_MERGER_RETRY_GATE_DIRECTORY");
+                if (pilotMerger && string.Equals(beadId, retryGateBead, StringComparison.Ordinal)
+                    && !string.IsNullOrWhiteSpace(interruptMarker) && File.Exists(interruptMarker))
+                {
+                    if (string.IsNullOrWhiteSpace(retryGateDirectory))
+                        throw new InvalidOperationException("The manual-pilot Merger retry gate directory is missing.");
+                    RunManualPilotMergerStep(beadId, "retry-before-current-head-checks-gate", head, () =>
+                    {
+                        Directory.CreateDirectory(retryGateDirectory);
+                        WriteFlushedText(Path.Combine(retryGateDirectory, beadId + ".merger.retry.started"),
+                            $"{Environment.ProcessId}|{head}\n");
+                        WaitForFile(Path.Combine(retryGateDirectory, beadId + ".merger.retry.release"), TimeSpan.FromMinutes(2));
+                    });
+                }
+
                 var pullRequest = "https://github.com/nightweaver-fixture/target/pull/123";
-                var beforeChecks = ReadPullRequest(pullRequest);
+                var beforeChecks = RunManualPilotMergerStep(beadId, "read-pull-request-before-checks", head,
+                    () => ReadPullRequest(pullRequest));
                 if (beforeChecks.GetProperty("state").GetString() != "OPEN"
                     || beforeChecks.GetProperty("headRefOid").GetString() != head)
                     throw new InvalidOperationException("Fixture pull request did not identify the synchronized current HEAD.");
-                Run("gh", ["pr", "checks", pullRequest, "--watch"]);
-                var afterChecks = ReadPullRequest(pullRequest);
+                RunManualPilotMergerStep(beadId, "run-current-head-required-checks", head,
+                    () => Run("gh", ["pr", "checks", pullRequest, "--watch"]));
+                var afterChecks = RunManualPilotMergerStep(beadId, "read-pull-request-after-checks", head,
+                    () => ReadPullRequest(pullRequest));
                 if (afterChecks.GetProperty("headRefOid").GetString() != head)
                     throw new InvalidOperationException("Fixture pull request head changed while checks were running.");
-                Run("gh", ["pr", "merge", pullRequest, "--squash", "--delete-branch"]);
-                var merged = ReadPullRequest(pullRequest);
+                RunManualPilotMergerStep(beadId, "merge-current-head-pull-request", head,
+                    () => Run("gh", ["pr", "merge", pullRequest, "--squash", "--delete-branch"]));
+                var merged = RunManualPilotMergerStep(beadId, "verify-merged-pull-request", head,
+                    () => ReadPullRequest(pullRequest));
                 if (merged.GetProperty("state").GetString() != "MERGED")
                     throw new InvalidOperationException("Fixture pull request was not confirmed merged.");
 
                 var mergeCommit = merged.GetProperty("mergeCommit").GetProperty("oid").GetString();
-                Run("bd", ["comments", "add", beadId,
-                    $"nightweaver-merge-v1 pull_request={pullRequest} checked_head={head} required_checks=passed merge_method=squash merge_commit={mergeCommit}"]);
+                RunManualPilotMergerStep(beadId, "publish-verified-merge-evidence", head,
+                    () => Run("bd", ["comments", "add", beadId,
+                        $"nightweaver-merge-v1 pull_request={pullRequest} checked_head={head} required_checks=passed merge_method=squash merge_commit={mergeCommit}"]));
+                if (diagnosticsEnabled)
+                    WriteManualPilotMergerDiagnostic(beadId, "invocation", "completed", head, null, null, null);
                 break;
             }
             case "merger-reject-checks":
@@ -1257,6 +1355,125 @@ internal static class Program
     {
         var result = RunAllowFailure("git", ["merge-base", "--is-ancestor", ancestor, descendant]);
         return result.ExitCode == 0;
+    }
+
+    private static void RunManualPilotMergerStep(string beadId, string phase, string? currentHead, Action action) =>
+        _ = RunManualPilotMergerStep(beadId, phase, currentHead, () =>
+        {
+            action();
+            return true;
+        });
+
+    private static T RunManualPilotMergerStep<T>(string beadId, string phase, string? currentHead, Func<T> action)
+    {
+        if (!ManualPilotMergerDiagnosticsEnabled()) return action();
+
+        var stopwatch = Stopwatch.StartNew();
+        WriteManualPilotMergerDiagnostic(beadId, phase, "started", currentHead, null, null, null);
+        try
+        {
+            var result = action();
+            stopwatch.Stop();
+            WriteManualPilotMergerDiagnostic(beadId, phase, "completed", currentHead,
+                stopwatch.ElapsedMilliseconds, null, null);
+            return result;
+        }
+        catch (Exception exception)
+        {
+            stopwatch.Stop();
+            WriteManualPilotMergerDiagnostic(beadId, phase, "failed", currentHead,
+                stopwatch.ElapsedMilliseconds, exception.ToString(), TryReadExitStatus(exception.Message));
+            throw;
+        }
+    }
+
+    private static void WriteManualPilotMergerDiagnostic(string beadId, string phase, string status,
+        string? currentHead, long? elapsedMilliseconds, string? failure, int? childCommandExitStatus)
+    {
+        if (!ManualPilotMergerDiagnosticsEnabled()) return;
+        var path = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_MERGER_DIAGNOSTICS_PATH");
+        if (string.IsNullOrWhiteSpace(path)) throw new InvalidOperationException("Manual-pilot Merger diagnostics path is missing.");
+
+        var process = Process.GetCurrentProcess();
+        var processStartedAt = process.StartTime.ToUniversalTime();
+        var timeoutSeconds = ReadConfiguredRoleTimeoutSeconds();
+        var record = JsonSerializer.Serialize(new
+        {
+            schema = "manual-pilot-merger-step-v1",
+            bead_id = beadId,
+            phase,
+            status,
+            process_id = process.Id,
+            process_started_at = processStartedAt,
+            invocation_identity = $"{process.Id}-{processStartedAt.Ticks}",
+            configured_role_timeout_seconds = timeoutSeconds,
+            observed_at = DateTimeOffset.UtcNow,
+            elapsed_ms = elapsedMilliseconds,
+            current_head = currentHead,
+            child_command_exit_status = childCommandExitStatus,
+            failure
+        });
+        var bytes = Encoding.UTF8.GetBytes(record + Environment.NewLine);
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+        stream.Write(bytes);
+        stream.Flush(flushToDisk: true);
+    }
+
+    private static bool ManualPilotMergerDiagnosticsEnabled() =>
+        Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION") == "manual-delivery-pilot"
+        && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_MERGER_DIAGNOSTICS_PATH"));
+
+    private static int? ReadConfiguredRoleTimeoutSeconds()
+    {
+        var configPath = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_PILOT_CONFIG");
+        if (string.IsNullOrWhiteSpace(configPath) || !File.Exists(configPath)) return null;
+        using var document = JsonDocument.Parse(File.ReadAllText(configPath));
+        var minutes = document.RootElement.GetProperty("agent_defaults").GetProperty("timeout_minutes").GetInt32();
+        return checked(minutes * 60);
+    }
+
+    private static int? TryReadExitStatus(string message)
+    {
+        var marker = " exited ";
+        var start = message.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0) return null;
+        start += marker.Length;
+        var end = message.IndexOfAny([':', '.', ' ', '\r', '\n'], start);
+        var value = end < 0 ? message[start..] : message[start..end];
+        return int.TryParse(value, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var exitStatus) ? exitStatus : null;
+    }
+
+    private static string RunGitInDirectory(string workingDirectory, IReadOnlyList<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start 'git'.");
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        process.WaitForExit();
+        Task.WaitAll(stdoutTask, stderrTask);
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} exited {process.ExitCode}: {stderrTask.Result}{stdoutTask.Result}");
+        return stdoutTask.Result;
+    }
+
+    private static void WriteFlushedText(string path, string value)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+        var bytes = new UTF8Encoding(false).GetBytes(value);
+        stream.Write(bytes);
+        stream.Flush(flushToDisk: true);
     }
 
     private static JsonElement ReadPullRequest(string pullRequest)

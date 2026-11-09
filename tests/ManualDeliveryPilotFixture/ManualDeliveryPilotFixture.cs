@@ -54,6 +54,9 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
     public string ExhaustionTaskId { get; private set; } = string.Empty;
     public string ForeignClaimId { get; private set; } = string.Empty;
     public string? MergerGateBeadId { get; set; }
+    public string? MergerInterruptBeadId { get; set; }
+    public string? MergerRetryGateBeadId { get; set; }
+    public string? MergerDiagnosticsBeadId { get; set; }
     public string? RetainSentinelBeadId { get; set; }
     internal WindowsConsoleProcess? RuntimeProcess { get; private set; }
     public bool PreserveEvidenceOnDispose { get; private set; }
@@ -133,6 +136,12 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
             ["NIGHTWEAVER_FIXTURE_PILOT_EXHAUST_BEAD"] = string.IsNullOrEmpty(ExhaustionTaskId) ? null : ExhaustionTaskId,
             ["NIGHTWEAVER_FIXTURE_PILOT_MERGER_GATE_BEAD"] = MergerGateBeadId,
             ["NIGHTWEAVER_FIXTURE_PILOT_MERGER_GATE_DIRECTORY"] = GateDirectory,
+            ["NIGHTWEAVER_FIXTURE_PILOT_MERGER_INTERRUPT_BEAD"] = MergerInterruptBeadId,
+            ["NIGHTWEAVER_FIXTURE_PILOT_MERGER_INTERRUPT_DIRECTORY"] = GateDirectory,
+            ["NIGHTWEAVER_FIXTURE_PILOT_MERGER_RETRY_GATE_BEAD"] = MergerRetryGateBeadId,
+            ["NIGHTWEAVER_FIXTURE_PILOT_MERGER_RETRY_GATE_DIRECTORY"] = GateDirectory,
+            ["NIGHTWEAVER_FIXTURE_PILOT_MERGER_DIAGNOSTICS_PATH"] = string.IsNullOrWhiteSpace(MergerDiagnosticsBeadId)
+                ? null : MergerDiagnosticsPath(MergerDiagnosticsBeadId),
             ["NIGHTWEAVER_FIXTURE_PILOT_REJECT_BEAD"] = ProductTaskId,
             ["NIGHTWEAVER_FIXTURE_DEFAULT_BRANCH"] = "main"
         };
@@ -247,6 +256,9 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
     public void ReleaseMergerGate(string beadId) =>
         File.WriteAllText(Path.Combine(GateDirectory, beadId + ".merger.release"), "release\n", new UTF8Encoding(false));
 
+    public void ReleaseMergerRetryGate(string beadId) =>
+        File.WriteAllText(Path.Combine(GateDirectory, beadId + ".merger.retry.release"), "release\n", new UTF8Encoding(false));
+
     public async Task WaitForMergerGateAsync(string beadId, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
         var gate = Path.Combine(GateDirectory, beadId + ".merger.started");
@@ -260,6 +272,21 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
             await Task.Delay(100, cancellationToken).ConfigureAwait(false);
         }
         throw new TimeoutException($"Pilot Merger '{beadId}' did not reach its gate within {timeout}. Runtime output: {ReadRuntimeLog()}");
+    }
+
+    public async Task WaitForMergerRetryGateAsync(string beadId, TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        var gate = Path.Combine(GateDirectory, beadId + ".merger.retry.started");
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (File.Exists(gate)) return;
+            if (RuntimeProcess is { HasExited: true } process)
+                throw new InvalidOperationException($"Pilot runtime exited ({process.ExitCode}) before the Merger retry gate opened: {ReadRuntimeLog()}");
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        }
+        throw new TimeoutException($"Pilot Merger retry '{beadId}' did not reach its gate within {timeout}. Runtime output: {ReadRuntimeLog()}");
     }
 
     public Task<string> CreateTaskAsync(string title, CancellationToken cancellationToken = default) =>
@@ -300,6 +327,25 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
     public async Task<string> ReadRemoteMainFileAsync(string relativePath, CancellationToken cancellationToken = default) =>
         await RunToolAsync("git", ["--git-dir", Origin, "show", $"refs/heads/main:{relativePath}"], Root,
             CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+
+    public Task<string> ReadOriginRefAsync(string reference, CancellationToken cancellationToken = default) =>
+        RunToolAsync("git", ["--git-dir", Origin, "rev-parse", reference], Root,
+            CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken);
+
+    public Task<string> ReadOriginFileCommitHistoryAsync(string relativePath, CancellationToken cancellationToken = default) =>
+        RunToolAsync("git", ["--git-dir", Origin, "log", "--format=%H", "--all", "--", relativePath], Root,
+            CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken);
+
+    public Task<string> ReadBeadCommentsAsync(string beadId, CancellationToken cancellationToken = default) =>
+        RunToolAsync("bd", ["comments", beadId, "--json"], Repository, CreateEnvironment(),
+            TimeSpan.FromSeconds(30), cancellationToken);
+
+    public Task<string> ReadPullRequestAsync(string beadId, CancellationToken cancellationToken = default) =>
+        RunToolAsync(Path.Combine(FakeCliRoot, "gh.exe"),
+            ["pr", "view", "https://github.com/nightweaver-fixture/target/pull/123", "--json", "state,headRefOid"],
+            WorktreePath(beadId), CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken);
+
+    public string MergerDiagnosticsPath(string beadId) => Path.Combine(GateDirectory, beadId + ".merger-diagnostics.jsonl");
 
     public string WorktreePath(string beadId) => Path.Combine(NightweaverRoot, "worktrees", "manualqa", beadId);
 
