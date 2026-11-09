@@ -17,6 +17,9 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0].StartsWith("--evidence-", StringComparison.Ordinal))
+            return RunEvidenceProbe(args);
+
         if (args.Length == 2 && args[0] == "--nightweaver-send-control-break")
             return SendConsoleBreak(args[1]);
 
@@ -259,6 +262,70 @@ internal static class Program
         Console.OpenStandardOutput().Write(Encoding.UTF8.GetBytes(response));
         Console.OpenStandardOutput().Flush();
         return 0;
+    }
+
+    private static int RunEvidenceProbe(string[] args)
+    {
+        switch (args[0])
+        {
+            case "--evidence-legacy-hold" when args.Length == 4:
+            {
+                using var stream = new FileStream(args[1], FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read);
+                File.WriteAllText(args[2], Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                WaitForFile(args[3], TimeSpan.FromSeconds(20));
+                return 0;
+            }
+            case "--evidence-legacy-append" when args.Length == 3:
+                try
+                {
+                    File.AppendAllText(args[1], args[2] + Environment.NewLine, new UTF8Encoding(false));
+                    return 0;
+                }
+                catch (IOException exception)
+                {
+                    Console.Error.WriteLine($"evidence-legacy-sharing-ioexception hresult={exception.HResult}");
+                    return 23;
+                }
+            case "--evidence-hold-mutex" when args.Length == 4:
+                ManualPilotEvidenceLog.HoldMutexForProbe(args[1], args[2], args[3]);
+                return 0;
+            case "--evidence-append" when args.Length == 5:
+                File.WriteAllText(args[3], "started");
+                Console.WriteLine("evidence-append-entering-helper");
+                Console.Out.Flush();
+                ManualPilotEvidenceLog.AppendLine(args[1], args[2]);
+                File.WriteAllText(args[4], "completed");
+                return 0;
+            case "--evidence-read" when args.Length == 5:
+                File.WriteAllText(args[3], "started");
+                Console.WriteLine("evidence-read-entering-helper");
+                Console.Out.Flush();
+                File.WriteAllText(args[4], JsonSerializer.Serialize(ManualPilotEvidenceLog.ReadAllLines(args[1])));
+                return 0;
+            case "--evidence-batch" when args.Length == 6:
+            {
+                var worker = args[2];
+                var count = int.Parse(args[3], System.Globalization.CultureInfo.InvariantCulture);
+                File.WriteAllText(args[4], Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                WaitForFile(args[5], TimeSpan.FromSeconds(20));
+                var payload = new string('界', 2048);
+                for (var sequence = 0; sequence < count; sequence++)
+                {
+                    var record = JsonSerializer.Serialize(new
+                    {
+                        worker,
+                        sequence,
+                        pid = Environment.ProcessId,
+                        payload
+                    });
+                    ManualPilotEvidenceLog.AppendLine(args[1], record);
+                }
+
+                return 0;
+            }
+            default:
+                return 68;
+        }
     }
 
     private static int RunBdShim(string[] args)
@@ -624,7 +691,7 @@ internal static class Program
                     head_before = headBefore.Trim()
                 });
                 Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
-                File.AppendAllText(evidencePath, record + Environment.NewLine, new UTF8Encoding(false));
+                ManualPilotEvidenceLog.AppendLine(evidencePath, record);
                 Console.WriteLine($"manual-delivery-live bead={beadId} role={role} stage={stage} head={headBefore.Trim()}");
                 Console.Out.Flush();
 

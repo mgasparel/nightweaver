@@ -71,7 +71,7 @@ public sealed class ManualDeliveryPilotIntegrationTests
             Assert.False(Directory.Exists(fixture.WorktreePath(fixture.ParentlessTaskId)),
                 "Verified closed work should be cleaned up after the merger reaches origin/main.");
 
-            var evidence = File.ReadAllLines(fixture.EvidencePath)
+            var evidence = Nightweaver.Tests.AgentInvocationFixture.ManualPilotEvidenceLog.ReadAllLines(fixture.EvidencePath)
                 .Select(line => JsonDocument.Parse(line))
                 .Select(document => document.RootElement.Clone())
                 .ToArray();
@@ -447,7 +447,7 @@ public sealed class ManualDeliveryPilotIntegrationTests
     }
 
     private static (string BeadId, string Role)[] ReadEvidence(string evidencePath) =>
-        File.ReadAllLines(evidencePath).Select(line =>
+        Nightweaver.Tests.AgentInvocationFixture.ManualPilotEvidenceLog.ReadAllLines(evidencePath).Select(line =>
         {
             using var document = JsonDocument.Parse(line);
             return (document.RootElement.GetProperty("bead_id").GetString()!,
