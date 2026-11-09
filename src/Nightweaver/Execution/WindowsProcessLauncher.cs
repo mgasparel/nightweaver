@@ -8,6 +8,8 @@ namespace Nightweaver.Execution;
 /// <summary>Creates a process with its job assigned as part of CreateProcessW, before user code can run.</summary>
 internal static class WindowsProcessLauncher
 {
+    internal static readonly object ProcessCreationGate = new();
+
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const int JobObjectExtendedLimitInformationClass = 9;
     private const int JobObjectBasicAccountingInformationClass = 1;
@@ -33,6 +35,10 @@ internal static class WindowsProcessLauncher
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Agent CLI execution requires Windows.");
 
+        using var commandLine = new SafeHGlobalBuffer(SerializeCommandLine(executable, arguments));
+        var environmentBlock = BuildEnvironmentBlock(environment);
+        using var environmentPointer = new SafeHGlobalBuffer(environmentBlock);
+
         SafeKernelHandle? job = null;
         SafeFileHandle? childStdinRead = null;
         SafeFileHandle? parentStdinWrite = null;
@@ -45,6 +51,23 @@ internal static class WindowsProcessLauncher
         FileStream? stdinStream = null;
         FileStream? stdoutStream = null;
         FileStream? stderrStream = null;
+
+        void DisposeHandles()
+        {
+            process?.Dispose(); process = null;
+            thread?.Dispose(); thread = null;
+            job?.Dispose(); job = null;
+            stdinStream?.Dispose(); stdinStream = null;
+            stdoutStream?.Dispose(); stdoutStream = null;
+            stderrStream?.Dispose(); stderrStream = null;
+            childStdinRead?.Dispose(); childStdinRead = null;
+            parentStdinWrite?.Dispose(); parentStdinWrite = null;
+            parentStdoutRead?.Dispose(); parentStdoutRead = null;
+            childStdoutWrite?.Dispose(); childStdoutWrite = null;
+            parentStderrRead?.Dispose(); parentStderrRead = null;
+            childStderrWrite?.Dispose(); childStderrWrite = null;
+        }
+
         try
         {
             job = CreateJobObjectW(IntPtr.Zero, null);
@@ -57,48 +80,58 @@ internal static class WindowsProcessLauncher
                     (uint)Marshal.SizeOf<JobObjectExtendedLimitInformation>()))
                 throw LastError("SetInformationJobObject(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)");
 
-            CreatePipePair(out childStdinRead, out parentStdinWrite);
-            CreatePipePair(out parentStdoutRead, out childStdoutWrite);
-            CreatePipePair(out parentStderrRead, out childStderrWrite);
-            ClearInherit(parentStdinWrite);
-            ClearInherit(parentStdoutRead);
-            ClearInherit(parentStderrRead);
-
-            using var attributes = new ProcessAttributeList(2);
-            attributes.AddHandleList([childStdinRead, childStdoutWrite, childStderrWrite]);
-            attributes.AddJobList(job);
-
-            var startup = new StartupInfoEx
+            ProcessInformation processInformation = default;
+            lock (ProcessCreationGate)
             {
-                StartupInfo = new StartupInfo
+                try
                 {
-                    Cb = (uint)Marshal.SizeOf<StartupInfoEx>(),
-                    Flags = StartfUseStdHandles,
-                    StandardInput = childStdinRead.DangerousGetHandle(),
-                    StandardOutput = childStdoutWrite.DangerousGetHandle(),
-                    StandardError = childStderrWrite.DangerousGetHandle()
-                },
-                AttributeList = attributes.Pointer
-            };
-            using var commandLine = new SafeHGlobalBuffer(SerializeCommandLine(executable, arguments));
-            var environmentBlock = BuildEnvironmentBlock(environment);
-            using var environmentPointer = new SafeHGlobalBuffer(environmentBlock);
-            if (!CreateProcessW(executable, commandLine.DangerousGetHandle(), IntPtr.Zero, IntPtr.Zero, inheritHandles: true,
-                    ExtendedStartupInfoPresent | CreateNoWindow | CreateUnicodeEnvironment,
-                    environmentPointer.DangerousGetHandle(), workingDirectory, ref startup, out var processInformation))
-                throw LastError($"CreateProcessW('{executable}')");
+                    CreatePipePair(out childStdinRead, out parentStdinWrite);
+                    CreatePipePair(out parentStdoutRead, out childStdoutWrite);
+                    CreatePipePair(out parentStderrRead, out childStderrWrite);
+                    ClearInherit(parentStdinWrite);
+                    ClearInherit(parentStdoutRead);
+                    ClearInherit(parentStderrRead);
 
-            // Transfer both returned kernel handles. The primary thread is closed immediately; the process handle
-            // remains available to observe and preserve the root Agent CLI exit code.
-            process = new SafeKernelHandle(processInformation.Process, ownsHandle: true);
-            thread = new SafeKernelHandle(processInformation.Thread, ownsHandle: true);
-            thread.Dispose();
-            thread = null;
+                    using var attributes = new ProcessAttributeList(2);
+                    attributes.AddHandleList([childStdinRead, childStdoutWrite, childStderrWrite]);
+                    attributes.AddJobList(job);
 
-            // The child ends were inherited only through HANDLE_LIST; close the parent's copies so EOF is reliable.
-            childStdinRead.Dispose(); childStdinRead = null;
-            childStdoutWrite.Dispose(); childStdoutWrite = null;
-            childStderrWrite.Dispose(); childStderrWrite = null;
+                    var startup = new StartupInfoEx
+                    {
+                        StartupInfo = new StartupInfo
+                        {
+                            Cb = (uint)Marshal.SizeOf<StartupInfoEx>(),
+                            Flags = StartfUseStdHandles,
+                            StandardInput = childStdinRead.DangerousGetHandle(),
+                            StandardOutput = childStdoutWrite.DangerousGetHandle(),
+                            StandardError = childStderrWrite.DangerousGetHandle()
+                        },
+                        AttributeList = attributes.Pointer
+                    };
+                    if (!CreateProcessW(executable, commandLine.DangerousGetHandle(), IntPtr.Zero, IntPtr.Zero, inheritHandles: true,
+                            ExtendedStartupInfoPresent | CreateNoWindow | CreateUnicodeEnvironment,
+                            environmentPointer.DangerousGetHandle(), workingDirectory, ref startup, out processInformation))
+                        throw LastError($"CreateProcessW('{executable}')");
+
+                    // Transfer both returned kernel handles. The primary thread is closed immediately; the process handle
+                    // remains available to observe and preserve the root Agent CLI exit code.
+                    process = new SafeKernelHandle(processInformation.Process, ownsHandle: true);
+                    thread = new SafeKernelHandle(processInformation.Thread, ownsHandle: true);
+                    thread.Dispose();
+                    thread = null;
+
+                    // The child ends were inherited only through HANDLE_LIST; close the parent's copies so EOF is reliable.
+                    childStdinRead.Dispose(); childStdinRead = null;
+                    childStdoutWrite.Dispose(); childStdoutWrite = null;
+                    childStderrWrite.Dispose(); childStderrWrite = null;
+                }
+                catch
+                {
+                    // Close every potentially inheritable pipe end before another managed process can start.
+                    DisposeHandles();
+                    throw;
+                }
+            }
 
             stdinStream = new FileStream(parentStdinWrite, FileAccess.Write, 64 * 1024, isAsync: false);
             parentStdinWrite = null;
@@ -116,15 +149,7 @@ internal static class WindowsProcessLauncher
         }
         catch
         {
-            // If CreateProcess succeeded but a later stream wrapper failed, closing the sole job handle still
-            // applies KILL_ON_JOB_CLOSE to the already-contained process tree.
-            process?.Dispose();
-            thread?.Dispose();
-            job?.Dispose();
-            stdinStream?.Dispose(); stdoutStream?.Dispose(); stderrStream?.Dispose();
-            childStdinRead?.Dispose(); parentStdinWrite?.Dispose();
-            parentStdoutRead?.Dispose(); childStdoutWrite?.Dispose();
-            parentStderrRead?.Dispose(); childStderrWrite?.Dispose();
+            DisposeHandles();
             throw;
         }
     }

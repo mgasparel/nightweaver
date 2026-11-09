@@ -9,6 +9,9 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--stream-cleanup-coordinator")
+            return await AgentStreamCleanupCoordinator.RunAsync(args.Skip(1).ToArray()).ConfigureAwait(false);
+
         if (args.Length != 6) return 64;
         var paths = new HostPaths(args[0]);
         var project = ProjectSlug.Parse(args[1]);

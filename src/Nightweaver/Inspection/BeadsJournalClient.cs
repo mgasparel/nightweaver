@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Nightweaver.Application;
+using Nightweaver.Execution;
 
 namespace Nightweaver.Inspection;
 
@@ -105,7 +106,13 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
         var process = new Process { StartInfo = startInfo };
         try
         {
-            if (!process.Start()) throw new InvalidOperationException("Could not start bd events tail.");
+            bool started;
+            lock (WindowsProcessLauncher.ProcessCreationGate)
+            {
+                started = process.Start();
+            }
+
+            if (!started) throw new InvalidOperationException("Could not start bd events tail.");
             process.StandardInput.Close();
             return process;
         }

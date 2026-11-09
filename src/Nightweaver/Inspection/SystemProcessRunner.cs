@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using Nightweaver.Execution;
 
 namespace Nightweaver.Inspection;
 
@@ -42,7 +43,13 @@ internal sealed class SystemProcessRunner : IProcessRunner
         using var process = new Process { StartInfo = startInfo };
         try
         {
-            if (!process.Start())
+            bool started;
+            lock (WindowsProcessLauncher.ProcessCreationGate)
+            {
+                started = process.Start();
+            }
+
+            if (!started)
             {
                 throw new ToolExecutionException($"required executable '{request.FileName}' was not found on PATH");
             }

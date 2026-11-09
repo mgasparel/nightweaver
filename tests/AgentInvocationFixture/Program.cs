@@ -37,7 +37,12 @@ internal static class Program
             return RunNativeHelperInspectChild(args);
         if (args.Length > 0 && args[0] == "--native-helper-no-log-child")
             return RunNativeHelperNoLogChild(args);
-
+        if (args.Length > 0 && args[0] == "stream-cleanup-producer")
+            return AgentStreamCleanupFixture.RunProducer(args);
+        if (args.Length > 0 && args[0] == "stream-cleanup-race-producer")
+            return AgentStreamCleanupFixture.RunRaceProducer(args);
+        if (args.Length > 0 && args[0] == "stream-cleanup-holder")
+            return AgentStreamCleanupFixture.RunHolder(args);
         if (args.Length > 0 && args[0].StartsWith("--evidence-", StringComparison.Ordinal))
             return RunEvidenceProbe(args);
 
