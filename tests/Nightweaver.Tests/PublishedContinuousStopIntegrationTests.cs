@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
+using Nightweaver.Tests.AgentInvocationFixture;
 
 namespace Nightweaver.Tests;
 
@@ -58,11 +59,11 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
             using var classifier = ReadFixtureProcess(classifierPid);
             Assert.False(runtime.HasExited, "The bounded native outcome classifier must remain part of the current drain.");
             Assert.False(classifier.HasExited, "The classifier gate must hold the native fallback process during drain.");
-            Assert.Single(File.ReadAllLines(stageLaunchLog));
+            Assert.Single(ReadStageLaunchLines(stageLaunchLog));
 
             File.WriteAllText(classifierRelease, "classification complete", new UTF8Encoding(false));
             Assert.Equal(0, await runtime.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken));
-            Assert.Single(File.ReadAllLines(stageLaunchLog));
+            Assert.Single(ReadStageLaunchLines(stageLaunchLog));
             Assert.Equal("stage:review", BeadWorkflowState.Parse(target.ReadBead(beadId)).Stage);
             Assert.Equal("open", target.ReadBead(beadId).Status);
             Assert.Null(target.ReadBead(beadId).Assignee);
@@ -130,7 +131,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         try
         {
             await WaitForStageLaunchCountAsync(stageLaunchLog, 1, runtime, TimeSpan.FromSeconds(90));
-            var deliveryRecord = File.ReadAllLines(stageLaunchLog)
+            var deliveryRecord = ReadStageLaunchLines(stageLaunchLog)
                 .Select(ReadFixtureProcessFromLaunchRecord)
                 .Single(record => record.BeadId == deliveryBeadId);
             using var deliveryAgent = deliveryRecord.Process;
@@ -151,19 +152,19 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
             await WaitForFileAsync(classifierStarted, runtime, TimeSpan.FromSeconds(90));
             using var classifier = ReadFixtureProcess(classifierPid);
             Assert.False(classifier.HasExited, "Outcome classification for the active Delivery turn must remain part of graceful drain.");
-            Assert.Single(File.ReadAllLines(stageLaunchLog));
+            Assert.Single(ReadStageLaunchLines(stageLaunchLog));
 
             File.WriteAllText(classifierRelease, "complete current Delivery classification", new UTF8Encoding(false));
             var exitCode = await runtime.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
             Assert.True(exitCode == 0, $"Expected graceful drain to exit successfully, got {exitCode}. Runtime output: {ReadRuntimeLog(runtime)}");
-            Assert.Single(File.ReadAllLines(stageLaunchLog));
+            Assert.Single(ReadStageLaunchLines(stageLaunchLog));
             Assert.Equal("stage:review", BeadWorkflowState.Parse(target.ReadBead(deliveryBeadId)).Stage);
             Assert.Equal("open", target.ReadBead(deliveryBeadId).Status);
             Assert.Null(target.ReadBead(deliveryBeadId).Assignee);
             Assert.Equal("open", target.ReadBead(mergerBeadId).Status);
             Assert.Null(target.ReadBead(mergerBeadId).Assignee);
             Assert.Equal("stage:merge", BeadWorkflowState.Parse(target.ReadBead(mergerBeadId)).Stage);
-            Assert.DoesNotContain(File.ReadAllLines(stageLaunchLog), line => line.StartsWith(mergerBeadId + "|", StringComparison.Ordinal));
+            Assert.DoesNotContain(ReadStageLaunchLines(stageLaunchLog), line => line.StartsWith(mergerBeadId + "|", StringComparison.Ordinal));
             AssertFixtureProcessExited(classifierPid);
         }
         finally
@@ -230,7 +231,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         try
         {
             await WaitForStageLaunchCountAsync(stageLaunchLog, 2, runtime, TimeSpan.FromSeconds(90));
-            var activeAgents = File.ReadAllLines(stageLaunchLog).Select(ReadFixtureProcessFromLaunchRecord).ToArray();
+            var activeAgents = ReadStageLaunchLines(stageLaunchLog).Select(ReadFixtureProcessFromLaunchRecord).ToArray();
             Assert.Equal(new[] { deliveryBeadId, mergerBeadId }.Order(StringComparer.Ordinal),
                 activeAgents.Select(agent => agent.BeadId).Order(StringComparer.Ordinal));
             using var deliveryAgent = Assert.Single(activeAgents, agent => agent.BeadId == deliveryBeadId).Process;
@@ -255,11 +256,11 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
             await WaitForFileAsync(classifierStarted, runtime, TimeSpan.FromSeconds(90));
             using var classifier = ReadFixtureProcess(classifierPid);
             Assert.False(classifier.HasExited, "The current Delivery outcome classifier must be allowed to finish during drain.");
-            Assert.Equal(2, File.ReadAllLines(stageLaunchLog).Length);
+            Assert.Equal(2, ReadStageLaunchLines(stageLaunchLog).Length);
 
             File.WriteAllText(classifierRelease, "finish current Delivery classification", new UTF8Encoding(false));
             Assert.Equal(0, await runtime.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken));
-            Assert.Equal(2, File.ReadAllLines(stageLaunchLog).Length);
+            Assert.Equal(2, ReadStageLaunchLines(stageLaunchLog).Length);
             var delivery = target.ReadBead(deliveryBeadId);
             Assert.Equal("open", delivery.Status);
             Assert.Null(delivery.Assignee);
@@ -324,7 +325,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         try
         {
             await WaitForStageLaunchCountAsync(stageLaunchLog, beadIds.Length, runtime, TimeSpan.FromSeconds(90));
-            var agentProcesses = File.ReadAllLines(stageLaunchLog)
+            var agentProcesses = ReadStageLaunchLines(stageLaunchLog)
                 .Select(ReadFixtureProcessFromLaunchRecord).ToArray();
             Assert.Equal(beadIds.Order(StringComparer.Ordinal), agentProcesses.Select(item => item.BeadId).Order(StringComparer.Ordinal));
             using var firstAgent = agentProcesses[0].Process;
@@ -349,7 +350,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
             Assert.True(secondAgent.HasExited, "The second real console signal must close every active Agent Job.");
             Assert.True(firstChild.HasExited, "Closing the first Agent Job must terminate its native descendant.");
             Assert.True(secondChild.HasExited, "Closing the second Agent Job must terminate its native descendant.");
-            Assert.Equal(beadIds.Length, File.ReadAllLines(stageLaunchLog).Length);
+            Assert.Equal(beadIds.Length, ReadStageLaunchLines(stageLaunchLog).Length);
             foreach (var beadId in beadIds)
             {
                 Assert.Equal("in_progress", target.ReadBead(beadId).Status);
@@ -422,7 +423,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
             Assert.Equal(1, await runtime.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
             Assert.True(agent.HasExited);
             Assert.True(classifier.HasExited, "The second signal must close the classifier's Agent Job without waiting for it.");
-            Assert.Single(File.ReadAllLines(stageLaunchLog));
+            Assert.Single(ReadStageLaunchLines(stageLaunchLog));
             Assert.Equal("in_progress", target.ReadBead(beadId).Status);
         }
         finally
@@ -487,7 +488,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         try
         {
             await WaitForStageLaunchCountAsync(stageLaunchLog, 1, runtime, TimeSpan.FromSeconds(90));
-            var hungAgentRecord = File.ReadAllLines(stageLaunchLog)
+            var hungAgentRecord = ReadStageLaunchLines(stageLaunchLog)
                 .Single(record => record.StartsWith(beadIds[0] + "|", StringComparison.Ordinal));
             using var hungAgent = ReadFixtureProcessFromLaunchRecord(hungAgentRecord).Process;
             await WaitForFileAsync(Path.Combine(agentReadyDirectory, beadIds[0] + ".ready"), runtime, TimeSpan.FromSeconds(30));
@@ -542,8 +543,26 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
     [InlineData(false)]
     public async Task PublishedRuntimeForceStopsBlockedNativeBdFinalizationAndRestartRereadsActualState(bool commitAfterForce)
     {
-        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows console control events and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
+        try
+        {
+            await RunPublishedRuntimeForceStopsBlockedNativeBdFinalizationAndRestartRereadsActualStateAsync(target, commitAfterForce);
+        }
+        catch (Exception exception)
+        {
+            target.PreserveForFailure();
+            throw new InvalidOperationException(
+                $"Published force-stop fixture retained for diagnosis at '{target.RootPath}'. See its runtime logs, " +
+                "stage launch records, native gate files, worktrees, invocation logs and factory snapshot.",
+                exception);
+        }
+    }
+
+    private async Task RunPublishedRuntimeForceStopsBlockedNativeBdFinalizationAndRestartRereadsActualStateAsync(
+        AgentStageTargetFixture target,
+        bool commitAfterForce)
+    {
+        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows console control events and native CLI fixtures.");
         target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge", "--add-label", "needs-human"]);
         var beadIds = new[]
         {
@@ -554,6 +573,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         var gateDirectory = Directory.CreateDirectory(Path.Combine(target.RootPath, "published-bd-force-gates")).FullName;
         var releaseDirectory = Directory.CreateDirectory(Path.Combine(gateDirectory, "agent-releases")).FullName;
         var agentPidDirectory = Directory.CreateDirectory(Path.Combine(gateDirectory, "agent-pids")).FullName;
+        var agentStartedDirectory = Directory.CreateDirectory(Path.Combine(gateDirectory, "agent-started")).FullName;
         var agentReadyDirectory = Directory.CreateDirectory(Path.Combine(gateDirectory, "agent-ready")).FullName;
         var markerDirectory = Directory.CreateDirectory(Path.Combine(gateDirectory, "worktrees")).FullName;
         var stageLaunchLog = Path.Combine(gateDirectory, "stage-launches.log");
@@ -563,7 +583,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         var environment = CreateBdShimEnvironment(target, new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
             ["NIGHTWEAVER_FIXTURE_ACTION"] = "pool-implement-gated",
-            ["NIGHTWEAVER_FIXTURE_STARTED_FILE"] = Path.Combine(gateDirectory, "agent.started"),
+            ["NIGHTWEAVER_FIXTURE_STARTED_DIRECTORY"] = agentStartedDirectory,
             ["NIGHTWEAVER_FIXTURE_RELEASE_FILE"] = Path.Combine(releaseDirectory, "default.release"),
             ["NIGHTWEAVER_FIXTURE_RELEASE_DIRECTORY"] = releaseDirectory,
             ["NIGHTWEAVER_FIXTURE_PID_DIRECTORY"] = agentPidDirectory,
@@ -583,14 +603,20 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         Directory.CreateDirectory(restartMarkerDirectory);
 
         using var runtime = WindowsConsoleProcess.Start(executable, ["--project", "demo"], target.Path, environment, runtimeLog);
+        RecordRuntimeIdentity(Path.Combine(gateDirectory, "runtime.identity"), runtime);
         Process? bdProcess = null;
         try
         {
             await WaitForStageLaunchCountAsync(stageLaunchLog, beadIds.Length, runtime, TimeSpan.FromSeconds(90));
-            var initialAgents = File.ReadAllLines(stageLaunchLog).Select(ReadFixtureProcessFromLaunchRecord).ToArray();
+            var initialAgents = ReadStageLaunchLines(stageLaunchLog).Select(ReadFixtureProcessFromLaunchRecord).ToArray();
             using var remainingAgent = initialAgents.Single(item => item.BeadId == beadIds[0]).Process;
             foreach (var beadId in beadIds)
+            {
+                var startedPath = Path.Combine(agentStartedDirectory, beadId + ".started");
+                await WaitForFileAsync(startedPath, runtime, TimeSpan.FromSeconds(30));
+                Assert.Equal(beadId, File.ReadAllText(startedPath));
                 await WaitForFileAsync(Path.Combine(agentReadyDirectory, beadId + ".ready"), runtime, TimeSpan.FromSeconds(30));
+            }
 
             target.SendConsoleBreak(runtime.Id);
             await Task.Delay(250, TestContext.Current.CancellationToken);
@@ -651,7 +677,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         var restartOverrides = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
             ["NIGHTWEAVER_FIXTURE_ACTION"] = "pool-implement-restart-observe",
-            ["NIGHTWEAVER_FIXTURE_STARTED_FILE"] = Path.Combine(gateDirectory, "restart-agent.started"),
+            ["NIGHTWEAVER_FIXTURE_STARTED_DIRECTORY"] = Directory.CreateDirectory(Path.Combine(gateDirectory, "restart-agent-started")).FullName,
             ["NIGHTWEAVER_FIXTURE_RELEASE_DIRECTORY"] = releaseDirectory,
             ["NIGHTWEAVER_FIXTURE_PID_DIRECTORY"] = Path.Combine(gateDirectory, "restart-agent-pids"),
             ["NIGHTWEAVER_FIXTURE_WORKTREE_MARKER_DIRECTORY"] = restartMarkerDirectory,
@@ -660,8 +686,11 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         };
         Directory.CreateDirectory(restartOverrides["NIGHTWEAVER_FIXTURE_PID_DIRECTORY"]!);
         var restartEnvironment = CreateBdShimEnvironment(target, restartOverrides);
+        var restartRuntimeLogPath = Path.Combine(gateDirectory, "restart-runtime.log");
         using var restarted = WindowsConsoleProcess.Start(executable, ["--project", "demo"], target.Path, restartEnvironment,
-            Path.Combine(gateDirectory, "restart-runtime.log"));
+            restartRuntimeLogPath);
+        var restartedStartTicks = RecordRuntimeIdentity(Path.Combine(gateDirectory, "restart-runtime.identity"), restarted);
+        var stopLogOffset = 0L;
         try
         {
             await WaitForStageLaunchCountAsync(stageLaunchLog, beadIds.Length * 2, restarted, TimeSpan.FromSeconds(90));
@@ -674,7 +703,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
                 }
                 catch (Exception exception) when (exception is TimeoutException or InvalidOperationException)
                 {
-                    var launches = File.Exists(stageLaunchLog) ? File.ReadAllText(stageLaunchLog) : "(no stage launch records)";
+                    var launches = File.Exists(stageLaunchLog) ? string.Join(Environment.NewLine, ReadStageLaunchLines(stageLaunchLog)) : "(no stage launch records)";
                     throw new InvalidOperationException(
                         $"Restart observer for {beadId} did not leave its marker. Stage launches: {launches}{Environment.NewLine}Runtime output: {ReadRuntimeLog(restarted)}",
                         exception);
@@ -682,10 +711,17 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
                 Assert.EndsWith("|retained=True", File.ReadAllText(observationPath), StringComparison.OrdinalIgnoreCase);
             }
 
+            stopLogOffset = File.Exists(restartRuntimeLogPath) ? new FileInfo(restartRuntimeLogPath).Length : 0;
+            var stopDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
             target.SendConsoleBreak(restarted.Id);
+            await WaitForGracefulStopAcceptedAsync(restarted, restartRuntimeLogPath, stopLogOffset, restartedStartTicks,
+                stopDeadline, TestContext.Current.CancellationToken);
             foreach (var beadId in beadIds)
                 File.WriteAllText(Path.Combine(releaseDirectory, beadId + ".release"), "finish restart observation", new UTF8Encoding(false));
-            _ = await restarted.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            var remainingStopBudget = stopDeadline - DateTime.UtcNow;
+            if (remainingStopBudget <= TimeSpan.Zero)
+                throw new TimeoutException("Restarted runtime accepted graceful stop after the 30-second shutdown budget expired.");
+            _ = await restarted.WaitAsync(remainingStopBudget, TestContext.Current.CancellationToken);
         }
         finally
         {
@@ -699,6 +735,65 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
                 catch (TimeoutException) { }
             }
         }
+    }
+
+    private static async Task WaitForGracefulStopAcceptedAsync(
+        WindowsConsoleProcess runtime,
+        string runtimeLogPath,
+        long logOffset,
+        long expectedStartTicks,
+        DateTime deadline,
+        CancellationToken cancellationToken)
+    {
+        const string marker = "nightweaver: graceful stop accepted; draining current turns.";
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (runtime.HasExited)
+                throw new InvalidOperationException(
+                    $"Restarted runtime {runtime.Id} exited before acknowledging graceful stop (exit {runtime.ExitCode}). " +
+                    $"Output: {ReadRuntimeLog(runtime)}");
+
+            var actualStartTicks = ReadProcessStartTicks(runtime.Id);
+            if (actualStartTicks != expectedStartTicks)
+                throw new InvalidOperationException(
+                    $"Restarted runtime PID {runtime.Id} changed identity before graceful stop acceptance " +
+                    $"(expected startUtcTicks={expectedStartTicks}, actual={actualStartTicks}).");
+
+            if (ReadRuntimeLogFromOffset(runtimeLogPath, logOffset).Contains(marker, StringComparison.Ordinal))
+                return;
+
+            var remaining = deadline - DateTime.UtcNow;
+            if (remaining > TimeSpan.Zero)
+                await Task.Delay(remaining < TimeSpan.FromMilliseconds(50) ? remaining : TimeSpan.FromMilliseconds(50), cancellationToken);
+        }
+
+        throw new TimeoutException(
+            $"Restarted runtime {runtime.Id} did not acknowledge graceful stop within the shared 30-second shutdown budget. " +
+            $"Output: {ReadRuntimeLog(runtime)}");
+    }
+
+    private static long ReadProcessStartTicks(int processId)
+    {
+        using var process = Process.GetProcessById(processId);
+        return process.StartTime.ToUniversalTime().Ticks;
+    }
+
+    private static long RecordRuntimeIdentity(string path, WindowsConsoleProcess runtime)
+    {
+        var startTicks = ReadProcessStartTicks(runtime.Id);
+        File.WriteAllText(path,
+            $"pid={runtime.Id}|startUtcTicks={startTicks}|runtimeLog={runtime.OutputLogPath}", new UTF8Encoding(false));
+        return startTicks;
+    }
+
+    private static string ReadRuntimeLogFromOffset(string path, long offset)
+    {
+        if (!File.Exists(path)) return string.Empty;
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        stream.Position = stream.Length < offset ? 0 : offset;
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     private string CreatePublishedHost(AgentStageTargetFixture target, int deliveryCapacity = 1)
@@ -823,24 +918,13 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         throw new TimeoutException($"Published Nightweaver did not launch {expectedCount} Agents within {timeout}.");
     }
 
-    private static async Task<string[]> ReadStageLaunchLinesAsync(string path, CancellationToken cancellationToken)
+    private static Task<string[]> ReadStageLaunchLinesAsync(string path, CancellationToken cancellationToken)
     {
-        for (var attempt = 0; ; attempt++)
-        {
-            try
-            {
-                return File.ReadAllLines(path);
-            }
-            catch (IOException exception) when (OperatingSystem.IsWindows()
-                && (exception.HResult & 0xFFFF) == 32
-                && attempt < 5)
-            {
-                // Native Agents append launch records while the runtime starts the pool.
-                // Retry only bounded sharing violations; persistent I/O errors still fail.
-                await Task.Delay(TimeSpan.FromMilliseconds(50 << attempt), cancellationToken);
-            }
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(ReadStageLaunchLines(path));
     }
+
+    private static string[] ReadStageLaunchLines(string path) => ManualPilotEvidenceLog.ReadAllLines(path);
 
     private static void AssertFixtureProcessExited(string path)
     {

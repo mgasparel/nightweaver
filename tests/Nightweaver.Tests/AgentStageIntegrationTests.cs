@@ -1793,6 +1793,8 @@ public abstract class AgentStageIntegrationTestSupport
             return stdoutTask.Result;
         }
 
+        internal void PreserveForFailure() => temp.PreserveForFailure();
+
         public void Dispose() => temp.Dispose();
     }
 }

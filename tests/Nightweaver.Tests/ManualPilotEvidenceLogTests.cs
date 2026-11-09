@@ -7,6 +7,53 @@ namespace Nightweaver.Tests;
 public sealed class ManualPilotEvidenceLogTests
 {
     [Fact]
+    public async Task ConcurrentStartedMarkerWritersUsePerBeadPathsWhileSharedMarkerIsHeld()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var temp = new TempDirectory();
+        var marker = temp.WriteFile("agent.started", "seed");
+        var startedDirectory = temp.CreateDirectory("agent-started");
+        var release = Path.Combine(temp.Path, "writers.release");
+        var heldWriter = new FileStream(marker, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite);
+        var writers = Enumerable.Range(0, 2).Select(index =>
+        {
+            var ready = Path.Combine(temp.Path, $"writer-{index}.ready");
+            return StartFixtureWithEnvironment(
+                new Dictionary<string, string?>
+                {
+                    ["NIGHTWEAVER_BEAD_ID"] = $"stage-{index}",
+                    ["NIGHTWEAVER_FIXTURE_STARTED_DIRECTORY"] = startedDirectory
+                },
+                "--evidence-started-marker-write", ready, release);
+        }).ToArray();
+
+        try
+        {
+            foreach (var index in Enumerable.Range(0, writers.Length))
+                await WaitForFileAsync(Path.Combine(temp.Path, $"writer-{index}.ready"), TimeSpan.FromSeconds(10),
+                    TestContext.Current.CancellationToken);
+            File.WriteAllText(release, "release writers");
+
+            var results = await Task.WhenAll(writers.Select(writer => writer.FinishAsync(TestContext.Current.CancellationToken)));
+            Assert.All(results, result => Assert.Equal(0, result.ExitCode));
+            foreach (var index in Enumerable.Range(0, writers.Length))
+            {
+                var startedPath = Path.Combine(startedDirectory, $"stage-{index}.started");
+                Assert.Equal($"stage-{index}", File.ReadAllText(startedPath));
+            }
+        }
+        finally
+        {
+            heldWriter.Dispose();
+            File.WriteAllText(release, "release writers");
+            foreach (var writer in writers) await FinishIfRunningAsync(writer);
+        }
+
+        Assert.Equal("seed", File.ReadAllText(marker));
+    }
+
+    [Fact]
     public async Task LegacyAppendCollisionIsReproducedAndCoordinatedAppendAndReadWaitForRelease()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -165,7 +212,10 @@ public sealed class ManualPilotEvidenceLogTests
         Assert.Throws<DirectoryNotFoundException>(() => ManualPilotEvidenceLog.AppendLine(missing, "{}"));
     }
 
-    private static RunningChild StartFixture(params string[] arguments)
+    private static RunningChild StartFixture(params string[] arguments) => StartFixtureWithEnvironment(null, arguments);
+
+    private static RunningChild StartFixtureWithEnvironment(IReadOnlyDictionary<string, string?>? environment,
+        params string[] arguments)
     {
         var startInfo = new ProcessStartInfo("dotnet")
         {
@@ -174,6 +224,9 @@ public sealed class ManualPilotEvidenceLogTests
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
+        if (environment is not null)
+            foreach (var (key, value) in environment)
+                startInfo.Environment[key] = value;
         startInfo.ArgumentList.Add(typeof(FixtureMarker).Assembly.Location);
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
         return new RunningChild(Process.Start(startInfo)

@@ -8,6 +8,8 @@ namespace Nightweaver.Tests;
 
 internal sealed class TempDirectory : IDisposable
 {
+    private bool preserveForFailure;
+
     internal TempDirectory()
     {
         Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"nightweaver-{Guid.NewGuid():N}");
@@ -31,9 +33,11 @@ internal sealed class TempDirectory : IDisposable
         return path;
     }
 
+    internal void PreserveForFailure() => preserveForFailure = true;
+
     public void Dispose()
     {
-        if (!Directory.Exists(Path))
+        if (preserveForFailure || !Directory.Exists(Path))
         {
             return;
         }

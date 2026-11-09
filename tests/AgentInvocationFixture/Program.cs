@@ -775,6 +775,21 @@ internal static class Program
     {
         switch (args[0])
         {
+            case "--evidence-started-marker-write" when args.Length == 3:
+                try
+                {
+                    var beadId = Environment.GetEnvironmentVariable("NIGHTWEAVER_BEAD_ID")
+                        ?? throw new InvalidOperationException("NIGHTWEAVER_BEAD_ID is missing.");
+                    File.WriteAllText(args[1], Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    WaitForFile(args[2], TimeSpan.FromSeconds(20));
+                    WriteStartedMarker(ResolveStartedMarkerPath(beadId), beadId);
+                    return 0;
+                }
+                catch (IOException exception)
+                {
+                    Console.Error.WriteLine($"fixture-started-marker-sharing-ioexception hresult={exception.HResult}");
+                    return 23;
+                }
             case "--evidence-legacy-hold" when args.Length == 4:
             {
                 using var stream = new FileStream(args[1], FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read);
@@ -1162,9 +1177,7 @@ internal static class Program
         }
         var launchLog = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_STAGE_LAUNCH_LOG");
         if (!string.IsNullOrWhiteSpace(launchLog))
-            File.AppendAllText(launchLog,
-                $"{beadId}|{Environment.ProcessId}|{Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks}{Environment.NewLine}",
-                new UTF8Encoding(false));
+            AppendStageLaunchRecord(launchLog, beadId);
 
         switch (action)
         {
@@ -1314,8 +1327,7 @@ internal static class Program
                 break;
             case "pool-implement-gated":
             {
-                var startedFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_STARTED_FILE")
-                    ?? throw new InvalidOperationException("Pool fixture started-file path is missing.");
+                var startedFile = ResolveStartedMarkerPath(beadId);
                 var releaseFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_RELEASE_FILE")
                     ?? throw new InvalidOperationException("Pool fixture release-file path is missing.");
                 var releaseDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_RELEASE_DIRECTORY");
@@ -1356,7 +1368,7 @@ internal static class Program
                     finally { Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_ACTION", fixtureAction); }
                     WaitForFile(descendantPidFile);
                 }
-                File.WriteAllText(startedFile, beadId, new UTF8Encoding(false));
+                WriteStartedMarker(startedFile, beadId);
                 var readyDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_READY_DIRECTORY");
                 if (!string.IsNullOrWhiteSpace(readyDirectory))
                     File.WriteAllText(Path.Combine(readyDirectory, beadId + ".ready"), "waiting for release", new UTF8Encoding(false));
@@ -1371,11 +1383,10 @@ internal static class Program
             }
             case "pool-implement-fail-gated":
             {
-                var startedFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_STARTED_FILE")
-                    ?? throw new InvalidOperationException("Pool fixture started-file path is missing.");
+                var startedFile = ResolveStartedMarkerPath(beadId);
                 var releaseFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_RELEASE_FILE")
                     ?? throw new InvalidOperationException("Pool fixture release-file path is missing.");
-                File.WriteAllText(startedFile, beadId, new UTF8Encoding(false));
+                WriteStartedMarker(startedFile, beadId);
                 WaitForFile(releaseFile, TimeSpan.FromMinutes(2));
                 File.WriteAllText(Path.Combine(Environment.CurrentDirectory, "unfinished-after-stop.txt"),
                     "preserve this failed current turn\n", new UTF8Encoding(false));
@@ -1383,14 +1394,13 @@ internal static class Program
             }
             case "pool-implement-restart-observe":
             {
-                var startedFile = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_STARTED_FILE")
-                    ?? throw new InvalidOperationException("Restart observer started-file path is missing.");
+                var startedFile = ResolveStartedMarkerPath(beadId);
                 var markerDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_WORKTREE_MARKER_DIRECTORY")
                     ?? throw new InvalidOperationException("Restart observer marker directory is missing.");
                 var retainedFile = Path.Combine(Environment.CurrentDirectory, "force-stop-retained.txt");
                 File.WriteAllText(Path.Combine(markerDirectory, beadId + ".restart"),
                     $"{Environment.CurrentDirectory}|retained={File.Exists(retainedFile)}", new UTF8Encoding(false));
-                File.WriteAllText(startedFile, beadId, new UTF8Encoding(false));
+                WriteStartedMarker(startedFile, beadId);
                 var releaseDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_RELEASE_DIRECTORY")
                     ?? throw new InvalidOperationException("Restart observer release directory is missing.");
                 WaitForFile(Path.Combine(releaseDirectory, beadId + ".release"), TimeSpan.FromMinutes(2));
@@ -2010,6 +2020,23 @@ internal static class Program
         Task.WaitAll(stdoutTask, stderrTask);
         return (process.ExitCode, stdoutTask.Result, stderrTask.Result);
     }
+
+    private static string ResolveStartedMarkerPath(string beadId)
+    {
+        var startedDirectory = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_STARTED_DIRECTORY");
+        if (!string.IsNullOrWhiteSpace(startedDirectory))
+            return Path.Combine(startedDirectory, beadId + ".started");
+
+        return Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_STARTED_FILE")
+            ?? throw new InvalidOperationException("Pool fixture started-file path is missing.");
+    }
+
+    private static void WriteStartedMarker(string path, string beadId) =>
+        File.WriteAllText(path, beadId, new UTF8Encoding(false));
+
+    private static void AppendStageLaunchRecord(string path, string beadId) =>
+        ManualPilotEvidenceLog.AppendLine(path,
+            $"{beadId}|{Environment.ProcessId}|{Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks}");
 
     private static void RejectToImplement(string beadId, string stage, int repairCycles, string finding)
     {
