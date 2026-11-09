@@ -174,6 +174,14 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         var releaseMergerRepairPublication = NewSignal();
         var deliveryMergePublicationEntered = NewSignal();
         var releaseDeliveryMergePublication = NewSignal();
+        var deliveryRunnerSlotContext = new AsyncLocal<string?>();
+        var forcedDeliveryDiscoveryContext = new AsyncLocal<bool>();
+        var forcedDeliveryDiscoveryReadEntered = NewSignal();
+        var releaseForcedDeliveryDiscoveryRead = NewSignal();
+        var holdForcedDeliveryDiscoveryRead = 1;
+        var deliveryStageRequestSequence = 0L;
+        var deliveryStageRequestTrace = new ConcurrentQueue<(long Sequence, string BeadId, string Phase,
+            ProcessRequest Request, int? ExitCode, string? Error)>();
         bool IsGuardedPublication(ProcessRequest request, string stage)
         {
             var arguments = request.Arguments;
@@ -184,6 +192,22 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
                 && addLabelIndex >= 0 && addLabelIndex + 1 < arguments.Count && arguments[addLabelIndex + 1] == stage
                 && arguments.Contains("--if-status", StringComparer.Ordinal)
                 && arguments.Contains("--if-assignee", StringComparer.Ordinal);
+        }
+
+        bool IsReadOnlyDeliveryDiscoveryRequest(ProcessRequest request)
+        {
+            if (request.FileName != "bd")
+                return false;
+
+            var arguments = request.Arguments;
+            return arguments.SequenceEqual(
+                    ["--readonly", "--sandbox", "list", "--all", "--limit", "0", "--include-ephemeral",
+                        "--include-gates", "--include-infra", "--include-templates", "--json"], StringComparer.Ordinal)
+                || arguments.SequenceEqual(
+                    ["--readonly", "--sandbox", "ready", "--unassigned", "--limit", "0", "--json"], StringComparer.Ordinal)
+                || arguments.SequenceEqual(
+                    ["--readonly", "--sandbox", "list", "--ready", "--status", "in_progress", "--assignee",
+                        project.RecoveryActor, "--limit", "0", "--json"], StringComparer.Ordinal);
         }
 
         async Task<ProcessResult> RunMergerProcessAsync(ProcessRequest request, CancellationToken cancellationToken)
@@ -198,10 +222,44 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
 
         async Task<ProcessResult> RunDeliveryProcessAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
-            if (IsGuardedPublication(request, "stage:merge"))
+            var beadIdForRequest = deliveryRunnerSlotContext.Value;
+            if (beadIdForRequest is null)
+                throw new InvalidOperationException(
+                    $"Delivery stage process request has no actual slot attribution: bead=<none>; "
+                    + $"{request.FileName} {string.Join(" ", request.Arguments)} cwd={request.WorkingDirectory}");
+            if (beadIdForRequest != beadId && beadIdForRequest != independentDeliveryBeadId)
+                throw new InvalidOperationException(
+                    $"Delivery stage process request has unexpected slot attribution: bead={beadIdForRequest}; "
+                    + $"{request.FileName} {string.Join(" ", request.Arguments)} cwd={request.WorkingDirectory}");
+
+            var sequence = Interlocked.Increment(ref deliveryStageRequestSequence);
+            deliveryStageRequestTrace.Enqueue((sequence, beadIdForRequest, "started", request, null, null));
+
+            try
             {
-                deliveryMergePublicationEntered.TrySetResult(true);
-                await releaseDeliveryMergePublication.Task.WaitAsync(cancellationToken);
+                if (IsGuardedPublication(request, "stage:merge"))
+                {
+                    deliveryMergePublicationEntered.TrySetResult(true);
+                    await releaseDeliveryMergePublication.Task.WaitAsync(cancellationToken);
+                }
+                var result = await target.RunWithFixturePullRequestAsync(systemRunner, request, cancellationToken);
+                deliveryStageRequestTrace.Enqueue((sequence, beadIdForRequest, "completed", request, result.ExitCode, null));
+                return result;
+            }
+            catch (Exception exception)
+            {
+                deliveryStageRequestTrace.Enqueue((sequence, beadIdForRequest, "failed", request, null,
+                    $"{exception.GetType().Name}: {exception.Message}"));
+                throw;
+            }
+        }
+
+        async Task<ProcessResult> RunDeliveryDiscoveryProcessAsync(ProcessRequest request, CancellationToken cancellationToken)
+        {
+            if (forcedDeliveryDiscoveryContext.Value && Interlocked.Exchange(ref holdForcedDeliveryDiscoveryRead, 0) == 1)
+            {
+                forcedDeliveryDiscoveryReadEntered.TrySetResult(true);
+                await releaseForcedDeliveryDiscoveryRead.Task.WaitAsync(cancellationToken);
             }
             return await target.RunWithFixturePullRequestAsync(systemRunner, request, cancellationToken);
         }
@@ -209,6 +267,8 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         var mergerProcessRunner = new RecordingProcessRunner(RunMergerProcessAsync);
         var mergerDiscoveryProcessRunner = new RecordingProcessRunner(RunMergerProcessAsync);
         var deliveryProcessRunner = new RecordingProcessRunner(RunDeliveryProcessAsync);
+        var independentDeliveryProcessRunner = new RecordingProcessRunner(RunDeliveryProcessAsync);
+        var deliveryDiscoveryProcessRunner = new RecordingProcessRunner(RunDeliveryDiscoveryProcessAsync);
         var provisioner = new WorktreeProvisioner(systemRunner);
         var worktree = await provisioner.ProvisionAsync(target.Host, project.Name, repository, beadId,
             WorktreePurpose.Delivery, TestContext.Current.CancellationToken);
@@ -218,6 +278,8 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         var independentStartedFile = Path.Combine(independentGateDirectory, "started.txt");
         var independentReleaseFile = Path.Combine(independentGateDirectory, "release.txt");
         var independentPidFile = Path.Combine(independentGateDirectory, "pid.txt");
+        var independentReviewerPidFile = Path.Combine(independentGateDirectory, "reviewer.pid");
+        var independentDeliveryPidFiles = new ConcurrentQueue<string>();
         var warmSentinel = Path.Combine(worktree.Path, ".nightweaver-ignored", "warm-build-artifact.bin");
         Directory.CreateDirectory(Path.GetDirectoryName(warmSentinel)!);
         File.WriteAllText(warmSentinel, "retain for Delivery repair\n", new System.Text.UTF8Encoding(false));
@@ -329,16 +391,27 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             var (executingBeadId, role) = deliveryRoles[invocation.InvocationId];
             if (executingBeadId == independentDeliveryBeadId)
             {
-                Assert.Equal(AgentRole.Implementer, role);
+                var independentAction = role switch
+                {
+                    AgentRole.Implementer => "pool-implement-gated",
+                    AgentRole.Reviewer => "slot-review-pause",
+                    _ => throw new InvalidOperationException($"Unexpected independent Delivery role {role}.")
+                };
+                var independentRolePidFile = role == AgentRole.Implementer ? independentPidFile : independentReviewerPidFile;
+                independentDeliveryPidFiles.Enqueue(independentRolePidFile);
+                var independentEnvironment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["BD_ACTOR"] = project.RecoveryActor,
+                    ["NIGHTWEAVER_FIXTURE_ACTION"] = independentAction,
+                    ["NIGHTWEAVER_FIXTURE_PID_FILE"] = independentRolePidFile
+                };
+                if (role == AgentRole.Implementer)
+                {
+                    independentEnvironment["NIGHTWEAVER_FIXTURE_STARTED_FILE"] = independentStartedFile;
+                    independentEnvironment["NIGHTWEAVER_FIXTURE_RELEASE_FILE"] = independentReleaseFile;
+                }
                 return AgentInvocationExecutor.ExecuteAsync(hostPaths, projectSlug, invocation,
-                    target.CreateProcessLauncher(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-                    {
-                        ["BD_ACTOR"] = project.RecoveryActor,
-                        ["NIGHTWEAVER_FIXTURE_ACTION"] = "pool-implement-gated",
-                        ["NIGHTWEAVER_FIXTURE_STARTED_FILE"] = independentStartedFile,
-                        ["NIGHTWEAVER_FIXTURE_RELEASE_FILE"] = independentReleaseFile,
-                        ["NIGHTWEAVER_FIXTURE_PID_FILE"] = independentPidFile
-                    }), cancellationToken);
+                    target.CreateProcessLauncher(independentEnvironment), cancellationToken);
             }
             var action = role switch
             {
@@ -365,25 +438,73 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
                 target.CreateProcessLauncher(environment), cancellationToken);
         }
 
-        var deliveryStages = new AgentStageCoordinator(deliveryProcessRunner, prepare: PrepareDelivery, execute: ExecuteDelivery);
-        var deliveryRetries = new OperationalRetryCoordinator(deliveryProcessRunner, stages: deliveryStages,
-            outcomeClassifier: FixtureOutcomeClassifier.Create());
-        DeliveryRoleRunner deliveryRole = (host, config, targetRepository, requestedBead, role, actor, expectedState, token, progress) =>
-            deliveryRetries.RunAsync(host, config, targetRepository, requestedBead, role, actor, token, progress, expectedState);
+        DeliveryRoleRunner CreateDeliveryRole(RecordingProcessRunner processRunner)
+        {
+            var stages = new AgentStageCoordinator(processRunner, prepare: PrepareDelivery, execute: ExecuteDelivery);
+            var retries = new OperationalRetryCoordinator(processRunner, stages: stages,
+                outcomeClassifier: FixtureOutcomeClassifier.Create());
+            return (host, config, targetRepository, requestedBead, role, actor, expectedState, token, progress) =>
+                retries.RunAsync(host, config, targetRepository, requestedBead, role, actor, token, progress, expectedState);
+        }
+
+        var deliveryRole = CreateDeliveryRole(deliveryProcessRunner);
+        var independentDeliveryRole = CreateDeliveryRole(independentDeliveryProcessRunner);
         var deliverySlot = new DeliverySlotCoordinator(deliveryProcessRunner, deliveryRole);
+        var independentDeliverySlot = new DeliverySlotCoordinator(independentDeliveryProcessRunner, independentDeliveryRole);
         var deliveryEntered = NewSignal();
         var releaseDelivery = NewSignal();
         var holdPrimaryDelivery = 1;
+        var deliverySlotInvocations = new ConcurrentQueue<string>();
+        void WriteDeliveryStageTrace(string label, long afterSequence)
+        {
+            var output = TestContext.Current.TestOutputHelper;
+            var trace = deliveryStageRequestTrace.ToArray();
+            var startedRequests = trace
+                .Where(entry => entry.Sequence > afterSequence && entry.Phase == "started")
+                .OrderBy(entry => entry.Sequence)
+                .ToArray();
+            output?.WriteLine($"ns-d9j stage trace {label}: requests={startedRequests.Length}, "
+                + $"sequenceRange={afterSequence + 1}..{Volatile.Read(ref deliveryStageRequestSequence)}");
+            foreach (var started in startedRequests)
+            {
+                var completion = trace.LastOrDefault(entry => entry.Sequence == started.Sequence
+                    && entry.Phase != "started");
+                output?.WriteLine(
+                    $"ns-d9j stage request[{started.Sequence}]: slot={started.BeadId}; "
+                    + $"{started.Request.FileName} {string.Join(" ", started.Request.Arguments)} "
+                    + $"cwd={started.Request.WorkingDirectory} timeout={started.Request.Timeout}; "
+                    + $"outcome={completion.Phase ?? "pending"} exitCode={completion.ExitCode?.ToString() ?? "n/a"} "
+                    + $"error={completion.Error ?? "none"}");
+            }
+        }
         var deliveryOutcomes = Channel.CreateUnbounded<DeliverySlotOutcome>();
+        var independentDeliveryOutcomes = Channel.CreateUnbounded<DeliverySlotOutcome>();
         DeliveryPoolSlotRunner deliverySlotRunner = async (host, config, targetRepository, requestedBead, token) =>
         {
+            var requestedSlot = requestedBead switch
+            {
+                var id when id == beadId => deliverySlot,
+                var id when id == independentDeliveryBeadId => independentDeliverySlot,
+                _ => throw new InvalidOperationException($"Unexpected Delivery pool slot request for Bead {requestedBead}.")
+            };
+            deliverySlotInvocations.Enqueue(requestedBead);
             if (requestedBead == beadId && Interlocked.Exchange(ref holdPrimaryDelivery, 0) == 1)
             {
                 handoffTrace.Enqueue("Delivery:reserved");
                 deliveryEntered.TrySetResult(true);
                 await releaseDelivery.Task.WaitAsync(token);
             }
-            var outcome = await deliverySlot.RunAsync(host, config, targetRepository, requestedBead, token);
+            var previousSlot = deliveryRunnerSlotContext.Value;
+            deliveryRunnerSlotContext.Value = requestedBead;
+            DeliverySlotOutcome outcome;
+            try
+            {
+                outcome = await requestedSlot.RunAsync(host, config, targetRepository, requestedBead, token);
+            }
+            finally
+            {
+                deliveryRunnerSlotContext.Value = previousSlot;
+            }
             if (requestedBead == beadId)
             {
                 handoffTrace.Enqueue($"Delivery:{outcome.Disposition}");
@@ -392,10 +513,12 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             else
             {
                 handoffTrace.Enqueue($"Delivery:{requestedBead}:{outcome.Disposition}");
+                if (requestedBead == independentDeliveryBeadId)
+                    independentDeliveryOutcomes.Writer.TryWrite(outcome);
             }
             return outcome;
         };
-        var deliveryPool = new DeliveryPoolCoordinator(target.Host, project, repository, deliveryProcessRunner,
+        var deliveryPool = new DeliveryPoolCoordinator(target.Host, project, repository, deliveryDiscoveryProcessRunner,
             runSlot: deliverySlotRunner, stopGate: stopGate, slotLifetimeToken: runtimeLifetime.Token);
         var runtimeOutput = new StringWriter();
         var runtime = new ContinuousDiscoveryCoordinator(
@@ -418,6 +541,8 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             TextWriter.Null,
             stopGate: stopGate);
         var runtimeTask = runtime.RunAsync(runtimeLifetime.Token);
+        var deliveryStageRequestSequenceAtHandoff = 0L;
+        Task<DeliveryPoolEvaluation>? forcedDeliveryEvaluationTask = null;
 
         try
         {
@@ -519,6 +644,104 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         Assert.Equal("stage:merge", receivingMergerState.Stage);
         Assert.Equal(project.RecoveryActor, target.ReadBead(beadId).Assignee);
         var deliveryRequestsAtHandoff = deliveryProcessRunner.Requests.Count;
+        deliveryStageRequestSequenceAtHandoff = Volatile.Read(ref deliveryStageRequestSequence);
+        var requestCountBeforeForcedDiscovery = deliveryDiscoveryProcessRunner.Requests.Count;
+        var stageRequestCountBeforeForcedDiscovery = deliveryProcessRunner.Requests.Count;
+        var primarySlotCountBeforeForcedDiscovery = deliverySlotInvocations.Count(invocation => invocation == beadId);
+        var primaryLaunchCountBeforeForcedDiscovery = deliveryPidFiles.Count;
+        var primaryBeadBeforeForcedDiscovery = target.ReadBead(beadId);
+        var primaryStateBeforeForcedDiscovery = BeadWorkflowState.Parse(primaryBeadBeforeForcedDiscovery);
+        var previousForcedDiscoveryContext = forcedDeliveryDiscoveryContext.Value;
+        forcedDeliveryDiscoveryContext.Value = true;
+        try
+        {
+            forcedDeliveryEvaluationTask = deliveryPool.EvaluateAsync(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            forcedDeliveryDiscoveryContext.Value = previousForcedDiscoveryContext;
+        }
+        await forcedDeliveryDiscoveryReadEntered.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        var stageSequenceBeforeIndependentProgress = Volatile.Read(ref deliveryStageRequestSequence);
+        File.WriteAllText(independentReleaseFile, "complete independent Delivery while receiving Merger is held",
+            new System.Text.UTF8Encoding(false));
+        var independentDeliveryOutcome = await independentDeliveryOutcomes.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+        var independentDeliveryState = target.ReadBead(independentDeliveryBeadId);
+        var independentDeliveryWorkflow = BeadWorkflowState.Parse(independentDeliveryState);
+        var independentStageTrace = deliveryStageRequestTrace.ToArray()
+            .Where(entry => entry.Sequence > stageSequenceBeforeIndependentProgress)
+            .ToArray();
+        releaseForcedDeliveryDiscoveryRead.TrySetResult(true);
+        var forcedDiscovery = await forcedDeliveryEvaluationTask.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+        var forcedDiscoveryRequests = deliveryDiscoveryProcessRunner.Requests.Skip(requestCountBeforeForcedDiscovery).ToArray();
+        var stageRequestCountAfterForcedDiscovery = deliveryProcessRunner.Requests.Count;
+        var completeStageTrace = deliveryStageRequestTrace.ToArray();
+        var startedStageRequests = completeStageTrace.Where(entry => entry.Phase == "started").ToArray();
+        var completedStageRequests = completeStageTrace.Where(entry => entry.Phase != "started").ToArray();
+        var primaryBeadAfterForcedDiscovery = target.ReadBead(beadId);
+        var primaryStateAfterForcedDiscovery = BeadWorkflowState.Parse(primaryBeadAfterForcedDiscovery);
+        var forcedDiscoveryOutput = TestContext.Current.TestOutputHelper;
+        forcedDiscoveryOutput?.WriteLine(
+            $"ns-d9j provenance: forced Delivery EvaluateAsync while receiving Merger is held; "
+            + $"admitted=[{string.Join(",", forcedDiscovery.Admitted.Select(admission => admission.BeadId))}], "
+            + $"diagnostics=[{string.Join(";", forcedDiscovery.Diagnostics.Select(diagnostic => $"{diagnostic.BeadId}:{diagnostic.Code}"))}], "
+            + $"active=[{string.Join(",", forcedDiscovery.ActiveReservations.Select(reservation => reservation.BeadId))}], "
+            + $"primaryBefore={primaryBeadBeforeForcedDiscovery.Status}/{primaryStateBeforeForcedDiscovery.Stage}/{primaryBeadBeforeForcedDiscovery.Assignee}, "
+            + $"primaryAfter={primaryBeadAfterForcedDiscovery.Status}/{primaryStateAfterForcedDiscovery.Stage}/{primaryBeadAfterForcedDiscovery.Assignee}, "
+            + $"independentOutcome={independentDeliveryOutcome.Disposition}, independentState={independentDeliveryState.Status}/{independentDeliveryWorkflow.Stage}/{independentDeliveryState.Assignee}, "
+            + $"primaryDeliverySlots={deliverySlotInvocations.Count(invocation => invocation == beadId) - primarySlotCountBeforeForcedDiscovery}, "
+            + $"primaryAgentLaunches={deliveryPidFiles.Count - primaryLaunchCountBeforeForcedDiscovery}, "
+            + $"stageRequestDelta={stageRequestCountAfterForcedDiscovery - stageRequestCountBeforeForcedDiscovery}, "
+            + $"discoveryRequestDelta={forcedDiscoveryRequests.Length}");
+        foreach (var (index, request) in forcedDiscoveryRequests.Select((request, index) => (index, request)))
+            forcedDiscoveryOutput?.WriteLine(
+                $"ns-d9j request[{index}]: {request.FileName} {string.Join(" ", request.Arguments)} "
+                + $"cwd={request.WorkingDirectory} timeout={request.Timeout}");
+        foreach (var (index, entry) in independentStageTrace.Where(entry => entry.Phase == "started")
+                     .OrderBy(entry => entry.Sequence).Select((entry, index) => (index, entry)))
+        {
+            var completion = independentStageTrace.LastOrDefault(candidate => candidate.Sequence == entry.Sequence
+                && candidate.Phase != "started");
+            forcedDiscoveryOutput?.WriteLine(
+                $"ns-d9j independent stage[{index}] sequence={entry.Sequence} slot={entry.BeadId}: "
+                + $"{entry.Request.FileName} {string.Join(" ", entry.Request.Arguments)} "
+                + $"cwd={entry.Request.WorkingDirectory} timeout={entry.Request.Timeout}; "
+                + $"outcome={completion.Phase ?? "pending"} exitCode={completion.ExitCode?.ToString() ?? "n/a"} "
+                + $"error={completion.Error ?? "none"}");
+        }
+        Assert.Empty(forcedDiscovery.Admitted);
+        Assert.DoesNotContain(forcedDiscovery.ActiveReservations, reservation => reservation.BeadId == beadId);
+        Assert.All(forcedDiscoveryRequests, request => Assert.True(IsReadOnlyDeliveryDiscoveryRequest(request),
+            $"Delivery discovery issued a request outside the read-only inventory/readiness allowlist: {request.FileName} {string.Join(" ", request.Arguments)}"));
+        Assert.Equal(deliveryRequestsAtHandoff, stageRequestCountBeforeForcedDiscovery);
+        Assert.Equal(stageRequestCountBeforeForcedDiscovery, stageRequestCountAfterForcedDiscovery);
+        Assert.All(completeStageTrace, entry => Assert.Contains(entry.BeadId, new[] { beadId, independentDeliveryBeadId }));
+        Assert.Equal(deliveryProcessRunner.Requests.Count + independentDeliveryProcessRunner.Requests.Count,
+            startedStageRequests.Length);
+        Assert.Equal(startedStageRequests.Length, completedStageRequests.Length);
+        Assert.All(startedStageRequests, started =>
+        {
+            var completion = Assert.Single(completedStageRequests, entry => entry.Sequence == started.Sequence);
+            Assert.Equal(started.BeadId, completion.BeadId);
+            Assert.Equal("completed", completion.Phase);
+            Assert.Equal(0, completion.ExitCode);
+            Assert.Null(completion.Error);
+        });
+        Assert.Equal(DeliverySlotDisposition.PausedForProductDecision, independentDeliveryOutcome.Disposition);
+        Assert.True(independentDeliveryOutcome.ClaimHandoffCompleted, independentDeliveryOutcome.Diagnostic);
+        Assert.Equal("open", independentDeliveryState.Status);
+        Assert.Null(independentDeliveryState.Assignee);
+        Assert.Equal("stage:review", independentDeliveryWorkflow.Stage);
+        Assert.Contains("product-decision-required", independentDeliveryState.Labels);
+        Assert.Contains(independentStageTrace, entry => entry.Phase == "started" && entry.BeadId == independentDeliveryBeadId);
+        Assert.All(independentStageTrace, entry => Assert.Equal(independentDeliveryBeadId, entry.BeadId));
+        Assert.Equal(primaryBeadBeforeForcedDiscovery.Status, primaryBeadAfterForcedDiscovery.Status);
+        Assert.Equal(primaryStateBeforeForcedDiscovery.Stage, primaryStateAfterForcedDiscovery.Stage);
+        Assert.Equal(primaryBeadBeforeForcedDiscovery.Assignee, primaryBeadAfterForcedDiscovery.Assignee);
+        Assert.Equal(primarySlotCountBeforeForcedDiscovery,
+            deliverySlotInvocations.Count(invocation => invocation == beadId));
+        Assert.Equal(primaryLaunchCountBeforeForcedDiscovery, deliveryPidFiles.Count);
         Assert.True(File.Exists(resumeEvidence));
         using (var evidence = JsonDocument.Parse(File.ReadAllText(resumeEvidence)))
         {
@@ -548,7 +771,9 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
                 + $"escalationCause={secondMerger.Stage?.EscalationCause}; duplicateFailure={secondMerger.Stage?.LastClassification?.Verdict}:"
                 + $"{secondMerger.Stage?.LastClassification?.Diagnostic}; escalationFindings={string.Join(" | ", secondMerger.EscalationProgress?.Failures ?? [])}");
             Assert.True(secondMerger.MergeCompleted, secondMerger.Diagnostic);
-            Assert.Equal(["Merger:RepairHandedOff", "Delivery:reserved", "Delivery:MergeReady", "Merger:Merged"], handoffTrace.ToArray());
+            Assert.Equal(["Merger:RepairHandedOff", "Delivery:reserved", "Delivery:MergeReady",
+                $"Delivery:{independentDeliveryBeadId}:{DeliverySlotDisposition.PausedForProductDecision}", "Merger:Merged"],
+                handoffTrace.ToArray());
             Assert.Contains("Merger slot", runtimeOutput.ToString(), StringComparison.Ordinal);
             Assert.Contains("Delivery slot", runtimeOutput.ToString(), StringComparison.Ordinal);
 
@@ -559,6 +784,7 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             Assert.False(Directory.Exists(worktree.Path));
             Assert.False(Directory.Exists(Path.Combine(target.Host.TmpRoot(project.Name), beadId)));
             Assert.All(deliveryPidFiles, AssertFixtureExited);
+            Assert.All(independentDeliveryPidFiles, AssertFixtureExited);
             AssertFixtureExited(mergerPidFiles[1]);
             runtimeLifetime.Cancel();
             File.WriteAllText(independentReleaseFile, "cancel independent native Delivery", new System.Text.UTF8Encoding(false));
@@ -568,9 +794,35 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         finally
         {
             File.WriteAllText(independentReleaseFile, "test cleanup", new System.Text.UTF8Encoding(false));
+            releaseForcedDeliveryDiscoveryRead.TrySetResult(true);
+            if (forcedDeliveryEvaluationTask is { IsCompleted: false })
+            {
+                try
+                {
+                    await forcedDeliveryEvaluationTask.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+                }
+                catch (Exception exception)
+                {
+                    TestContext.Current.TestOutputHelper?.WriteLine(
+                        $"ns-d9j forced discovery cleanup: {exception.GetType().Name}: {exception.Message}");
+                }
+            }
             runtimeLifetime.Cancel();
-            if (!runtimeTask.IsCompleted)
-                await runtimeTask.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+            releaseFirstMergerPrepare.TrySetResult(true);
+            releaseMergerRepairPublication.TrySetResult(true);
+            releaseDelivery.TrySetResult(true);
+            releaseDeliveryPrepare.TrySetResult(true);
+            releaseDeliveryMergePublication.TrySetResult(true);
+            releaseSecondMerger.TrySetResult(true);
+            try
+            {
+                if (!runtimeTask.IsCompleted)
+                    await runtimeTask.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+            }
+            finally
+            {
+                WriteDeliveryStageTrace("held Merger handoff", deliveryStageRequestSequenceAtHandoff);
+            }
         }
     }
 
