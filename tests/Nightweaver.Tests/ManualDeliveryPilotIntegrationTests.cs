@@ -4,6 +4,8 @@ using System.Diagnostics;
 using Nightweaver.Configuration;
 using Nightweaver.Telemetry;
 using ManualPilot = Nightweaver.Tests.ManualDeliveryPilotFixture.ManualDeliveryPilotFixture;
+using Nightweaver.Tests.ManualDeliveryPilotFixture;
+using static Nightweaver.Tests.ManualDeliveryPilotTestHelpers;
 
 namespace Nightweaver.Tests;
 
@@ -107,7 +109,10 @@ public sealed class ManualDeliveryPilotIntegrationTests
             }
         }
     }
+}
 
+public sealed class ManualDeliveryPilotCrashRecoveryTests
+{
     [Fact]
     public async Task AbruptRuntimeCrashKillsNativeAgentAndRestartRecoversTheClaim()
     {
@@ -115,7 +120,8 @@ public sealed class ManualDeliveryPilotIntegrationTests
 
         await using var fixture = await ManualPilot.CreateAsync(
             agentInvocationFixturePath: typeof(Nightweaver.Tests.AgentInvocationFixture.FixtureMarker).Assembly.Location,
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken,
+            seedProfile: ManualPilotSeedProfile.ParentlessOnly);
         var runtimeAssembly = typeof(ProjectConfigLoader).Assembly.Location;
         Exception? primaryFailure = null;
         try
@@ -178,7 +184,10 @@ public sealed class ManualDeliveryPilotIntegrationTests
             }
         }
     }
+}
 
+public sealed class ManualDeliveryPilotFirstSignalTests
+{
     [Fact]
     public async Task FirstConsoleSignalDrainsHeldManualPilotTurnWithoutLaunchingNextRole()
     {
@@ -186,7 +195,8 @@ public sealed class ManualDeliveryPilotIntegrationTests
 
         await using var fixture = await ManualPilot.CreateAsync(
             agentInvocationFixturePath: typeof(Nightweaver.Tests.AgentInvocationFixture.FixtureMarker).Assembly.Location,
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken,
+            seedProfile: ManualPilotSeedProfile.ParentlessOnly);
         var runtime = fixture.StartRuntime(typeof(ProjectConfigLoader).Assembly.Location);
         Exception? primaryFailure = null;
         try
@@ -241,7 +251,10 @@ public sealed class ManualDeliveryPilotIntegrationTests
             }
         }
     }
+}
 
+public sealed class ManualDeliveryPilotSecondSignalTests
+{
     [Fact]
     public async Task SecondConsoleSignalForceStopsHeldAgentAndRestartPreservesWorktreeAndForeignClaim()
     {
@@ -249,7 +262,8 @@ public sealed class ManualDeliveryPilotIntegrationTests
 
         await using var fixture = await ManualPilot.CreateAsync(
             agentInvocationFixturePath: typeof(Nightweaver.Tests.AgentInvocationFixture.FixtureMarker).Assembly.Location,
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken,
+            seedProfile: ManualPilotSeedProfile.ParentlessAndProduct);
         fixture.RetainSentinelBeadId = fixture.ParentlessTaskId;
         var foreignClaimId = await fixture.CreateForeignClaimAsync(TestContext.Current.CancellationToken);
         var runtimeAssembly = typeof(ProjectConfigLoader).Assembly.Location;
@@ -337,7 +351,10 @@ public sealed class ManualDeliveryPilotIntegrationTests
             }
         }
     }
+}
 
+public sealed class ManualDeliveryPilotHeldMergerTests
+{
     [Fact]
     public async Task DeliveryCompletesWhileSingletonMergerIsHeldThenBothTasksMerge()
     {
@@ -345,7 +362,8 @@ public sealed class ManualDeliveryPilotIntegrationTests
 
         await using var fixture = await ManualPilot.CreateAsync(
             agentInvocationFixturePath: typeof(Nightweaver.Tests.AgentInvocationFixture.FixtureMarker).Assembly.Location,
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken,
+            seedProfile: ManualPilotSeedProfile.Empty);
         var heldMergerId = await fixture.CreateMergeGateTaskAsync(
             "QA manual pilot held singleton Merger", TestContext.Current.CancellationToken);
         fixture.MergerGateBeadId = heldMergerId;
@@ -399,8 +417,11 @@ public sealed class ManualDeliveryPilotIntegrationTests
             }
         }
     }
+}
 
-    private static FactorySnapshotObservation WaitForLiveSnapshot(HostPaths paths, ProjectConfig project,
+internal static class ManualDeliveryPilotTestHelpers
+{
+    internal static FactorySnapshotObservation WaitForLiveSnapshot(HostPaths paths, ProjectConfig project,
         string beadId, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var reader = new FactoryTelemetryReader(paths, project);
@@ -421,7 +442,7 @@ public sealed class ManualDeliveryPilotIntegrationTests
         throw new TimeoutException($"The live factory snapshot did not report invocation for '{beadId}'.");
     }
 
-    private static async Task WaitForProcessExitAsync(int processId, TimeSpan timeout, CancellationToken cancellationToken)
+    internal static async Task WaitForProcessExitAsync(int processId, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
@@ -439,7 +460,7 @@ public sealed class ManualDeliveryPilotIntegrationTests
         throw new TimeoutException($"Process {processId} remained alive after its owning runtime was force-stopped.");
     }
 
-    private static bool IsProcessRunning(int processId)
+    internal static bool IsProcessRunning(int processId)
     {
         try
         {
@@ -450,7 +471,7 @@ public sealed class ManualDeliveryPilotIntegrationTests
         catch (InvalidOperationException) { return false; }
     }
 
-    private static (string BeadId, string Role)[] ReadEvidence(string evidencePath) =>
+    internal static (string BeadId, string Role)[] ReadEvidence(string evidencePath) =>
         Nightweaver.Tests.AgentInvocationFixture.ManualPilotEvidenceLog.ReadAllLines(evidencePath).Select(line =>
         {
             using var document = JsonDocument.Parse(line);
@@ -458,7 +479,7 @@ public sealed class ManualDeliveryPilotIntegrationTests
                 document.RootElement.GetProperty("role").GetString()!);
         }).ToArray();
 
-    private static async Task AssertForeignClaimUnchangedAsync(ManualPilot fixture, string beadId,
+    internal static async Task AssertForeignClaimUnchangedAsync(ManualPilot fixture, string beadId,
         CancellationToken cancellationToken)
     {
         var foreign = await fixture.ReadBeadAsync(beadId, cancellationToken);
@@ -467,7 +488,7 @@ public sealed class ManualDeliveryPilotIntegrationTests
         Assert.Contains("stage:implement", foreign.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
     }
 
-    private static async Task WaitForClosedAsync(ManualPilot fixture, string beadId,
+    internal static async Task WaitForClosedAsync(ManualPilot fixture, string beadId,
         TimeSpan timeout, CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -492,7 +513,7 @@ public sealed class ManualDeliveryPilotIntegrationTests
         throw new TimeoutException($"Bead '{beadId}' was not closed within {timeout}; last status '{lastStatus}'. Runtime output: {fixture.ReadRuntimeLog()}");
     }
 
-    private static async Task<JsonElement> WaitForNeedsHumanAsync(ManualPilot fixture, string beadId,
+    internal static async Task<JsonElement> WaitForNeedsHumanAsync(ManualPilot fixture, string beadId,
         TimeSpan timeout, CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -511,7 +532,7 @@ public sealed class ManualDeliveryPilotIntegrationTests
         throw new TimeoutException($"Bead '{beadId}' was not safely paused within {timeout}: {fixture.ReadRuntimeLog()}");
     }
 
-    private static async Task<JsonElement> WaitForWorkflowAsync(ManualPilot fixture, string beadId,
+    internal static async Task<JsonElement> WaitForWorkflowAsync(ManualPilot fixture, string beadId,
         string expectedStatus, string expectedStage, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -534,5 +555,5 @@ public sealed class ManualDeliveryPilotIntegrationTests
         throw new TimeoutException($"Bead '{beadId}' did not reach '{expectedStage}' within {timeout}: {fixture.ReadRuntimeLog()}");
     }
 
-    private sealed record FactorySnapshotObservation(string RuntimeId, int ProcessId, string State);
+    internal sealed record FactorySnapshotObservation(string RuntimeId, int ProcessId, string State);
 }

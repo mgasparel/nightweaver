@@ -1,17 +1,43 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using Nightweaver.Tests;
 
 namespace Nightweaver.Tests.ManualDeliveryPilotFixture;
 
+public enum ManualPilotSeedProfile
+{
+    Comprehensive,
+    ParentlessOnly,
+    ParentlessAndProduct,
+    Empty
+}
+
 /// <summary>Owns the disposable Git, Beads, runtime and gate files used by the manual Delivery pilot.</summary>
 public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
 {
     private static readonly JsonSerializerOptions IndentedJson = new() { WriteIndented = true };
+    private static readonly ConcurrentDictionary<TemplateKey, Lazy<Task<ManualDeliveryPilotFixture>>> Templates = new();
     private readonly string inheritedPath;
     private readonly HashSet<int> ownedProcesses = [];
     private bool disposed;
+
+    static ManualDeliveryPilotFixture()
+    {
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            foreach (var template in Templates.Values)
+            {
+                try
+                {
+                    if (template.IsValueCreated)
+                        template.Value.GetAwaiter().GetResult().DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
+                catch { }
+            }
+        };
+    }
 
     private ManualDeliveryPilotFixture(string root)
     {
@@ -61,20 +87,31 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
     internal WindowsConsoleProcess? RuntimeProcess { get; private set; }
     public bool PreserveEvidenceOnDispose { get; private set; }
 
+    internal ManualPilotSeedProfile SeedProfile { get; private set; }
+
     public void PreserveForFailure() => PreserveEvidenceOnDispose = true;
 
     public static async Task<ManualDeliveryPilotFixture> CreateAsync(string? root = null,
         string? agentInvocationFixturePath = null, bool includeExhaustionTask = false,
-        bool includeForeignClaim = false, CancellationToken cancellationToken = default)
+        bool includeForeignClaim = false, ManualPilotSeedProfile seedProfile = ManualPilotSeedProfile.Comprehensive,
+        CancellationToken cancellationToken = default)
+    {
+        return await CreateCoreAsync(root, agentInvocationFixturePath, includeExhaustionTask,
+            includeForeignClaim, seedProfile, initializeTemplate: false, cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<ManualDeliveryPilotFixture> CreateCoreAsync(string? root,
+        string? agentInvocationFixturePath, bool includeExhaustionTask, bool includeForeignClaim,
+        ManualPilotSeedProfile seedProfile, bool initializeTemplate, CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The native manual Delivery pilot requires Windows process and console controls.");
 
         var fixture = new ManualDeliveryPilotFixture(root ?? Path.Combine(Path.GetTempPath(), "nightweaver-manual-delivery-" + Guid.NewGuid().ToString("N")));
+        fixture.SeedProfile = seedProfile;
         try
         {
             Directory.CreateDirectory(fixture.Root);
-            Directory.CreateDirectory(fixture.Repository);
             Directory.CreateDirectory(fixture.UserHome);
             Directory.CreateDirectory(fixture.NightweaverRoot);
             Directory.CreateDirectory(Path.Combine(fixture.NightweaverRoot, "prompts"));
@@ -86,8 +123,21 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
                     $"Disposable manual Delivery pilot {role} prompt. Follow the task and report evidence.\n",
                     new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
 
-            await fixture.InitializeGitAsync(cancellationToken).ConfigureAwait(false);
-            await fixture.InitializeBeadsAsync(includeExhaustionTask, includeForeignClaim, cancellationToken).ConfigureAwait(false);
+            if (initializeTemplate)
+            {
+                Directory.CreateDirectory(fixture.Repository);
+                await fixture.InitializeGitAsync(cancellationToken).ConfigureAwait(false);
+                await fixture.InitializeBeadsAsync(seedProfile, includeExhaustionTask, includeForeignClaim, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                var key = new TemplateKey(seedProfile, includeExhaustionTask, includeForeignClaim);
+                var template = await GetTemplateAsync(key).ConfigureAwait(false);
+                CopyTemplateDirectory(template.Repository, fixture.Repository);
+                CopyTemplateDirectory(template.Origin, fixture.Origin);
+                fixture.CopyBeadIds(template);
+                fixture.RewriteGitOriginPath(template.Origin);
+            }
             fixture.CopyAgentAliases(agentInvocationFixturePath ?? Path.Combine(AppContext.BaseDirectory, "AgentInvocationFixture.exe"));
             await fixture.WriteConfigurationAsync(cancellationToken).ConfigureAwait(false);
             await fixture.WriteManifestAsync(cancellationToken).ConfigureAwait(false);
@@ -99,6 +149,60 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
             throw;
         }
     }
+
+    private static Task<ManualDeliveryPilotFixture> GetTemplateAsync(TemplateKey key) =>
+        Templates.GetOrAdd(key, static templateKey => new Lazy<Task<ManualDeliveryPilotFixture>>(
+            () => CreateTemplateAsync(templateKey), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+
+    private static Task<ManualDeliveryPilotFixture> CreateTemplateAsync(TemplateKey key) =>
+        CreateCoreAsync(null, null, key.IncludeExhaustionTask, key.IncludeForeignClaim,
+            key.SeedProfile, initializeTemplate: true, cancellationToken: CancellationToken.None);
+
+    private void CopyBeadIds(ManualDeliveryPilotFixture template)
+    {
+        ParentlessTaskId = template.ParentlessTaskId;
+        ProductId = template.ProductId;
+        ProductTaskId = template.ProductTaskId;
+        DecisionId = template.DecisionId;
+        PausedTaskId = template.PausedTaskId;
+        ExhaustionTaskId = template.ExhaustionTaskId;
+        ForeignClaimId = template.ForeignClaimId;
+    }
+
+    private void RewriteGitOriginPath(string templateOrigin)
+    {
+        var configurationPath = Path.Combine(Repository, ".git", "config");
+        var configuration = File.ReadAllText(configurationPath);
+        var previous = templateOrigin.Replace('\\', '/');
+        var current = Origin.Replace('\\', '/');
+        if (!configuration.Contains(previous, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The prepared manual pilot Git template does not contain its own absolute origin path.");
+        File.WriteAllText(configurationPath, configuration.Replace(previous, current, StringComparison.OrdinalIgnoreCase), new UTF8Encoding(false));
+    }
+
+    private static void CopyTemplateDirectory(string source, string destination)
+    {
+        if (!Directory.Exists(source))
+            throw new DirectoryNotFoundException($"Manual pilot fixture template was not initialized: '{source}'.");
+        Directory.CreateDirectory(destination);
+        foreach (var entry in Directory.EnumerateFileSystemEntries(source))
+        {
+            var attributes = File.GetAttributes(entry);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"Manual pilot templates cannot contain links: '{entry}'.");
+            var target = Path.Combine(destination, Path.GetFileName(entry));
+            if ((attributes & FileAttributes.Directory) != 0)
+                CopyTemplateDirectory(entry, target);
+            else
+                File.Copy(entry, target);
+        }
+    }
+
+    internal Task<string> RunToolForTestAsync(string executable, IReadOnlyList<string> arguments,
+        string workingDirectory, CancellationToken cancellationToken = default) =>
+        RunToolAsync(executable, arguments, workingDirectory, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken);
+
+    private readonly record struct TemplateKey(ManualPilotSeedProfile SeedProfile, bool IncludeExhaustionTask, bool IncludeForeignClaim);
 
     public IReadOnlyDictionary<string, string?> CreateEnvironment()
     {
@@ -250,8 +354,11 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
         throw new TimeoutException($"Pilot task '{beadId}' did not reach its native gate within {timeout}. Runtime output: {ReadRuntimeLog()}");
     }
 
-    public void ReleaseGate(string beadId) =>
+    public void ReleaseGate(string beadId)
+    {
+        if (string.IsNullOrWhiteSpace(beadId)) return;
         File.WriteAllText(Path.Combine(GateDirectory, beadId + ".release"), "release\n", new UTF8Encoding(false));
+    }
 
     public void ReleaseMergerGate(string beadId) =>
         File.WriteAllText(Path.Combine(GateDirectory, beadId + ".merger.release"), "release\n", new UTF8Encoding(false));
@@ -485,16 +592,31 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
         await RunToolAsync("git", ["push", "--set-upstream", "origin", "main"], Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task InitializeBeadsAsync(bool includeExhaustionTask, bool includeForeignClaim, CancellationToken cancellationToken)
+    private async Task InitializeBeadsAsync(ManualPilotSeedProfile seedProfile, bool includeExhaustionTask,
+        bool includeForeignClaim, CancellationToken cancellationToken)
     {
         await RunToolAsync("bd", ["init", "--prefix", "qa", "--non-interactive", "--skip-agents", "--skip-hooks"],
             Repository, CreateEnvironment(), TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
         await RunToolAsync("bd", ["config", "set", "events-journal", "true"], Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+        if (seedProfile == ManualPilotSeedProfile.Empty)
+            return;
+
         ParentlessTaskId = await CreateBeadAsync("QA manual pilot parentless task", "task", ["stage:implement"], cancellationToken).ConfigureAwait(false);
+        if (seedProfile == ManualPilotSeedProfile.ParentlessOnly)
+            return;
+
         ProductId = await CreateBeadAsync("QA manual pilot Product", "feature", ["planned"], cancellationToken).ConfigureAwait(false);
         ProductTaskId = await CreateBeadAsync("QA manual pilot linked task", "task", ["stage:implement"], cancellationToken).ConfigureAwait(false);
         await RunToolAsync("bd", ["dep", "add", ProductTaskId, ProductId, "--type", "discovered-from"],
             Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+        if (seedProfile == ManualPilotSeedProfile.ParentlessAndProduct)
+        {
+            if (includeForeignClaim)
+                await CreateForeignClaimSeedAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        if (seedProfile != ManualPilotSeedProfile.Comprehensive)
+            throw new ArgumentOutOfRangeException(nameof(seedProfile), seedProfile, "Unknown manual pilot seed profile.");
         DecisionId = await CreateBeadAsync("QA manual pilot product decision", "feature", ["product-decision-required"], cancellationToken).ConfigureAwait(false);
         await RunToolAsync("bd", ["comments", "add", DecisionId,
             "Which compatibility path should we choose? Keep the current API contract or migrate the consumer."],
@@ -524,12 +646,15 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
             ExhaustionTaskId = await CreateBeadAsync("QA manual pilot automatic rejection exhaustion", "task",
                 ["stage:implement"], cancellationToken).ConfigureAwait(false);
         if (includeForeignClaim)
-        {
-            ForeignClaimId = await CreateBeadAsync("QA manual pilot foreign-owned preservation sentinel", "task",
-                ["stage:implement"], cancellationToken).ConfigureAwait(false);
-            await RunToolAsync("bd", ["update", ForeignClaimId, "--status", "in_progress", "--assignee", "foreign:operator"],
-                Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
-        }
+            await CreateForeignClaimSeedAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task CreateForeignClaimSeedAsync(CancellationToken cancellationToken)
+    {
+        ForeignClaimId = await CreateBeadAsync("QA manual pilot foreign-owned preservation sentinel", "task",
+            ["stage:implement"], cancellationToken).ConfigureAwait(false);
+        await RunToolAsync("bd", ["update", ForeignClaimId, "--status", "in_progress", "--assignee", "foreign:operator"],
+            Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<string> CreateBeadAsync(string title, string type, IReadOnlyList<string> labels,

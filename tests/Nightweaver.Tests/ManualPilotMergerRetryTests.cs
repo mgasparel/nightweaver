@@ -18,7 +18,8 @@ public sealed class ManualPilotMergerRetryTests
 
         await using var fixture = await ManualPilot.CreateAsync(
             agentInvocationFixturePath: typeof(Nightweaver.Tests.AgentInvocationFixture.FixtureMarker).Assembly.Location,
-            cancellationToken: TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken,
+            seedProfile: Nightweaver.Tests.ManualDeliveryPilotFixture.ManualPilotSeedProfile.Empty);
         var beadId = await fixture.CreateMergeGateTaskAsync("QA manual pilot retry after pushed Merger commit",
             TestContext.Current.CancellationToken);
         fixture.MergerInterruptBeadId = beadId;
