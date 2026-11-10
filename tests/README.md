@@ -1,29 +1,34 @@
 # Test suite
 
-Run the complete suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner:
+Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection. The current retained suite discovers 607 tests.
 
 ```powershell
 $timer = [Diagnostics.Stopwatch]::StartNew()
-dotnet test --solution Nightweaver.slnx --minimum-expected-tests 1
+dotnet test --solution Nightweaver.slnx --minimum-expected-tests 607 --report-xunit-xml --report-xunit-xml-filename timing.xml --show-slowest-tests 20
 $testExit = $LASTEXITCODE
 $timer.Stop()
-Write-Host "Suite wall time: $($timer.Elapsed)"
+Write-Host "Suite wall time (build, fixture publishing, tests, teardown): $($timer.Elapsed)"
 if ($testExit -ne 0) { throw "Tests failed (exit $testExit)" }
-if ($timer.Elapsed.TotalMinutes -ge 5) { throw 'Suite exceeded the five-minute budget' }
+if ($timer.Elapsed.TotalSeconds -ge 300) { throw 'Suite exceeded the five-minute budget' }
 ```
 
-The five-minute budget includes the incremental build, fixture publishing, tests, and teardown. Keep the committed six-thread parallelism. Prerequisites are the .NET SDK, Git, bd 1.3.1 with embedded Dolt, and Windows for Job Objects. A fresh SDK/package installation is prerequisite setup.
+The five-minute budget covers the normal solution build, native fixture publishing, tests, and teardown. Keep the committed six-thread parallelism in `TestScheduling.cs`. For a cold-machine run, report package restore and first build separately from this warm, normal suite command. A filtered run never establishes full-suite acceptance.
 
-Use `--report-xunit-xml --report-xunit-xml-filename timing.xml` to collect per-test and per-collection durations in `TestResults`. Measure a full run after changing expensive coverage; filtered timings do not establish the suite budget.
+Use `--report-xunit-xml --report-xunit-xml-filename timing.xml` to collect per-test and per-collection durations in `TestResults`.
 
-## Coverage placement
+## Coverage pyramid
 
-| Concern | Focused coverage | Real-tool coverage |
+The retained suite keeps broad, fast decision and security checks in unit/coordinator tests and one representative set of expensive process boundaries:
+
+| Concern | Detailed fast coverage | Retained real-tool boundary |
 | --- | --- | --- |
-| Delivery entry stages, role order, repair counters, pauses | `DeliverySlotCoordinatorTests` and `AuthorityMatrixTests` | One complete Delivery handoff, one repair loop, one pause cleanup, and persisted budget escalation |
-| Pool capacity, overlapping lifetimes, replacement, admission races | `DeliveryPoolCoordinatorTests`, using explicit signals | Competing guarded bd claim after evaluation |
-| Retry budget and duplicate/different failures | `OperationalRetryCoordinatorTests` | Planning retry, dirty-worktree retry/reset, and duplicate-failure escalation |
-| Post-exit classifications, precedence, read-only HEAD protection | `AgentPostExitVerifierTests` with controlled process observations | Native lifecycle smoke tests plus process containment tests in `AgentInvocationExecutorTests` |
-| Planning materialization, challenge, and worker observation rules | `AuthorityMatrixTests` and `AgentPostExitVerifierTests` | Native plan transitions and rejected Merger worker mutation; `MergerPoolIntegrationTests.NativeMergerSynchronizesChecksAndLeavesCompletionToTheCompletionOwner` verifies Merger completion ownership |
+| Ownership, read-only roles, failure classification, and budget precedence | `AgentPostExitVerifierTests`, `AuthorityMatrixTests`, retry and coordinator tests | One complete Delivery handoff and one Merger completion-owner/real Beads boundary |
+| Slot capacity, competing writes, and claim ownership | Pool/coordinator tests | One native guarded claim after evaluation |
+| Process creation, inheritable pipe cleanup, job containment, and long paths | Existing focused executor and runtime-file tests | Retained native process/window and published active-classifier smoke tests |
+| Stop, restart, and preservation | Fast state/worker-observation tests | One second-signal restart case and one published force-stop case |
+| Bead HTTP and workspace safety | Request/authority tests | Intake plus invalid-query HTTP cases; ambient-variable, reparse-path, and Git-admin-pointer checks |
+| Merge finalization and repository guards | Cheap finalizer and branch-ownership tests | Repeatable owned cleanup, conditional branch deletion, and expected-commit guards |
 
-Expand combinations at the focused boundary. Add a native scenario when it checks a distinct tool contract or cross-component behavior. Repeating a decision matrix through fresh repositories and child processes adds substantial cost; the focused tests should carry those combinations.
+This suite deliberately removes 138 costly overlapping integration scenarios: the comprehensive parentless/planned pilot variants, held-Merger and crash-recovery journeys, most repeated published stop/restart and dispatch/repair/admission cross-products, and most full Bead/Web request permutations. These deletions reduce integration breadth; they do not fix the historical ns-jbp.13 delivery-admission issue, ns-d9j publication timing issue, or ns-dd3 fixture log cleanup issue. Those Beads remain open.
+
+The latest full run on this candidate discovered and passed 607 tests with no skips in 179.366 seconds, including the normal solution build, native fixture publishing, test execution, and teardown. Treat that as a measured reference; the five-minute budget remains the acceptance threshold. Record the exact command, artifact path, measured duration, and any further coverage changes in the Bead result.

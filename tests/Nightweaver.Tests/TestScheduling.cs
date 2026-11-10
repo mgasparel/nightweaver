@@ -1,7 +1,7 @@
 using Xunit.Sdk;
 using Xunit.v3;
 
-// Native Git/Dolt tests are limited by disk/process contention, rather than CPU.
+// Order the longest retained native collections first so they overlap with short cases.
 // Start the longest collections first so their serial tail overlaps smaller tests.
 // Refresh measured seconds when a native collection changes; keep the six-thread cap and isolated fixtures intact.
 [assembly: Parallelization(MaxThreads = 6)]
@@ -14,45 +14,18 @@ public sealed class IntegrationFirstCollectionOrderer : ITestCollectionOrderer
 {
     private static readonly (string Name, double Seconds)[] MeasuredCollectionWeights =
     [
-        (nameof(ManualDeliveryPilotIntegrationTests), 568.674),
-        (nameof(DeliveryPoolIntegrationTests), 402.243),
-        (nameof(PublishedContinuousStopIntegrationTests), 369.103),
-        (nameof(ManualDeliveryPilotHeldMergerTests), 350.962),
-        (nameof(MergerPoolIntegrationTests), 340.332),
-        (nameof(WebBeadsIntegrationTests), 308.293),
-        (nameof(AgentStageDeliveryIntegrationTests), 297.508),
-        (nameof(ManualDeliveryPilotCrashRecoveryTests), 281.147),
-        (nameof(AgentStageIntegrationTests), 276.660),
-        (nameof(PublishedCliIntegrationTests), 260.417),
-        (nameof(BackgroundDeploymentIntegrationTests), 216.275),
-        (nameof(AgentStageRepairIntegrationTests), 197.540),
-        (nameof(MergerCompletionFinalizerTests), 192.540),
-        (nameof(AgentStageRetryIntegrationTests), 176.877),
-        (nameof(DispatchAdmissionIntegrationTests), 170.755),
-        (nameof(ManualPilotMergerRetryTests), 169.623),
-        (nameof(WebBeadWorkspaceBoundaryIntegrationTests), 162.187),
-        (nameof(DispatchRecoveryIntegrationTests), 130.632),
-        (nameof(NeedsHumanEscalatorIntegrationTests), 120),
-        (nameof(DispatchStartupCleanupIntegrationTests), 118.498),
-        (nameof(WorktreeProvisionerIntegrationTests), 90),
-        (nameof(DeliveryDiscoveryIntegrationTests), 75),
-        (nameof(AgentStageDeliveryPauseIntegrationTests), 66.893),
-        (nameof(PlanningIntegrationTests), 60),
-        (nameof(MergerOutcomeVerifierTests), 45.932),
-        (nameof(BeadsIntegrationTests), 45),
-        (nameof(ManualDeliveryPilotSecondSignalTests), 44.116),
-        (nameof(NativeOperationalRetryTimeoutIntegrationTests), 42.592),
-        (nameof(DispatchCompetingProjectsIntegrationTests), 42.485), // Measured in the combined focused Dispatch run.
-        (nameof(ManualDeliveryPilotFirstSignalTests), 33.268),
-        (nameof(WorktreeIntegrationTests), 30),
-        (nameof(FactoryTelemetryIntegrationTests), 26.853),
-        (nameof(WebBeadWorkspaceIntegrationTests), 25.016),
-        (nameof(BeadsJournalClientIntegrationTests), 23.599),
-        (nameof(StartupEnvironmentCleanerIntegrationTests), 21.305),
-        (nameof(NightweaverAppTests), 20),
-        (nameof(DeliverySlotCoordinatorTests), 10),
-        (nameof(ProductDecisionPauseHandlerTests), 10),
-        (nameof(DispatchFixtureTemplateTests), 9.809)
+        (nameof(AgentStageDeliveryIntegrationTests), 111.469),
+        (nameof(MergerPoolIntegrationTests), 107.119),
+        (nameof(ManualDeliveryPilotSecondSignalTests), 80.129),
+        (nameof(MergerOutcomeVerifierTests), 63.089),
+        (nameof(WebBeadWorkspaceBoundaryIntegrationTests), 51.805),
+        (nameof(WorktreeProvisionerIntegrationTests), 42.712),
+        (nameof(PublishedContinuousStopIntegrationTests), 40.975),
+        (nameof(WebBeadsIntegrationTests), 39.386),
+        (nameof(MergerCompletionFinalizerTests), 36.875),
+        (nameof(BeadsIntegrationTests), 29.239),
+        (nameof(DeliveryPoolIntegrationTests), 22.509),
+        (nameof(ManualPilotMergerRetryTests), 12.747)
     ];
 
     public IReadOnlyCollection<TTestCollection> OrderTestCollections<TTestCollection>(
