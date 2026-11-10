@@ -574,6 +574,10 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
         await RunToolAsync("git", ["init", "--bare", Origin], Root, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
         await RunToolAsync("git", ["init", "-b", "main"], Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
         await RunToolAsync("git", ["config", "core.autocrlf", "false"], Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+        // Nested pilot worktrees can exceed MAX_PATH for Git's internal
+        // rebase SHA...SHA files even when all tracked file names are short.
+        // Keep this local so copied repositories and their worktrees inherit it.
+        await RunToolAsync("git", ["config", "core.longpaths", "true"], Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
         await RunToolAsync("git", ["config", "user.name", "Nightweaver Manual Delivery Fixture"], Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
         await RunToolAsync("git", ["config", "user.email", "fixture@example.invalid"], Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
         await File.WriteAllTextAsync(Path.Combine(Repository, "README.md"), "Disposable native Delivery pilot.\n", new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);

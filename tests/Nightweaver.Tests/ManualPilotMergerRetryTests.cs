@@ -8,6 +8,49 @@ namespace Nightweaver.Tests;
 
 public sealed class ManualPilotMergerRetryTests
 {
+    [Theory]
+    [InlineData("merge", "rebase-merge")]
+    [InlineData("apply", "rebase-apply")]
+    public void InterruptedRebaseIsPreservedAndRejectedBeforeAnotherFetchOrRebase(string backend, string stateDirectory)
+    {
+        WithGitRepository(repository =>
+        {
+            RunGit(repository, ["checkout", "-b", "nightweaver/qa-interrupted"]);
+            File.WriteAllText(Path.Combine(repository, "README.md"), "task change\n");
+            RunGit(repository, ["commit", "-am", "task change"]);
+            RunGit(repository, ["checkout", "main"]);
+            File.WriteAllText(Path.Combine(repository, "README.md"), "default change\n");
+            RunGit(repository, ["commit", "-am", "default change"]);
+            RunGit(repository, ["checkout", "nightweaver/qa-interrupted"]);
+            Assert.Throws<InvalidOperationException>(() => RunGit(repository, ["-c", $"rebase.backend={backend}", "rebase", "main"]));
+            var rebasePath = Path.Combine(repository, ".git", stateDirectory);
+            Assert.True(Directory.Exists(rebasePath));
+            File.WriteAllText(Path.Combine(repository, "README.md"), "human resolution in progress\n");
+            var head = RunGit(repository, ["rev-parse", "HEAD"]);
+            var status = RunGit(repository, ["status", "--porcelain"]);
+            var state = Directory.GetFiles(rebasePath)
+                .Select(path => (Name: Path.GetFileName(path), Content: File.ReadAllText(path)))
+                .OrderBy(file => file.Name).ToArray();
+            var commands = new List<string[]>();
+
+            var failure = Assert.Throws<InvalidOperationException>(() =>
+                ManualPilotMergerChange.SynchronizeWithDefaultBranch(repository, "main", (path, arguments) =>
+                {
+                    commands.Add(arguments.ToArray());
+                    return RunGit(path, arguments);
+                }));
+
+            Assert.Contains("unfinished rebase", failure.Message, StringComparison.Ordinal);
+            Assert.All(commands, command => Assert.Equal("rev-parse", command[0]));
+            Assert.Equal(head, RunGit(repository, ["rev-parse", "HEAD"]));
+            Assert.Equal(status, RunGit(repository, ["status", "--porcelain"]));
+            Assert.Equal("human resolution in progress\n", File.ReadAllText(Path.Combine(repository, "README.md")));
+            Assert.Equal(state, Directory.GetFiles(rebasePath)
+                .Select(path => (Name: Path.GetFileName(path), Content: File.ReadAllText(path)))
+                .OrderBy(file => file.Name).ToArray());
+        });
+    }
+
     private const string ControlledInterruption =
         "Controlled one-shot interruption after expected commit and branch push, before PR checks.";
 

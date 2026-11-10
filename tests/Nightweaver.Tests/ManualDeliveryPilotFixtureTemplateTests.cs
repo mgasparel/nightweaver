@@ -5,6 +5,47 @@ namespace Nightweaver.Tests;
 
 public sealed class ManualDeliveryPilotFixtureTemplateTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(175)]
+    public async Task NestedPilotRepositoryCanRebaseWithoutLeavingInterruptedState(int rootLength)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var temp = new TempDirectory();
+        var root = rootLength == 0 ? temp.Path
+            : Path.Combine(temp.Path, new string('n', rootLength - temp.Path.Length - 1));
+        await using var fixture = await ManualPilotFixture.CreateAsync(root: root,
+            seedProfile: ManualPilotSeedProfile.Empty,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var token = TestContext.Current.CancellationToken;
+        Task<string> Git(params string[] arguments) => fixture.RunToolForTestAsync("git", arguments, fixture.Repository, token);
+
+        // bd init extends the seeded .gitignore. Keep that unrelated setup
+        // change out of the rebase precondition.
+        await Git("add", "-u");
+        await Git("commit", "--allow-empty", "-m", "snapshot tracker initialization");
+        await Git("checkout", "-b", "nightweaver/qa-long-path");
+        await File.WriteAllTextAsync(Path.Combine(fixture.Repository, "task.txt"), "task\n", token);
+        await Git("add", "task.txt");
+        await Git("commit", "-m", "task change");
+        var taskHead = (await Git("rev-parse", "HEAD")).Trim();
+        await Git("checkout", "main");
+        await File.WriteAllTextAsync(Path.Combine(fixture.Repository, "default.txt"), "default\n", token);
+        await Git("add", "default.txt");
+        await Git("commit", "-m", "default change");
+        await Git("checkout", "nightweaver/qa-long-path");
+
+        // Rebase creates a SHA..SHA patch name below .git/rebase-merge, even
+        // when every tracked path is short. The fixture must survive nested roots.
+        await Git("rebase", "main");
+        Assert.NotEqual(taskHead, (await Git("rev-parse", "HEAD")).Trim());
+        Assert.Equal("task\n", await File.ReadAllTextAsync(Path.Combine(fixture.Repository, "task.txt"), token));
+        Assert.Equal("default\n", await File.ReadAllTextAsync(Path.Combine(fixture.Repository, "default.txt"), token));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Repository, ".git", "rebase-merge")));
+        Assert.Empty(await Git("status", "--porcelain", "--untracked-files=no"));
+    }
+
     [Fact]
     public async Task ManualPilotCopiesKeepTrackerAndGitOriginChangesInsideTheirOwnRoot()
     {

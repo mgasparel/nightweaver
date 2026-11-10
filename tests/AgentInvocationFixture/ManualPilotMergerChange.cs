@@ -7,6 +7,22 @@ public sealed record ManualPilotMergerCommit(string HeadSha, bool Reused);
 /// <summary>Validates the deterministic manual-pilot Merger change before creating or reusing it.</summary>
 public static class ManualPilotMergerChange
 {
+    public static void SynchronizeWithDefaultBranch(string worktreePath, string defaultBranch,
+        Func<string, IReadOnlyList<string>, string> runGit)
+    {
+        foreach (var state in new[] { "rebase-merge", "rebase-apply" })
+        {
+            var path = runGit(worktreePath, ["rev-parse", "--git-path", state]).Trim();
+            var fullPath = Path.GetFullPath(path, worktreePath);
+            if (Directory.Exists(fullPath) || File.Exists(fullPath))
+                throw new InvalidOperationException(
+                    $"Manual-pilot Merger found an unfinished rebase at '{fullPath}'; preserve it for inspection before retrying.");
+        }
+
+        runGit(worktreePath, ["fetch", "origin", defaultBranch]);
+        runGit(worktreePath, ["rebase", $"origin/{defaultBranch}"]);
+    }
+
     public static ManualPilotMergerCommit EnsureExpectedCommit(
         string beadId,
         string branch,

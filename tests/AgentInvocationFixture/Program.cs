@@ -1570,10 +1570,11 @@ internal static class Program
                     : string.Empty;
                 if (pilotMerger)
                 {
-                    RunManualPilotMergerStep(beadId, "fetch-default-before-rebase", head,
-                        () => Run("git", ["fetch", "origin", defaultBranch]));
-                    RunManualPilotMergerStep(beadId, "rebase-default", head,
-                        () => Run("git", ["rebase", $"origin/{defaultBranch}"]));
+                    ManualPilotMergerChange.SynchronizeWithDefaultBranch(Environment.CurrentDirectory, defaultBranch,
+                        (workingDirectory, arguments) => RunManualPilotMergerStep(beadId,
+                            arguments[0] == "fetch" ? "fetch-default-before-rebase"
+                                : arguments[0] == "rebase" ? "rebase-default" : "read-rebase-state",
+                            head, () => RunGitInDirectory(workingDirectory, arguments)));
                 }
                 if (pilotMerger)
                 {
