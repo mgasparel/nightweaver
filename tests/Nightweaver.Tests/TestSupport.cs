@@ -77,6 +77,11 @@ internal sealed class TempDirectory : IDisposable
                 File.Delete(path);
                 return;
             }
+            catch (IOException exception) when (OperatingSystem.IsWindows() && (exception.HResult & 0xFFFF) == 32)
+            {
+                WindowsFileLockDiagnostics.Record(path, exception);
+                throw;
+            }
             catch (UnauthorizedAccessException exception) when (OperatingSystem.IsWindows()
                 && (exception.HResult & 0xFFFF) == 5
                 && attempt < 5)
