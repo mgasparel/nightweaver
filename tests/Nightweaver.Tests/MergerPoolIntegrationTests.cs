@@ -18,8 +18,6 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         using var target = new AgentStageTargetFixture();
         target.ConfigureHostedFixtureOriginWithLocalRewrite();
         var beadId = target.CreateBead("Native Merger pool closure", "task", "stage:merge");
-        var productId = target.CreateBead("Native planned Product completion", "feature", "planned");
-        target.RunTarget("bd", ["dep", "add", beadId, productId, "--type", "discovered-from"]);
         var project = target.CreateProject(AgentCli.Codex, maxConcurrentDelivery: 3, timeoutMinutes: 5)
             with { Limits = new LimitsConfig(3, 0) };
         var repository = new ValidatedTargetRepository(target.Path, "main")
@@ -29,7 +27,6 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         var systemRunner = new SystemProcessRunner();
         var processRunner = new RecordingProcessRunner((request, cancellationToken) =>
             target.RunWithFixturePullRequestAsync(systemRunner, request, cancellationToken));
-        target.LoseVerifiedTaskCloseResponseAfterCommitOnce = true;
         var provisioner = new WorktreeProvisioner(processRunner);
         var worktree = await provisioner.ProvisionAsync(target.Host, project.Name, repository, beadId,
             WorktreePurpose.Delivery, TestContext.Current.CancellationToken);
@@ -105,7 +102,6 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             Assert.Null(finalBead.Assignee);
             Assert.Equal("stage:merge", finalState.Stage);
             Assert.Equal(0, finalState.RepairCycles);
-            Assert.Equal("closed", target.ReadBead(productId).Status);
             Assert.False(Directory.Exists(worktree.Path), completion.Diagnostic ?? "The owned completed worktree was not removed.");
             Assert.Empty(target.RunTarget("git", ["branch", "--list", originalBranch]));
             Assert.False(Directory.Exists(Path.Combine(target.Host.TmpRoot(project.Name), beadId)));
@@ -148,8 +144,6 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             Assert.Equal("open", AgentStageTargetFixture.ClaimWriteStatus(claimWrites[0]));
             Assert.Equal("in_progress", AgentStageTargetFixture.ClaimWriteStatus(claimWrites[1]));
             Assert.Contains("closed", claimWrites[1].Arguments);
-            Assert.False(target.LoseVerifiedTaskCloseResponseAfterCommitOnce,
-                "The fixture did not exercise a lost guarded-close response after the tracker committed it.");
             testSucceeded = true;
         }
         finally

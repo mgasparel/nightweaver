@@ -7,13 +7,15 @@ namespace Nightweaver.Tests;
 public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSupport
 {
     [Fact]
-    public async Task ExactCleanupCanRepeatWithoutRemovingUnrelatedWorktreeOrInvocationLog()
+    public async Task LostTaskCloseResponseStillCompletesHousekeepingAndAllowsRepeatedCleanup()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires native Windows CLI fixtures.");
         using var target = new AgentStageTargetFixture();
         var beadId = target.CreateBead("Repeat exact Merger cleanup", "task", "stage:merge");
-        target.RunTarget("bd", ["update", beadId, "--status", "closed", "--assignee", ""]);
+        var productId = target.CreateBead("Native planned Product completion", "feature", "planned");
+        target.RunTarget("bd", ["dep", "add", beadId, productId, "--type", "discovered-from"]);
         var project = target.CreateProject(AgentCli.Codex);
+        target.RunTarget("bd", ["update", beadId, "--status", "in_progress", "--assignee", project.RecoveryActor]);
         var repository = Repository(target);
         var systemRunner = new SystemProcessRunner();
         var worktree = await new WorktreeProvisioner(systemRunner).ProvisionAsync(target.Host, project.Name,
@@ -25,9 +27,24 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         File.WriteAllText(logPath, "retain invocation evidence");
         var session = Session(target, project, repository, beadId, worktree);
         var evidence = Evidence(worktree.HeadSha);
-        var finalizer = new MergerCompletionFinalizer(systemRunner);
+        var observations = new AgentStageObservations(session.InitialState, session.InitialState, project.RecoveryActor,
+            project.RecoveryActor, AgentExecutionStatus.Exited, 0, $"nightweaver/{beadId}", worktree.HeadSha, string.Empty, true);
+        var invocation = new AgentStageResult(AgentRole.Merger, beadId, "fixture-invocation", logPath, null, [],
+            Observations: observations);
+        target.LoseVerifiedTaskCloseResponseAfterCommitOnce = true;
+        var runner = new RecordingProcessRunner((request, token) =>
+            target.RunWithFixturePullRequestAsync(systemRunner, request, token));
+        var finalizer = new MergerCompletionFinalizer(runner);
 
-        await finalizer.CleanupOwnedEnvironmentAsync(session, evidence, TestContext.Current.CancellationToken);
+        var completion = await finalizer.CompleteAsync(session, invocation, project.RecoveryActor, evidence,
+            TestContext.Current.CancellationToken);
+        Assert.True(completion.Succeeded, completion.Diagnostic);
+        Assert.True(completion.Receipt!.CleanupSucceeded, completion.Diagnostic);
+        Assert.True(completion.Receipt.ProductCompletionSucceeded, completion.Diagnostic);
+        Assert.False(target.LoseVerifiedTaskCloseResponseAfterCommitOnce);
+        Assert.Single(AgentStageTargetFixture.ClaimWrites(runner.Requests, beadId));
+        Assert.Equal("closed", target.ReadBead(beadId).Status);
+        Assert.Equal("closed", target.ReadBead(productId).Status);
         await finalizer.CleanupOwnedEnvironmentAsync(session, evidence, TestContext.Current.CancellationToken);
 
         Assert.False(Directory.Exists(worktree.Path));
