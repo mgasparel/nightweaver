@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 
@@ -53,11 +54,49 @@ internal static class WindowsFileLockDiagnostics
                 {
                     Pid = item.Process.Id,
                     StartFileTime = ((long)item.Process.Start.dwHighDateTime << 32) | (uint)item.Process.Start.dwLowDateTime,
-                    item.AppName
+                    item.AppName,
+                    item.AppStatus,
+                    ProcessObservation = ObserveOwner(item.Process.Id,
+                        ((long)item.Process.Start.dwHighDateTime << 32) | (uint)item.Process.Start.dwLowDateTime)
                 })
             });
         }
         finally { _ = RmEndSession(session); }
+    }
+
+    internal sealed record OwnerObservation(long? ObservedStartFileTime, bool? IdentityMatches,
+        bool? HasExited, uint? NativeWaitStatus, string? ExecutablePath, string? QueryError);
+
+    internal static OwnerObservation ObserveOwner(int processId, long expectedStartFileTime)
+    {
+        long? start = null;
+        bool? identityMatches = null;
+        bool? hasExited = null;
+        uint? nativeWaitStatus = null;
+        string? executable = null;
+        string? error = null;
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            _ = process.SafeHandle;
+            start = process.StartTime.ToFileTimeUtc();
+            identityMatches = start == expectedStartFileTime;
+            if (identityMatches.Value)
+            {
+                hasExited = process.HasExited;
+                nativeWaitStatus = WaitForSingleObject(process.SafeHandle, 0);
+                if (nativeWaitStatus == uint.MaxValue)
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                if (nativeWaitStatus == 258)
+                    executable = process.MainModule?.FileName;
+            }
+        }
+        catch (Exception failure)
+        {
+            // An owner may disappear or become inaccessible after Restart Manager's snapshot.
+            error = $"{failure.GetType().Name}: {failure.Message}";
+        }
+        return new OwnerObservation(start, identityMatches, hasExited, nativeWaitStatus, executable, error);
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -89,6 +128,8 @@ internal static class WindowsFileLockDiagnostics
         [In, Out] ProcessInfo[]? processes, out uint reasons);
     [DllImport("rstrtmgr.dll")]
     private static extern int RmEndSession(uint session);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(Microsoft.Win32.SafeHandles.SafeProcessHandle process, uint milliseconds);
 }
 
 public sealed class WindowsFileLockDiagnosticsTests
@@ -103,6 +144,40 @@ public sealed class WindowsFileLockDiagnosticsTests
         using var report = JsonDocument.Parse(WindowsFileLockDiagnostics.Capture(path));
         Assert.Contains(report.RootElement.GetProperty("Owners").EnumerateArray(),
             owner => owner.GetProperty("Pid").GetInt32() == Environment.ProcessId);
+        var owner = Assert.Single(report.RootElement.GetProperty("Owners").EnumerateArray(),
+            item => item.GetProperty("Pid").GetInt32() == Environment.ProcessId);
+        var observation = owner.GetProperty("ProcessObservation");
+        Assert.True(observation.GetProperty("IdentityMatches").GetBoolean());
+        Assert.False(observation.GetProperty("HasExited").GetBoolean());
+        Assert.Equal(258u, observation.GetProperty("NativeWaitStatus").GetUInt32());
+        Assert.Equal(Environment.ProcessPath, observation.GetProperty("ExecutablePath").GetString());
+        Assert.Equal(JsonValueKind.Null, observation.GetProperty("QueryError").ValueKind);
+        Assert.True(owner.TryGetProperty("AppStatus", out _));
+    }
+
+    [Fact]
+    public void ReusedIdentityDoesNotAttributeCurrentExecutableToTheOldOwner()
+    {
+        using var current = Process.GetCurrentProcess();
+        var actualStart = current.StartTime.ToFileTimeUtc();
+        var observation = WindowsFileLockDiagnostics.ObserveOwner(current.Id, actualStart + 1);
+        Assert.Equal(actualStart, observation.ObservedStartFileTime);
+        Assert.False(observation.IdentityMatches);
+        Assert.Null(observation.HasExited);
+        Assert.Null(observation.NativeWaitStatus);
+        Assert.Null(observation.ExecutablePath);
+        Assert.Null(observation.QueryError);
+    }
+
+    [Fact]
+    public void MissingOwnerDoesNotReplaceThePrimaryRestartManagerObservation()
+    {
+        var observation = WindowsFileLockDiagnostics.ObserveOwner(-1, 123);
+        Assert.Null(observation.IdentityMatches);
+        Assert.Null(observation.HasExited);
+        Assert.Null(observation.NativeWaitStatus);
+        Assert.Null(observation.ExecutablePath);
+        Assert.NotEmpty(observation.QueryError!);
     }
 
     [Fact]
