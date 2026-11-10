@@ -1026,9 +1026,7 @@ internal static class Program
     }
 
     private static void WriteProcessIdentity(string path) =>
-        File.WriteAllText(path,
-            $"{Environment.ProcessId}|{Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks}",
-            new UTF8Encoding(false));
+        NativeProcessIdentityFile.Write(path);
 
     private static int RunRealGit(string executable, string[] args)
     {

@@ -452,7 +452,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
 
     private static Process ReadFixtureProcess(string path)
     {
-        var parts = File.ReadAllText(path).Split('|', StringSplitOptions.TrimEntries);
+        var parts = NativeProcessIdentityFile.Read(path).Split('|', StringSplitOptions.TrimEntries);
         Assert.Equal(2, parts.Length);
         var process = Process.GetProcessById(int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture));
         Assert.Equal(long.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture), process.StartTime.ToUniversalTime().Ticks);
