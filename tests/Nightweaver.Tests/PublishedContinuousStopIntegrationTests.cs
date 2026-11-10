@@ -131,6 +131,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
             await WaitForStageLaunchCountAsync(stageLaunchLog, beadIds.Length, runtime, TimeSpan.FromSeconds(90));
             var initialAgents = ReadStageLaunchLines(stageLaunchLog).Select(ReadFixtureProcessFromLaunchRecord).ToArray();
             using var remainingAgent = initialAgents.Single(item => item.BeadId == beadIds[0]).Process;
+            using var completingAgent = initialAgents.Single(item => item.BeadId == beadIds[1]).Process;
             foreach (var beadId in beadIds)
             {
                 var startedPath = Path.Combine(agentStartedDirectory, beadId + ".started");
@@ -457,24 +458,38 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         return reader.ReadToEnd();
     }
 
-    private static Process ReadFixtureProcess(string path)
+    internal static Process ReadFixtureProcess(string path)
     {
         var parts = NativeProcessIdentityFile.Read(path).Split('|', StringSplitOptions.TrimEntries);
         Assert.Equal(2, parts.Length);
-        var process = Process.GetProcessById(int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture));
-        Assert.Equal(long.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture), process.StartTime.ToUniversalTime().Ticks);
-        return process;
+        return OpenVerifiedProcess(int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture),
+            long.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture));
     }
 
-    private static (string BeadId, Process Process) ReadFixtureProcessFromLaunchRecord(string record)
+    internal static (string BeadId, Process Process) ReadFixtureProcessFromLaunchRecord(string record)
     {
         var parts = record.Split('|', StringSplitOptions.TrimEntries);
         Assert.Equal(3, parts.Length);
         var processId = int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture);
         var startTicks = long.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture);
+        return (parts[0], OpenVerifiedProcess(processId, startTicks));
+    }
+
+    private static Process OpenVerifiedProcess(int processId, long startTicks)
+    {
         var process = Process.GetProcessById(processId);
-        Assert.Equal(startTicks, process.StartTime.ToUniversalTime().Ticks);
-        return (parts[0], process);
+        try
+        {
+            // Bind later exit checks to this process generation before verifying its identity.
+            _ = process.SafeHandle;
+            Assert.Equal(startTicks, process.StartTime.ToUniversalTime().Ticks);
+            return process;
+        }
+        catch
+        {
+            process.Dispose();
+            throw;
+        }
     }
 
     private static async Task WaitForStageLaunchCountAsync(
