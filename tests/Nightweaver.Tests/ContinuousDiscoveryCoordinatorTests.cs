@@ -126,7 +126,7 @@ public sealed class ContinuousDiscoveryCoordinatorTests
         using var lifetime = new CancellationTokenSource();
         var completions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
         var ticks = Channel.CreateUnbounded<bool>();
-        var error = new StringWriter();
+        var error = new ChannelLineWriter();
         var watcherStopped = NewSignal();
         var failWatcher = NewSignal();
         var passGates = Channel.CreateUnbounded<TaskCompletionSource<bool>>();
@@ -156,8 +156,10 @@ public sealed class ContinuousDiscoveryCoordinatorTests
             // request. Hold startup in flight before requiring a separate pass.
             failWatcher.TrySetResult(true);
             await watcherStopped.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-            await WaitForWatcherFailureAsync();
-            Assert.Contains("periodic and completion discovery remain active", error.ToString(), StringComparison.Ordinal);
+            var diagnostic = await error.Lines.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.Contains("tracker journal watcher stopped", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("periodic and completion discovery remain active", diagnostic, StringComparison.Ordinal);
 
             startupPass.TrySetResult(true);
             var watcherFailurePass = await ReadPassGateAsync();
@@ -180,12 +182,6 @@ public sealed class ContinuousDiscoveryCoordinatorTests
         async Task<TaskCompletionSource<bool>> ReadPassGateAsync() =>
             await passGates.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
                 .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-
-        async Task WaitForWatcherFailureAsync()
-        {
-            while (!error.ToString().Contains("tracker journal watcher stopped", StringComparison.Ordinal))
-                await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
 
         static async Task<IReadOnlyList<DeliveryPoolDiagnostic>> WaitForPassReleaseAsync(
             TaskCompletionSource<bool> release, CancellationToken cancellationToken)
