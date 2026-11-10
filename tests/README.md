@@ -1,10 +1,10 @@
 # Test suite
 
-Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection. The current retained suite discovers 611 tests.
+Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection. The current retained suite discovers 612 tests.
 
 ```powershell
 $timer = [Diagnostics.Stopwatch]::StartNew()
-dotnet test --solution Nightweaver.slnx --minimum-expected-tests 611 --report-xunit-xml --report-xunit-xml-filename timing.xml --show-slowest-tests 20
+dotnet test --solution Nightweaver.slnx --minimum-expected-tests 612 --report-xunit-xml --report-xunit-xml-filename timing.xml --show-slowest-tests 20
 $testExit = $LASTEXITCODE
 $timer.Stop()
 Write-Host "Suite wall time (build, fixture publishing, tests, teardown): $($timer.Elapsed)"
@@ -31,4 +31,4 @@ The retained suite keeps broad, fast decision and security checks in unit/coordi
 
 This suite deliberately removes 138 costly overlapping integration scenarios: the comprehensive parentless/planned pilot variants, held-Merger and crash-recovery journeys, most repeated published stop/restart and dispatch/repair/admission cross-products, and most full Bead/Web request permutations. These deletions reduce integration breadth; they do not fix the historical ns-jbp.13 delivery-admission issue, ns-d9j publication timing issue, or ns-dd3 fixture log cleanup issue. Those Beads remain open.
 
-The prior ns-e5i baseline discovered and passed 607 tests with no skips in 179.366 seconds, including the normal solution build, native fixture publishing, test execution, and teardown. Four focused Git cases now cover short/deep pilot rebases and preservation of interrupted merge/apply rebases, without restoring removed runtime journeys. The five-minute budget remains the acceptance threshold. Record the exact command, artifact path, measured duration, and any further coverage changes in the Bead result.
+The prior ns-e5i baseline discovered and passed 607 tests with no skips in 179.366 seconds, including the normal solution build, native fixture publishing, test execution, and teardown. Four focused Git cases cover short/deep pilot rebases and preservation of interrupted merge/apply rebases. One native resumed-admission regression now covers dependency, capacity, and restart with explicit fixture priorities; it launches no Agent process. The five-minute budget remains the acceptance threshold. Record the exact command, artifact path, measured duration, and any further coverage changes in the Bead result.
