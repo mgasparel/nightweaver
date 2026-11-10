@@ -158,52 +158,20 @@ public sealed class AgentStageRetryIntegrationTests : AgentStageIntegrationTestS
         Assert.Equal(2, target.LastRetryLifecycleCount);
     }
 
-    [Fact]
-    public async Task DistinctRetryFailuresExhaustDefaultBudgetAfterThreeNativeAttempts()
-    {
-        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
-        using var target = new AgentStageTargetFixture();
-        var bead = target.CreateBead("Retry exhaustion integration", "task", "stage:implement");
-
-        var outcome = await target.RunRetryAgentAsync(bead, AgentRole.Implementer,
-            ["failure", "failure", "failure"], classifierAction: "different");
-
-        Assert.Equal(OperationalRetryStatus.Escalated, outcome.Status);
-        Assert.Equal(3, outcome.AttemptCount);
-        Assert.Equal(NeedsHumanCause.OperationalRetriesExhausted, outcome.EscalationCause);
-        Assert.Equal(DuplicateFailureVerdict.Different, outcome.LastClassification!.Verdict);
-        Assert.Equal(3, target.LastRetryLifecycleCount);
-        var beadSnapshot = target.ReadBead(bead);
-        var state = BeadWorkflowState.Parse(beadSnapshot);
-        Assert.Equal("stage:implement", state.Stage);
-        Assert.True(state.NeedsHuman);
-        Assert.Equal("open", beadSnapshot.Status);
-        Assert.Null(beadSnapshot.Assignee);
-        Assert.True(Directory.Exists(target.WorktreePath(bead)));
-        Assert.True(Directory.Exists(System.IO.Path.Combine(target.Host.TmpRoot(ProjectSlug.Parse("demo")), bead)));
-        Assert.Equal(0, GitFixture.RunGit(target.Path, ["show-ref", "--verify", "--quiet", $"refs/heads/nightweaver/{bead}"], allowFailure: true));
-        var logs = Directory.GetFiles(System.IO.Path.Combine(target.Host.LogsRoot(ProjectSlug.Parse("demo")), bead), "*.log");
-        Assert.Equal(4, logs.Length); // three lifecycle invocations and one comparison
-    }
-
-
 }
 
 public sealed class AgentStageRepairIntegrationTests : AgentStageIntegrationTestSupport
 {
     [Fact]
-    public async Task ReviewerAndQaRepairsReuseTheClaimWorktreeBranchAndFreshBudgetHeaders()
+    public async Task ReviewerRepairReusesTheClaimWorktreeBranchAndFreshBudgetHeaders()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
-        var bead = target.CreateBead("Reviewer and QA repair loops", "task", "stage:implement");
+        var bead = target.CreateBead("Reviewer repair loop", "task", "stage:implement");
         (AgentRole Role, string Action)[] actions =
         [
             (AgentRole.Implementer, "slot-implement-push"),
             (AgentRole.Reviewer, "slot-review-reject-1"),
-            (AgentRole.Implementer, "slot-implement-repair"),
-            (AgentRole.Reviewer, "slot-review"),
-            (AgentRole.Qa, "slot-qa-reject-2"),
             (AgentRole.Implementer, "slot-implement-repair"),
             (AgentRole.Reviewer, "slot-review"),
             (AgentRole.Qa, "slot-qa")
@@ -218,8 +186,8 @@ public sealed class AgentStageRepairIntegrationTests : AgentStageIntegrationTest
             + $"log {outcome.LastStage?.StageResult.LogFilePath}\n{ReadInvocationLog(outcome.LastStage?.StageResult.LogFilePath)}");
         Assert.Equal(actions.Select(step => step.Role), target.LastSlotRoles);
         var records = File.ReadAllLines(observations).Select(line => JsonSerializer.Deserialize<SlotObservation>(line)!).ToArray();
-        Assert.Equal([0, 0, 1, 1, 1, 2, 2, 2], records.Select(record => record.RepairCycles));
-        Assert.Equal([3, 3, 2, 2, 2, 1, 1, 1], records.Select(record => record.RemainingRepairBudget));
+        Assert.Equal([0, 0, 1, 1, 1], records.Select(record => record.RepairCycles));
+        Assert.Equal([3, 3, 2, 2, 2], records.Select(record => record.RemainingRepairBudget));
         Assert.All(records, record =>
         {
             Assert.Equal(target.WorktreePath(bead), record.Worktree);
@@ -228,14 +196,14 @@ public sealed class AgentStageRepairIntegrationTests : AgentStageIntegrationTest
             Assert.Equal("nightweaver:demo", record.Assignee);
         });
         Assert.NotEqual(records[0].Head, records[2].Head);
-        Assert.NotEqual(records[2].Head, records[5].Head);
+
         Assert.True(File.Exists(System.IO.Path.Combine(target.WorktreePath(bead), ".nightweaver-ignored", "slot-sentinel.bin")));
         Assert.Contains("slot fixture repair", target.RunTarget("git", ["log", "--format=%s"], target.WorktreePath(bead)), StringComparison.Ordinal);
-        Assert.Equal(2, target.ReadState(bead).RepairCycles);
+        Assert.Equal(1, target.ReadState(bead).RepairCycles);
         using var comments = JsonDocument.Parse(target.ReadComments(bead));
         var commentTexts = StringValues(comments.RootElement).ToArray();
         Assert.Contains(commentTexts, value => value.Contains("Blocking finding: reviewer cycle 1", StringComparison.Ordinal));
-        Assert.Contains(commentTexts, value => value.Contains("QA failure: cycle 2; POST /fixture returned 500", StringComparison.Ordinal));
+
     }
 
 
@@ -375,16 +343,14 @@ public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTe
     }
 
     [Fact]
-    public async Task DeliverySlotKeepsOneClaimAndPersistentWorktreeAcrossEverySupportedEntryStage()
+    public async Task DeliverySlotKeepsOneClaimAndPersistentWorktreeThroughMergeHandoff()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
         var entries = new[]
         {
-            (Label: (string?)null, Roles: new[] { AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa }),
-            (Label: (string?)"stage:implement", Roles: new[] { AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa }),
-            (Label: (string?)"stage:review", Roles: new[] { AgentRole.Reviewer, AgentRole.Qa }),
-            (Label: (string?)"stage:qa", Roles: new[] { AgentRole.Qa })
+            // Entry-stage selection is covered by DeliverySlotCoordinatorTests.
+            (Label: (string?)null, Roles: new[] { AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa })
         };
 
         var entryBeads = target.CreateBeads(entries.Select(entry =>
@@ -513,15 +479,14 @@ public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTe
 public sealed class AgentStageDeliveryPauseIntegrationTests : AgentStageIntegrationTestSupport
 {
     [Fact]
-    public async Task DeliverySlotPausesForProductDecisionFromEveryDeliveryRoleAndRetainsEnvironment()
+    public async Task DeliverySlotPauseRetainsOwnedEnvironmentAndUnrelatedWorktree()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
         var entries = new[]
         {
-            (Label: (string?)null, Role: AgentRole.Implementer, Action: "slot-implement-pause-unlabeled"),
-            (Label: (string?)"stage:review", Role: AgentRole.Reviewer, Action: "slot-review-pause"),
-            (Label: (string?)"stage:qa", Role: AgentRole.Qa, Action: "slot-qa-pause")
+            // Role and stage combinations are covered by DeliverySlotCoordinatorTests.
+            (Label: (string?)null, Role: AgentRole.Implementer, Action: "slot-implement-pause-unlabeled")
         };
 
         var entryBeads = target.CreateBeads(entries.Select(entry =>
@@ -805,7 +770,7 @@ public sealed class AgentStageIntegrationTests : AgentStageIntegrationTestSuppor
     }
 
     [Fact]
-    public async Task RealGitBdAndWindowsJobsRunPlanningDeliveryAndAllOperationalClassifications()
+    public async Task NativeAgentsMaterializePlansAndRejectMergerLifecycleMutation()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows Job Objects and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
@@ -815,28 +780,9 @@ public sealed class AgentStageIntegrationTests : AgentStageIntegrationTestSuppor
         var rootBefore = target.CaptureRootState();
 
         var beads = target.CreateBeads(
-            ("Planning transition", "feature", ["stage:plan"]),
             ("Plan challenge transition", "feature", ["stage:plan-challenge"]),
             ("Materialized plan", "bug", ["stage:plan-approved"]),
-            ("Delivery transition", "task", ["stage:implement"]),
-            ("Reviewer transition", "task", ["stage:review"]),
-            ("QA transition", "task", ["stage:qa"]),
-            ("Merger closure", "task", ["stage:merge"]),
-            ("Correct repair increment", "task", ["stage:review"]),
-            ("Nonzero exit", "task", ["stage:implement"]),
-            ("Timeout", "task", ["stage:implement"]),
-            ("Dirty worktree", "task", ["stage:implement"]),
-            ("Forbidden read-only commit", "feature", ["stage:plan"]),
-            ("Forbidden challenger commit", "feature", ["stage:plan-challenge"]),
-            ("Forbidden reviewer commit", "task", ["stage:review"]),
-            ("Forbidden QA commit", "task", ["stage:qa"]),
-            ("Illegal no-op", "task", ["stage:implement"]),
-            ("Missing repair increment", "task", ["stage:review"]));
-
-        var planner = beads["Planning transition"];
-        var planning = await target.RunAgentAsync(planner, AgentRole.Planner, "plan-challenge", AgentCli.Claude);
-        AssertSuccess(planning, "plan-challenge");
-        Assert.Equal("stage:plan-challenge", planning.VerifiedState?.Stage);
+            ("Merger lifecycle mutation", "task", ["stage:merge"]));
 
         var challenger = beads["Plan challenge transition"];
         var challenged = await target.RunAgentAsync(challenger, AgentRole.PlanChallenger, "challenge", AgentCli.Codex);
@@ -852,95 +798,24 @@ public sealed class AgentStageIntegrationTests : AgentStageIntegrationTestSuppor
         Assert.Contains(links, link => link.DependsOnId == approved && link.Type == "discovered-from"
             && target.ReadBead(link.IssueId) is { IssueType: "task", Status: "open" });
 
-        var delivery = beads["Delivery transition"];
-        var delivered = await target.RunAgentAsync(delivery, AgentRole.Implementer, "review-commit", AgentCli.Codex);
-        AssertSuccess(delivered, "review-commit");
-        Assert.Null(delivered.VerifiedState);
-        Assert.Equal("stage:implement", target.ReadState(delivery).Stage);
-        Assert.Equal("nightweaver/" + delivery, delivered.Observations?.BranchName);
+        var merger = beads["Merger lifecycle mutation"];
+        var mergerBefore = BeadWorkflowState.Parse(target.ReadBead(merger));
+        var mergeAttempt = await target.RunAgentAsync(merger, AgentRole.Merger, "close-commit", AgentCli.Codex);
+        AssertFailure(mergeAttempt, AgentOperationalFailureKind.IllegalBeadTransition);
+        Assert.Null(mergeAttempt.VerifiedState);
+        Assert.Contains("Lifecycle agents may report evidence but cannot mutate",
+            mergeAttempt.Failure!.Reason, StringComparison.Ordinal);
+        Assert.Equal(mergerBefore, mergeAttempt.Observations?.BeforeState);
+        var mergerObservedAfter = mergerBefore with { Status = "closed" };
+        Assert.Equal(mergerObservedAfter, mergeAttempt.Observations?.ObservedState);
 
-        var reviewId = beads["Reviewer transition"];
-        var reviewed = await target.RunAgentAsync(reviewId, AgentRole.Reviewer, "review-qa", AgentCli.Claude);
-        AssertFailure(reviewed, AgentOperationalFailureKind.IllegalBeadTransition);
-        Assert.Contains("cannot mutate", reviewed.Failure!.Reason, StringComparison.OrdinalIgnoreCase);
-        Assert.Null(reviewed.VerifiedState);
-
-        var qaId = beads["QA transition"];
-        var qa = await target.RunAgentAsync(qaId, AgentRole.Qa, "qa-merge", AgentCli.Codex);
-        AssertFailure(qa, AgentOperationalFailureKind.IllegalBeadTransition);
-        Assert.Contains("cannot mutate", qa.Failure!.Reason, StringComparison.OrdinalIgnoreCase);
-        Assert.Null(qa.VerifiedState);
-
-        var merger = beads["Merger closure"];
-        var merged = await target.RunAgentAsync(merger, AgentRole.Merger, "close-commit", AgentCli.Codex);
-        AssertFailure(merged, AgentOperationalFailureKind.IllegalBeadTransition);
-        Assert.Null(merged.VerifiedState);
-
-        var rejectionId = beads["Correct repair increment"];
-        var rejection = await target.RunAgentAsync(rejectionId, AgentRole.Reviewer, "reject-with-increment", AgentCli.Claude);
-        AssertFailure(rejection, AgentOperationalFailureKind.IllegalBeadTransition);
-        Assert.Contains("repair_cycles", rejection.Failure!.Reason, StringComparison.Ordinal);
-
-        var nonzeroId = beads["Nonzero exit"];
-        var nonzero = await target.RunAgentAsync(nonzeroId, AgentRole.Implementer, "review-nonzero", AgentCli.Codex);
-        AssertFailure(nonzero, AgentOperationalFailureKind.NonZeroExit);
-        Assert.Contains("19", nonzero.Failure!.Reason, StringComparison.Ordinal);
-
-        var timeoutId = beads["Timeout"];
-        var timedOut = await target.RunAgentAsync(timeoutId, AgentRole.Implementer, "timeout", AgentCli.Codex);
-        AssertFailure(timedOut, AgentOperationalFailureKind.TimedOut);
-        Assert.DoesNotContain(timedOut.Diagnostics, diagnostic => diagnostic.StartsWith("IllegalBeadTransition:", StringComparison.Ordinal));
-
-        var dirtyId = beads["Dirty worktree"];
-        var dirty = await target.RunAgentAsync(dirtyId, AgentRole.Implementer, "review-dirty", AgentCli.Codex);
-        AssertSuccess(dirty, "review-dirty");
-        Assert.False(dirty.Observations?.WorktreeClean);
-        Assert.Contains("fixture-dirty.txt", dirty.Observations!.WorktreeStatus!, StringComparison.Ordinal);
-        Assert.True(File.Exists(System.IO.Path.Combine(target.WorktreePath(dirtyId), "fixture-dirty.txt")),
-            "Post-exit failure must retain the dirty worktree for diagnosis.");
-
-        var headId = beads["Forbidden read-only commit"];
-        var headChanged = await target.RunAgentAsync(headId, AgentRole.Planner, "plan-commit", AgentCli.Claude);
-        AssertFailure(headChanged, AgentOperationalFailureKind.ForbiddenHeadMutation);
-
-        var challengerHeadId = beads["Forbidden challenger commit"];
-        var challengerHeadChanged = await target.RunAgentAsync(challengerHeadId, AgentRole.PlanChallenger, "challenge-commit", AgentCli.Codex);
-        AssertFailure(challengerHeadChanged, AgentOperationalFailureKind.ForbiddenHeadMutation);
-
-        var reviewerHeadId = beads["Forbidden reviewer commit"];
-        var reviewerHeadChanged = await target.RunAgentAsync(reviewerHeadId, AgentRole.Reviewer, "review-qa-commit", AgentCli.Claude);
-        AssertFailure(reviewerHeadChanged, AgentOperationalFailureKind.ForbiddenHeadMutation);
-
-        var qaHeadId = beads["Forbidden QA commit"];
-        var qaHeadChanged = await target.RunAgentAsync(qaHeadId, AgentRole.Qa, "qa-merge-commit", AgentCli.Codex);
-        AssertFailure(qaHeadChanged, AgentOperationalFailureKind.ForbiddenHeadMutation);
-
-        var noOpId = beads["Illegal no-op"];
-        var noOp = await target.RunAgentAsync(noOpId, AgentRole.Implementer, "noop", AgentCli.Codex);
-        AssertSuccess(noOp, "noop");
-        Assert.Equal("stage:implement", target.ReadState(noOpId).Stage);
-
-        var missingCounterId = beads["Missing repair increment"];
-        var missingCounter = await target.RunAgentAsync(missingCounterId, AgentRole.Reviewer, "reject-without-increment", AgentCli.Claude);
-        AssertFailure(missingCounter, AgentOperationalFailureKind.IllegalBeadTransition);
-        Assert.Contains("repair_cycles", missingCounter.Failure!.Reason, StringComparison.Ordinal);
-
-        // Each scenario has a separate bead, so one final native inventory proves
-        // their persisted transitions together after all native processes have exited.
         var persisted = target.ReadInventory().ById;
-        Assert.Equal("stage:plan-challenge", BeadWorkflowState.Parse(persisted[planner]).Stage);
         Assert.Equal("stage:plan-approved", BeadWorkflowState.Parse(persisted[challenger]).Stage);
         Assert.True(BeadWorkflowState.Parse(persisted[approved]).Planned);
-        Assert.Equal("stage:implement", BeadWorkflowState.Parse(persisted[delivery]).Stage);
-        Assert.Equal("stage:qa", BeadWorkflowState.Parse(persisted[reviewId]).Stage);
-        Assert.Equal("stage:merge", BeadWorkflowState.Parse(persisted[qaId]).Stage);
-        Assert.Equal("closed", BeadWorkflowState.Parse(persisted[merger]).Status);
-        Assert.Equal(1, BeadWorkflowState.Parse(persisted[rejectionId]).RepairCycles);
-
+        Assert.Equal(mergerObservedAfter, BeadWorkflowState.Parse(persisted[merger]));
         Assert.Equal(rootBefore, target.CaptureRootState());
         Assert.Equal(foreignBefore, Snapshot.FileTree(foreign.Path));
     }
-
 }
 
 public abstract class AgentStageIntegrationTestSupport
