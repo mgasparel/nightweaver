@@ -16,6 +16,7 @@ public sealed class IntegrationFirstCollectionOrderer : ITestCollectionOrderer
     [
         (nameof(AgentStageDeliveryIntegrationTests), 111.469),
         (nameof(MergerPoolIntegrationTests), 107.119),
+        (nameof(PoolConcurrencyIntegrationTests), 90.597),
         (nameof(ManualDeliveryPilotSecondSignalTests), 80.129),
         (nameof(MergerOutcomeVerifierTests), 63.089),
         (nameof(WebBeadWorkspaceBoundaryIntegrationTests), 51.805),
