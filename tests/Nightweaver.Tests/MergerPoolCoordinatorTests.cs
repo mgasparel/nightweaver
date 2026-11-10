@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Nightweaver.Application;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
@@ -394,6 +395,116 @@ public sealed class MergerPoolCoordinatorTests
         Assert.Empty(deliveryPool.ActiveReservations);
     }
 
+    [Fact]
+    public async Task VerifiedRepairAndQaHandoffsTriggerDiscoveryInBothPools()
+    {
+        const string beadId = "repair-task";
+        var host = new HostPaths(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "repair-handoff-host")));
+        var target = new ValidatedTargetRepository(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "repair-handoff-target")), "main");
+        var project = CreateProject(target, maxConcurrentDelivery: 1);
+        var processRunner = new RecordingProcessRunner((_, _) => throw new InvalidOperationException("Unexpected external command."));
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var stopGate = new ContinuousStopGate();
+        var firstMergerStarted = NewSignal();
+        var publishRepair = NewSignal();
+        var deliveryStarted = NewSignal();
+        var publishQaApproval = NewSignal();
+        var secondMergerFinished = NewSignal();
+        var trackerState = new BeadWorkflowState(beadId, "task", "open", "stage:merge", false, false, false, 0);
+        var mergerStarts = 0;
+
+        string TrackerRow(BeadWorkflowState state) =>
+            Row(beadId, status: state.Status, labels: [state.Stage!], repairCycles: state.RepairCycles);
+
+        var delivery = new DeliveryPoolCoordinator(host, project, target, processRunner,
+            (_, _, _) =>
+            {
+                var state = Volatile.Read(ref trackerState);
+                return Task.FromResult(DeliverySnapshot([TrackerRow(state)], state.Status == "open" ? [beadId] : []));
+            },
+            async (_, _, _, admittedBead, token) =>
+            {
+                Assert.Equal(beadId, admittedBead);
+                var received = Volatile.Read(ref trackerState);
+                Assert.Equal("stage:implement", received.Stage);
+                Assert.Equal(1, received.RepairCycles);
+                deliveryStarted.SetResult(true);
+                await publishQaApproval.Task.WaitAsync(token);
+                var published = received with { Stage = "stage:merge" };
+                Volatile.Write(ref trackerState, published);
+                return new DeliverySlotOutcome(DeliverySlotDisposition.MergeReady, published, AgentRole.Qa, null, true, null);
+            },
+            slotLifetimeToken: lifetime.Token, stopGate: stopGate);
+        var merger = new MergerPoolCoordinator(host, project, target, processRunner,
+            (_, _, _) =>
+            {
+                var state = Volatile.Read(ref trackerState);
+                return Task.FromResult(Snapshot([TrackerRow(state)], state.Status == "open" ? [beadId] : []));
+            },
+            async (_, _, _, admittedBead, agentAttemptStarted, token) =>
+            {
+                Assert.Equal(beadId, admittedBead);
+                var received = Volatile.Read(ref trackerState);
+                Assert.Equal("stage:merge", received.Stage);
+                agentAttemptStarted();
+                if (Interlocked.Increment(ref mergerStarts) == 1)
+                {
+                    Assert.Equal(0, received.RepairCycles);
+                    firstMergerStarted.SetResult(true);
+                    await publishRepair.Task.WaitAsync(token);
+                    var published = received with { Stage = "stage:implement", RepairCycles = 1 };
+                    Volatile.Write(ref trackerState, published);
+                    return new MergerSlotOutcome(MergerSlotDisposition.RepairHandedOff, published, null, true, null);
+                }
+
+                Assert.Equal(1, received.RepairCycles);
+                var closed = received with { Status = "closed" };
+                Volatile.Write(ref trackerState, closed);
+                secondMergerFinished.SetResult(true);
+                return new MergerSlotOutcome(MergerSlotDisposition.Merged, closed, null, true, null);
+            },
+            slotLifetimeToken: lifetime.Token, stopGate: stopGate);
+
+        var runtime = new ContinuousDiscoveryCoordinator(
+            [
+                new ContinuousPoolRegistration(ContinuousPoolKind.Delivery,
+                    async token => (await delivery.EvaluateAsync(token)).Diagnostics, delivery.CompletionReader,
+                    lifetime.Cancel, async token => { await delivery.WaitForActiveSlotsAsync(token); },
+                    delivery.WaitForCompletionAccountingAsync),
+                new ContinuousPoolRegistration(ContinuousPoolKind.Merger,
+                    async token => (await merger.EvaluateAsync(token)).Diagnostics, merger.CompletionReader,
+                    lifetime.Cancel, async token => { await merger.WaitForActiveSlotsAsync(token); },
+                    merger.WaitForCompletionAccountingAsync)
+            ],
+            _ => Task.CompletedTask, TextWriter.Null, TextWriter.Null, stopGate: stopGate);
+        var run = runtime.RunAsync(lifetime.Token);
+        var handshakeDeadline = TimeSpan.FromSeconds(10);
+        var testToken = TestContext.Current.CancellationToken;
+        try
+        {
+            await firstMergerStarted.Task.WaitAsync(handshakeDeadline, testToken);
+            Assert.Empty((await delivery.EvaluateAsync(testToken)).Admitted);
+            publishRepair.SetResult(true);
+
+            await deliveryStarted.Task.WaitAsync(handshakeDeadline, testToken);
+            Assert.Empty((await merger.EvaluateAsync(testToken)).Admitted);
+            publishQaApproval.SetResult(true);
+
+            await secondMergerFinished.Task.WaitAsync(handshakeDeadline, testToken);
+        }
+        finally
+        {
+            await lifetime.CancelAsync();
+            await run.WaitAsync(handshakeDeadline, CancellationToken.None);
+        }
+
+        Assert.True(await run);
+        Assert.Equal(2, mergerStarts);
+        Assert.Equal("closed", trackerState.Status);
+        Assert.Empty(delivery.ActiveReservations);
+        Assert.Empty(merger.ActiveReservations);
+    }
+
     private static MergerPoolCoordinator CreatePool(Func<Task<MergerPoolSnapshot>> snapshotReader,
         MergerPoolSlotRunner slotRunner, int maxConcurrentDelivery = 1, ContinuousStopGate? stopGate = null)
     {
@@ -427,7 +538,7 @@ public sealed class MergerPoolCoordinatorTests
     }
 
     private static string Row(string id, string status = "open", string issueType = "task", int priority = 1,
-        string createdAt = "2026-01-01T00:00:00Z", string? assignee = null, string[]? labels = null)
+        string createdAt = "2026-01-01T00:00:00Z", string? assignee = null, string[]? labels = null, int repairCycles = 0)
         => JsonSerializer.Serialize(new
         {
             id,
@@ -438,7 +549,7 @@ public sealed class MergerPoolCoordinatorTests
             assignee,
             labels = labels ?? [],
             dependencies = Array.Empty<object>(),
-            metadata = new { repair_cycles = 0 }
+            metadata = new { repair_cycles = repairCycles }
         });
 
     private static TaskCompletionSource<bool> NewSignal() =>
