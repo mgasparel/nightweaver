@@ -50,7 +50,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
             File.WriteAllText(agentRelease, "finish before classifier force stop", new UTF8Encoding(false));
             await WaitForFileAsync(classifierStarted, runtime, TimeSpan.FromSeconds(90));
             using var classifier = ReadFixtureProcess(classifierPid);
-            Assert.True(agent.HasExited, "The working Agent must finish before its fallback classifier starts.");
+            Assert.True(agent.WaitForExit(0), "The working Agent must finish before its fallback classifier starts.");
             Assert.False(classifier.HasExited);
 
             target.SendConsoleBreak(runtime.Id);
