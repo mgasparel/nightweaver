@@ -10,6 +10,8 @@ Nightweaver is a discovery-driven software factory for Beads (`bd`) work. It is 
 - The Target Repository must be the root of a Git working tree and contain a prepared `.beads` tracker. Complete tracker setup before running Nightweaver. A fresh `bd init` may need a normal bd write outside the dry-run to create bd's persistent gate-lock files. Nightweaver does not initialize or migrate a tracker.
 - Live operation currently requires Windows for Win32 Job Object process containment, the configured Agent CLI installed and available on `PATH`, and the role prompt under `<nightweaver-root>\prompts\`. Worktree provisioning also needs the configured default branch on `origin`. A role's mandate can use `git`, `gh`, or the Target Repository's own build and test tools.
 
+Invocation temp-directory reservation and runtime native log, status, lock, diagnostic, and snapshot file boundaries support paths beyond the legacy Windows 248/260-character limits through extended-length native paths. Canonical runtime identities, reparse-point rejection, directory pins and exclusive reservation still apply; child `TEMP`, `TMP` and `TMPDIR` retain the ordinary invocation-scoped path. Filesystem component limits and the Agent CLI's own path restrictions still apply.
+
 The integration tests use real Git and bd against disposable repositories and use native fake Agent apphosts for live execution. They require those tools and fail with a prerequisite error if a required tool is missing; the real-tool gate does not silently skip. A dry run does not need an Agent CLI, `gh`, a network connection, an `origin` remote, or credentials.
 
 ## Build, test, and publish

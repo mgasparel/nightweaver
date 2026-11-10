@@ -67,10 +67,12 @@ public sealed class AgentInvocationExecutorTests
         Assert.Equal(0, launcher.LaunchCount);
     }
 
-    [Fact]
-    public async Task DeliversExactUtf8ClosesStdinSetsCwdAndOverlaysOnlyRuntimeEnvironment()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeliversExactUtf8ClosesStdinSetsCwdAndOverlaysOnlyRuntimeEnvironment(bool longRoot)
     {
-        using var fixture = new ExecutionFixture();
+        using var fixture = new ExecutionFixture(longRoot);
         const string payload = "hÃ©llo é›ª ðŸŒƒ\nsecond line\n";
         const string ambientName = "NIGHTWEAVER_FIXTURE_AMBIENT";
         const string authName = "NIGHTWEAVER_FIXTURE_AUTH";
@@ -118,10 +120,12 @@ public sealed class AgentInvocationExecutorTests
         }
     }
 
-    [Fact]
-    public async Task FlushesMergedOutputBeforeTheNativeAgentExits()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FlushesMergedOutputBeforeTheNativeAgentExits(bool longRoot)
     {
-        using var fixture = new ExecutionFixture();
+        using var fixture = new ExecutionFixture(longRoot);
         var ready = Path.Combine(fixture.Temp.Path, "live log ready.txt");
         var release = Path.Combine(fixture.Temp.Path, "live log release.txt");
         var invocation = fixture.Invocation("live-marker", "payload", TimeSpan.FromSeconds(20), ready, release);
@@ -378,10 +382,12 @@ public sealed class AgentInvocationExecutorTests
         Assert.False(Directory.Exists(Path.Combine(fixture.Paths.LogsRoot(fixture.Project), "ns-xci-fixture")));
     }
 
-    [Fact]
-    public async Task ExistingLogIsNeverTruncatedAndTmpCollisionNeverSpawns()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExistingLogIsNeverTruncatedAndTmpCollisionNeverSpawns(bool longRoot)
     {
-        using var fixture = new ExecutionFixture();
+        using var fixture = new ExecutionFixture(longRoot);
         var logCollision = fixture.Invocation("inspect", "payload");
         Directory.CreateDirectory(Path.GetDirectoryName(logCollision.LogFilePath)!);
         const string sentinel = "do not overwrite";
@@ -397,10 +403,12 @@ public sealed class AgentInvocationExecutorTests
             fixture.Paths, fixture.Project, tmpCollision, TestContext.Current.CancellationToken));
     }
 
-    [Fact]
-    public async Task ReparsePointInRuntimePathFailsBeforeProcessLaunch()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReparsePointInRuntimePathFailsBeforeProcessLaunch(bool longRoot)
     {
-        using var fixture = new ExecutionFixture();
+        using var fixture = new ExecutionFixture(longRoot);
         var target = fixture.Temp.CreateDirectory("external tmp target");
         var tmpRoot = Path.Combine(fixture.HostRoot, "tmp");
         Directory.CreateDirectory(tmpRoot);
@@ -433,10 +441,12 @@ public sealed class AgentInvocationExecutorTests
         Directory.Delete(projectLogs);
     }
 
-    [Fact]
-    public async Task ConcurrentUseOfOnePreparedIdentityLaunchesAtMostOneProcess()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConcurrentUseOfOnePreparedIdentityLaunchesAtMostOneProcess(bool longRoot)
     {
-        using var fixture = new ExecutionFixture();
+        using var fixture = new ExecutionFixture(longRoot);
         var invocation = fixture.Invocation("inspect", "payload");
         var first = AgentInvocationExecutor.ExecuteAsync(fixture.Paths, fixture.Project, invocation, TestContext.Current.CancellationToken);
         var second = AgentInvocationExecutor.ExecuteAsync(fixture.Paths, fixture.Project, invocation, TestContext.Current.CancellationToken);
@@ -545,10 +555,13 @@ public sealed class AgentInvocationExecutorTests
     {
         private static long nextInvocation;
 
-        internal ExecutionFixture()
+        internal ExecutionFixture(bool longRoot = false)
         {
             Temp = new TempDirectory();
-            HostRoot = Temp.CreateDirectory("host with spaces");
+            var root = Path.Combine(Temp.Path, "host with spaces");
+            if (longRoot)
+                while (root.Length < 190) root = Path.Combine(root, "nested host");
+            HostRoot = Directory.CreateDirectory(root).FullName;
             Paths = new HostPaths(HostRoot);
             Project = ProjectSlug.Parse("fixture-project");
             Worktree = Directory.CreateDirectory(Path.Combine(Paths.WorktreesRoot(Project), "ns-xci-fixture")).FullName;

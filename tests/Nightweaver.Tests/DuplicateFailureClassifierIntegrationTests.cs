@@ -13,11 +13,13 @@ public sealed class DuplicateFailureClassifierNativeIntegration { }
 [Collection("Duplicate failure classifier native integration")]
 public sealed class DuplicateFailureClassifierIntegrationTests
 {
-    [Fact]
-    public async Task FakeClaudeAndCodexRunInsideJobsReceiveExactPayloadAndReturnBothVerdicts()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FakeClaudeAndCodexRunInsideJobsReceiveExactPayloadAndReturnBothVerdicts(bool longRoot)
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration requires Win32 Job Objects and native fake CLI executables.");
-        using var fixture = new ClassifierNativeFixture();
+        using var fixture = new ClassifierNativeFixture(longRoot);
         var environment = fixture.Install("duplicate");
 
         foreach (var (cli, action, expected) in new[]
@@ -132,10 +134,13 @@ public sealed class DuplicateFailureClassifierIntegrationTests
         private static long nextTimestamp;
         private readonly string fakeCliRoot;
 
-        internal ClassifierNativeFixture()
+        internal ClassifierNativeFixture(bool longRoot = false)
         {
             Temp = new TempDirectory();
-            var root = Temp.CreateDirectory("nightweaver native host");
+            var root = Path.Combine(Temp.Path, "nightweaver native host");
+            if (longRoot)
+                while (root.Length < 190) root = Path.Combine(root, "nested host");
+            Directory.CreateDirectory(root);
             Paths = new HostPaths(root);
             Project = CreateBaseProject(AgentCli.Claude);
             Context = new AgentDispatchContext("ns-du-integration.1", "task", "stage:implement", 0);

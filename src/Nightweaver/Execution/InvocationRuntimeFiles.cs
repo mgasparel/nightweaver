@@ -119,7 +119,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         try
         {
             guard.PinDirectoryChain(Path.GetDirectoryName(expected)!, createMissing: false, exclusiveLeaf: false);
-            var handle = CreateFileW(expected, GenericRead, FileShareRead, IntPtr.Zero, OpenExisting,
+            var handle = CreateFileW(ToExtendedLengthPath(expected), GenericRead, FileShareRead, IntPtr.Zero, OpenExisting,
                 FileFlagOverlapped | FileFlagOpenReparsePoint, IntPtr.Zero);
             if (handle.IsInvalid)
             {
@@ -232,6 +232,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
     internal static async Task WriteRuntimeFileAtomicallyAsync(string path, ReadOnlyMemory<byte> bytes,
         CancellationToken cancellationToken)
     {
+        if (OperatingSystem.IsWindows()) ValidatePathSegments(path);
         var fullPath = Path.GetFullPath(path);
         var directory = Path.GetDirectoryName(fullPath)
             ?? throw new InvalidDataException("Runtime status path has no parent directory.");
@@ -275,6 +276,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
     internal static byte[] ReadRuntimeFileBounded(string path, int maximumBytes)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
+        if (OperatingSystem.IsWindows()) ValidatePathSegments(path);
         var fullPath = Path.GetFullPath(path);
         if (!OperatingSystem.IsWindows())
         {
@@ -287,7 +289,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         try
         {
             guard.PinDirectoryChain(Path.GetDirectoryName(fullPath)!, createMissing: false, exclusiveLeaf: false);
-            using var handle = CreateFileW(fullPath, GenericRead, FileShareRead | FileShareWrite | FileShareDelete,
+            using var handle = CreateFileW(ToExtendedLengthPath(fullPath), GenericRead, FileShareRead | FileShareWrite | FileShareDelete,
                 IntPtr.Zero, OpenExisting, FileFlagOverlapped | FileFlagOpenReparsePoint, IntPtr.Zero);
             if (handle.IsInvalid) throw NativeError($"Could not safely open runtime status file '{fullPath}'", Marshal.GetLastWin32Error());
             ValidateRegularFile(handle, fullPath, "runtime status");
@@ -300,6 +302,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
     /// <summary>Opens a per-Project lock file without following reparse points and pins its parent chain.</summary>
     internal static PinnedRuntimeFile OpenExclusiveRuntimeFile(string path, bool createMissingDirectories)
     {
+        if (OperatingSystem.IsWindows()) ValidatePathSegments(path);
         var fullPath = Path.GetFullPath(path);
         if (!OperatingSystem.IsWindows())
         {
@@ -313,7 +316,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         try
         {
             guard.PinDirectoryChain(Path.GetDirectoryName(fullPath)!, createMissingDirectories, exclusiveLeaf: false);
-            var handle = CreateFileW(fullPath, GenericRead | GenericWrite, FileShareNone, IntPtr.Zero,
+            var handle = CreateFileW(ToExtendedLengthPath(fullPath), GenericRead | GenericWrite, FileShareNone, IntPtr.Zero,
                 OpenAlways, FileFlagOpenReparsePoint, IntPtr.Zero);
             if (handle.IsInvalid)
             {
@@ -338,6 +341,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
     /// <summary>Opens one append-only diagnostic log and pins its parent chain for the writer lifetime.</summary>
     internal static PinnedRuntimeFile OpenAppendRuntimeLog(string path)
     {
+        if (OperatingSystem.IsWindows()) ValidatePathSegments(path);
         var fullPath = Path.GetFullPath(path);
         if (!OperatingSystem.IsWindows())
         {
@@ -350,7 +354,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         try
         {
             guard.PinDirectoryChain(Path.GetDirectoryName(fullPath)!, createMissing: true, exclusiveLeaf: false);
-            var handle = CreateFileW(fullPath, GenericWrite, FileShareRead, IntPtr.Zero,
+            var handle = CreateFileW(ToExtendedLengthPath(fullPath), GenericWrite, FileShareRead, IntPtr.Zero,
                 OpenAlways, FileFlagOverlapped | FileFlagOpenReparsePoint, IntPtr.Zero);
             if (handle.IsInvalid)
             {
@@ -392,7 +396,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
 
     private static void ValidateRuntimeFileDestination(string path, string description)
     {
-        using var handle = CreateFileW(path, FileReadAttributes, FileShareRead | FileShareWrite | FileShareDelete,
+        using var handle = CreateFileW(ToExtendedLengthPath(path), FileReadAttributes, FileShareRead | FileShareWrite | FileShareDelete,
             IntPtr.Zero, OpenExisting, FileFlagOpenReparsePoint, IntPtr.Zero);
         if (handle.IsInvalid)
         {
@@ -425,7 +429,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
 
     private static void ValidateFactorySnapshotDestination(string path)
     {
-        using var handle = CreateFileW(path, FileReadAttributes, FileShareRead | FileShareWrite | FileShareDelete,
+        using var handle = CreateFileW(ToExtendedLengthPath(path), FileReadAttributes, FileShareRead | FileShareWrite | FileShareDelete,
             IntPtr.Zero, OpenExisting, FileFlagOpenReparsePoint, IntPtr.Zero);
         if (handle.IsInvalid)
         {
@@ -476,7 +480,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         try
         {
             guard.PinDirectoryChain(Path.GetDirectoryName(expected)!, createMissing: false, exclusiveLeaf: false);
-            var handle = CreateFileW(expected, GenericRead, shareMode, IntPtr.Zero, OpenExisting,
+            var handle = CreateFileW(ToExtendedLengthPath(expected), GenericRead, shareMode, IntPtr.Zero, OpenExisting,
                 FileFlagOverlapped | FileFlagOpenReparsePoint, IntPtr.Zero);
             if (handle.IsInvalid)
             {
@@ -579,13 +583,24 @@ internal sealed class InvocationRuntimeFiles : IDisposable
 
     private static void ValidatePathSegments(string path)
     {
+        if (IsDeviceNamespace(path.Replace('/', '\\')))
+            throw new InvalidDataException($"Device paths are not supported in runtime paths: '{path}'.");
+
         var full = Path.GetFullPath(path);
+        if (IsDeviceNamespace(full))
+            throw new InvalidDataException($"Device paths are not supported in runtime paths: '{path}'.");
         var root = Path.GetPathRoot(full) ?? throw new InvalidDataException($"Path '{path}' has no volume root.");
         var relative = Path.GetRelativePath(root, full);
         if (relative == ".") return;
         foreach (var segment in relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
             if (!SafeWindowsSegment(segment)) throw new InvalidDataException($"Path '{path}' contains unsafe Windows segment '{segment}'.");
     }
+
+    private static bool IsDeviceNamespace(string path) =>
+        path.StartsWith(@"\\?\", StringComparison.Ordinal)
+        || path.StartsWith(@"\\.\", StringComparison.Ordinal)
+        || path.StartsWith(@"\??\", StringComparison.Ordinal)
+        || path.StartsWith(@"\\??\", StringComparison.Ordinal);
 
     private static bool SafeWindowsSegment(string segment)
     {
@@ -631,7 +646,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
 
             if (exclusiveLeaf && leaf)
             {
-                if (!CreateDirectoryW(current, IntPtr.Zero))
+                if (!CreateDirectoryW(ToExtendedLengthPath(current), IntPtr.Zero))
                 {
                     var error = Marshal.GetLastWin32Error();
                     if ((uint)error == ErrorAlreadyExists)
@@ -651,7 +666,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
             if (!createMissing || ((uint)errorCode != ErrorFileNotFound && (uint)errorCode != ErrorPathNotFound))
                 throw NativeError($"Could not safely open directory '{current}'", errorCode);
 
-            if (!CreateDirectoryW(current, IntPtr.Zero))
+            if (!CreateDirectoryW(ToExtendedLengthPath(current), IntPtr.Zero))
             {
                 var createError = Marshal.GetLastWin32Error();
                 if ((uint)createError != ErrorAlreadyExists)
@@ -693,7 +708,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         try
         {
             logHandle = CreateFileW(
-                path,
+                ToExtendedLengthPath(path),
                 GenericWrite,
                 FileShareRead,
                 IntPtr.Zero,
@@ -749,7 +764,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
 
     private static bool TryOpenDirectory(string path, out SafeFileHandle handle, out int errorCode)
     {
-        handle = CreateFileW(path, FileReadAttributes, FileShareRead | FileShareWrite, IntPtr.Zero, OpenExisting,
+        handle = CreateFileW(ToExtendedLengthPath(path), FileReadAttributes, FileShareRead | FileShareWrite, IntPtr.Zero, OpenExisting,
             FileFlagBackupSemantics | FileFlagOpenReparsePoint, IntPtr.Zero);
         if (!handle.IsInvalid)
         {
@@ -761,6 +776,19 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         handle.Dispose();
         handle = null!;
         return false;
+    }
+
+    // Convert only validated ordinary paths at native boundaries. Keep canonical identities and environment paths ordinary.
+    private static string ToExtendedLengthPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (IsDeviceNamespace(fullPath))
+            throw new InvalidDataException($"Device paths are not supported in runtime paths: '{path}'.");
+        if (fullPath.StartsWith(@"\\", StringComparison.Ordinal))
+            return @"\\?\UNC\" + fullPath[2..];
+        if (!Path.IsPathFullyQualified(fullPath))
+            throw new InvalidDataException($"Runtime path '{path}' is not absolute.");
+        return @"\\?\" + fullPath;
     }
 
     private static IOException NativeError(string operation, int errorCode)
