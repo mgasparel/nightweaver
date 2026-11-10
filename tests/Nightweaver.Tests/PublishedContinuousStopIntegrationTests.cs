@@ -292,7 +292,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         }
     }
 
-    private static async Task WaitForGracefulStopAcceptedAsync(
+    internal static async Task WaitForGracefulStopAcceptedAsync(
         WindowsConsoleProcess runtime,
         string runtimeLogPath,
         long logOffset,
@@ -304,19 +304,26 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (ReadRuntimeLogFromOffset(runtimeLogPath, logOffset).Contains(marker, StringComparison.Ordinal))
+                return;
+
             if (runtime.HasExited)
+            {
+                var remainingExitBudget = deadline - DateTime.UtcNow;
+                var exitCode = await runtime.WaitAsync(
+                    remainingExitBudget > TimeSpan.Zero ? remainingExitBudget : TimeSpan.Zero, cancellationToken);
+                if (ReadRuntimeLogFromOffset(runtimeLogPath, logOffset).Contains(marker, StringComparison.Ordinal))
+                    return;
                 throw new InvalidOperationException(
-                    $"Restarted runtime {runtime.Id} exited before acknowledging graceful stop (exit {runtime.ExitCode}). " +
+                    $"Restarted runtime {runtime.Id} exited before acknowledging graceful stop (exit {exitCode}). " +
                     $"Output: {ReadRuntimeLog(runtime)}");
+            }
 
             var actualStartTicks = ReadProcessStartTicks(runtime.Id);
             if (actualStartTicks != expectedStartTicks)
                 throw new InvalidOperationException(
                     $"Restarted runtime PID {runtime.Id} changed identity before graceful stop acceptance " +
                     $"(expected startUtcTicks={expectedStartTicks}, actual={actualStartTicks}).");
-
-            if (ReadRuntimeLogFromOffset(runtimeLogPath, logOffset).Contains(marker, StringComparison.Ordinal))
-                return;
 
             var remaining = deadline - DateTime.UtcNow;
             if (remaining > TimeSpan.Zero)
