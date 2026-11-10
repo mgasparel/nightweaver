@@ -14,6 +14,7 @@ public sealed class IntegrationFirstCollectionOrderer : ITestCollectionOrderer
 {
     private static readonly (string Name, double Seconds)[] MeasuredCollectionWeights =
     [
+        (nameof(ManualDeliveryPilotConcurrencyTests), 160),
         (nameof(AgentStageDeliveryIntegrationTests), 111.469),
         (nameof(MergerPoolIntegrationTests), 107.119),
         (nameof(ManualDeliveryPilotSecondSignalTests), 80.129),
