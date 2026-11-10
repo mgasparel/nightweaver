@@ -1558,6 +1558,7 @@ internal static class Program
                     });
                 }
                 var defaultBranch = Environment.GetEnvironmentVariable("NIGHTWEAVER_DEFAULT_BRANCH") ?? "main";
+                const string pullRequest = "https://github.com/nightweaver-fixture/target/pull/123";
                 var branch = pilotMerger
                     ? RunManualPilotMergerStep(beadId, "read-owned-branch", null,
                         () => Run("git", ["branch", "--show-current"]).Trim())
@@ -1617,6 +1618,23 @@ internal static class Program
                     WriteManualPilotMergerDiagnostic(beadId,
                         preparedChange.Reused ? "expected-commit-reused" : "expected-commit-created",
                         "completed", head, null, null, null);
+                    if (preparedChange.Reused)
+                    {
+                        var previous = RunManualPilotMergerStep(beadId, "read-existing-pull-request", head,
+                            () => ReadPullRequest(pullRequest));
+                        if (previous.GetProperty("state").GetString() == "MERGED")
+                        {
+                            using var checks = JsonDocument.Parse(RunManualPilotMergerStep(beadId,
+                                "read-existing-required-checks", head,
+                                () => Run("gh", ["pr", "checks", pullRequest, "--required", "--json", "name,state,bucket"])));
+                            var confirmation = RunManualPilotMergerStep(beadId, "confirm-existing-merge", head,
+                                () => ReadPullRequest(pullRequest));
+                            var completedCommit = ManualPilotMergerRecovery.VerifyMerged(
+                                confirmation, checks.RootElement, head, branch, defaultBranch);
+                            PublishVerifiedMergerEvidence(beadId, pullRequest, head, completedCommit, diagnosticsEnabled);
+                            break;
+                        }
+                    }
                 }
                 else
                 {
@@ -1661,7 +1679,6 @@ internal static class Program
                     });
                 }
 
-                var pullRequest = "https://github.com/nightweaver-fixture/target/pull/123";
                 var beforeChecks = RunManualPilotMergerStep(beadId, "read-pull-request-before-checks", head,
                     () => ReadPullRequest(pullRequest));
                 if (beforeChecks.GetProperty("state").GetString() != "OPEN"
@@ -1681,11 +1698,7 @@ internal static class Program
                     throw new InvalidOperationException("Fixture pull request was not confirmed merged.");
 
                 var mergeCommit = merged.GetProperty("mergeCommit").GetProperty("oid").GetString();
-                RunManualPilotMergerStep(beadId, "publish-verified-merge-evidence", head,
-                    () => Run("bd", ["comments", "add", beadId,
-                        $"nightweaver-merge-v1 pull_request={pullRequest} checked_head={head} required_checks=passed merge_method=squash merge_commit={mergeCommit}"]));
-                if (diagnosticsEnabled)
-                    WriteManualPilotMergerDiagnostic(beadId, "invocation", "completed", head, null, null, null);
+                PublishVerifiedMergerEvidence(beadId, pullRequest, head, mergeCommit, diagnosticsEnabled);
                 break;
             }
             case "merger-reject-checks":
@@ -1986,6 +1999,16 @@ internal static class Program
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"git {string.Join(' ', arguments)} exited {process.ExitCode}: {stderrTask.Result}{stdoutTask.Result}");
         return stdoutTask.Result;
+    }
+
+    private static void PublishVerifiedMergerEvidence(string beadId, string pullRequest, string head,
+        string? mergeCommit, bool diagnosticsEnabled)
+    {
+        RunManualPilotMergerStep(beadId, "publish-verified-merge-evidence", head,
+            () => Run("bd", ["comments", "add", beadId,
+                $"nightweaver-merge-v1 pull_request={pullRequest} checked_head={head} required_checks=passed merge_method=squash merge_commit={mergeCommit}"]));
+        if (diagnosticsEnabled)
+            WriteManualPilotMergerDiagnostic(beadId, "invocation", "completed", head, null, null, null);
     }
 
     private static void WriteFlushedText(string path, string value)
