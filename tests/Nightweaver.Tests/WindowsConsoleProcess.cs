@@ -42,14 +42,32 @@ internal sealed class WindowsConsoleProcess : IDisposable
     }
 
     internal int Id => process.Id;
-    internal bool HasExited => process.HasExited;
-    internal int ExitCode => process.ExitCode;
+    internal bool HasExited
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            var wait = WaitForSingleObject(nativeProcessHandle, 0);
+            if (wait == WaitFailed)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), $"Could not inspect console process {process.Id}.");
+            return wait == WaitObject0;
+        }
+    }
+
+    internal int ExitCode
+    {
+        get
+        {
+            if (!HasExited) throw new InvalidOperationException($"Console process {process.Id} is still terminating or running.");
+            return ReadNativeExitCode();
+        }
+    }
     internal string? OutputLogPath { get; }
 
     internal void KillEntireProcessTree()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        if (!process.HasExited) process.Kill(entireProcessTree: true);
+        if (!HasExited) process.Kill(entireProcessTree: true);
     }
 
     internal static WindowsConsoleProcess Start(string executable, IReadOnlyList<string> arguments,
@@ -244,34 +262,62 @@ internal sealed class WindowsConsoleProcess : IDisposable
 
     internal async Task<int> WaitAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
         using var timeoutSource = new CancellationTokenSource(timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
         try
         {
-            await process.WaitForExitAsync(linked.Token).ConfigureAwait(false);
+            using var processExited = new NativeProcessWaitHandle(nativeProcessHandle);
+            // Managed HasExited can observe termination status before native handle rundown finishes.
+            // Wait on the handle returned by CreateProcess, including when termination has already begun.
+            var completed = await Task.Run(() => WaitHandle.WaitAny([processExited, linked.Token.WaitHandle]),
+                CancellationToken.None).ConfigureAwait(false);
+            if (completed != 0) linked.Token.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             throw new TimeoutException($"Console process {process.Id} did not exit within {timeout}.");
         }
+        return ReadNativeExitCode();
+    }
+
+    private int ReadNativeExitCode()
+    {
         if (!GetExitCodeProcess(nativeProcessHandle, out var exitCode))
             throw new Win32Exception(Marshal.GetLastWin32Error(), $"Could not read exit code for console process {process.Id}.");
         return unchecked((int)exitCode);
     }
 
+    private sealed class NativeProcessWaitHandle : WaitHandle
+    {
+        internal NativeProcessWaitHandle(IntPtr handle) =>
+            SafeWaitHandle = new Microsoft.Win32.SafeHandles.SafeWaitHandle(handle, ownsHandle: false);
+    }
+
     public void Dispose()
     {
         if (disposed) return;
+        var exited = HasExited;
         disposed = true;
-        if (!process.HasExited)
+        try
         {
-            try { process.Kill(entireProcessTree: true); }
-            catch (InvalidOperationException) { }
-            try { process.WaitForExit(5000); }
-            catch (InvalidOperationException) { }
+            if (!exited)
+            {
+                try { process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { }
+                var wait = WaitForSingleObject(nativeProcessHandle, 5000);
+                if (wait == WaitFailed)
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), $"Could not settle console process {process.Id}.");
+                if (wait != WaitObject0)
+                    throw new TimeoutException($"Console process {process.Id} did not terminate within five seconds during disposal.");
+            }
         }
-        process.Dispose();
-        _ = CloseHandle(nativeProcessHandle);
+        finally
+        {
+            process.Dispose();
+            _ = CloseHandle(nativeProcessHandle);
+        }
     }
 
     private static string BuildEnvironmentBlock(IReadOnlyDictionary<string, string?> overrides)
