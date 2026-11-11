@@ -63,7 +63,7 @@ internal sealed record CatchUpCheckpointFile(
 
 internal sealed class CatchUpRequestValidationException(string detail) : Exception(detail);
 
-internal sealed class CatchUpCheckpointStore(HostPaths paths, ProjectConfig project) : IDisposable
+internal sealed partial class CatchUpCheckpointStore(HostPaths paths, ProjectConfig project) : IDisposable
 {
     private const int MaximumCheckpointBytes = 16 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -168,14 +168,20 @@ internal sealed class CatchUpCheckpointStore(HostPaths paths, ProjectConfig proj
 
             if (!seen || string.IsNullOrWhiteSpace(rawTimestamp))
                 throw new CatchUpRequestValidationException("caughtUpAt is required.");
-            if (!DateTimeOffset.TryParse(rawTimestamp, CultureInfo.InvariantCulture,
+            if (!IsoTimestampPattern().IsMatch(rawTimestamp)
+                || !DateTimeOffset.TryParseExact(rawTimestamp,
+                    ["yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz"],
+                    CultureInfo.InvariantCulture,
                     DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed))
-                throw new CatchUpRequestValidationException("caughtUpAt must be a valid ISO-8601 timestamp.");
+                throw new CatchUpRequestValidationException("caughtUpAt must be an ISO-8601 timestamp with seconds and an explicit Z or numeric offset.");
             if (parsed > DateTimeOffset.UtcNow.AddMinutes(5))
                 throw new CatchUpRequestValidationException("caughtUpAt cannot be in the future.");
             return parsed.ToUniversalTime();
         }
     }
+
+    [GeneratedRegex(@"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,7})?(?:Z|[+-][0-9]{2}:[0-9]{2})\z")]
+    private static partial Regex IsoTimestampPattern();
 }
 
 internal static partial class CatchUpDigestProjector

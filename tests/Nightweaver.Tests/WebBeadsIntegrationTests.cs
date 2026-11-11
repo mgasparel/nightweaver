@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -549,6 +550,7 @@ public sealed class WebBeadsIntegrationTests
             "{",
             "[]",
             "{\"caughtUpAt\":\"not-a-timestamp\"}",
+            "{\"caughtUpAt\":\"01/02/2026\"}",
             "{\"caughtUpAt\":123}",
             "{\"unexpected\":true}",
             JsonSerializer.Serialize(new { caughtUpAt = DateTimeOffset.UtcNow.AddHours(1).ToString("O") })
@@ -561,6 +563,66 @@ public sealed class WebBeadsIntegrationTests
         }
 
         Assert.Empty(Directory.EnumerateFileSystemEntries(factory.HostRoot));
+        Assert.Empty(runner.Requests);
+    }
+
+    [Fact]
+    public async Task DigestCatchUpRequiresIsoTimestampAndPreservesCheckpointOnRejection()
+    {
+        using var target = new BeadsApplicationFixture();
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var checkpointPath = Path.Combine(factory.HostRoot, "telemetry", "web-test", "catch-up.json");
+
+        foreach (var timestamp in new[]
+        {
+            "2026-01-02T03:04:05Z",
+            "2026-01-02T03:04:05.1Z",
+            "2026-01-02T03:04:05.1234567Z",
+            "2026-01-02T05:34:05.1234567+02:30",
+            "2026-01-01T23:34:05-03:30"
+        })
+        {
+            using var request = CreateAttentionRequest(client, "/api/digest/catch-up",
+                JsonSerializer.Serialize(new { caughtUpAt = timestamp }));
+            using var response = await client.SendAsync(request, cancellationToken);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            var normalized = result.RootElement.GetProperty("lastCaughtUpAt").GetDateTimeOffset();
+            Assert.Equal(TimeSpan.Zero, normalized.Offset);
+            Assert.Equal(DateTimeOffset.Parse(timestamp, CultureInfo.InvariantCulture).ToUniversalTime(), normalized);
+            using var stored = JsonDocument.Parse(await File.ReadAllBytesAsync(checkpointPath, cancellationToken));
+            Assert.Equal(normalized, stored.RootElement.GetProperty("last_caught_up_at").GetDateTimeOffset());
+        }
+
+        var savedBytes = await File.ReadAllBytesAsync(checkpointPath, cancellationToken);
+        foreach (var timestamp in new[]
+        {
+            "01/02/2026",
+            "January 2, 2026",
+            "2026-01-02",
+            "2026-01-02T03:04:05",
+            "2026-01-02T03:04:05.1234567",
+            "2026-01-02 03:04:05Z",
+            "2026-01-02T03:04:05.Z",
+            "2026-01-02T03:04:05+2:30",
+            "2026-01-02T03:04:05+0230",
+            " 2026-01-02T03:04:05Z",
+            "2026-01-02T03:04:05Z ",
+            "2026-02-30T03:04:05Z"
+        })
+        {
+            using var request = CreateAttentionRequest(client, "/api/digest/catch-up",
+                JsonSerializer.Serialize(new { caughtUpAt = timestamp }));
+            using var response = await client.SendAsync(request, cancellationToken);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+            Assert.Equal(savedBytes, await File.ReadAllBytesAsync(checkpointPath, cancellationToken));
+            Assert.Single(Directory.EnumerateFiles(Path.GetDirectoryName(checkpointPath)!));
+        }
+
         Assert.Empty(runner.Requests);
     }
 

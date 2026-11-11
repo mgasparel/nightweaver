@@ -702,7 +702,8 @@ function renderDigest() {
       const formatted = new Date(d.lastCaughtUpAt).toLocaleString();
       digestCheckpointBadge.textContent = `Caught up bookmark: ${formatDigestRelativeTime(d.lastCaughtUpAt)} (${formatted})`;
     } else {
-      digestCheckpointBadge.textContent = "No catch-up bookmark set · showing Last 24h";
+      const effectiveWindow = d.window === "since_caught_up" ? "24h" : d.window;
+      digestCheckpointBadge.textContent = `No catch-up bookmark set · showing ${formatDigestWindowLabel(effectiveWindow)}`;
     }
   }
 

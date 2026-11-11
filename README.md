@@ -137,6 +137,8 @@ The snapshot's `configured_model` is the model selected by Project or role confi
 
 `GET /api/digest?window=auto|since_caught_up|24h|7d|30d|all` reads tracker activity without creating host files. Auto uses the saved checkpoint or the last 24 hours. Mark Caught Up submits the response's `generatedAt` to the locally protected `POST /api/digest/catch-up` as `{ "caughtUpAt": "<UTC timestamp>" }`, atomically saving `telemetry/<project>/catch-up.json`. The checkpoint boundary is captured before the inventory read because external tracker writers do not share the Web host gate, and rounded down to whole seconds to match native tracker timestamp precision. Changes made during that read remain eligible in the next window; activity already visible during the read or in the boundary second may appear again. An empty Since Caught Up window collapses automatically and can be expanded manually.
 
+Checkpoint submissions require an ISO-8601 timestamp in `yyyy-MM-ddTHH:mm:ss` form, with optional fractional seconds (up to seven digits) and a required `Z` or `±HH:mm` offset. Offsets are normalized to UTC. Locale-formatted dates, date-only values, and timestamps without an offset return 400 and leave the saved checkpoint unchanged.
+
 ### Beads Explorer API
 
 `GET /api/beads` returns a JSON array of tracker items with exactly these fields: `id`, `title`, `type`, `priority` (integer P0–P4), `status` (the stored status), `labels` (always an array), and `assignee` (a string or `null`). The response is `Cache-Control: no-store`. Optional query parameters are:
