@@ -110,6 +110,23 @@ internal sealed class TrackerBridge(
         }
     }
 
+    internal async Task<CatchUpDigestResponse> ReadDigestAsync(string window, DateTimeOffset? lastCaughtUpAt,
+        CancellationToken cancellationToken)
+    {
+        await operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            var target = await targetRepositoryValidator.ValidateAsync(
+                project.TargetRepository, project.ConfigFilePath, cancellationToken);
+            var inventory = await beadsReader.ReadSnapshotAsync(target, cancellationToken);
+            return CatchUpDigestProjector.Project(inventory, window, lastCaughtUpAt, DateTimeOffset.UtcNow);
+        }
+        finally
+        {
+            operationGate.Release();
+        }
+    }
+
     internal async Task<BeadWorkspaceResponse> ReadWorkspaceAsync(string beadId, CancellationToken cancellationToken)
     {
         if (!BeadIdSafety.IsSafe(beadId))

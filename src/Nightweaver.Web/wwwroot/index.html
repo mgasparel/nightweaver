@@ -96,11 +96,87 @@
 
   <main class="page-shell" id="main-content" tabindex="-1">
     <div id="console-deck">
-    <div class="page-intro">
-      <p class="eyebrow">Factory console</p>
-      <h1>Nightweaver console</h1>
-      <p class="intro-copy">A single place to catch up, review work that needs attention, and follow factory activity.</p>
-    </div>
+    <h1 class="sr-only">Nightweaver console</h1>
+
+    <section class="console-section digest-section" id="catch-up" aria-labelledby="catch-up-title">
+      <div class="surface digest-panel">
+        <div class="digest-header">
+          <div class="digest-title-group">
+            <div class="digest-eyebrow-row">
+              <p class="eyebrow">Catch-Up Digest</p>
+              <span class="digest-checkpoint-badge" id="digest-checkpoint-badge">Loading checkpoint…</span>
+            </div>
+            <h2 id="catch-up-title">Activity &amp; Milestone Rollups</h2>
+          </div>
+          <div class="digest-controls">
+            <div class="digest-windows" role="group" aria-label="Digest time window">
+              <button class="digest-window" type="button" data-digest-window="since_caught_up" aria-pressed="false">Since Caught Up</button>
+              <button class="digest-window" type="button" data-digest-window="24h" aria-pressed="true">24h</button>
+              <button class="digest-window" type="button" data-digest-window="7d" aria-pressed="false">7d</button>
+              <button class="digest-window" type="button" data-digest-window="30d" aria-pressed="false">30d</button>
+              <button class="digest-window" type="button" data-digest-window="all" aria-pressed="false">All</button>
+            </div>
+            <div class="digest-actions">
+              <button class="primary-action" id="digest-mark-caught-up" type="button" disabled>Mark Caught Up</button>
+              <button class="secondary-action" id="digest-refresh" type="button">Refresh</button>
+              <button class="secondary-action" id="digest-toggle" type="button" aria-expanded="true" aria-controls="digest-body">Collapse</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="digest-metrics" id="digest-metrics" aria-label="Window summary counters">
+          <div class="digest-metric-card">
+            <span class="digest-metric-label">Completed</span>
+            <strong class="digest-metric-value" id="digest-metric-completed">—</strong>
+            <span class="digest-metric-sub" id="digest-metric-completed-sub">Closed in window</span>
+          </div>
+          <div class="digest-metric-card">
+            <span class="digest-metric-label">Active Threads</span>
+            <strong class="digest-metric-value" id="digest-metric-threads">—</strong>
+            <span class="digest-metric-sub" id="digest-metric-threads-sub">Lineage rollups</span>
+          </div>
+          <div class="digest-metric-card">
+            <span class="digest-metric-label">Open / Updated</span>
+            <strong class="digest-metric-value" id="digest-metric-open">—</strong>
+            <span class="digest-metric-sub" id="digest-metric-open-sub">New or progressed</span>
+          </div>
+          <a class="digest-metric-card digest-metric-link" href="#attention">
+            <span class="digest-metric-label">Waiting for You</span>
+            <strong class="digest-metric-value" id="digest-metric-waiting">—</strong>
+            <span class="digest-metric-sub" id="digest-metric-waiting-sub">Review Attention Desk</span>
+          </a>
+        </div>
+
+        <p class="digest-status" id="digest-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1">Loading catch-up digest…</p>
+        <div class="digest-error" id="digest-error" role="alert" aria-live="assertive" hidden>
+          <span id="digest-error-text">The Catch-Up Digest is unavailable. Refresh to try again.</span>
+          <button class="retry-button" id="digest-retry" type="button">Retry</button>
+        </div>
+        <div class="digest-caught-up-bar" id="digest-caught-up-bar" hidden>
+          <span id="digest-caught-up-text">All caught up since your last bookmark.</span>
+          <button class="secondary-action" id="digest-view-24h" type="button">View Last 24h</button>
+        </div>
+
+        <div class="digest-body" id="digest-body">
+          <div class="digest-empty" id="digest-empty" hidden>No Bead activity occurred in this time window.</div>
+          <div class="digest-threads-section" id="digest-threads-section" hidden>
+            <div class="digest-subsection-heading">
+              <h3>Lineage Threads</h3>
+              <span class="digest-subsection-note">Connected parent-child and discovered-from chains</span>
+            </div>
+            <div class="digest-threads" id="digest-threads"></div>
+          </div>
+          <div class="digest-standalone-section" id="digest-standalone-section" hidden>
+            <div class="digest-subsection-heading">
+              <h3>Standalone Activity</h3>
+              <span class="digest-subsection-note">Independent tasks and bugs in this window</span>
+            </div>
+            <div class="digest-standalone" id="digest-standalone"></div>
+          </div>
+        </div>
+        <noscript><p class="digest-empty">Enable JavaScript to load the Catch-Up Digest from the configured tracker.</p></noscript>
+      </div>
+    </section>
 
     <section class="console-section attention-section" id="attention" aria-labelledby="attention-title">
       <div class="section-heading">
@@ -118,22 +194,6 @@
       <div class="attention-empty" id="attention-empty" hidden>No Beads are waiting for human guidance.</div>
       <div class="attention-cards" id="attention-cards" aria-label="Beads paused for human attention"></div>
       <noscript><p class="attention-empty">Enable JavaScript to load paused Beads from the configured tracker.</p></noscript>
-    </section>
-
-    <section class="console-section digest-section" id="catch-up" aria-labelledby="catch-up-title">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Milestone rollups</p>
-          <h2 id="catch-up-title">Catch-Up Digest</h2>
-        </div>
-      </div>
-      <div class="surface digest-card">
-        <span class="section-mark" aria-hidden="true">01</span>
-        <div>
-          <h3>See what changed since your last visit</h3>
-          <p>Milestone summaries will appear here when catch-up data is connected.</p>
-        </div>
-      </div>
     </section>
 
     <section class="console-section" id="factory" aria-labelledby="factory-title">
