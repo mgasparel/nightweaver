@@ -75,6 +75,7 @@ public sealed class Program
         builder.Services.AddSingleton<IBeadWorkspaceRuntimeObserver, UnavailableBeadWorkspaceRuntimeObserver>();
         builder.Services.AddSingleton<BeadWorkspaceEnvironmentObserver>();
         builder.Services.AddSingleton<TrackerBridge>();
+        builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton<CatchUpCheckpointStore>();
         builder.Services.AddSingleton<LocalMutationRequestPolicy>();
         builder.Services.AddSingleton(services => new FactoryTelemetryReader(

@@ -436,25 +436,30 @@ public sealed class WebBeadsIntegrationTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task DigestCatchUpRetainsChangesMadeWhileInventoryReadIsInFlight(bool closeBead)
+    [InlineData("updated")]
+    [InlineData("closed")]
+    [InlineData("opened")]
+    public async Task DigestCatchUpRetainsChangesMadeWhileInventoryReadIsInFlight(string activityKind)
     {
         using var target = new BeadsApplicationFixture();
         var cancellationToken = TestContext.Current.CancellationToken;
-        var createdAt = DateTimeOffset.UtcNow.AddDays(-2);
+        var boundary = new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero).AddMilliseconds(400);
+        var clock = new DigestTestClock(boundary);
+        var createdAt = boundary.AddDays(-2);
+        var closeBead = activityKind == "closed";
         string Inventory(DateTimeOffset updatedAt, bool closed) => JsonSerializer.Serialize(new[]
         {
             new
             {
                 id = "ns-race", title = "Concurrent tracker change", issue_type = "task", priority = 2,
                 status = closed ? "closed" : "open", labels = Array.Empty<string>(),
-                created_at = createdAt, updated_at = updatedAt,
-                closed_at = closed ? updatedAt : (DateTimeOffset?)null
+                created_at = (activityKind == "opened" ? updatedAt : createdAt).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"),
+                updated_at = updatedAt.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"),
+                closed_at = closed ? updatedAt.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'") : null
             }
         });
 
-        var inventoryJson = Inventory(createdAt, false);
+        var inventoryJson = activityKind == "opened" ? "[]" : Inventory(createdAt, false);
         var captured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reads = 0;
@@ -470,7 +475,7 @@ public sealed class WebBeadsIntegrationTests
             }
             return new ProcessResult(0, snapshot, string.Empty);
         });
-        using var factory = CreateFactory(target, runner);
+        using var factory = CreateFactory(target.Path, runner, clock);
         using var client = factory.CreateClient();
 
         var pendingDigest = client.GetAsync("/api/digest", cancellationToken);
@@ -478,10 +483,11 @@ public sealed class WebBeadsIntegrationTests
         try
         {
             await captured.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
-            changedAt = DateTimeOffset.UtcNow;
+            // The stale inventory omits a later write in the boundary's same second.
+            changedAt = boundary.AddMilliseconds(300);
             inventoryJson = Inventory(changedAt, closeBead);
-            // Keep the external change strictly before completion of the stale read.
-            await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
+            // Complete in the next second to also protect the pre-read boundary ordering.
+            clock.UtcNow = boundary.AddSeconds(1);
         }
         finally
         {
@@ -506,8 +512,16 @@ public sealed class WebBeadsIntegrationTests
         var item = Assert.Single(subsequent.RootElement
             .GetProperty(closeBead ? "standaloneCompleted" : "standaloneOpen").EnumerateArray());
         Assert.Equal("ns-race", item.GetProperty("id").GetString());
-        Assert.Equal(closeBead ? "closed" : "updated", item.GetProperty("activityKind").GetString());
-        Assert.True(generatedAt <= changedAt);
+        Assert.Equal(activityKind, item.GetProperty("activityKind").GetString());
+        var nativeChangedAt = DateTimeOffset.FromUnixTimeSeconds(changedAt.ToUnixTimeSeconds());
+        Assert.Equal(nativeChangedAt, item.GetProperty("activityAt").GetDateTimeOffset());
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(boundary.ToUnixTimeSeconds()), generatedAt);
+    }
+
+    private sealed class DigestTestClock(DateTimeOffset utcNow) : TimeProvider
+    {
+        internal DateTimeOffset UtcNow { get; set; } = utcNow;
+        public override DateTimeOffset GetUtcNow() => UtcNow;
     }
 
     [Fact]
@@ -653,12 +667,18 @@ public sealed class WebBeadsIntegrationTests
     private static NightweaverWebApplicationFactory CreateFactory(BeadsFixture target, IProcessRunner runner)
         => CreateFactory(target.Path, runner);
 
-    private static NightweaverWebApplicationFactory CreateFactory(string targetPath, IProcessRunner runner)
+    private static NightweaverWebApplicationFactory CreateFactory(string targetPath, IProcessRunner runner,
+        TimeProvider? timeProvider = null)
     {
         var factory = new NightweaverWebApplicationFactory(configureServices: services =>
         {
             services.RemoveAll<IProcessRunner>();
             services.AddSingleton<IProcessRunner>(runner);
+            if (timeProvider is not null)
+            {
+                services.RemoveAll<TimeProvider>();
+                services.AddSingleton(timeProvider);
+            }
         });
         File.WriteAllText(factory.ConfigPath, JsonSerializer.Serialize(new
         {
