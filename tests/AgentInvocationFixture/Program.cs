@@ -256,7 +256,7 @@ internal static class Program
             if (injectFailureAfterPeek)
                 throw new InvalidOperationException("Injected probe infrastructure failure after the live-child Peek.");
 
-            File.WriteAllText(releasePath, nonce, new UTF8Encoding(false));
+            WriteAtomicText(releasePath, nonce);
             observation.ExitCode = child.WaitAsync(TimeSpan.FromSeconds(20)).GetAwaiter().GetResult();
             observation.ChildExited = child.HasExited;
             observation.AfterExit = Peek(pipe.SafePipeHandle);
@@ -272,7 +272,7 @@ internal static class Program
                     {
                         try
                         {
-                            File.WriteAllText(releasePath, nonce, new UTF8Encoding(false));
+                            WriteAtomicText(releasePath, nonce);
                             observation.ExitCode = child.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
                         }
                         catch (Exception exception) { AppendCleanupError(observation, "release/wait", exception); }
