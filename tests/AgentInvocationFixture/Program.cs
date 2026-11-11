@@ -364,9 +364,7 @@ internal static class Program
         var nonce = args[3];
         var ready = new NativeHandleChildReady(Environment.ProcessId,
             Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks, nonce);
-        var temporaryPath = readyPath + ".tmp";
-        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(ready), new UTF8Encoding(false));
-        File.Move(temporaryPath, readyPath);
+        WriteAtomicText(readyPath, JsonSerializer.Serialize(ready));
         WaitForFile(releasePath, TimeSpan.FromSeconds(30));
         return string.Equals(File.ReadAllText(releasePath), nonce, StringComparison.Ordinal) ? 0 : 68;
     }
@@ -1234,7 +1232,8 @@ internal static class Program
                             if (!File.Exists(retainedSentinel))
                                 File.WriteAllText(retainedSentinel, "retain across runtime recovery\n", new UTF8Encoding(false));
                         }
-                        File.WriteAllText(Path.Combine(gateDirectory, beadId + ".started"), Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), new UTF8Encoding(false));
+                        WriteAtomicText(Path.Combine(gateDirectory, beadId + ".started"),
+                            Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
                         WaitForFile(Path.Combine(gateDirectory, beadId + ".release"), TimeSpan.FromMinutes(5));
                     }
 
@@ -2011,6 +2010,20 @@ internal static class Program
                 $"nightweaver-merge-v1 pull_request={pullRequest} checked_head={head} required_checks=passed merge_method=squash merge_commit={mergeCommit}"]));
         if (diagnosticsEnabled)
             WriteManualPilotMergerDiagnostic(beadId, "invocation", "completed", head, null, null, null);
+    }
+
+    private static void WriteAtomicText(string path, string value)
+    {
+        var temporaryPath = path + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(temporaryPath, value, new UTF8Encoding(false));
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        finally
+        {
+            File.Delete(temporaryPath);
+        }
     }
 
     private static void WriteFlushedText(string path, string value)
