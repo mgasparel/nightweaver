@@ -32,6 +32,19 @@ jobs:
           $executable = Get-ChildItem $install -Filter bd.exe -Recurse | Select-Object -First 1
           if ($null -eq $executable) { throw 'Beads executable missing from archive' }
           $executable.DirectoryName | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Install Dolt 2.1.5
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'dolt.zip'
+          $install = Join-Path $env:RUNNER_TEMP 'dolt'
+          Invoke-WebRequest 'https://github.com/dolthub/dolt/releases/download/v2.1.5/dolt-windows-amd64.zip' -OutFile $archive
+          $expected = 'c1c83a00f06393874929c94f69cd654fb8cb8ce9cda3e4c017de820eb7450862'
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Dolt archive checksum mismatch' }
+          Expand-Archive $archive $install
+          $executable = Get-ChildItem $install -Filter dolt.exe -Recurse | Select-Object -First 1
+          if ($null -eq $executable) { throw 'Dolt executable missing from archive' }
+          $executable.DirectoryName | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Configure fixture Git identity
         shell: pwsh
         run: |
@@ -58,5 +71,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-test-results
-          path: '**/TestResults/**'
+          path: |
+            **/TestResults/**
+            ${{ runner.temp }}/nightweaver-console-*/**
           if-no-files-found: ignore
