@@ -435,6 +435,81 @@ public sealed class WebBeadsIntegrationTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DigestCatchUpRetainsChangesMadeWhileInventoryReadIsInFlight(bool closeBead)
+    {
+        using var target = new BeadsApplicationFixture();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var createdAt = DateTimeOffset.UtcNow.AddDays(-2);
+        string Inventory(DateTimeOffset updatedAt, bool closed) => JsonSerializer.Serialize(new[]
+        {
+            new
+            {
+                id = "ns-race", title = "Concurrent tracker change", issue_type = "task", priority = 2,
+                status = closed ? "closed" : "open", labels = Array.Empty<string>(),
+                created_at = createdAt, updated_at = updatedAt,
+                closed_at = closed ? updatedAt : (DateTimeOffset?)null
+            }
+        });
+
+        var inventoryJson = Inventory(createdAt, false);
+        var captured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        var systemRunner = new SystemProcessRunner();
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            if (request.FileName == "git") return await systemRunner.RunAsync(request, token);
+            var snapshot = inventoryJson;
+            if (Interlocked.Increment(ref reads) == 1)
+            {
+                captured.SetResult();
+                await release.Task.WaitAsync(token);
+            }
+            return new ProcessResult(0, snapshot, string.Empty);
+        });
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+
+        var pendingDigest = client.GetAsync("/api/digest", cancellationToken);
+        DateTimeOffset changedAt;
+        try
+        {
+            await captured.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            changedAt = DateTimeOffset.UtcNow;
+            inventoryJson = Inventory(changedAt, closeBead);
+            // Keep the external change strictly before completion of the stale read.
+            await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        using var initialResponse = await pendingDigest;
+        Assert.Equal(HttpStatusCode.OK, initialResponse.StatusCode);
+        using var initial = JsonDocument.Parse(await initialResponse.Content.ReadAsStringAsync(cancellationToken));
+        Assert.False(initial.RootElement.GetProperty("isCaughtUp").GetBoolean());
+        Assert.Empty(initial.RootElement.GetProperty("standaloneOpen").EnumerateArray());
+        var generatedAt = initial.RootElement.GetProperty("generatedAt").GetDateTimeOffset();
+        using var request = CreateAttentionRequest(client, "/api/digest/catch-up",
+            JsonSerializer.Serialize(new { caughtUpAt = generatedAt }));
+        using var checkpointResponse = await client.SendAsync(request, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, checkpointResponse.StatusCode);
+
+        using var subsequentResponse = await client.GetAsync("/api/digest?window=since_caught_up", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, subsequentResponse.StatusCode);
+        using var subsequent = JsonDocument.Parse(await subsequentResponse.Content.ReadAsStringAsync(cancellationToken));
+        Assert.False(subsequent.RootElement.GetProperty("isCaughtUp").GetBoolean());
+        var item = Assert.Single(subsequent.RootElement
+            .GetProperty(closeBead ? "standaloneCompleted" : "standaloneOpen").EnumerateArray());
+        Assert.Equal("ns-race", item.GetProperty("id").GetString());
+        Assert.Equal(closeBead ? "closed" : "updated", item.GetProperty("activityKind").GetString());
+        Assert.True(generatedAt <= changedAt);
+    }
+
     [Fact]
     public async Task DigestCatchUpEnforcesLocalMutationPolicyAndValidatesRequestPayload()
     {

@@ -118,8 +118,11 @@ internal sealed class TrackerBridge(
         {
             var target = await targetRepositoryValidator.ValidateAsync(
                 project.TargetRepository, project.ConfigFilePath, cancellationToken);
+            // External tracker writers do not share this gate. A checkpoint must precede
+            // the read so changes omitted from this snapshot remain in the next window.
+            var generatedAt = DateTimeOffset.UtcNow;
             var inventory = await beadsReader.ReadSnapshotAsync(target, cancellationToken);
-            return CatchUpDigestProjector.Project(inventory, window, lastCaughtUpAt, DateTimeOffset.UtcNow);
+            return CatchUpDigestProjector.Project(inventory, window, lastCaughtUpAt, generatedAt);
         }
         finally
         {
