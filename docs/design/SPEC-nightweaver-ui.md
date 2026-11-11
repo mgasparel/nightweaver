@@ -15,7 +15,7 @@ A local web application and dashboard console hosted by the Nightweaver Orchestr
 
 The solution integrates:
 1. **Factory Execution Bays**: Real-time operational visibility into the three bounded concurrency pools (Planning Pool with backpressure gauge, Delivery Floor with isolated worktrees, and Singleton Merger Air-Lock with rebase and CI monitoring).
-2. **"Since Last Visit" Catch-Up Digest**: A milestone-oriented rollup architecture designed for long user absences (days or weeks), grouping delivered slices into completed Product Feature packages, tracking a persistent `last_visited` checkpoint, and providing a single-click "Mark Caught Up" action.
+2. **"Since Last Caught Up" Catch-Up Digest**: A collapsible top-of-console window-delta digest designed for both daily check-ins and multi-week absences, grouping connected completed and newly-opened/progressed Beads into unified Lineage Threads (via `parent` / `parent-child` and multi-hop `discovered-from` chains) alongside standalone activity, surfacing best-effort outcome summaries (`close_reason` / commit SHAs / PR references with Bead state fallback), tracking a persistent per-project `last_caught_up_at` checkpoint under `<nightweaver-root>/telemetry/<project>/catch-up.json`, and providing a race-safe single-click "Mark Caught Up" action that auto-collapses the digest when caught up.
 3. **Human Attention Desk**: A prioritized intervention queue surfacing `product-decision-required` questions and `needs-human` escalations, supporting both instant one-line resolutions and deep context escalation.
 4. **Dedicated Full Bead Workspace**: A large-surface reading and decision view featuring generous typography (15–16px body, relaxed line height), smart collapsible history (grouping older planning and review cycles under an expandable banner), spec inspection, runtime environment sidebar, and an integrated human guidance studio.
 5. **Product Bead Intake Composer**: An intuitive interface to author and submit new Product Beads (`--type feature` or `--type bug`) directly into the tracker.
@@ -24,11 +24,11 @@ The solution integrates:
 ## User Stories
 
 1. As a repository maintainer, I want to open a local dashboard via a single command, so that I can inspect my factory without configuring external servers or cloud services.
-2. As a repository maintainer returning after two weeks away, I want a high-level summary of what shipped while I was gone, so that I can understand overall progress without scrolling through dozens of individual tasks.
-3. As a repository maintainer, I want completed Plan Beads to be rolled up into their parent Product Features in the catch-up digest, so that I see cohesive milestones rather than fragmented implementation slices.
-4. As a repository maintainer, I want an explicit "Last seen X days ago" indicator, so that I know exactly what time window the digest covers.
-5. As a repository maintainer, I want a "Mark Caught Up" button, so that I can acknowledge recent accomplishments and reset my baseline checkpoint for future visits.
-6. As a repository maintainer, I want a time-horizon selector (Since Last Visit, Last 48 Hours, Last 7 Days, All Time), so that I can explore factory velocity over different historical windows.
+2. As a repository maintainer returning after hours, days, or weeks away, I want a collapsible Catch-Up Digest at the very top of the console showing the full delta of what completed and what was newly discovered/updated in the selected window, so that I can understand overall progress and new follow-ups without scrolling through dozens of individual tasks.
+3. As a repository maintainer, I want connected Beads (both `parent-child` and multi-hop `discovered-from` chains, mixing closed and still-open items) rolled up into unified Lineage Threads alongside a clean Standalone Activity list, with best-effort outcome summaries (`close_reason`, extracted commit SHAs/PRs, and Bead state fallback), so that multi-step investigations and feature slices read as coherent stories while standalone tasks and bugs remain visible.
+4. As a repository maintainer, I want an explicit checkpoint status indicator and 4 grounded tracker counters (`Completed`, `Active Threads`, `Open / Updated`, and `Waiting for You`), so that I know the exact time window and health at a glance even when the digest is collapsed.
+5. As a repository maintainer, I want a race-safe "Mark Caught Up" button that records the loaded snapshot's `generatedAt` timestamp to `<nightweaver-root>/telemetry/<project>/catch-up.json` and auto-collapses the digest when `Since Caught Up` has zero new items, so that I can reset my baseline without hiding work completed while I was reading.
+6. As a repository maintainer, I want time-window preset pills (`Since Caught Up`, `24h`, `7d`, `30d`, `All`), defaulting to `24h` when no checkpoint has been set yet, so that I can explore factory velocity over different historical windows without losing my saved checkpoint.
 7. As a product owner, I want a pinned Human Attention Desk at the top of the console, so that I immediately see any beads halting agents for guidance.
 8. As a product owner, I want to read the Planner Agent's exact clarification question on a `product-decision-required` bead, so that I understand what architectural ambiguity stopped planning.
 9. As a product owner, I want a quick inline reply box on the attention card, so that I can resolve straightforward one-line decisions in seconds.
@@ -65,31 +65,81 @@ The solution integrates:
 - **Host HTTP Server Module**: Embedded lightweight HTTP server in the Nightweaver Orchestrator host triggered via `nightweaver dashboard` or `nightweaver serve --project <slug>`. Serves pre-compiled static SPA assets and exposes REST/SSE endpoints.
 - **Tracker Bridge Service**: Interacts with the local Target Repository's `.beads` tracker via `bd` CLI queries and mutations (`bd list`, `bd show`, `bd comments add`, `bd update`, `bd create`).
 - **Factory Telemetry Service**: Exposes in-memory slot states for Planning, Delivery, and Merger pools, active worktree paths, and Win32 Job Object runtime statistics.
-- **Catch-Up & Rollup Service**: Queries closed beads and commits, groups child Plan Beads by their parent Product Bead via `discovered-from` metadata, and computes delta rollups against the user's persisted `last_visited` timestamp.
+- **Catch-Up & Rollup Service**: Queries `.beads` inventory via `TrackerBridge`, computes the full window delta (`closed_at >= since`, `created_at >= since`, or open `updated_at >= since`) against the requested window or the per-project checkpoint persisted at `<nightweaver-root>/telemetry/<project>/catch-up.json`, groups connected Beads (`parent` / `parent-child` and multi-hop `discovered-from` edges) into unified Lineage Threads plus Standalone items, and extracts best-effort outcome summaries (`close_reason` / `notes`, commit SHAs, PR refs, and state fallback).
 - **Log Streaming Service**: Serves Server-Sent Events (SSE) streaming live logs from `<nightweaver-root>/logs/<project>/<bead-id>/<timestamp>-<role>.log`.
 
 ### 3. Key Data Contracts (Derived from Prototype)
 
-#### Catch-Up Digest Schema
+#### Catch-Up Digest Schema (`GET /api/digest?window=auto|since_caught_up|24h|7d|30d|all` & `POST /api/digest/catch-up`)
 ```json
 {
-  "last_visited": "2026-10-12T08:00:00Z",
-  "interval_label": "12 days ago (Oct 12)",
+  "generatedAt": "2026-11-10T20:35:00Z",
+  "window": "since_caught_up",
+  "windowStart": "2026-11-09T20:35:00Z",
+  "lastCaughtUpAt": "2026-11-09T20:35:00Z",
+  "isCaughtUp": false,
   "metrics": {
-    "plan_beads_delivered": 18,
-    "prs_merged": 14,
-    "product_features_completed": 4,
-    "items_needing_guidance": 2
+    "completedTotal": 20,
+    "completedFeatures": 0,
+    "completedTasks": 6,
+    "completedBugs": 14,
+    "activeThreads": 4,
+    "openOrUpdatedTotal": 1,
+    "waitingForGuidance": 2
   },
-  "feature_rollups": [
+  "threads": [
     {
-      "product_bead_id": "ns-xci",
-      "title": "Worktree Isolation Spine",
-      "slices_completed": 4,
-      "total_slices": 4,
-      "prs": ["#41", "#44"]
+      "root": {
+        "id": "ns-e5i",
+        "title": "Reduce full test suite wall time below five minutes",
+        "type": "task",
+        "priority": 1,
+        "status": "closed",
+        "stage": null,
+        "pauseLabels": [],
+        "activityKind": "closed",
+        "activityAt": "2026-11-10T04:07:03Z",
+        "outcome": "resolved",
+        "outcomeLabel": "Resolved",
+        "summary": "Validated lower-coverage suite merged into local main at 8a8679fdf54993da51aa4b051a487e4b0d263c65.",
+        "commits": ["8a8679f"],
+        "pullRequests": [],
+        "fromId": null,
+        "fromRelation": null
+      },
+      "completedCount": 7,
+      "openCount": 0,
+      "items": [
+        {
+          "id": "ns-dd3",
+          "title": "Investigate published force-stop fixture log lock during post-body teardown",
+          "type": "bug",
+          "priority": 2,
+          "status": "closed",
+          "stage": null,
+          "pauseLabels": [],
+          "activityKind": "closed",
+          "activityAt": "2026-11-10T15:35:57Z",
+          "outcome": "resolved",
+          "outcomeLabel": "Resolved",
+          "summary": "Committed and merged verified changes; latest main 644/644 passes.",
+          "commits": [],
+          "pullRequests": [],
+          "fromId": "ns-e5i",
+          "fromRelation": "discovered-from"
+        }
+      ]
     }
-  ]
+  ],
+  "standaloneCompleted": [],
+  "standaloneOpen": []
+}
+```
+
+```json
+POST /api/digest/catch-up
+{
+  "caughtUpAt": "2026-11-10T20:35:00Z"
 }
 ```
 
@@ -134,7 +184,7 @@ POST /api/beads/{id}/decide
   - No coupling to internal controller classes, in-memory collection implementations, or private service methods.
   - Validates that `POST /api/beads` creates a genuine issue in `.beads` discoverable by `bd list`.
   - Validates that `POST /api/beads/{id}/decide` carries the displayed snapshot, rejects stale state before adding a comment, and performs a guarded resume that clears both pause labels and the repair budget while preserving stage and unrelated fields.
-  - Validates that `GET /api/digest` correctly groups child Plan Beads into their parent Product Bead milestones based on `discovered-from` relations.
+  - Validates that `GET /api/digest` computes the full window delta across closed and newly-opened/updated Beads, groups multi-hop `discovered-from` and `parent-child` lineage threads alongside standalone items, and `POST /api/digest/catch-up` atomically persists the checkpoint in `<nightweaver-root>/telemetry/<project>/catch-up.json`.
 - **Prior Art**:
   - `PublishedCliIntegrationTests.cs` and `BeadsIntegrationTests.cs` in `tests/Nightweaver.Tests/`, which execute against real disposable Git repositories and verify external tool behavior under `TestSupport.cs`.
 

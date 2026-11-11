@@ -20,6 +20,8 @@ public sealed class Program
         "Attention Desk action {Action} failed for Bead {BeadId}.");
     private static readonly Action<ILogger, string, Exception?> LogAttentionActionError = LoggerMessage.Define<string>(
         LogLevel.Error, new EventId(5, "AttentionActionError"), "Attention Desk action failed for Bead {BeadId}.");
+    private static readonly Action<ILogger, Exception?> LogCatchUpDigestFailure = LoggerMessage.Define(
+        LogLevel.Error, new EventId(6, "CatchUpDigestFailure"), "Catch-Up Digest query or checkpoint update failed.");
 
     private Program() { }
 
@@ -73,6 +75,8 @@ public sealed class Program
         builder.Services.AddSingleton<IBeadWorkspaceRuntimeObserver, UnavailableBeadWorkspaceRuntimeObserver>();
         builder.Services.AddSingleton<BeadWorkspaceEnvironmentObserver>();
         builder.Services.AddSingleton<TrackerBridge>();
+        builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton<CatchUpCheckpointStore>();
         builder.Services.AddSingleton<LocalMutationRequestPolicy>();
         builder.Services.AddSingleton(services => new FactoryTelemetryReader(
             services.GetRequiredService<HostPaths>(), services.GetRequiredService<ProjectConfig>()));
@@ -163,6 +167,86 @@ public sealed class Program
                 LogAttentionDeskFailure(logger, exception);
                 var (title, detail) = GetSafeFailure(exception);
                 return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: title, detail: detail);
+            }
+        });
+        app.MapGet("/api/digest", async (HttpContext context, TrackerBridge tracker,
+            CatchUpCheckpointStore checkpointStore, ILogger<Program> logger) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var query = context.Request.Query;
+            if (query.Keys.Any(key => !string.Equals(key, "window", StringComparison.Ordinal)))
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Catch-Up Digest query", detail: "Only the window parameter is supported.");
+            if (query.TryGetValue("window", out var windowValues) && windowValues.Count > 1)
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Catch-Up Digest query", detail: "The window parameter may be supplied only once.");
+
+            var rawWindow = query.TryGetValue("window", out windowValues) ? windowValues.ToString().Trim() : string.Empty;
+            var window = string.IsNullOrEmpty(rawWindow) ? "auto" : rawWindow.ToLowerInvariant();
+            if (!CatchUpDigestProjector.IsSupportedWindow(window))
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Catch-Up Digest query",
+                    detail: "Supported windows are auto, since_caught_up, 24h, 7d, 30d, and all.");
+
+            try
+            {
+                var lastCaughtUpAt = checkpointStore.ReadLastCaughtUpAt();
+                return Results.Ok(await tracker.ReadDigestAsync(window, lastCaughtUpAt, context.RequestAborted));
+            }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (IsExpectedTrackerFailure(exception))
+            {
+                LogCatchUpDigestFailure(logger, exception);
+                var (title, detail) = GetSafeFailure(exception);
+                return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: title, detail: detail);
+            }
+        });
+        app.MapPost("/api/digest/catch-up", async (HttpContext context, CatchUpCheckpointStore checkpointStore,
+            LocalMutationRequestPolicy policy, ILogger<Program> logger) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (context.Request.Query.Count != 0)
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Catch-Up Digest request", detail: "Query parameters are not supported.");
+            if (!policy.Allows(context.Request))
+                return Results.Problem(statusCode: StatusCodes.Status403Forbidden,
+                    title: "Request origin rejected", detail: "Use the local Nightweaver console to submit this action.");
+            if (!IsJsonContentType(context.Request.ContentType))
+                return Results.Problem(statusCode: StatusCodes.Status415UnsupportedMediaType,
+                    title: "Unsupported media type", detail: "Submit the catch-up timestamp as application/json.");
+            var body = await BoundedRequestBody.ReadAsync(context.Request, context.RequestAborted, 16 * 1024);
+            if (body is null)
+                return Results.Problem(statusCode: StatusCodes.Status413PayloadTooLarge,
+                    title: "Request body too large", detail: "The request body cannot exceed 16 KiB.");
+            DateTimeOffset caughtUpAt;
+            try
+            {
+                caughtUpAt = CatchUpCheckpointStore.ParseCatchUpRequest(body);
+            }
+            catch (CatchUpRequestValidationException exception)
+            {
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Catch-Up Digest request", detail: exception.Message);
+            }
+
+            try
+            {
+                return Results.Ok(await checkpointStore.WriteLastCaughtUpAtAsync(caughtUpAt, context.RequestAborted));
+            }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidDataException or ArgumentException or NotSupportedException)
+            {
+                LogCatchUpDigestFailure(logger, exception);
+                return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable,
+                    title: "Catch-Up checkpoint unavailable",
+                    detail: "The local catch-up bookmark could not be saved. Try again shortly.");
             }
         });
         app.MapPost("/api/beads/{id}/decide", async (HttpContext context, string id, TrackerBridge tracker,

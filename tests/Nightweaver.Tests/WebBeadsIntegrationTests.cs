@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -21,6 +22,15 @@ public sealed class WebBeadsIntegrationTests
         "pauseTimeSource", "fromRole", "question", "diagnostic", "repairCycles", "maxRepairCycles",
         "canDecide", "canRetry", "canAbort", "unavailableReason", "sourceAuthor"
     ];
+    private static readonly string[] PlannedLabels = ["planned"];
+    private static readonly string[] StageReviewLabels = ["stage:review"];
+    private static readonly string[] RollupLabels = ["rollup"];
+    private static readonly string[] NeedsHumanLabels = ["needs-human"];
+    private static readonly string[] DecisionPausedLabels = ["stage:plan", "product-decision-required"];
+    private static readonly string[] ExpectedLeafBugCommits = ["8b59449"];
+    private static readonly string[] ExpectedLeafBugPrs = ["#19"];
+    private static readonly string[] ExpectedRollupCommits = ["130f881"];
+    private static readonly string[] ExpectedRollupPrs = ["#6"];
 
     [Fact]
     public async Task IntakeCreatesReadyProductBeadsAndPreservesLiteralContent()
@@ -133,13 +143,486 @@ public sealed class WebBeadsIntegrationTests
         {
             "/api/beads?view=unsupported",
             "/api/beads?view=all&view=closed",
-            "/api/beads?q=one&q=two"
+            "/api/beads?q=one&q=two",
+            "/api/digest?window=unsupported",
+            "/api/digest?window=24h&window=7d",
+            "/api/digest?extra=1"
         })
         {
             var response = await GetRowsAsync(client, path, HttpStatusCode.BadRequest);
             Assert.Equal("application/problem+json", response.ContentType);
             Assert.Equal("no-store", response.CacheControl);
         }
+        Assert.Empty(runner.Requests);
+    }
+
+    [Fact]
+    public async Task DigestGroupsLineageThreadsExtractsOutcomesAndPersistsCatchUpCheckpoint()
+    {
+        using var target = new BeadsApplicationFixture();
+        var now = DateTimeOffset.UtcNow;
+        var tenDaysAgo = now.AddDays(-10).ToString("O");
+        var threeDaysAgo = now.AddDays(-3).ToString("O");
+        var twoHoursAgo = now.AddHours(-2).ToString("O");
+        var oneHourAgo = now.AddHours(-1).ToString("O");
+        var thirtyMinutesAgo = now.AddMinutes(-30).ToString("O");
+        var twentyMinutesAgo = now.AddMinutes(-20).ToString("O");
+
+        var inventoryJson = JsonSerializer.Serialize(new object[]
+        {
+            new
+            {
+                id = "ns-root",
+                title = "Root feature closed before window",
+                issue_type = "feature",
+                priority = 1,
+                status = "closed",
+                assignee = (string?)null,
+                labels = PlannedLabels,
+                created_at = tenDaysAgo,
+                updated_at = tenDaysAgo,
+                closed_at = tenDaysAgo,
+                close_reason = "Initial feature closed earlier."
+            },
+            new
+            {
+                id = "ns-mid",
+                title = "Middle implementation task",
+                issue_type = "task",
+                priority = 2,
+                status = "closed",
+                assignee = "Michael Gasparelli",
+                labels = Array.Empty<string>(),
+                created_at = threeDaysAgo,
+                updated_at = twoHoursAgo,
+                closed_at = twoHoursAgo,
+                close_reason = "Merged approved candidate ca8377492f8f7731f9a1229b017f4bf2d1ed820e into local main as ccf9d1c8c3be5f2871d8cba191f543170f2e3a83.",
+                dependencies = new[]
+                {
+                    new { issue_id = "ns-mid", depends_on_id = "ns-root", type = "parent-child" }
+                }
+            },
+            new
+            {
+                id = "ns-leaf-bug",
+                title = "Discovered regression leaf",
+                issue_type = "bug",
+                priority = 1,
+                status = "closed",
+                assignee = "Michael Gasparelli",
+                labels = Array.Empty<string>(),
+                created_at = twoHoursAgo,
+                updated_at = oneHourAgo,
+                closed_at = oneHourAgo,
+                close_reason = "Fixed in commit 8b59449 (#19).",
+                dependencies = new[]
+                {
+                    new { issue_id = "ns-leaf-bug", depends_on_id = "ns-mid", type = "discovered-from" }
+                }
+            },
+            new
+            {
+                id = "ns-leaf-open",
+                title = "Follow-up hardening slice",
+                issue_type = "task",
+                priority = 2,
+                status = "in_progress",
+                assignee = "codex:ns-leaf-open",
+                labels = StageReviewLabels,
+                created_at = thirtyMinutesAgo,
+                updated_at = twentyMinutesAgo,
+                dependencies = new[]
+                {
+                    new { issue_id = "ns-leaf-open", depends_on_id = "ns-mid", type = "discovered-from" }
+                }
+            },
+            new
+            {
+                id = "ns-rollup",
+                title = "Parent rollup epic",
+                issue_type = "epic",
+                priority = 1,
+                status = "open",
+                assignee = (string?)null,
+                labels = RollupLabels,
+                created_at = tenDaysAgo,
+                updated_at = tenDaysAgo
+            },
+            new
+            {
+                id = "ns-rollup.1",
+                title = "Single active child under rollup",
+                issue_type = "task",
+                priority = 2,
+                status = "closed",
+                assignee = "Michael Gasparelli",
+                labels = Array.Empty<string>(),
+                created_at = threeDaysAgo,
+                updated_at = oneHourAgo,
+                closed_at = oneHourAgo,
+                close_reason = "PR #6 squash-merged into main as 130f881.",
+                dependencies = new[]
+                {
+                    new { issue_id = "ns-rollup.1", depends_on_id = "ns-rollup", type = "parent-child" }
+                }
+            },
+            new
+            {
+                id = "ns-standalone-dup",
+                title = "Duplicate standalone bug",
+                issue_type = "bug",
+                priority = 2,
+                status = "closed",
+                assignee = (string?)null,
+                labels = Array.Empty<string>(),
+                created_at = twoHoursAgo,
+                updated_at = oneHourAgo,
+                closed_at = oneHourAgo,
+                close_reason = "Duplicate of existing issue; no code changes required."
+            },
+            new
+            {
+                id = "ns-standalone-aborted",
+                title = "Aborted standalone task",
+                issue_type = "task",
+                priority = 2,
+                status = "closed",
+                assignee = (string?)null,
+                labels = NeedsHumanLabels,
+                created_at = twoHoursAgo,
+                updated_at = oneHourAgo,
+                closed_at = oneHourAgo,
+                close_reason = "Aborted from the Human Attention Desk."
+            },
+            new
+            {
+                id = "ns-standalone-paused",
+                title = "Paused standalone decision bead",
+                issue_type = "feature",
+                priority = 1,
+                status = "open",
+                assignee = (string?)null,
+                labels = DecisionPausedLabels,
+                created_at = threeDaysAgo,
+                updated_at = twentyMinutesAgo,
+                notes = "Waiting on user confirmation for digest placement."
+            }
+        });
+
+        var systemRunner = new SystemProcessRunner();
+        var runner = new RecordingProcessRunner((request, cancellationToken) =>
+            request.FileName == "git"
+                ? systemRunner.RunAsync(request, cancellationToken)
+                : Task.FromResult(new ProcessResult(0, inventoryJson, string.Empty)));
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+
+        // 1. Fresh host GET /api/digest defaults to 24h, has null lastCaughtUpAt, and does not write to HostRoot.
+        using (var initialResponse = await client.GetAsync("/api/digest", TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(HttpStatusCode.OK, initialResponse.StatusCode);
+            Assert.Equal("application/json", initialResponse.Content.Headers.ContentType?.MediaType);
+            Assert.Equal("no-store", initialResponse.Headers.CacheControl?.ToString());
+            Assert.Empty(Directory.EnumerateFileSystemEntries(factory.HostRoot));
+
+            using var document = JsonDocument.Parse(await initialResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            var root = document.RootElement;
+            Assert.Equal("24h", root.GetProperty("window").GetString());
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("lastCaughtUpAt").ValueKind);
+            Assert.False(root.GetProperty("isCaughtUp").GetBoolean());
+
+            var metrics = root.GetProperty("metrics");
+            Assert.Equal(5, metrics.GetProperty("completedTotal").GetInt32());
+            Assert.Equal(0, metrics.GetProperty("completedFeatures").GetInt32());
+            Assert.Equal(3, metrics.GetProperty("completedTasks").GetInt32());
+            Assert.Equal(2, metrics.GetProperty("completedBugs").GetInt32());
+            Assert.Equal(2, metrics.GetProperty("activeThreads").GetInt32());
+            Assert.Equal(2, metrics.GetProperty("openOrUpdatedTotal").GetInt32());
+            Assert.Equal(1, metrics.GetProperty("waitingForGuidance").GetInt32());
+
+            var threads = root.GetProperty("threads").EnumerateArray().ToArray();
+            Assert.Equal(2, threads.Length);
+
+            var multiHopThread = Assert.Single(threads, thread => thread.GetProperty("root").GetProperty("id").GetString() == "ns-root");
+            Assert.Equal("context", multiHopThread.GetProperty("root").GetProperty("activityKind").GetString());
+            Assert.Equal(2, multiHopThread.GetProperty("completedCount").GetInt32());
+            Assert.Equal(1, multiHopThread.GetProperty("openCount").GetInt32());
+            var multiHopItems = multiHopThread.GetProperty("items").EnumerateArray().ToArray();
+            Assert.Equal(3, multiHopItems.Length);
+
+            var midItem = Assert.Single(multiHopItems, item => item.GetProperty("id").GetString() == "ns-mid");
+            Assert.Equal("closed", midItem.GetProperty("activityKind").GetString());
+            Assert.Equal("ns-root", midItem.GetProperty("fromId").GetString());
+            Assert.Equal("parent-child", midItem.GetProperty("fromRelation").GetString());
+            Assert.Equal("resolved", midItem.GetProperty("outcome").GetString());
+            Assert.Contains("ccf9d1c", midItem.GetProperty("commits").EnumerateArray().Select(commit => commit.GetString()));
+
+            var leafBug = Assert.Single(multiHopItems, item => item.GetProperty("id").GetString() == "ns-leaf-bug");
+            Assert.Equal("ns-mid", leafBug.GetProperty("fromId").GetString());
+            Assert.Equal("discovered-from", leafBug.GetProperty("fromRelation").GetString());
+            Assert.Equal(ExpectedLeafBugCommits, leafBug.GetProperty("commits").EnumerateArray().Select(commit => commit.GetString()).ToArray());
+            Assert.Equal(ExpectedLeafBugPrs, leafBug.GetProperty("pullRequests").EnumerateArray().Select(pr => pr.GetString()).ToArray());
+
+            var leafOpen = Assert.Single(multiHopItems, item => item.GetProperty("id").GetString() == "ns-leaf-open");
+            Assert.Equal("opened", leafOpen.GetProperty("activityKind").GetString());
+            Assert.Equal("in_progress", leafOpen.GetProperty("outcome").GetString());
+            Assert.Equal("In progress (stage:review)", leafOpen.GetProperty("outcomeLabel").GetString());
+
+            var rollupThread = Assert.Single(threads, thread => thread.GetProperty("root").GetProperty("id").GetString() == "ns-rollup");
+            Assert.Equal("context", rollupThread.GetProperty("root").GetProperty("activityKind").GetString());
+            var rollupChild = Assert.Single(rollupThread.GetProperty("items").EnumerateArray());
+            Assert.Equal("ns-rollup.1", rollupChild.GetProperty("id").GetString());
+            Assert.Equal(ExpectedRollupCommits, rollupChild.GetProperty("commits").EnumerateArray().Select(commit => commit.GetString()).ToArray());
+            Assert.Equal(ExpectedRollupPrs, rollupChild.GetProperty("pullRequests").EnumerateArray().Select(pr => pr.GetString()).ToArray());
+
+            var standaloneCompleted = root.GetProperty("standaloneCompleted").EnumerateArray().ToArray();
+            Assert.Equal(2, standaloneCompleted.Length);
+            var dupItem = Assert.Single(standaloneCompleted, item => item.GetProperty("id").GetString() == "ns-standalone-dup");
+            Assert.Equal("no_op", dupItem.GetProperty("outcome").GetString());
+            Assert.Equal("Closed (No-Op / Duplicate)", dupItem.GetProperty("outcomeLabel").GetString());
+
+            var abortedItem = Assert.Single(standaloneCompleted, item => item.GetProperty("id").GetString() == "ns-standalone-aborted");
+            Assert.Equal("aborted", abortedItem.GetProperty("outcome").GetString());
+            Assert.Equal("Aborted", abortedItem.GetProperty("outcomeLabel").GetString());
+
+            var standaloneOpen = root.GetProperty("standaloneOpen").EnumerateArray().ToArray();
+            var pausedItem = Assert.Single(standaloneOpen);
+            Assert.Equal("ns-standalone-paused", pausedItem.GetProperty("id").GetString());
+            Assert.Equal("updated", pausedItem.GetProperty("activityKind").GetString());
+            Assert.Equal("paused", pausedItem.GetProperty("outcome").GetString());
+            Assert.Equal("product-decision-required", pausedItem.GetProperty("outcomeLabel").GetString());
+
+            // 2. Mark Caught Up using generatedAt snapshot timestamp.
+            var generatedAt = root.GetProperty("generatedAt").GetString()!;
+            using var catchUpRequest = CreateAttentionRequest(
+                client,
+                "/api/digest/catch-up",
+                JsonSerializer.Serialize(new { caughtUpAt = generatedAt }));
+            using var catchUpResponse = await client.SendAsync(catchUpRequest, TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.OK, catchUpResponse.StatusCode);
+
+            using var caughtUpDoc = JsonDocument.Parse(await catchUpResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            var caughtUpRoot = caughtUpDoc.RootElement;
+            Assert.Equal(DateTimeOffset.Parse(generatedAt), DateTimeOffset.Parse(caughtUpRoot.GetProperty("lastCaughtUpAt").GetString()!));
+        }
+
+        var catchUpPath = Path.Combine(factory.HostRoot, "telemetry", "web-test", "catch-up.json");
+        Assert.True(File.Exists(catchUpPath));
+
+        // 3. Subsequent default GET /api/digest resolves auto -> since_caught_up and stays caught up.
+        using (var subsequentResponse = await client.GetAsync("/api/digest", TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(HttpStatusCode.OK, subsequentResponse.StatusCode);
+            using var document = JsonDocument.Parse(await subsequentResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            var caughtUpDigest = document.RootElement;
+            Assert.Equal("since_caught_up", caughtUpDigest.GetProperty("window").GetString());
+            Assert.True(caughtUpDigest.GetProperty("isCaughtUp").GetBoolean());
+            Assert.Equal(0, caughtUpDigest.GetProperty("metrics").GetProperty("completedTotal").GetInt32());
+            Assert.Equal(0, caughtUpDigest.GetProperty("metrics").GetProperty("openOrUpdatedTotal").GetInt32());
+            Assert.Empty(caughtUpDigest.GetProperty("threads").EnumerateArray());
+            Assert.Empty(caughtUpDigest.GetProperty("standaloneCompleted").EnumerateArray());
+            Assert.Empty(caughtUpDigest.GetProperty("standaloneOpen").EnumerateArray());
+        }
+
+        // 4. Explicit ?window=24h still returns the 24h delta while reporting lastCaughtUpAt.
+        using (var explicitWindowResponse = await client.GetAsync("/api/digest?window=24h", TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(HttpStatusCode.OK, explicitWindowResponse.StatusCode);
+            using var document = JsonDocument.Parse(await explicitWindowResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            Assert.Equal("24h", document.RootElement.GetProperty("window").GetString());
+            Assert.Equal(JsonValueKind.String, document.RootElement.GetProperty("lastCaughtUpAt").ValueKind);
+            Assert.False(document.RootElement.GetProperty("isCaughtUp").GetBoolean());
+            Assert.Equal(5, document.RootElement.GetProperty("metrics").GetProperty("completedTotal").GetInt32());
+        }
+    }
+
+    [Theory]
+    [InlineData("updated")]
+    [InlineData("closed")]
+    [InlineData("opened")]
+    public async Task DigestCatchUpRetainsChangesMadeWhileInventoryReadIsInFlight(string activityKind)
+    {
+        using var target = new BeadsApplicationFixture();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var boundary = new DateTimeOffset(2026, 11, 10, 12, 0, 0, TimeSpan.Zero).AddMilliseconds(400);
+        var clock = new DigestTestClock(boundary);
+        var createdAt = boundary.AddDays(-2);
+        var closeBead = activityKind == "closed";
+        string Inventory(DateTimeOffset updatedAt, bool closed) => JsonSerializer.Serialize(new[]
+        {
+            new
+            {
+                id = "ns-race", title = "Concurrent tracker change", issue_type = "task", priority = 2,
+                status = closed ? "closed" : "open", labels = Array.Empty<string>(),
+                created_at = (activityKind == "opened" ? updatedAt : createdAt).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"),
+                updated_at = updatedAt.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"),
+                closed_at = closed ? updatedAt.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'") : null
+            }
+        });
+
+        var inventoryJson = activityKind == "opened" ? "[]" : Inventory(createdAt, false);
+        var captured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        var systemRunner = new SystemProcessRunner();
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            if (request.FileName == "git") return await systemRunner.RunAsync(request, token);
+            var snapshot = inventoryJson;
+            if (Interlocked.Increment(ref reads) == 1)
+            {
+                captured.SetResult();
+                await release.Task.WaitAsync(token);
+            }
+            return new ProcessResult(0, snapshot, string.Empty);
+        });
+        using var factory = CreateFactory(target.Path, runner, clock);
+        using var client = factory.CreateClient();
+
+        var pendingDigest = client.GetAsync("/api/digest", cancellationToken);
+        DateTimeOffset changedAt;
+        try
+        {
+            await captured.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            // The stale inventory omits a later write in the boundary's same second.
+            changedAt = boundary.AddMilliseconds(300);
+            inventoryJson = Inventory(changedAt, closeBead);
+            // Complete in the next second to also protect the pre-read boundary ordering.
+            clock.UtcNow = boundary.AddSeconds(1);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        using var initialResponse = await pendingDigest;
+        Assert.Equal(HttpStatusCode.OK, initialResponse.StatusCode);
+        using var initial = JsonDocument.Parse(await initialResponse.Content.ReadAsStringAsync(cancellationToken));
+        Assert.False(initial.RootElement.GetProperty("isCaughtUp").GetBoolean());
+        Assert.Empty(initial.RootElement.GetProperty("standaloneOpen").EnumerateArray());
+        var generatedAt = initial.RootElement.GetProperty("generatedAt").GetDateTimeOffset();
+        using var request = CreateAttentionRequest(client, "/api/digest/catch-up",
+            JsonSerializer.Serialize(new { caughtUpAt = generatedAt }));
+        using var checkpointResponse = await client.SendAsync(request, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, checkpointResponse.StatusCode);
+
+        using var subsequentResponse = await client.GetAsync("/api/digest?window=since_caught_up", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, subsequentResponse.StatusCode);
+        using var subsequent = JsonDocument.Parse(await subsequentResponse.Content.ReadAsStringAsync(cancellationToken));
+        Assert.False(subsequent.RootElement.GetProperty("isCaughtUp").GetBoolean());
+        var item = Assert.Single(subsequent.RootElement
+            .GetProperty(closeBead ? "standaloneCompleted" : "standaloneOpen").EnumerateArray());
+        Assert.Equal("ns-race", item.GetProperty("id").GetString());
+        Assert.Equal(activityKind, item.GetProperty("activityKind").GetString());
+        var nativeChangedAt = DateTimeOffset.FromUnixTimeSeconds(changedAt.ToUnixTimeSeconds());
+        Assert.Equal(nativeChangedAt, item.GetProperty("activityAt").GetDateTimeOffset());
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(boundary.ToUnixTimeSeconds()), generatedAt);
+    }
+
+    private sealed class DigestTestClock(DateTimeOffset utcNow) : TimeProvider
+    {
+        internal DateTimeOffset UtcNow { get; set; } = utcNow;
+        public override DateTimeOffset GetUtcNow() => UtcNow;
+    }
+
+    [Fact]
+    public async Task DigestCatchUpEnforcesLocalMutationPolicyAndValidatesRequestPayload()
+    {
+        using var target = new BeadsApplicationFixture();
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+
+        using (var missingHeader = CreateAttentionRequest(client, "/api/digest/catch-up", "{}", includeHeader: false))
+        using (var response = await client.SendAsync(missingHeader, TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+
+        using (var crossOrigin = CreateAttentionRequest(client, "/api/digest/catch-up", "{}", origin: "https://evil.example"))
+        using (var response = await client.SendAsync(crossOrigin, TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+
+        foreach (var invalidBody in new[]
+        {
+            "{",
+            "[]",
+            "{\"caughtUpAt\":\"not-a-timestamp\"}",
+            "{\"caughtUpAt\":\"01/02/2026\"}",
+            "{\"caughtUpAt\":123}",
+            "{\"unexpected\":true}",
+            JsonSerializer.Serialize(new { caughtUpAt = DateTimeOffset.UtcNow.AddHours(1).ToString("O") })
+        })
+        {
+            using var badRequest = CreateAttentionRequest(client, "/api/digest/catch-up", invalidBody);
+            using var response = await client.SendAsync(badRequest, TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        }
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(factory.HostRoot));
+        Assert.Empty(runner.Requests);
+    }
+
+    [Fact]
+    public async Task DigestCatchUpRequiresIsoTimestampAndPreservesCheckpointOnRejection()
+    {
+        using var target = new BeadsApplicationFixture();
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var checkpointPath = Path.Combine(factory.HostRoot, "telemetry", "web-test", "catch-up.json");
+
+        foreach (var timestamp in new[]
+        {
+            "2026-01-02T03:04:05Z",
+            "2026-01-02T03:04:05.1Z",
+            "2026-01-02T03:04:05.1234567Z",
+            "2026-01-02T05:34:05.1234567+02:30",
+            "2026-01-01T23:34:05-03:30"
+        })
+        {
+            using var request = CreateAttentionRequest(client, "/api/digest/catch-up",
+                JsonSerializer.Serialize(new { caughtUpAt = timestamp }));
+            using var response = await client.SendAsync(request, cancellationToken);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var result = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            var normalized = result.RootElement.GetProperty("lastCaughtUpAt").GetDateTimeOffset();
+            Assert.Equal(TimeSpan.Zero, normalized.Offset);
+            Assert.Equal(DateTimeOffset.Parse(timestamp, CultureInfo.InvariantCulture).ToUniversalTime(), normalized);
+            using var stored = JsonDocument.Parse(await File.ReadAllBytesAsync(checkpointPath, cancellationToken));
+            Assert.Equal(normalized, stored.RootElement.GetProperty("last_caught_up_at").GetDateTimeOffset());
+        }
+
+        var savedBytes = await File.ReadAllBytesAsync(checkpointPath, cancellationToken);
+        foreach (var timestamp in new[]
+        {
+            "01/02/2026",
+            "January 2, 2026",
+            "2026-01-02",
+            "2026-01-02T03:04:05",
+            "2026-01-02T03:04:05.1234567",
+            "2026-01-02 03:04:05Z",
+            "2026-01-02T03:04:05.Z",
+            "2026-01-02T03:04:05+2:30",
+            "2026-01-02T03:04:05+0230",
+            " 2026-01-02T03:04:05Z",
+            "2026-01-02T03:04:05Z ",
+            "2026-02-30T03:04:05Z"
+        })
+        {
+            using var request = CreateAttentionRequest(client, "/api/digest/catch-up",
+                JsonSerializer.Serialize(new { caughtUpAt = timestamp }));
+            using var response = await client.SendAsync(request, cancellationToken);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+            Assert.Equal(savedBytes, await File.ReadAllBytesAsync(checkpointPath, cancellationToken));
+            Assert.Single(Directory.EnumerateFiles(Path.GetDirectoryName(checkpointPath)!));
+        }
+
         Assert.Empty(runner.Requests);
     }
 
@@ -246,12 +729,18 @@ public sealed class WebBeadsIntegrationTests
     private static NightweaverWebApplicationFactory CreateFactory(BeadsFixture target, IProcessRunner runner)
         => CreateFactory(target.Path, runner);
 
-    private static NightweaverWebApplicationFactory CreateFactory(string targetPath, IProcessRunner runner)
+    private static NightweaverWebApplicationFactory CreateFactory(string targetPath, IProcessRunner runner,
+        TimeProvider? timeProvider = null)
     {
         var factory = new NightweaverWebApplicationFactory(configureServices: services =>
         {
             services.RemoveAll<IProcessRunner>();
             services.AddSingleton<IProcessRunner>(runner);
+            if (timeProvider is not null)
+            {
+                services.RemoveAll<TimeProvider>();
+                services.AddSingleton(timeProvider);
+            }
         });
         File.WriteAllText(factory.ConfigPath, JsonSerializer.Serialize(new
         {

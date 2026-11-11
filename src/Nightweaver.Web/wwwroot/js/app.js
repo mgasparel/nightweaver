@@ -407,6 +407,7 @@ async function submitAttentionAction(item, action, instruction = undefined, { wo
     const attentionRefreshed = await loadAttention();
     if (attentionRefreshed) attentionActionBlocked.delete(item.beadId);
     await loadBeads();
+    void loadDigest();
     if (action === "note_only")
       focusAfterRender = "guidance";
     else if (expectedFocusAfterAction(action, result))
@@ -451,6 +452,453 @@ if (attentionCards) {
   attentionRefresh?.addEventListener("click", () => void loadAttention());
   attentionRetry?.addEventListener("click", () => void loadAttention());
   void loadAttention();
+}
+
+const digestSection = document.querySelector("#catch-up");
+const digestCheckpointBadge = document.querySelector("#digest-checkpoint-badge");
+const digestWindowButtons = Array.from(document.querySelectorAll(".digest-window"));
+const digestMarkCaughtUp = document.querySelector("#digest-mark-caught-up");
+const digestRefresh = document.querySelector("#digest-refresh");
+const digestToggle = document.querySelector("#digest-toggle");
+const digestStatus = document.querySelector("#digest-status");
+const digestError = document.querySelector("#digest-error");
+const digestErrorText = document.querySelector("#digest-error-text");
+const digestRetry = document.querySelector("#digest-retry");
+const digestCaughtUpBar = document.querySelector("#digest-caught-up-bar");
+const digestCaughtUpText = document.querySelector("#digest-caught-up-text");
+const digestView24h = document.querySelector("#digest-view-24h");
+const digestBody = document.querySelector("#digest-body");
+const digestEmpty = document.querySelector("#digest-empty");
+const digestThreadsSection = document.querySelector("#digest-threads-section");
+const digestThreads = document.querySelector("#digest-threads");
+const digestStandaloneSection = document.querySelector("#digest-standalone-section");
+const digestStandalone = document.querySelector("#digest-standalone");
+const digestMetricCompleted = document.querySelector("#digest-metric-completed");
+const digestMetricCompletedSub = document.querySelector("#digest-metric-completed-sub");
+const digestMetricThreads = document.querySelector("#digest-metric-threads");
+const digestMetricThreadsSub = document.querySelector("#digest-metric-threads-sub");
+const digestMetricOpen = document.querySelector("#digest-metric-open");
+const digestMetricOpenSub = document.querySelector("#digest-metric-open-sub");
+const digestMetricWaiting = document.querySelector("#digest-metric-waiting");
+const digestMetricWaitingSub = document.querySelector("#digest-metric-waiting-sub");
+
+let selectedDigestWindow = "auto";
+let currentDigest = null;
+let digestRequestGeneration = 0;
+let activeDigestRequest = null;
+let digestManualCollapse = null;
+let digestSubmittingCatchUp = false;
+const expandedDigestSummaries = new Set();
+const expandedDigestThreads = new Set();
+
+function digestNode(tagName, className, text) {
+  const element = document.createElement(tagName);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+
+function formatDigestRelativeTime(isoString) {
+  if (!isoString) return "Unknown";
+  const parsed = Date.parse(isoString);
+  if (!Number.isFinite(parsed)) return "Unknown";
+  const elapsed = Math.max(0, Date.now() - parsed);
+  const minutes = Math.floor(elapsed / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function formatDigestWindowLabel(windowValue) {
+  return ({
+    since_caught_up: "Since Caught Up",
+    "24h": "Last 24h",
+    "7d": "Last 7d",
+    "30d": "Last 30d",
+    all: "All Time"
+  })[windowValue] ?? windowValue;
+}
+
+function updateDigestCollapseState(expanded) {
+  if (!digestBody || !digestToggle) return;
+  digestBody.hidden = !expanded;
+  digestToggle.setAttribute("aria-expanded", String(expanded));
+  digestToggle.textContent = expanded ? "Collapse" : "Expand";
+}
+
+function updateDigestWindowControls(activeWindow) {
+  for (const button of digestWindowButtons) {
+    button.setAttribute("aria-pressed", String(button.dataset.digestWindow === activeWindow));
+  }
+}
+
+function outcomePillClass(outcome) {
+  if (outcome === "resolved") return "digest-pill digest-pill-resolved";
+  if (outcome === "paused" || outcome === "aborted") return "digest-pill digest-pill-paused";
+  if (outcome === "no_op") return "digest-pill digest-pill-noop";
+  return "digest-pill";
+}
+
+function renderDigestItemRow(item, { isThreadRoot = false } = {}) {
+  const row = digestNode("div", "digest-item-row");
+  row.dataset.beadId = item.id;
+
+  const meta = digestNode("div", "digest-item-meta");
+  meta.append(digestNode("span", "digest-pill", `${item.type} · P${item.priority}`));
+
+  if (item.activityKind === "context") {
+    meta.append(digestNode("span", "digest-pill digest-pill-noop", `Root context (${item.status})`));
+  } else {
+    meta.append(digestNode("span", outcomePillClass(item.outcome), item.outcomeLabel));
+  }
+
+  if (!isThreadRoot && item.fromId) {
+    const relationLabel = item.fromRelation === "parent-child" ? `child of ${item.fromId}` : `from ${item.fromId}`;
+    meta.append(digestNode("span", "digest-pill digest-pill-lineage", `↳ ${relationLabel}`));
+  }
+
+  for (const sha of item.commits ?? []) {
+    meta.append(digestNode("span", "digest-pill digest-pill-commit", sha));
+  }
+  for (const pr of item.pullRequests ?? []) {
+    meta.append(digestNode("span", "digest-pill digest-pill-commit", pr));
+  }
+
+  const top = digestNode("div", "digest-item-top");
+  const titleHeading = digestNode("h4", "digest-item-title");
+  const titleLink = digestNode("a", "", `${item.id} · ${item.title}`);
+  titleLink.href = `#bead/${encodeURIComponent(item.id)}`;
+  titleLink.dataset.beadWorkspaceLink = "true";
+  titleHeading.append(titleLink);
+
+  const timeLabel = item.activityKind === "closed"
+    ? `Closed ${formatDigestRelativeTime(item.activityAt)}`
+    : item.activityKind === "opened"
+      ? `Opened ${formatDigestRelativeTime(item.activityAt)}`
+      : item.activityKind === "updated"
+        ? `Updated ${formatDigestRelativeTime(item.activityAt)}`
+        : `Context ${formatDigestRelativeTime(item.activityAt)}`;
+  top.append(titleHeading, digestNode("span", "digest-item-time", timeLabel));
+
+  row.append(meta, top);
+
+  if (item.summary && (item.activityKind !== "context" || !isThreadRoot)) {
+    const summaryKey = `${item.id}:${item.activityKind}`;
+    const isLong = item.summary.length > 140;
+    const isExpanded = expandedDigestSummaries.has(summaryKey);
+    const summary = digestNode("p", isLong && !isExpanded ? "digest-summary is-clamped" : "digest-summary", item.summary);
+    row.append(summary);
+
+    if (isLong) {
+      const toggle = digestNode("button", "digest-inline-toggle", isExpanded ? "Show less" : "Show more");
+      toggle.type = "button";
+      toggle.addEventListener("click", () => {
+        if (expandedDigestSummaries.has(summaryKey)) expandedDigestSummaries.delete(summaryKey);
+        else expandedDigestSummaries.add(summaryKey);
+        renderDigest();
+      });
+      row.append(toggle);
+    }
+  }
+
+  return row;
+}
+
+function renderDigestThreadCard(thread) {
+  const card = digestNode("article", "digest-thread-card");
+  card.dataset.rootBeadId = thread.root.id;
+
+  const header = digestNode("div", "digest-thread-header");
+  const titleGroup = digestNode("div", "digest-thread-title-group");
+  const meta = digestNode("div", "digest-thread-meta");
+
+  meta.append(digestNode("span", "digest-pill", `${thread.root.type} · P${thread.root.priority}`));
+
+  if (thread.root.activityKind === "context") {
+    meta.append(digestNode("span", "digest-pill digest-pill-noop", `Origin (${thread.root.status})`));
+  } else {
+    meta.append(digestNode("span", outcomePillClass(thread.root.outcome), thread.root.outcomeLabel));
+  }
+  for (const sha of thread.root.commits ?? []) {
+    meta.append(digestNode("span", "digest-pill digest-pill-commit", sha));
+  }
+  for (const pr of thread.root.pullRequests ?? []) {
+    meta.append(digestNode("span", "digest-pill digest-pill-commit", pr));
+  }
+
+  const title = digestNode("h4", "digest-thread-title");
+  const titleLink = digestNode("a", "", `${thread.root.id} · ${thread.root.title}`);
+  titleLink.href = `#bead/${encodeURIComponent(thread.root.id)}`;
+  titleLink.dataset.beadWorkspaceLink = "true";
+  title.append(titleLink);
+  titleGroup.append(meta, title);
+
+  if (thread.root.activityKind !== "context" && thread.root.summary) {
+    const summaryKey = `root:${thread.root.id}`;
+    const isLong = thread.root.summary.length > 140;
+    const isExpanded = expandedDigestSummaries.has(summaryKey);
+    const rootSummary = digestNode("p", isLong && !isExpanded ? "digest-summary is-clamped" : "digest-summary", thread.root.summary);
+    rootSummary.style.marginTop = "0.35rem";
+    titleGroup.append(rootSummary);
+    if (isLong) {
+      const toggle = digestNode("button", "digest-inline-toggle", isExpanded ? "Show less" : "Show more");
+      toggle.type = "button";
+      toggle.style.marginTop = "0.25rem";
+      toggle.addEventListener("click", () => {
+        if (expandedDigestSummaries.has(summaryKey)) expandedDigestSummaries.delete(summaryKey);
+        else expandedDigestSummaries.add(summaryKey);
+        renderDigest();
+      });
+      titleGroup.append(toggle);
+    }
+  }
+
+  const counts = digestNode("div", "digest-thread-counts");
+  if (thread.completedCount > 0) {
+    counts.append(digestNode("span", "digest-pill digest-pill-resolved", `${thread.completedCount} completed`));
+  }
+  if (thread.openCount > 0) {
+    counts.append(digestNode("span", "digest-pill", `${thread.openCount} open/updated`));
+  }
+  header.append(titleGroup, counts);
+  card.append(header);
+
+  if (Array.isArray(thread.items) && thread.items.length > 0) {
+    const itemsContainer = digestNode("div", "digest-thread-items");
+    const isThreadExpanded = expandedDigestThreads.has(thread.root.id);
+    const visibleItems = isThreadExpanded ? thread.items : thread.items.slice(0, 4);
+    for (const item of visibleItems) {
+      itemsContainer.append(renderDigestItemRow(item));
+    }
+    card.append(itemsContainer);
+
+    if (thread.items.length > 4) {
+      const hiddenCount = thread.items.length - 4;
+      const moreBtn = digestNode("button", "digest-inline-toggle",
+        isThreadExpanded ? "Show fewer in thread" : `Show ${hiddenCount} more in thread`);
+      moreBtn.type = "button";
+      moreBtn.addEventListener("click", () => {
+        if (expandedDigestThreads.has(thread.root.id)) expandedDigestThreads.delete(thread.root.id);
+        else expandedDigestThreads.add(thread.root.id);
+        renderDigest();
+      });
+      card.append(moreBtn);
+    }
+  }
+
+  return card;
+}
+
+function renderDigest() {
+  if (!currentDigest || !digestSection) return;
+  const d = currentDigest;
+  updateDigestWindowControls(d.window);
+
+  if (digestCheckpointBadge) {
+    if (d.lastCaughtUpAt) {
+      const formatted = new Date(d.lastCaughtUpAt).toLocaleString();
+      digestCheckpointBadge.textContent = `Caught up bookmark: ${formatDigestRelativeTime(d.lastCaughtUpAt)} (${formatted})`;
+    } else {
+      const effectiveWindow = d.window === "since_caught_up" ? "24h" : d.window;
+      digestCheckpointBadge.textContent = `No catch-up bookmark set · showing ${formatDigestWindowLabel(effectiveWindow)}`;
+    }
+  }
+
+  if (digestMarkCaughtUp) {
+    digestMarkCaughtUp.disabled = digestSubmittingCatchUp || Boolean(d.isCaughtUp);
+    digestMarkCaughtUp.textContent = d.isCaughtUp ? "Caught Up" : "Mark Caught Up";
+  }
+
+  const m = d.metrics;
+  if (digestMetricCompleted) digestMetricCompleted.textContent = String(m.completedTotal);
+  if (digestMetricCompletedSub) {
+    const parts = [];
+    if (m.completedFeatures > 0) parts.push(`${m.completedFeatures} feature${m.completedFeatures === 1 ? "" : "s"}`);
+    if (m.completedTasks > 0) parts.push(`${m.completedTasks} task${m.completedTasks === 1 ? "" : "s"}`);
+    if (m.completedBugs > 0) parts.push(`${m.completedBugs} bug${m.completedBugs === 1 ? "" : "s"}`);
+    digestMetricCompletedSub.textContent = parts.length > 0 ? parts.join(" · ") : `In ${formatDigestWindowLabel(d.window)}`;
+  }
+  if (digestMetricThreads) digestMetricThreads.textContent = String(m.activeThreads);
+  if (digestMetricThreadsSub) {
+    digestMetricThreadsSub.textContent = m.activeThreads === 1 ? "1 connected lineage chain" : `${m.activeThreads} connected lineage chains`;
+  }
+  if (digestMetricOpen) digestMetricOpen.textContent = String(m.openOrUpdatedTotal);
+  if (digestMetricOpenSub) {
+    digestMetricOpenSub.textContent = m.openOrUpdatedTotal === 0 ? "No newly opened items" : "Opened or updated in window";
+  }
+  if (digestMetricWaiting) digestMetricWaiting.textContent = String(m.waitingForGuidance);
+  if (digestMetricWaitingSub) {
+    digestMetricWaitingSub.textContent = m.waitingForGuidance === 0 ? "Attention Desk clear" : "Paused in Attention Desk";
+  }
+
+  if (digestCaughtUpBar && digestCaughtUpText) {
+    digestCaughtUpBar.hidden = !d.isCaughtUp;
+    if (d.isCaughtUp && d.lastCaughtUpAt) {
+      digestCaughtUpText.textContent = `All caught up since ${new Date(d.lastCaughtUpAt).toLocaleString()} · 0 new changes since your bookmark.`;
+    }
+  }
+
+  const shouldCollapse = digestManualCollapse !== null ? digestManualCollapse : Boolean(d.isCaughtUp);
+  updateDigestCollapseState(!shouldCollapse);
+
+  const hasThreads = Array.isArray(d.threads) && d.threads.length > 0;
+  const standaloneItems = [...(d.standaloneCompleted ?? []), ...(d.standaloneOpen ?? [])];
+  const hasStandalone = standaloneItems.length > 0;
+
+  if (digestEmpty) digestEmpty.hidden = hasThreads || hasStandalone;
+
+  if (digestThreadsSection && digestThreads) {
+    digestThreadsSection.hidden = !hasThreads;
+    const threadFragment = document.createDocumentFragment();
+    for (const thread of d.threads ?? []) {
+      threadFragment.append(renderDigestThreadCard(thread));
+    }
+    digestThreads.replaceChildren(threadFragment);
+  }
+
+  if (digestStandaloneSection && digestStandalone) {
+    digestStandaloneSection.hidden = !hasStandalone;
+    const standaloneFragment = document.createDocumentFragment();
+    for (const item of standaloneItems) {
+      standaloneFragment.append(renderDigestItemRow(item));
+    }
+    digestStandalone.replaceChildren(standaloneFragment);
+  }
+}
+
+async function loadDigest(windowOverride = undefined) {
+  if (!digestSection) return false;
+  if (windowOverride !== undefined) selectedDigestWindow = windowOverride;
+  activeDigestRequest?.abort();
+  const generation = ++digestRequestGeneration;
+  const controller = new AbortController();
+  activeDigestRequest = controller;
+
+  if (digestRefresh) digestRefresh.disabled = true;
+  if (digestRetry) digestRetry.disabled = true;
+  if (digestError) digestError.hidden = true;
+  if (digestStatus) digestStatus.textContent = "Refreshing catch-up digest…";
+
+  const params = new URLSearchParams();
+  if (selectedDigestWindow && selectedDigestWindow !== "auto") {
+    params.set("window", selectedDigestWindow);
+  }
+  const url = params.size > 0 ? `/api/digest?${params.toString()}` : "/api/digest";
+
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      let detail = "The Catch-Up Digest could not be refreshed.";
+      try {
+        const problem = await response.json();
+        if (typeof problem?.detail === "string" && problem.detail.trim()) detail = problem.detail;
+      } catch { /* Fallback to generic message */ }
+      throw new Error(detail);
+    }
+    const payload = await response.json();
+    if (generation !== digestRequestGeneration) return false;
+    if (!payload || typeof payload !== "object" || !payload.metrics) {
+      throw new Error("The Catch-Up Digest response was invalid.");
+    }
+    currentDigest = payload;
+    selectedDigestWindow = payload.window;
+    renderDigest();
+    if (digestStatus) digestStatus.textContent = "";
+    return true;
+  } catch (error) {
+    if (error?.name === "AbortError" || generation !== digestRequestGeneration) return false;
+    if (digestError && digestErrorText) {
+      digestErrorText.textContent = error instanceof Error ? error.message : "The Catch-Up Digest is unavailable.";
+      digestError.hidden = false;
+    }
+    if (digestStatus) {
+      digestStatus.textContent = currentDigest
+        ? "Showing the last confirmed digest; current tracker state is unavailable."
+        : "Catch-Up Digest data is unavailable.";
+    }
+    return false;
+  } finally {
+    if (generation === digestRequestGeneration) {
+      activeDigestRequest = null;
+      if (digestRefresh) digestRefresh.disabled = false;
+      if (digestRetry) digestRetry.disabled = false;
+    }
+  }
+}
+
+async function submitMarkCaughtUp() {
+  if (!currentDigest?.generatedAt || digestSubmittingCatchUp) return;
+  digestSubmittingCatchUp = true;
+  if (digestMarkCaughtUp) digestMarkCaughtUp.disabled = true;
+  if (digestStatus) digestStatus.textContent = "Saving catch-up bookmark…";
+  if (digestError) digestError.hidden = true;
+
+  try {
+    const response = await fetch("/api/digest/catch-up", {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Nightweaver-Request": "console-v1"
+      },
+      body: JSON.stringify({ caughtUpAt: currentDigest.generatedAt })
+    });
+    if (!response.ok) {
+      let detail = "The catch-up bookmark could not be saved.";
+      try {
+        const problem = await response.json();
+        if (typeof problem?.detail === "string" && problem.detail.trim()) detail = problem.detail;
+      } catch { /* Fallback */ }
+      throw new Error(detail);
+    }
+    const saved = await response.json();
+    if (typeof saved?.lastCaughtUpAt !== "string") {
+      throw new Error("The catch-up bookmark response could not be verified.");
+    }
+    digestManualCollapse = null;
+    selectedDigestWindow = "since_caught_up";
+    await loadDigest("since_caught_up");
+  } catch (error) {
+    if (digestError && digestErrorText) {
+      digestErrorText.textContent = error instanceof Error ? error.message : "The catch-up bookmark could not be saved.";
+      digestError.hidden = false;
+    }
+    if (digestStatus) digestStatus.textContent = "";
+  } finally {
+    digestSubmittingCatchUp = false;
+    renderDigest();
+  }
+}
+
+if (digestSection) {
+  for (const button of digestWindowButtons) {
+    button.addEventListener("click", () => {
+      const targetWindow = button.dataset.digestWindow ?? "24h";
+      digestManualCollapse = false;
+      void loadDigest(targetWindow);
+    });
+  }
+  digestMarkCaughtUp?.addEventListener("click", () => void submitMarkCaughtUp());
+  digestRefresh?.addEventListener("click", () => void loadDigest());
+  digestRetry?.addEventListener("click", () => void loadDigest());
+  digestView24h?.addEventListener("click", () => {
+    digestManualCollapse = false;
+    void loadDigest("24h");
+  });
+  digestToggle?.addEventListener("click", () => {
+    const currentlyExpanded = digestToggle.getAttribute("aria-expanded") === "true";
+    digestManualCollapse = currentlyExpanded;
+    updateDigestCollapseState(!currentlyExpanded);
+  });
+  void loadDigest();
 }
 
 const beadsSearch = document.querySelector("#beads-search");
@@ -763,6 +1211,7 @@ if (intakeTrigger && intakeDialog instanceof HTMLDialogElement && intakeForm ins
           updateFilterControls();
           void loadBeads();
         }
+        void loadDigest();
         confirmed = true;
         return;
       }

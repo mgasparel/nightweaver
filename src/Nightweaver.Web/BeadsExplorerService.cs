@@ -41,7 +41,8 @@ internal sealed class TrackerBridge(
     BeadWorkspaceEnvironmentObserver environmentObserver,
     TargetRepositoryValidator targetRepositoryValidator,
     BeadsReader beadsReader,
-    BeadsWriter beadsWriter) : IDisposable
+    BeadsWriter beadsWriter,
+    TimeProvider timeProvider) : IDisposable
 {
     private static readonly TimeSpan VerificationTimeout = TimeSpan.FromSeconds(4);
     private readonly SemaphoreSlim operationGate = new(1, 1);
@@ -103,6 +104,28 @@ internal sealed class TrackerBridge(
                 .ThenBy(item => item.PausedAt)
                 .ThenBy(item => item.BeadId, StringComparer.Ordinal)
                 .ToArray();
+        }
+        finally
+        {
+            operationGate.Release();
+        }
+    }
+
+    internal async Task<CatchUpDigestResponse> ReadDigestAsync(string window, DateTimeOffset? lastCaughtUpAt,
+        CancellationToken cancellationToken)
+    {
+        await operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            var target = await targetRepositoryValidator.ValidateAsync(
+                project.TargetRepository, project.ConfigFilePath, cancellationToken);
+            // External tracker writers do not share this gate. A checkpoint must precede
+            // the read so changes omitted from this snapshot remain in the next window.
+            // Native bd activity timestamps have whole-second precision: include the entire
+            // boundary second rather than checkpointing past an unseen write in that second.
+            var generatedAt = DateTimeOffset.FromUnixTimeSeconds(timeProvider.GetUtcNow().ToUnixTimeSeconds());
+            var inventory = await beadsReader.ReadSnapshotAsync(target, cancellationToken);
+            return CatchUpDigestProjector.Project(inventory, window, lastCaughtUpAt, generatedAt);
         }
         finally
         {
