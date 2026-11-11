@@ -364,7 +364,9 @@ internal static class Program
         var nonce = args[3];
         var ready = new NativeHandleChildReady(Environment.ProcessId,
             Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks, nonce);
-        File.WriteAllText(readyPath, JsonSerializer.Serialize(ready), new UTF8Encoding(false));
+        var temporaryPath = readyPath + ".tmp";
+        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(ready), new UTF8Encoding(false));
+        File.Move(temporaryPath, readyPath);
         WaitForFile(releasePath, TimeSpan.FromSeconds(30));
         return string.Equals(File.ReadAllText(releasePath), nonce, StringComparison.Ordinal) ? 0 : 68;
     }
