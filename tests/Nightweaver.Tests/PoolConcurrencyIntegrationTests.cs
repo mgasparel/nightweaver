@@ -12,7 +12,7 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
     [Fact]
     public async Task DeliveryCompletesWhileMergerPreparationIsHeldThenBothTasksMerge()
     {
-        await using var fixture = await ManualPilot.CreateAsync(seedProfile: ManualPilotSeedProfile.Empty,
+        await using var fixture = await ManualPilot.CreateAsync(seedProfile: ManualPilotSeedProfile.ParentlessOnly,
             cancellationToken: TestContext.Current.CancellationToken);
         var paths = new HostPaths(fixture.NightweaverRoot);
         var project = ProjectConfigLoader.Load(fixture.ConfigPath, ProjectSlug.Parse("manualqa"), paths);
@@ -88,7 +88,11 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             Assert.Equal("in_progress", heldState.GetProperty("status").GetString());
             Assert.Equal(project.RecoveryActor, heldState.GetProperty("assignee").GetString());
 
-            var lateBead = await fixture.CreateTaskAsync("Independent Delivery", lifetime.Token);
+            // Reuse the native recovery smoke's prepared template. Admission still
+            // happens only after Merger preparation is held; release this task's
+            // fixture gate so the real Delivery roles can make independent progress.
+            var lateBead = fixture.ParentlessTaskId;
+            fixture.ReleaseGate(lateBead);
             var evaluation = await delivery.EvaluateAsync(lifetime.Token);
             var admitted = Assert.Single(evaluation.Admitted);
             Assert.Equal(lateBead, admitted.BeadId);
