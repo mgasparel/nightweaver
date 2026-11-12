@@ -339,29 +339,50 @@ internal static class AgentStreamCleanupCoordinator
             }
             else
             {
-                using var barrier = new Barrier(burstSize + 1);
-                var starts = Enumerable.Range(0, burstSize).Select(index => Task.Run(() =>
+                // This private coordinator must produce the burst even when its
+                // shared workers are scarce; it does not change xUnit parallelism.
+                ThreadPool.GetMinThreads(out var minimumWorkers, out var minimumIo);
+                ThreadPool.GetMaxThreads(out var maximumWorkers, out var maximumIo);
+                if (!ThreadPool.SetMinThreads(Math.Min(minimumWorkers, 2), minimumIo)
+                    || !ThreadPool.SetMaxThreads(2, maximumIo))
+                    throw new InvalidOperationException("Could not constrain the launch probe's private ThreadPool.");
+                try
                 {
-                    if (!barrier.SignalAndWait(TimeSpan.FromSeconds(10)))
-                        throw new TimeoutException("Managed runner did not reach the native launch overlap barrier.");
-                    return StartHolder(runner, fixtureAssembly, workingDirectory, scenarioDirectory, index,
-                        runnerCancellation.Token);
-                })).ToArray();
-                var executorStart = Task.Run(() =>
+                    using var barrier = new Barrier(burstSize + 1, _ =>
+                    {
+                        // Release the worker constraint before any real launch I/O.
+                        ThreadPool.SetMaxThreads(maximumWorkers, maximumIo);
+                        ThreadPool.SetMinThreads(minimumWorkers, minimumIo);
+                    });
+                    var starts = Enumerable.Range(0, burstSize).Select(index => Task.Factory.StartNew(() =>
+                    {
+                        if (!barrier.SignalAndWait(TimeSpan.FromSeconds(10)))
+                            throw new TimeoutException("Managed runner did not reach the native launch overlap barrier.");
+                        return StartHolder(runner, fixtureAssembly, workingDirectory, scenarioDirectory, index,
+                            runnerCancellation.Token);
+                    }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+                    var executorStart = Task.Factory.StartNew(() =>
+                    {
+                        if (!barrier.SignalAndWait(TimeSpan.FromSeconds(10)))
+                            throw new TimeoutException("Native executor did not reach the managed launch overlap barrier.");
+                        var calledAt = DateTimeOffset.UtcNow;
+                        return new ExecutorStart(calledAt,
+                            AgentInvocationExecutor.ExecuteAsync(hostPaths, project, invocation, CancellationToken.None));
+                    }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+                    runnerStarts.AddRange(await Task.WhenAll(starts).ConfigureAwait(false));
+                    var started = await executorStart.ConfigureAwait(false);
+                    executorCallStartedAt = started.CalledAtUtc;
+                    executorTask = started.Task;
+                    eventTimes["executorCallStarted"] = executorCallStartedAt;
+                    foreach (var holderStart in runnerStarts)
+                        eventTimes[$"managedRunnerCallStarted-{holderStart.Index}"] = holderStart.CallStartedAtUtc;
+                }
+                finally
                 {
-                    if (!barrier.SignalAndWait(TimeSpan.FromSeconds(10)))
-                        throw new TimeoutException("Native executor did not reach the managed launch overlap barrier.");
-                    var calledAt = DateTimeOffset.UtcNow;
-                    return new ExecutorStart(calledAt,
-                        AgentInvocationExecutor.ExecuteAsync(hostPaths, project, invocation, CancellationToken.None));
-                });
-                runnerStarts.AddRange(await Task.WhenAll(starts).ConfigureAwait(false));
-                var started = await executorStart.ConfigureAwait(false);
-                executorCallStartedAt = started.CalledAtUtc;
-                executorTask = started.Task;
-                eventTimes["executorCallStarted"] = executorCallStartedAt;
-                foreach (var holderStart in runnerStarts)
-                    eventTimes[$"managedRunnerCallStarted-{holderStart.Index}"] = holderStart.CallStartedAtUtc;
+                    // Constrain only burst admission, not later stream/exit callbacks.
+                    ThreadPool.SetMaxThreads(maximumWorkers, maximumIo);
+                    ThreadPool.SetMinThreads(minimumWorkers, minimumIo);
+                }
             }
 
             producer = await WaitForJsonAsync<ProducerReport>(producerReportPath, GateTimeout,
