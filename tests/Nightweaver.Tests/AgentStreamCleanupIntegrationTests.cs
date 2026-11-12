@@ -156,6 +156,7 @@ public sealed class AgentStreamCleanupIntegrationTests
         var invocationId = new DateTime(uniqueTicks, DateTimeKind.Utc)
             .ToString("yyyyMMdd'T'HHmmssfffffff'Z'", System.Globalization.CultureInfo.InvariantCulture) + "-qa";
         var environment = GetInheritedEnvironment();
+        if (scenario == "launch-race") environment["DOTNET_PROCESSOR_COUNT"] = "2";
         var dotnet = WindowsProcessLauncher.ResolveExecutable("dotnet", environment);
         var arguments = new[]
         {

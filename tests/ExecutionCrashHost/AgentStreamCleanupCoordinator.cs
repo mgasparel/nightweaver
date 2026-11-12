@@ -343,6 +343,10 @@ internal static class AgentStreamCleanupCoordinator
                 // shared workers are scarce; it does not change xUnit parallelism.
                 ThreadPool.GetMinThreads(out var minimumWorkers, out var minimumIo);
                 ThreadPool.GetMaxThreads(out var maximumWorkers, out var maximumIo);
+                // The eight deliberately held managed children retain stdout/stderr
+                // readers. Reserve callbacks as well as the native exit wait after
+                // testing burst admission with only two shared workers available.
+                var readerWorkers = Math.Max(minimumWorkers, burstSize * 2 + 4);
                 if (!ThreadPool.SetMinThreads(Math.Min(minimumWorkers, 2), minimumIo)
                     || !ThreadPool.SetMaxThreads(2, maximumIo))
                     throw new InvalidOperationException("Could not constrain the launch probe's private ThreadPool.");
@@ -352,7 +356,7 @@ internal static class AgentStreamCleanupCoordinator
                     {
                         // Release the worker constraint before any real launch I/O.
                         ThreadPool.SetMaxThreads(maximumWorkers, maximumIo);
-                        ThreadPool.SetMinThreads(minimumWorkers, minimumIo);
+                        ThreadPool.SetMinThreads(readerWorkers, minimumIo);
                     });
                     var starts = Enumerable.Range(0, burstSize).Select(index => Task.Factory.StartNew(() =>
                     {
@@ -379,9 +383,10 @@ internal static class AgentStreamCleanupCoordinator
                 }
                 finally
                 {
-                    // Constrain only burst admission, not later stream/exit callbacks.
+                    // Constrain only burst admission, not later stream/exit callbacks
+                    // in this single-scenario, disposable coordinator process.
                     ThreadPool.SetMaxThreads(maximumWorkers, maximumIo);
-                    ThreadPool.SetMinThreads(minimumWorkers, minimumIo);
+                    ThreadPool.SetMinThreads(readerWorkers, minimumIo);
                 }
             }
 
@@ -525,7 +530,7 @@ internal static class AgentStreamCleanupCoordinator
                 try { await executorTask.ConfigureAwait(false); }
                 catch (Exception exception) { failure = exception; }
                 var logText = logFilePath is not null && File.Exists(logFilePath)
-                    ? Convert.ToBase64String(await File.ReadAllBytesAsync(logFilePath).ConfigureAwait(false))
+                    ? Convert.ToBase64String(await ReadActiveLogAsync(logFilePath).ConfigureAwait(false))
                     : "missing";
                 throw new InvalidOperationException(
                     $"Actual executor completed before producer report. failure={failure}; logBase64={logText}", failure);
@@ -535,10 +540,19 @@ internal static class AgentStreamCleanupCoordinator
         }
 
         var logAtTimeout = logFilePath is not null && File.Exists(logFilePath)
-            ? Convert.ToBase64String(await File.ReadAllBytesAsync(logFilePath).ConfigureAwait(false))
+            ? Convert.ToBase64String(await ReadActiveLogAsync(logFilePath).ConfigureAwait(false))
             : "missing";
         throw new TimeoutException(
             $"Coordinator gate did not become ready: {path}; executorTask={executorTask?.Status.ToString() ?? "not observed"}; logBase64={logAtTimeout}");
+    }
+
+    private static async Task<byte[]> ReadActiveLogAsync(string path)
+    {
+        await using var log = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete, 4096, useAsync: true);
+        using var bytes = new MemoryStream();
+        await log.CopyToAsync(bytes).ConfigureAwait(false);
+        return bytes.ToArray();
     }
 
     private static void CloseDuplicateCopies(ProducerReport producer)
