@@ -7,8 +7,8 @@ public sealed class BackgroundTerminalLifetimeTests
 {
     [Theory]
     [InlineData("terminal")]
-    [InlineData("standalone")]
-    public async Task DetachedOwnerSurvivesClosingItsLaunchingTerminalJob(string mode)
+    [InlineData("inherited-host")]
+    public async Task DetachedOwnerHonorsCallerJobPolicyAndKeepsItsOwnContainment(string mode)
     {
         using var directory = new TempDirectory();
         var ready = Path.Combine(directory.Path, "owner.ready");
@@ -28,9 +28,23 @@ public sealed class BackgroundTerminalLifetimeTests
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
             deadline.CancelAfter(TimeSpan.FromSeconds(10));
+            var callerPolicy = await terminal.StandardOutput.ReadLineAsync(deadline.Token);
+            Assert.True(callerPolicy is "caller-policy=allow" or "caller-policy=deny",
+                $"The terminal probe did not report its caller's job policy: {callerPolicy}");
+            if (mode == "terminal") Assert.Equal("caller-policy=allow", callerPolicy);
+            if (callerPolicy == "caller-policy=deny")
+            {
+                await terminal.WaitForExitAsync(deadline.Token);
+                Assert.Equal(5, terminal.ExitCode);
+                Assert.Contains("detachment-error=5:", await terminal.StandardError.ReadToEndAsync(deadline.Token));
+                Assert.DoesNotContain("detached-owner=", await terminal.StandardOutput.ReadToEndAsync(deadline.Token));
+                Assert.False(File.Exists(ready));
+                return;
+            }
             while (!File.Exists(ready))
             {
-                Assert.False(terminal.HasExited, "Terminal probe exited before its owner became ready.");
+                if (terminal.HasExited)
+                    Assert.Fail($"Terminal probe exited before its owner became ready: {await terminal.StandardError.ReadToEndAsync(deadline.Token)}");
                 await Task.Delay(20, deadline.Token);
             }
             owner = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(ready, deadline.Token), CultureInfo.InvariantCulture));

@@ -8,6 +8,7 @@ internal static class TerminalOwnerProbe
 {
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const uint JobObjectLimitBreakawayOk = 0x00000800;
+    private const uint JobObjectLimitSilentBreakawayOk = 0x00001000;
 
     internal static async Task<int> RunAsync(string[] args)
     {
@@ -31,7 +32,7 @@ internal static class TerminalOwnerProbe
             return 0;
         }
 
-        if (args is not [var mode, var path] || mode is not ("terminal" or "standalone" or "restricted")) return 64;
+        if (args is not [var mode, var path] || mode is not ("terminal" or "inherited-host" or "restricted")) return 64;
         using var terminalJob = CreateJobObjectW(IntPtr.Zero, null);
         if (terminalJob.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
         var limits = new ExtendedLimits
@@ -42,8 +43,20 @@ internal static class TerminalOwnerProbe
             }
         };
         if (!SetInformationJobObject(terminalJob, 9, ref limits, (uint)Marshal.SizeOf<ExtendedLimits>())
-            || (mode != "standalone" && !AssignProcessToJobObject(terminalJob, GetCurrentProcess())))
+            || (mode != "inherited-host" && !AssignProcessToJobObject(terminalJob, GetCurrentProcess())))
             throw new Win32Exception(Marshal.GetLastWin32Error());
+
+        if (!IsProcessInJob(GetCurrentProcess(), IntPtr.Zero, out var isInJob))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        var canBreakAway = true;
+        if (isInJob)
+        {
+            if (!QueryInformationJobObject(IntPtr.Zero, 9, out var callerLimits,
+                    (uint)Marshal.SizeOf<ExtendedLimits>(), out _))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            canBreakAway = (callerLimits.Basic.Flags & (JobObjectLimitBreakawayOk | JobObjectLimitSilentBreakawayOk)) != 0;
+        }
+        Console.WriteLine(canBreakAway ? "caller-policy=allow" : "caller-policy=deny");
 
         try
         {
@@ -105,6 +118,13 @@ internal static class TerminalOwnerProbe
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool AssignProcessToJobObject(WindowsProcessLauncher.SafeKernelHandle job, IntPtr process);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsProcessInJob(IntPtr process, IntPtr job, [MarshalAs(UnmanagedType.Bool)] out bool result);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(IntPtr job, int informationClass,
+        out ExtendedLimits information, uint length, out uint returnLength);
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetCurrentProcess();
 }
