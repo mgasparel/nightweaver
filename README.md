@@ -72,6 +72,8 @@ Use the Unix apphost name `nightweaver` in place of `nightweaver.exe` on Unix sy
 
 The supported v1 deployment starts one detached runtime and its matching Web Console manually. Closing the starting terminal or browser does not stop the runtime. A crash requires an operator to run `background start` or `background restart`; Nightweaver installs no login task or Windows service and does not restart a crashed owner automatically.
 
+The background owner explicitly breaks away from the launching terminal's Windows Job Object as well as detaching from its console. Its own Job Object still contains the runtime, Web Console and Agent descendants. If the launching host forbids job breakaway, startup fails without creating an owner; launch from a terminal that permits background processes. Nightweaver does not silently fall back to a process that would die when the terminal closes.
+
 Publish both apphosts and their prompts/static assets to a new destination. Pass the existing Target Repository so the script can refuse a destination that overlaps either repository:
 
 ```powershell

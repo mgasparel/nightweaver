@@ -75,13 +75,23 @@ public sealed class ManualDeliveryPilotSecondSignalTests
                 TestContext.Current.CancellationToken)).Trim());
             await AssertForeignClaimUnchangedAsync(fixture, foreignClaimId, TestContext.Current.CancellationToken);
 
+            using var recoveryDeadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            recoveryDeadline.CancelAfter(TimeSpan.FromMinutes(2));
             fixture.ReleaseGate(fixture.ParentlessTaskId);
             var safelyPaused = await WaitForNeedsHumanAsync(fixture, fixture.ParentlessTaskId,
-                TimeSpan.FromMinutes(2), TestContext.Current.CancellationToken);
+                TimeSpan.FromMinutes(2), recoveryDeadline.Token);
             Assert.Equal("open", safelyPaused.GetProperty("status").GetString());
             Assert.Contains("needs-human", safelyPaused.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
             Assert.Contains("stage:implement", safelyPaused.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
-            Assert.Contains($"Delivery slot '{fixture.ParentlessTaskId}' released local capacity (Escalated; claim handoff=True)",
+            var releaseMarker = $"Delivery slot '{fixture.ParentlessTaskId}' released local capacity (Escalated; claim handoff=True)";
+            // The guarded pause write precedes local capacity release. Observe both
+            // boundaries within the original recovery budget, rather than racing the log.
+            while (!fixture.ReadRuntimeLog().Contains(releaseMarker, StringComparison.Ordinal))
+            {
+                Assert.False(secondRuntime.HasExited, "The runtime exited before releasing the paused slot.");
+                await Task.Delay(50, recoveryDeadline.Token);
+            }
+            Assert.Contains(releaseMarker,
                 fixture.ReadRuntimeLog(), StringComparison.Ordinal);
             Assert.True(File.Exists(retainedSentinel), "Recovery must keep the dirty sentinel after safely withholding approval.");
             Assert.Equal(branchBefore, (await fixture.ReadWorktreeBranchAsync(fixture.ParentlessTaskId,
