@@ -305,7 +305,8 @@ public sealed class BeadsJournalClientIntegrationTests
             ["--data-dir", Path.Combine(repositoryPath, ".beads", "embeddeddolt"), "sql", "-q", query],
             repositoryPath, environment, TimeSpan.FromSeconds(30));
         var result = await processRunner.RunAsync(request, cancellationToken);
-        Assert.Equal(0, result.ExitCode);
+        Assert.True(result.ExitCode == 0,
+            $"Unjournaled native SQL insert exited {result.ExitCode}. stdout={result.StandardOutput}; stderr={result.StandardError}");
         return id;
     }
 

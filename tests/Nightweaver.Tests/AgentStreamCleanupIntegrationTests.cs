@@ -55,9 +55,6 @@ public sealed class AgentStreamCleanupIntegrationTests
         var noninheritableControl = await RunCoordinatorAsync("noninheritable");
         AssertCleanControl(noninheritableControl.Root, "noninheritable");
 
-        var creationWindow = await RunCoordinatorAsync("launch-race");
-        AssertWindowExperiment(creationWindow.Root, "launch-race", expectedHolderCount: 8);
-
         var prelaunchControl = await RunCoordinatorAsync("prelaunch-holder");
         AssertWindowExperiment(prelaunchControl.Root, "prelaunch-holder", expectedHolderCount: 1);
         Assert.Equal(JsonValueKind.Null, prelaunchControl.Root.GetProperty("ExecutorFailure").ValueKind);
@@ -69,11 +66,19 @@ public sealed class AgentStreamCleanupIntegrationTests
             < prelaunchEvents.GetProperty("executorCallStarted").GetDateTimeOffset());
     }
 
+    [Fact]
+    public async Task NativeLaunchBurstDoesNotDependOnAvailableThreadPoolWorkers()
+    {
+        var creationWindow = await RunCoordinatorAsync("launch-race");
+        AssertWindowExperiment(creationWindow.Root, "launch-race", expectedHolderCount: 8);
+    }
+
     private static void AssertWindowExperiment(JsonElement result, string scenario, int expectedHolderCount)
     {
         Assert.Equal(scenario, result.GetProperty("Scenario").GetString());
         Assert.False(result.GetProperty("LaunchContextActive").GetBoolean());
         Assert.False(result.GetProperty("StopRequested").GetBoolean());
+        Assert.True(result.GetProperty("Producer").ValueKind == JsonValueKind.Object, result.GetRawText());
         Assert.Equal(0, result.GetProperty("Producer").GetProperty("StdoutHandle").GetInt64());
         Assert.Equal(0, result.GetProperty("Producer").GetProperty("StderrHandle").GetInt64());
         Assert.False(result.GetProperty("Producer").GetProperty("Inheritable").GetBoolean());
@@ -151,6 +156,7 @@ public sealed class AgentStreamCleanupIntegrationTests
         var invocationId = new DateTime(uniqueTicks, DateTimeKind.Utc)
             .ToString("yyyyMMdd'T'HHmmssfffffff'Z'", System.Globalization.CultureInfo.InvariantCulture) + "-qa";
         var environment = GetInheritedEnvironment();
+        if (scenario == "launch-race") environment["DOTNET_PROCESSOR_COUNT"] = "2";
         var dotnet = WindowsProcessLauncher.ResolveExecutable("dotnet", environment);
         var arguments = new[]
         {

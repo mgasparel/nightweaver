@@ -69,6 +69,9 @@ internal static class AgentStreamCleanupFixture
     internal static int RunRaceProducer(string[] args)
     {
         if (args.Length != 3) return 64;
+        // A ready Agent has consumed its prepared input. This probe exercises
+        // output-handle inheritance, not early process exit during stdin delivery.
+        Console.OpenStandardInput().CopyTo(Stream.Null);
         var reportPath = args[1];
         var releasePath = args[2];
         using var output = Console.OpenStandardOutput();

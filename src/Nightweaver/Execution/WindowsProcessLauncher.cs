@@ -14,6 +14,7 @@ internal static class WindowsProcessLauncher
     private const int JobObjectExtendedLimitInformationClass = 9;
     private const int JobObjectBasicAccountingInformationClass = 1;
     private const uint CreateNoWindow = 0x08000000;
+    private const uint CreateBreakawayFromJob = 0x01000000;
     private const uint CreateUnicodeEnvironment = 0x00000400;
     private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const uint StartfUseStdHandles = 0x00000100;
@@ -189,7 +190,7 @@ internal static class WindowsProcessLauncher
         }
     }
 
-    /// <summary>Starts a detached owner with only NUL standard handles inherited, never its caller's handles.</summary>
+    /// <summary>Starts an owner outside the caller's job, with only NUL standard handles inherited.</summary>
     internal static WindowsDetachedProcess LaunchDetached(string executable, IReadOnlyList<string> arguments,
         string workingDirectory)
     {
@@ -219,10 +220,17 @@ internal static class WindowsProcessLauncher
             AttributeList = attributes.Pointer
         };
         using var commandLine = new SafeHGlobalBuffer(SerializeCommandLine(executable, arguments));
+        // CREATE_NO_WINDOW detaches the console, but does not escape a terminal's
+        // kill-on-close job. Never fall back to an owner that dies with that job.
         if (!CreateProcessW(executable, commandLine.DangerousGetHandle(), IntPtr.Zero, IntPtr.Zero,
-                inheritHandles: true, ExtendedStartupInfoPresent | CreateNoWindow | CreateUnicodeEnvironment,
+                inheritHandles: true, ExtendedStartupInfoPresent | CreateNoWindow | CreateUnicodeEnvironment | CreateBreakawayFromJob,
                 IntPtr.Zero, workingDirectory, ref startup, out var processInformation))
-            throw LastError($"CreateProcessW(detached '{executable}')");
+        {
+            var error = Marshal.GetLastWin32Error();
+            throw new Win32Exception(error, error == 5
+                ? "Could not detach the background owner; the launching host may forbid job breakaway. No owner was started."
+                : $"CreateProcessW(detached '{executable}') failed.");
+        }
 
         using var thread = new SafeKernelHandle(processInformation.Thread, ownsHandle: true);
         return new WindowsDetachedProcess(new SafeKernelHandle(processInformation.Process, ownsHandle: true),
