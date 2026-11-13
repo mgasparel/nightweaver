@@ -761,16 +761,23 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
             else start.Environment[key] = value;
         }
         using var process = Process.Start(start) ?? throw new InvalidOperationException($"Could not start '{executable}'.");
-        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdout = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout);
         try { await process.WaitForExitAsync(timeoutSource.Token).ConfigureAwait(false); }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            try
+            {
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException) { /* The child exited during cancellation. */ }
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            throw new TimeoutException($"'{executable} {string.Join(' ', arguments)}' exceeded {timeout}.");
+            _ = await stdout.ConfigureAwait(false);
+            var diagnostic = await stderr.ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new TimeoutException($"'{executable} {string.Join(' ', arguments)}' exceeded {timeout}. stderr: {diagnostic}");
         }
         var output = await stdout.ConfigureAwait(false);
         var error = await stderr.ConfigureAwait(false);

@@ -5,6 +5,47 @@ namespace Nightweaver.Tests;
 
 public sealed class ManualDeliveryPilotFixtureTemplateTests
 {
+    [Fact]
+    public async Task CallerCancellationSettlesPilotToolBeforeReturning()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        await using var fixture = await ManualPilotFixture.CreateAsync(
+            seedProfile: ManualPilotSeedProfile.Empty,
+            cancellationToken: TestContext.Current.CancellationToken);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var marker = Path.Combine(fixture.Root, "cancelled-tool.pid");
+        var script = Path.Combine(fixture.Root, "hold-tool.ps1");
+        await File.WriteAllTextAsync(script,
+            "param([string]$Marker)\n[IO.File]::WriteAllText($Marker, [string]$PID)\nStart-Sleep -Seconds 60\n",
+            TestContext.Current.CancellationToken);
+        var run = fixture.RunToolForTestAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-File", script, marker],
+            fixture.Repository, cancellation.Token);
+        System.Diagnostics.Process? child = null;
+        try
+        {
+            using var ready = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            ready.CancelAfter(TimeSpan.FromSeconds(10));
+            while (!File.Exists(marker) || new FileInfo(marker).Length == 0)
+                await Task.Delay(20, ready.Token);
+            child = System.Diagnostics.Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(marker, ready.Token),
+                System.Globalization.CultureInfo.InvariantCulture));
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+            Assert.True(child.HasExited, "A cancelled tracker read must settle its child before another read or fixture teardown.");
+        }
+        finally
+        {
+            cancellation.Cancel();
+            if (child is not null)
+            {
+                if (!child.HasExited) child.Kill(entireProcessTree: true);
+                await child.WaitForExitAsync(CancellationToken.None);
+                child.Dispose();
+            }
+        }
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(175)]
