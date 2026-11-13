@@ -2101,8 +2101,41 @@ h3 {
 }
 
 .planning-disabled {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
   border-style: dashed;
   color: var(--color-muted);
+}
+
+.bay-grid {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+
+.bay-card {
+  min-width: 0;
+  min-height: 0;
+  padding: 0.75rem 1rem;
+}
+
+.bay-card h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.planning-disabled p {
+  margin: 0;
+}
+
+.bay-pool-status {
+  margin: 0.25rem 0 0;
+  font-size: 0.9375rem;
+}
+
+.bay-slots {
+  width: 100%;
 }
 
 .bay-pool-status,
@@ -2115,7 +2148,7 @@ h3 {
 .bay-slots {
   display: grid;
   gap: 0.65rem;
-  margin-top: 1rem;
+  margin-top: 0.75rem;
 }
 
 .factory-slot {
@@ -2142,7 +2175,134 @@ h3 {
 }
 
 .factory-slot button {
-  margin-top: 0.55rem;
+  margin-top: 0.5rem;
+}
+
+.slot-heading, .slot-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  align-items: baseline;
+}
+
+.slot-heading {
+  justify-content: space-between;
+  font-size: 0.8125rem;
+  color: var(--color-muted);
+}
+
+.slot-state {
+  color: var(--color-accent);
+}
+
+.factory-slot[data-status="failed"], .factory-slot[data-status="timed_out"] {
+  border-color: #fb7185;
+}
+
+.factory-slot[data-status="failed"] .slot-state, .factory-slot[data-status="timed_out"] .slot-state {
+  color: #fb7185;
+}
+
+.factory-slot[data-status="paused"], .factory-slot[data-status="preparing"] {
+  border-color: #fbbf24;
+}
+
+.factory-slot[data-status="paused"] .slot-state, .factory-slot[data-status="preparing"] .slot-state {
+  color: #fbbf24;
+}
+
+.factory-slot .slot-bead {
+  margin: 0.25rem 0;
+  overflow-wrap: anywhere;
+}
+
+.factory-slot p {
+  font-size: 0.9375rem;
+}
+
+.factory-slot .slot-timing {
+  font-size: 0.8125rem;
+  color: var(--color-muted);
+}
+
+.slot-repairs {
+  border: 1px solid var(--color-border);
+  border-radius: 0.3rem;
+  padding-inline: 0.3rem;
+}
+
+.slot-diff {
+  color: #34d399;
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.slot-diagnostics {
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+}
+
+.slot-diagnostics summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--color-accent);
+}
+
+.slot-diagnostics dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.35rem 0.75rem;
+}
+
+.slot-diagnostics dt {
+  color: var(--color-muted);
+}
+
+.slot-diagnostics dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.factory-slot-idle {
+  padding: 0.5rem 0.75rem;
+  background: transparent;
+}
+
+.factory-slot-idle p {
+  margin: 0;
+  color: var(--color-muted);
+}
+
+@media (max-width: 52rem) {
+  .bay-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .slot-diagnostics dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+#delivery-slots {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#delivery-slots .factory-slot-idle {
+  grid-column: 1 / -1;
+}
+
+.factory-slot[data-outcome] {
+  border-color: #fb7185;
+}
+
+.factory-slot[data-outcome] .slot-state {
+  color: #fb7185;
+}
+
+@media (max-width: 52rem) {
+  #delivery-slots {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .telemetry-dialog {
