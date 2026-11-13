@@ -295,6 +295,8 @@ internal sealed class BeadsApplicationFixture : IDisposable
 // A real, isolated embedded Dolt tracker. Setup writes are outside measured runs.
 internal sealed class BeadsFixture : IDisposable
 {
+    internal static void PrepareTemplate() => _ = Template.Value;
+
     private static readonly Lazy<BeadsFixture> Template = new(() =>
     {
         var fixture = new BeadsFixture(initializeTemplate: true);

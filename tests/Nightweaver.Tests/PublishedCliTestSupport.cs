@@ -55,6 +55,10 @@ public sealed class PublishedCliArtifactFixture : IDisposable
         }
 
         SelfTestTrapsAndPrerequisites();
+        // Prepare the shared embedded tracker before six native test collections
+        // compete for CPU and process startup. A failed Lazy initialization would
+        // otherwise poison every later copy of this prerequisite.
+        BeadsFixture.PrepareTemplate();
     }
 
     public Dictionary<string, string?> EnvironmentWithAgentTraps(IReadOnlyDictionary<string, string?>? inherited = null)

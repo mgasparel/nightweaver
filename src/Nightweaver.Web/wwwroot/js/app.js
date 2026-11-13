@@ -486,8 +486,13 @@ let selectedDigestWindow = "auto";
 let currentDigest = null;
 let digestRequestGeneration = 0;
 let activeDigestRequest = null;
-let digestManualCollapse = null;
+let digestManualCollapse = true;
 let digestSubmittingCatchUp = false;
+const DIGEST_INITIAL_THREADS = 5;
+const DIGEST_INITIAL_THREAD_ITEMS = 4;
+const DIGEST_INITIAL_STANDALONE = 6;
+let digestAllThreads = false;
+let digestAllStandalone = false;
 const expandedDigestSummaries = new Set();
 const expandedDigestThreads = new Set();
 
@@ -524,7 +529,9 @@ function formatDigestWindowLabel(windowValue) {
 
 function updateDigestCollapseState(expanded) {
   if (!digestBody || !digestToggle) return;
+  digestSection.dataset.collapsed = String(!expanded);
   digestBody.hidden = !expanded;
+  if (digestCaughtUpBar) digestCaughtUpBar.hidden = !expanded || !currentDigest?.isCaughtUp;
   digestToggle.setAttribute("aria-expanded", String(expanded));
   digestToggle.textContent = expanded ? "Collapse" : "Expand";
 }
@@ -572,6 +579,7 @@ function renderDigestItemRow(item, { isThreadRoot = false } = {}) {
   const titleLink = digestNode("a", "", `${item.id} · ${item.title}`);
   titleLink.href = `#bead/${encodeURIComponent(item.id)}`;
   titleLink.dataset.beadWorkspaceLink = "true";
+  titleLink.dataset.digestFocus = `bead:${item.id}`;
   titleHeading.append(titleLink);
 
   const timeLabel = item.activityKind === "closed"
@@ -586,7 +594,7 @@ function renderDigestItemRow(item, { isThreadRoot = false } = {}) {
   row.append(meta, top);
 
   if (item.summary && (item.activityKind !== "context" || !isThreadRoot)) {
-    const summaryKey = `${item.id}:${item.activityKind}`;
+    const summaryKey = item.id;
     const isLong = item.summary.length > 140;
     const isExpanded = expandedDigestSummaries.has(summaryKey);
     const summary = digestNode("p", isLong && !isExpanded ? "digest-summary is-clamped" : "digest-summary", item.summary);
@@ -595,6 +603,10 @@ function renderDigestItemRow(item, { isThreadRoot = false } = {}) {
     if (isLong) {
       const toggle = digestNode("button", "digest-inline-toggle", isExpanded ? "Show less" : "Show more");
       toggle.type = "button";
+      toggle.dataset.digestFocus = `summary:${summaryKey}`;
+      toggle.setAttribute("aria-expanded", String(isExpanded));
+      summary.id = `digest-summary-${encodeURIComponent(summaryKey)}`;
+      toggle.setAttribute("aria-controls", summary.id);
       toggle.addEventListener("click", () => {
         if (expandedDigestSummaries.has(summaryKey)) expandedDigestSummaries.delete(summaryKey);
         else expandedDigestSummaries.add(summaryKey);
@@ -633,11 +645,12 @@ function renderDigestThreadCard(thread) {
   const titleLink = digestNode("a", "", `${thread.root.id} · ${thread.root.title}`);
   titleLink.href = `#bead/${encodeURIComponent(thread.root.id)}`;
   titleLink.dataset.beadWorkspaceLink = "true";
+  titleLink.dataset.digestFocus = `root:${thread.root.id}`;
   title.append(titleLink);
   titleGroup.append(meta, title);
 
   if (thread.root.activityKind !== "context" && thread.root.summary) {
-    const summaryKey = `root:${thread.root.id}`;
+    const summaryKey = thread.root.id;
     const isLong = thread.root.summary.length > 140;
     const isExpanded = expandedDigestSummaries.has(summaryKey);
     const rootSummary = digestNode("p", isLong && !isExpanded ? "digest-summary is-clamped" : "digest-summary", thread.root.summary);
@@ -646,6 +659,10 @@ function renderDigestThreadCard(thread) {
     if (isLong) {
       const toggle = digestNode("button", "digest-inline-toggle", isExpanded ? "Show less" : "Show more");
       toggle.type = "button";
+      toggle.dataset.digestFocus = `summary:${summaryKey}`;
+      toggle.setAttribute("aria-expanded", String(isExpanded));
+      rootSummary.id = `digest-summary-${encodeURIComponent(summaryKey)}`;
+      toggle.setAttribute("aria-controls", rootSummary.id);
       toggle.style.marginTop = "0.25rem";
       toggle.addEventListener("click", () => {
         if (expandedDigestSummaries.has(summaryKey)) expandedDigestSummaries.delete(summaryKey);
@@ -668,18 +685,22 @@ function renderDigestThreadCard(thread) {
 
   if (Array.isArray(thread.items) && thread.items.length > 0) {
     const itemsContainer = digestNode("div", "digest-thread-items");
+    itemsContainer.id = `digest-thread-${encodeURIComponent(thread.root.id)}`;
     const isThreadExpanded = expandedDigestThreads.has(thread.root.id);
-    const visibleItems = isThreadExpanded ? thread.items : thread.items.slice(0, 4);
+    const visibleItems = isThreadExpanded ? thread.items : thread.items.slice(0, DIGEST_INITIAL_THREAD_ITEMS);
     for (const item of visibleItems) {
       itemsContainer.append(renderDigestItemRow(item));
     }
     card.append(itemsContainer);
 
-    if (thread.items.length > 4) {
-      const hiddenCount = thread.items.length - 4;
+    if (thread.items.length > DIGEST_INITIAL_THREAD_ITEMS) {
+      const hiddenCount = thread.items.length - DIGEST_INITIAL_THREAD_ITEMS;
       const moreBtn = digestNode("button", "digest-inline-toggle",
         isThreadExpanded ? "Show fewer in thread" : `Show ${hiddenCount} more in thread`);
       moreBtn.type = "button";
+      moreBtn.dataset.digestFocus = `thread:${thread.root.id}`;
+      moreBtn.setAttribute("aria-controls", itemsContainer.id);
+      moreBtn.setAttribute("aria-expanded", String(isThreadExpanded));
       moreBtn.addEventListener("click", () => {
         if (expandedDigestThreads.has(thread.root.id)) expandedDigestThreads.delete(thread.root.id);
         else expandedDigestThreads.add(thread.root.id);
@@ -692,15 +713,35 @@ function renderDigestThreadCard(thread) {
   return card;
 }
 
+function digestCollectionToggle(container, total, limit, expanded, label, onToggle) {
+  if (total <= limit) return;
+  const button = digestNode("button", "digest-inline-toggle",
+    expanded ? `Show fewer ${label}` : `Show ${total - limit} more ${label}`);
+  button.type = "button";
+  button.dataset.digestFocus = container.id;
+  button.setAttribute("aria-controls", container.id);
+  button.setAttribute("aria-expanded", String(expanded));
+  button.addEventListener("click", () => { onToggle(); renderDigest(); });
+  container.append(button);
+}
+
+function resetDigestCollectionBounds() {
+  digestAllThreads = false;
+  digestAllStandalone = false;
+  expandedDigestThreads.clear();
+}
+
 function renderDigest() {
   if (!currentDigest || !digestSection) return;
+  const focusKey = digestSection.contains(document.activeElement)
+    ? document.activeElement.dataset.digestFocus : null;
   const d = currentDigest;
   updateDigestWindowControls(d.window);
 
   if (digestCheckpointBadge) {
     if (d.lastCaughtUpAt) {
-      const formatted = new Date(d.lastCaughtUpAt).toLocaleString();
-      digestCheckpointBadge.textContent = `Caught up bookmark: ${formatDigestRelativeTime(d.lastCaughtUpAt)} (${formatted})`;
+      digestCheckpointBadge.title = new Date(d.lastCaughtUpAt).toLocaleString();
+      digestCheckpointBadge.textContent = `Checkpoint · ${formatDigestRelativeTime(d.lastCaughtUpAt)}`;
     } else {
       const effectiveWindow = d.window === "since_caught_up" ? "24h" : d.window;
       digestCheckpointBadge.textContent = `No catch-up bookmark set · showing ${formatDigestWindowLabel(effectiveWindow)}`;
@@ -741,8 +782,7 @@ function renderDigest() {
     }
   }
 
-  const shouldCollapse = digestManualCollapse !== null ? digestManualCollapse : Boolean(d.isCaughtUp);
-  updateDigestCollapseState(!shouldCollapse);
+  updateDigestCollapseState(!digestManualCollapse);
 
   const hasThreads = Array.isArray(d.threads) && d.threads.length > 0;
   const standaloneItems = [...(d.standaloneCompleted ?? []), ...(d.standaloneOpen ?? [])];
@@ -753,24 +793,33 @@ function renderDigest() {
   if (digestThreadsSection && digestThreads) {
     digestThreadsSection.hidden = !hasThreads;
     const threadFragment = document.createDocumentFragment();
-    for (const thread of d.threads ?? []) {
+    for (const thread of (digestAllThreads ? d.threads : d.threads?.slice(0, DIGEST_INITIAL_THREADS)) ?? []) {
       threadFragment.append(renderDigestThreadCard(thread));
     }
     digestThreads.replaceChildren(threadFragment);
+    digestCollectionToggle(digestThreads, d.threads?.length ?? 0, DIGEST_INITIAL_THREADS,
+      digestAllThreads, "threads", () => { digestAllThreads = !digestAllThreads; });
   }
 
   if (digestStandaloneSection && digestStandalone) {
     digestStandaloneSection.hidden = !hasStandalone;
     const standaloneFragment = document.createDocumentFragment();
-    for (const item of standaloneItems) {
+    for (const item of digestAllStandalone ? standaloneItems : standaloneItems.slice(0, DIGEST_INITIAL_STANDALONE)) {
       standaloneFragment.append(renderDigestItemRow(item));
     }
     digestStandalone.replaceChildren(standaloneFragment);
+    digestCollectionToggle(digestStandalone, standaloneItems.length, DIGEST_INITIAL_STANDALONE,
+      digestAllStandalone, "standalone items", () => { digestAllStandalone = !digestAllStandalone; });
+  }
+  if (focusKey) {
+    const replacement = Array.from(digestSection.querySelectorAll("[data-digest-focus]"))
+      .find(element => element.dataset.digestFocus === focusKey);
+    (replacement ?? digestToggle).focus({ preventScroll: true });
   }
 }
 
-async function loadDigest(windowOverride = undefined) {
-  if (!digestSection) return false;
+async function loadDigest(windowOverride = undefined, expectedCheckpoint = undefined) {
+  if (!digestSection || (digestSubmittingCatchUp && expectedCheckpoint === undefined)) return false;
   if (windowOverride !== undefined) selectedDigestWindow = windowOverride;
   activeDigestRequest?.abort();
   const generation = ++digestRequestGeneration;
@@ -807,6 +856,16 @@ async function loadDigest(windowOverride = undefined) {
     if (!payload || typeof payload !== "object" || !payload.metrics) {
       throw new Error("The Catch-Up Digest response was invalid.");
     }
+    if (expectedCheckpoint !== undefined && Date.parse(payload.lastCaughtUpAt) !== Date.parse(expectedCheckpoint)) {
+      throw new Error("The saved catch-up checkpoint could not be confirmed. Refresh to try again.");
+    }
+    const validThreads = new Set((payload.threads ?? []).map(thread => thread.root.id));
+    for (const id of expandedDigestThreads) if (!validThreads.has(id)) expandedDigestThreads.delete(id);
+    const validSummaries = new Set([
+      ...(payload.threads ?? []).flatMap(thread => [thread.root.id, ...thread.items.map(item => item.id)]),
+      ...[...(payload.standaloneCompleted ?? []), ...(payload.standaloneOpen ?? [])].map(item => item.id)
+    ]);
+    for (const id of expandedDigestSummaries) if (!validSummaries.has(id)) expandedDigestSummaries.delete(id);
     currentDigest = payload;
     selectedDigestWindow = payload.window;
     renderDigest();
@@ -835,8 +894,15 @@ async function loadDigest(windowOverride = undefined) {
 
 async function submitMarkCaughtUp() {
   if (!currentDigest?.generatedAt || digestSubmittingCatchUp) return;
+  const caughtUpAt = currentDigest.generatedAt;
+  activeDigestRequest?.abort();
+  ++digestRequestGeneration;
   digestSubmittingCatchUp = true;
   if (digestMarkCaughtUp) digestMarkCaughtUp.disabled = true;
+  if (digestRefresh) digestRefresh.disabled = true;
+  if (digestRetry) digestRetry.disabled = true;
+  for (const button of digestWindowButtons) button.disabled = true;
+  if (digestView24h) digestView24h.disabled = true;
   if (digestStatus) digestStatus.textContent = "Saving catch-up bookmark…";
   if (digestError) digestError.hidden = true;
 
@@ -849,7 +915,7 @@ async function submitMarkCaughtUp() {
         "Content-Type": "application/json",
         "X-Nightweaver-Request": "console-v1"
       },
-      body: JSON.stringify({ caughtUpAt: currentDigest.generatedAt })
+      body: JSON.stringify({ caughtUpAt })
     });
     if (!response.ok) {
       let detail = "The catch-up bookmark could not be saved.";
@@ -860,12 +926,13 @@ async function submitMarkCaughtUp() {
       throw new Error(detail);
     }
     const saved = await response.json();
-    if (typeof saved?.lastCaughtUpAt !== "string") {
+    if (typeof saved?.lastCaughtUpAt !== "string" || Date.parse(saved.lastCaughtUpAt) !== Date.parse(caughtUpAt)) {
       throw new Error("The catch-up bookmark response could not be verified.");
     }
-    digestManualCollapse = null;
+    digestManualCollapse = true;
+    resetDigestCollectionBounds();
     selectedDigestWindow = "since_caught_up";
-    await loadDigest("since_caught_up");
+    await loadDigest("since_caught_up", caughtUpAt);
   } catch (error) {
     if (digestError && digestErrorText) {
       digestErrorText.textContent = error instanceof Error ? error.message : "The catch-up bookmark could not be saved.";
@@ -874,6 +941,10 @@ async function submitMarkCaughtUp() {
     if (digestStatus) digestStatus.textContent = "";
   } finally {
     digestSubmittingCatchUp = false;
+    if (digestRefresh) digestRefresh.disabled = false;
+    if (digestRetry) digestRetry.disabled = false;
+    for (const button of digestWindowButtons) button.disabled = false;
+    if (digestView24h) digestView24h.disabled = false;
     renderDigest();
   }
 }
@@ -881,8 +952,11 @@ async function submitMarkCaughtUp() {
 if (digestSection) {
   for (const button of digestWindowButtons) {
     button.addEventListener("click", () => {
+      if (digestSubmittingCatchUp) return;
+      resetDigestCollectionBounds();
       const targetWindow = button.dataset.digestWindow ?? "24h";
       digestManualCollapse = false;
+      updateDigestCollapseState(true);
       void loadDigest(targetWindow);
     });
   }
@@ -890,7 +964,10 @@ if (digestSection) {
   digestRefresh?.addEventListener("click", () => void loadDigest());
   digestRetry?.addEventListener("click", () => void loadDigest());
   digestView24h?.addEventListener("click", () => {
+    if (digestSubmittingCatchUp) return;
+    resetDigestCollectionBounds();
     digestManualCollapse = false;
+    updateDigestCollapseState(true);
     void loadDigest("24h");
   });
   digestToggle?.addEventListener("click", () => {

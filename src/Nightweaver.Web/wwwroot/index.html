@@ -98,15 +98,15 @@
     <div id="console-deck">
     <h1 class="sr-only">Nightweaver console</h1>
 
-    <section class="console-section digest-section" id="catch-up" aria-labelledby="catch-up-title">
+    <section class="console-section digest-section" id="catch-up" data-collapsed="true" aria-labelledby="catch-up-title">
       <div class="surface digest-panel">
         <div class="digest-header">
           <div class="digest-title-group">
             <div class="digest-eyebrow-row">
-              <p class="eyebrow">Catch-Up Digest</p>
+              <p class="eyebrow">Activity &amp; milestone rollups</p>
               <span class="digest-checkpoint-badge" id="digest-checkpoint-badge">Loading checkpoint…</span>
             </div>
-            <h2 id="catch-up-title">Activity &amp; Milestone Rollups</h2>
+            <h2 id="catch-up-title">Catch-Up Digest</h2>
           </div>
           <div class="digest-controls">
             <div class="digest-windows" role="group" aria-label="Digest time window">
@@ -119,7 +119,7 @@
             <div class="digest-actions">
               <button class="primary-action" id="digest-mark-caught-up" type="button" disabled>Mark Caught Up</button>
               <button class="secondary-action" id="digest-refresh" type="button">Refresh</button>
-              <button class="secondary-action" id="digest-toggle" type="button" aria-expanded="true" aria-controls="digest-body">Collapse</button>
+              <button class="secondary-action" id="digest-toggle" type="button" aria-expanded="false" aria-controls="digest-body">Expand</button>
             </div>
           </div>
         </div>
@@ -157,7 +157,7 @@
           <button class="secondary-action" id="digest-view-24h" type="button">View Last 24h</button>
         </div>
 
-        <div class="digest-body" id="digest-body">
+        <div class="digest-body" id="digest-body" hidden>
           <div class="digest-empty" id="digest-empty" hidden>No Bead activity occurred in this time window.</div>
           <div class="digest-threads-section" id="digest-threads-section" hidden>
             <div class="digest-subsection-heading">

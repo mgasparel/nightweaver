@@ -43,7 +43,19 @@ Run the full fixture interaction checks with `node workspace-qa.mjs`; this cover
 
 Run `node planning-readiness-qa.mjs` against a fresh default fixture to check the Product backlog control, a stale 409 request, explicit Ready for Planning, persisted readiness after reload, and the 375px layout. It saves desktop/mobile screenshots under `TestResults`. This authorizes only the disposable Product; continuous Planning remains outside the runtime.
 
+## Digest disclosure QA
+
+Run `node digest-qa.mjs` against a fresh default fixture using the same discovered direct endpoint. It first saves a real checkpoint through the UI and independently reads persistence. Deterministic digest response fixtures then exercise long histories (5 threads / 4 children / 6 standalone initial bounds), summary disclosure, keyboard focus across refresh and removed items, window selection, retained data and save failures, and newer concurrent activity after catch-up. Screenshots under `TestResults/digest` cover busy, empty, caught-up and error states at desktop, plus compact and expanded long content at 375px and 720 CSS px. Only the digest responses are substituted; the shell and other sections use the running isolated host. Expected HTTP error fixtures may emit network console errors; uncaught page errors and other console errors fail the check. Always stop the same AppHost in `finally` afterward.
+
+Representative evidence: [desktop compact](../../docs/acceptance/digest/busy-desktop.png), [375px compact](../../docs/acceptance/digest/busy-375.png), [720px expanded](../../docs/acceptance/digest/expanded-720.png), [caught up](../../docs/acceptance/digest/caught-up-desktop.png), [empty](../../docs/acceptance/digest/empty-desktop.png), and [retained-data error](../../docs/acceptance/digest/error-desktop.png).
+
 ## Manual continuous-runtime pilot
+
+The native second-console-signal test waits for the resumed Delivery slot's capacity-release log before reading its persisted pause. This avoids repeated embedded-tracker subprocess reads during recovery while still checking the saved status, labels, retained worktree and foreign claim within the original two-minute recovery budget. Pilot tool cancellation kills and settles the child before returning; failures include runtime output in the test report.
+
+The assembly's real-tool prerequisite setup prepares the shared Beads template before parallel test collections start, so its one-time `bd init` does not compete with active native turns. Individual tests still receive isolated copies and run with the committed six-thread scheduling. The cancellation regression uses the native AgentInvocationFixture probe directly, without a PowerShell script or script execution-policy dependency.
+
+The cross-pool concurrency smoke retains a full native Delivery and first native merge, verifies that the held singleton does not block Delivery, and observes the queued successor's reservation after release. It stops that successor at the pool boundary rather than repeating a second native merge. Native merge completion remains covered by the first slot and the dedicated Merger integration tests.
 
 The real-repository proposal, observed local Codex settings, proposed Project JSON, success criteria, and abort conditions are documented in [the manual Delivery pilot proposal](../../../docs/acceptance/manual-delivery-pilot.md). It is a proposal only; this QA AppHost continues to use disposable repositories and fixture Agent/CI aliases.
 

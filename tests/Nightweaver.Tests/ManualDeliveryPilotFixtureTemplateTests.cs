@@ -5,6 +5,57 @@ namespace Nightweaver.Tests;
 
 public sealed class ManualDeliveryPilotFixtureTemplateTests
 {
+    [Fact]
+    public async Task CallerCancellationSettlesPilotToolBeforeReturning()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var temp = new TempDirectory();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var marker = Path.Combine(temp.Path, "cancelled-tool.pid");
+        var executable = Path.Combine(AppContext.BaseDirectory, "AgentInvocationFixture.exe");
+        var environment = new Dictionary<string, string?>
+        {
+            ["NIGHTWEAVER_FIXTURE_ACTION"] = null,
+            ["NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION"] = null,
+            ["NIGHTWEAVER_INVOCATION_PURPOSE"] = null
+        };
+        var run = ManualPilotFixture.RunToolAsync(executable, ["never-read", marker], temp.Path,
+            environment, TimeSpan.FromSeconds(30), cancellation.Token);
+        System.Diagnostics.Process? child = null;
+        try
+        {
+            using var ready = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            ready.CancelAfter(TimeSpan.FromSeconds(10));
+            while (!File.Exists(marker) || new FileInfo(marker).Length == 0)
+            {
+                if (run.IsCompleted)
+                {
+                    await run;
+                    throw new InvalidOperationException("The cancellation probe exited before reporting its PID.");
+                }
+                await Task.Delay(20, ready.Token);
+            }
+            child = System.Diagnostics.Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(marker, ready.Token),
+                System.Globalization.CultureInfo.InvariantCulture));
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+            Assert.True(child.HasExited, "A cancelled tracker read must settle its child before another read or fixture teardown.");
+        }
+        finally
+        {
+            cancellation.Cancel();
+            try { await run; }
+            catch (OperationCanceledException) { }
+            if (child is not null)
+            {
+                if (!child.HasExited) child.Kill(entireProcessTree: true);
+                await child.WaitForExitAsync(CancellationToken.None);
+                child.Dispose();
+            }
+        }
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(175)]

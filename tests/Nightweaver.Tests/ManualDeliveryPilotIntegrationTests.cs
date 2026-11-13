@@ -78,14 +78,10 @@ public sealed class ManualDeliveryPilotSecondSignalTests
             using var recoveryDeadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
             recoveryDeadline.CancelAfter(TimeSpan.FromMinutes(2));
             fixture.ReleaseGate(fixture.ParentlessTaskId);
-            var safelyPaused = await WaitForNeedsHumanAsync(fixture, fixture.ParentlessTaskId,
-                TimeSpan.FromMinutes(2), recoveryDeadline.Token);
-            Assert.Equal("open", safelyPaused.GetProperty("status").GetString());
-            Assert.Contains("needs-human", safelyPaused.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
-            Assert.Contains("stage:implement", safelyPaused.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
             var releaseMarker = $"Delivery slot '{fixture.ParentlessTaskId}' released local capacity (Escalated; claim handoff=True)";
-            // The guarded pause write precedes local capacity release. Observe both
-            // boundaries within the original recovery budget, rather than racing the log.
+            // The guarded pause write precedes local capacity release. Observe that
+            // boundary before reading persisted state, avoiding competing embedded-Dolt
+            // processes every 200ms while the resumed turn is still using the tracker.
             while (!fixture.ReadRuntimeLog().Contains(releaseMarker, StringComparison.Ordinal))
             {
                 Assert.False(secondRuntime.HasExited, "The runtime exited before releasing the paused slot.");
@@ -93,6 +89,10 @@ public sealed class ManualDeliveryPilotSecondSignalTests
             }
             Assert.Contains(releaseMarker,
                 fixture.ReadRuntimeLog(), StringComparison.Ordinal);
+            var safelyPaused = await fixture.ReadBeadAsync(fixture.ParentlessTaskId, recoveryDeadline.Token);
+            Assert.Equal("open", safelyPaused.GetProperty("status").GetString());
+            Assert.Contains("needs-human", safelyPaused.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
+            Assert.Contains("stage:implement", safelyPaused.GetProperty("labels").EnumerateArray().Select(label => label.GetString()));
             Assert.True(File.Exists(retainedSentinel), "Recovery must keep the dirty sentinel after safely withholding approval.");
             Assert.Equal(branchBefore, (await fixture.ReadWorktreeBranchAsync(fixture.ParentlessTaskId,
                 TestContext.Current.CancellationToken)).Trim());
@@ -101,6 +101,7 @@ public sealed class ManualDeliveryPilotSecondSignalTests
         catch (Exception exception)
         {
             fixture.PreserveForFailure();
+            TestContext.Current.TestOutputHelper?.WriteLine($"Second-signal fixture preserved at {fixture.Root}\nRuntime output:\n{fixture.ReadRuntimeLog()}");
             primaryFailure = exception;
             throw;
         }
@@ -208,25 +209,6 @@ internal static class ManualDeliveryPilotTestHelpers
             await Task.Delay(250, cancellationToken);
         }
         throw new TimeoutException($"Bead '{beadId}' was not closed within {timeout}; last status '{lastStatus}'. Runtime output: {fixture.ReadRuntimeLog()}");
-    }
-
-    internal static async Task<JsonElement> WaitForNeedsHumanAsync(ManualPilot fixture, string beadId,
-        TimeSpan timeout, CancellationToken cancellationToken)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var bead = await fixture.ReadBeadAsync(beadId, cancellationToken);
-            if (bead.TryGetProperty("labels", out var labels) && labels.ValueKind == JsonValueKind.Array
-                && labels.EnumerateArray().Any(label => label.GetString() == "needs-human")
-                && bead.GetProperty("status").GetString() == "open")
-                return bead;
-            if (fixture.RuntimeProcess is { HasExited: true } process)
-                throw new InvalidOperationException($"Runtime exited {process.ExitCode} before '{beadId}' reached needs-human: {fixture.ReadRuntimeLog()}");
-            await Task.Delay(200, cancellationToken);
-        }
-        throw new TimeoutException($"Bead '{beadId}' was not safely paused within {timeout}: {fixture.ReadRuntimeLog()}");
     }
 
     internal static async Task<JsonElement> WaitForWorkflowAsync(ManualPilot fixture, string beadId,
