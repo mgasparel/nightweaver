@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 
 const url = process.env.NIGHTWEAVER_QA_URL;
 if (!url) throw new Error('Set NIGHTWEAVER_QA_URL from aspire describe.');
-const output = fileURLToPath(new URL('../../TestResults/factory/', import.meta.url));
+const output = process.env.NIGHTWEAVER_QA_OUTPUT ?? fileURLToPath(new URL('../../TestResults/factory/', import.meta.url));
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 try {
@@ -47,12 +47,13 @@ try {
   let streamIdentity;
   await page.route('**/api/telemetry/stream**', async route => {
     streamIdentity = new URL(route.request().url()).searchParams;
-    await route.fulfill({ contentType: 'text/event-stream', body: 'event: end\ndata: {"status":"completed"}\n\n' });
+    await route.fulfill({ contentType: 'text/event-stream', body: 'event: log\ndata: {"cursor":1,"text":"Retained output for ' + streamIdentity.get('invocation_id') + '"}\n\nevent: end\ndata: {"status":"completed"}\n\n' });
   });
   const inspect = async (card, label, expected) => {
     await card.getByRole('button', { name: label, exact: true }).click();
     await page.getByText('Stream ended: completed', { exact: true }).waitFor();
     for (const [key, value] of Object.entries(expected)) assert.equal(streamIdentity.get(key), value);
+    assert.equal(await page.locator('#invocation-output').innerText(), 'Retained output for ' + expected.invocation_id);
     await page.keyboard.press('Escape');
   };
   await refresh();
@@ -162,8 +163,40 @@ try {
     await shot(`long-diagnostics-${width}`);
     assert.ok(await first.locator('button').isVisible());
   }
+  // Release clears current task metadata while preserving the exact invocation.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  for (const outcome of ['completed', 'failed']) {
+    busy.delivery.slots = [slot('delivery-1', 'ns-retained-' + outcome), idle('delivery-2'), idle('delivery-3')];
+    await refresh();
+    await first.locator('button').focus();
+    const invocation = { ...busy.delivery.slots[0].invocation, status: outcome };
+    busy.delivery.slots[0] = { slot_id: 'delivery-1', status: 'idle', bead_id: null, role: null,
+      stage: null, branch: null, worktree_path: null, repair_cycles: null, max_repair_cycles: null,
+      diff: null, invocation };
+    busy.revision++;
+    await page.waitForFunction(() => document.querySelector('[data-slot-id="delivery-1"]').dataset.status === 'idle');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.invocationId), invocation.invocation_id);
+    for (const initialLoad of [false, true]) {
+      if (initialLoad) {
+        await page.reload({ waitUntil: 'networkidle' });
+        await first.getByRole('button', { name: 'Open retained invocation', exact: true }).waitFor();
+      }
+      assert.match(await page.locator('#delivery-pool-status').innerText(), /^0 of 3 slots active · 3 idle/);
+      assert.equal(await first.locator('details, dl, .slot-timing, .slot-metrics').count(), 0);
+      assert.doesNotMatch(await first.innerText(), /Unknown|Unavailable/);
+      await inspect(first, 'Open retained invocation', { runtime_id: busy.runtime_id,
+        slot_id: 'delivery-1', invocation_id: invocation.invocation_id });
+      assert.ok((await page.locator('#invocation-title').innerText()).includes(invocation.bead_id));
+    }
+  }
+  for (const width of [1440, 375, 720]) {
+    await page.setViewportSize({ width, height: 900 });
+    await shot(`idle-retained-${width}`);
+    await inspect(first, 'Open retained invocation', { runtime_id: busy.runtime_id,
+      slot_id: 'delivery-1', invocation_id: busy.delivery.slots[0].invocation.invocation_id });
+  }
   assert.deepEqual(errors, []);
-  console.log('Factory QA passed: summaries, occupancy, idle/disabled, unavailable metadata, runtime-scoped disclosure, changed polling/focus, replacement identity, preparing/failed/paused, stale/no-snapshot/disconnected retention, long content at 1440/720/375.');
+  console.log('Factory QA passed: summaries, occupancy, idle/disabled, unavailable metadata, runtime-scoped disclosure, changed polling/focus, replacement identity, preparing/failed/paused, stale/no-snapshot/disconnected retention, released completed/failed invocation identity/output on changed polls and initial loads, long content at 1440/720/375.');
 } finally {
   await browser.close();
 }

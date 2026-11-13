@@ -57,6 +57,10 @@ Factory section and viewport screenshots under `TestResults/factory` cover 1440p
 
 Representative execution bay evidence is retained under [docs/acceptance/factory](../../docs/acceptance/factory).
 
+The Release-shaped idle regression retains completed and failed invocations while clearing current Bead/role/stage/path/repair/diff metadata. It checks both changed running-to-idle polls and initial idle loads: compact idle occupancy, no diagnostic dump, surviving button focus, retained Bead identity and exact runtime/slot/invocation output. Idle retained actions are also exercised at 1440px, 375px and 720 CSS px. Set `NIGHTWEAVER_QA_OUTPUT` to a separate output directory to preserve screenshots from earlier runs.
+
+Retained idle evidence: [1440px](../../docs/acceptance/factory/idle-retained-1440.png), [375px](../../docs/acceptance/factory/idle-retained-375.png), and [720 CSS px](../../docs/acceptance/factory/idle-retained-720.png).
+
 ## Manual continuous-runtime pilot
 
 The native second-console-signal test waits for the resumed Delivery slot's capacity-release log before reading its persisted pause. This avoids repeated embedded-tracker subprocess reads during recovery while still checking the saved status, labels, retained worktree and foreign claim within the original two-minute recovery budget. Pilot tool cancellation kills and settles the child before returning; failures include runtime output in the test report.

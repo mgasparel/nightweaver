@@ -2046,6 +2046,16 @@ function factoryTime(value) {
   return value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : "Unavailable";
 }
 
+function appendFactoryInvocation(card, slot, runtimeId, poolName) {
+  if (!slot.invocation) return;
+  const open = factoryText("button", "secondary-action", slot.status === "running" ? "Open live invocation" : "Open retained invocation");
+  open.type = "button";
+  open.dataset.openTelemetrySlot = slot.slot_id;
+  open.dataset.invocationId = slot.invocation.invocation_id;
+  open.addEventListener("click", () => openTelemetry(runtimeId, poolName.toLowerCase(), slot));
+  card.append(open);
+}
+
 function renderFactorySlot(slot, runtimeId, poolName, availability) {
   const card = document.createElement("article");
   card.className = "factory-slot";
@@ -2056,6 +2066,7 @@ function renderFactorySlot(slot, runtimeId, poolName, availability) {
     card.classList.add("factory-slot-idle");
     card.append(factoryText("p", "", slot.slot_id + " · ◌ Idle — "
       + (retained ? "Last observed idle" : "Available for admission")));
+    appendFactoryInvocation(card, slot, runtimeId, poolName);
     return card;
   }
   const states = { running: "● Running", preparing: "◐ Preparing", reserved: "◐ Reserved", settling: "◐ Settling",
@@ -2101,14 +2112,7 @@ function renderFactorySlot(slot, runtimeId, poolName, availability) {
     metadata.append(factoryText("dt", "", label), factoryText("dd", "", value ?? "Unavailable"));
   details.append(metadata);
   card.append(details);
-  if (slot.invocation) {
-    const open = factoryText("button", "secondary-action", slot.status === "running" ? "Open live invocation" : "Open retained invocation");
-    open.type = "button";
-    open.dataset.openTelemetrySlot = slot.slot_id;
-    open.dataset.invocationId = slot.invocation.invocation_id;
-    open.addEventListener("click", () => openTelemetry(runtimeId, poolName.toLowerCase(), slot));
-    card.append(open);
-  }
+  appendFactoryInvocation(card, slot, runtimeId, poolName);
   return card;
 }
 
@@ -2241,7 +2245,7 @@ function openTelemetry(runtimeId, pool, slot) {
   invocationPause.disabled = false;
   invocationPause.textContent = "Pause follow";
   invocationLatest.disabled = false;
-  invocationTitle.textContent = (slot.role ?? "Unknown role") + " · " + (slot.bead_id ?? "Unknown task");
+  invocationTitle.textContent = (slot.role ?? "Retained invocation") + " · " + (slot.invocation.bead_id ?? slot.bead_id ?? "Unknown task");
   invocationStatus.textContent = "Connecting to " + pool + " " + slot.slot_id + " · invocation " + slot.invocation.invocation_id;
   invocationMetadata.replaceChildren();
   const values = [
