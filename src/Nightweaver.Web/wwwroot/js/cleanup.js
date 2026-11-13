@@ -10,6 +10,7 @@
     return node;
   };
   const date = value => value ? new Date(value).toLocaleString() : 'None';
+  const announce = (node, value) => { if (node.textContent !== value) node.textContent = value; };
   function render(data) {
     snapshot = data; page = data.page;
     byId('scope').textContent = data.project ? `Project ${data.project} · ${data.repository}` : '';
@@ -43,7 +44,7 @@
       const retry = item.retry;
       if (item.status === 'resolved' && messages.has(item.beadId)) {
         messages.set(item.beadId, 'Cleanup confirmed: worktree, registration and temporary files are absent.');
-        if (lastActionBead === item.beadId) byId('message').textContent = `${item.beadId}: ${messages.get(item.beadId)}`;
+        if (lastActionBead === item.beadId) announce(byId('message'), `${item.beadId}: ${messages.get(item.beadId)}`);
       }
       if (retry) {
         const outcome = retry.outcome === 'accepted' && record.lastRetryRequestId === retry.requestId && (record.cycleAttempts ?? 0) > 0
@@ -60,7 +61,7 @@
       return card;
     });
     rows.replaceChildren(...children);
-    range.textContent = data.counts ? data.total ? `${(page - 1) * 8 + 1}–${Math.min(page * 8, data.total)} of ${data.total} matching obligations · Page ${page} of ${data.pages}` : 'No matching cleanup obligations.' : 'Cleanup evidence unavailable; this is not an empty queue.';
+    announce(range, data.counts ? data.total ? `${(page - 1) * 8 + 1}–${Math.min(page * 8, data.total)} of ${data.total} matching obligations · Page ${page} of ${data.pages}` : 'No matching cleanup obligations.' : 'Cleanup evidence unavailable; this is not an empty queue.');
     byId('previous').disabled = page <= 1 || !data.counts;
     byId('next').disabled = page >= data.pages || !data.counts;
     if (identity) {
