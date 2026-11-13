@@ -16,29 +16,21 @@ public sealed class AgentPostExitVerifierTests
     [InlineData("nonzero", "NonZeroExit")]
     [InlineData("dirty", "DirtyWorktree")]
     [InlineData("head", "ForbiddenHeadMutation")]
-    [InlineData("noop", "IllegalBeadTransition")]
+    [InlineData("mutation", "IllegalBeadTransition")]
     [InlineData("missing-counter", "IllegalBeadTransition")]
     public async Task ClassifiesFailuresAndPreservesInvocationEvidence(string scenario, string expectedKind)
     {
-        var role = scenario is "noop" or "missing-counter" ? AgentRole.PlanChallenger : AgentRole.Reviewer;
+        var role = scenario is "mutation" or "missing-counter" ? AgentRole.PlanChallenger : AgentRole.Reviewer;
         var result = await VerifyAsync(role, scenario);
 
         Assert.Equal(Enum.Parse<AgentOperationalFailureKind>(expectedKind), result.Failure?.Kind);
         Assert.Equal("invocation", result.InvocationId);
         Assert.Equal("agent.log", result.LogFilePath);
-        if (role is AgentRole.Implementer or AgentRole.Reviewer or AgentRole.Qa or AgentRole.Merger)
-        {
-            Assert.NotNull(result.Observations);
-            Assert.Null(result.VerifiedState);
-        }
-        else
-        {
-            Assert.Null(result.Observations);
-            Assert.NotNull(result.VerifiedState);
-        }
+        Assert.NotNull(result.Observations);
+        Assert.Null(result.VerifiedState);
         if (scenario == "dirty") Assert.Contains("dirty.txt", result.Failure!.Reason);
         if (scenario == "nonzero") Assert.Contains("19", result.Failure!.Reason);
-        if (scenario == "missing-counter") Assert.Contains("repair_cycles", result.Failure!.Reason);
+        if (scenario == "missing-counter") Assert.Contains("cannot mutate", result.Failure!.Reason);
     }
 
     [Theory]
@@ -111,9 +103,9 @@ public sealed class AgentPostExitVerifierTests
         var deliveryOrMerger = role is AgentRole.Implementer or AgentRole.Reviewer or AgentRole.Qa or AgentRole.Merger;
         var beforeStatus = deliveryOrMerger ? "in_progress" : "open";
         var beforeAssignee = deliveryOrMerger ? "nightweaver:demo" : null;
-        var beforeCycles = scenario is "noop" or "missing-counter" or "all-timeout" or "all-nonzero" or "all-exited" ? 2 : 0;
+        var beforeCycles = scenario is "mutation" or "missing-counter" or "all-timeout" or "all-nonzero" or "all-exited" ? 2 : 0;
         var allFindings = scenario.StartsWith("all-", StringComparison.Ordinal);
-        var afterStage = allFindings || scenario is "noop" or "missing-counter" ? beforeStage : legalAfterStage;
+        var afterStage = allFindings || scenario == "mutation" ? legalAfterStage : beforeStage;
         if (scenario == "missing-counter") afterStage = "stage:plan";
         var afterCycles = beforeCycles;
         var afterHead = scenario == "head" || allFindings ? new string('b', 40) : new string('a', 40);

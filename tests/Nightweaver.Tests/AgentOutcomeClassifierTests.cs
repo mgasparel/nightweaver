@@ -403,6 +403,41 @@ public sealed class AgentOutcomeClassifierTests
         Assert.Equal(1, fallbackCalls);
     }
 
+    [Theory]
+    [InlineData("Planner", "planner_outcome", "nightweaver-planner-outcome-v1", "ready_for_review")]
+    [InlineData("PlanChallenger", "plan_challenger_outcome", "nightweaver-plan-challenger-outcome-v1", "approved")]
+    public async Task PlanningFallbackReceivesTheSameRoleContractAndCompleteProductContext(
+        string roleName, string question, string schema, string choice)
+    {
+        using var fixture = new OutcomeFixture();
+        var role = Enum.Parse<AgentRole>(roleName);
+        var invocation = fixture.InvocationFor(role, role == AgentRole.Planner ? "stage:plan" : "stage:plan-challenge")
+            with { PlanningContext = "Full Product requirement and exact candidate text" };
+        string? primaryInput = null;
+        using var client = new HttpClient(new DelegateHttpMessageHandler(async request =>
+        {
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            Assert.Equal(question, body.RootElement.GetProperty("questions")[0].GetProperty("name").GetString());
+            primaryInput = body.RootElement.GetProperty("input").GetString();
+            Assert.Contains(invocation.PlanningContext, primaryInput, StringComparison.Ordinal);
+            return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+        }));
+        var fallbackCalls = 0;
+        var classifier = new AgentOutcomeClassifier(client, executeFallback: (_, _, fallback, _, _) =>
+        {
+            fallbackCalls++;
+            Assert.Contains(question, fallback.StandardInput, StringComparison.Ordinal);
+            Assert.Contains(primaryInput!, fallback.StandardInput, StringComparison.Ordinal);
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(new { schema, question, choice });
+            return Task.FromResult(new AgentStandardOutputCaptureResult(
+                new(AgentExecutionStatus.Exited, 0, fallback.InvocationId, fallback.LogFilePath), bytes, false));
+        }, apiKeyOverride: "fixture-key");
+        var result = await classifier.ClassifyAsync(fixture.Paths, fixture.Project,
+            fixture.Context with { BeadType = "feature" }, fixture.Worktree, invocation, [], TestContext.Current.CancellationToken);
+        Assert.True(result.Succeeded, result.Diagnostic);
+        Assert.Equal(1, fallbackCalls);
+    }
+
     private static HttpResponseMessage JsonResponse(string choice, string question = AgentOutcomeClassifier.QuestionName) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(JsonSerializer.Serialize(new

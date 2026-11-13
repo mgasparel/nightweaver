@@ -342,8 +342,7 @@ public sealed class AgentInvocationExecutorTests
         Process? agent = null;
         try
         {
-            await WaitForFileAsync(ready, TimeSpan.FromSeconds(15));
-            agent = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(ready, TestContext.Current.CancellationToken), CultureInfo.InvariantCulture));
+            agent = Process.GetProcessById(await WaitForProcessIdAsync(ready, TimeSpan.FromSeconds(15)));
             Assert.False(agent.HasExited);
 
             orchestrator.Kill();
@@ -367,6 +366,27 @@ public sealed class AgentInvocationExecutorTests
             }
             agent?.Dispose();
         }
+    }
+
+    [Theory]
+    [InlineData("", FileShare.None)]
+    [InlineData("12", FileShare.Read)]
+    public async Task ProcessReadinessWaitsForWriterToCloseBeforeReadingPid(string partialPid, FileShare sharing)
+    {
+        using var temp = new TempDirectory();
+        var path = Path.Combine(temp.Path, "ready.txt");
+        Task<int> readiness;
+        using (var writer = new FileStream(path, FileMode.CreateNew, FileAccess.Write, sharing))
+        {
+            writer.Write(Encoding.UTF8.GetBytes(partialPid));
+            writer.Flush();
+            readiness = WaitForProcessIdAsync(path, TimeSpan.FromSeconds(5));
+            Assert.False(readiness.IsCompleted);
+            writer.SetLength(0);
+            writer.Position = 0;
+            writer.Write(Encoding.UTF8.GetBytes("12345"));
+        }
+        Assert.Equal(12345, await readiness);
     }
 
     [Fact]
@@ -514,6 +534,28 @@ public sealed class AgentInvocationExecutorTests
     {
         try { await task.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken); }
         catch (OperationCanceledException) { }
+    }
+
+    private static async Task<int> WaitForProcessIdAsync(string path, TimeSpan timeout)
+    {
+        var timer = Stopwatch.StartNew();
+        while (timer.Elapsed < timeout)
+        {
+            TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                // Deny an active writer even when it shares reads: existence and
+                // readable partial digits do not prove that PID publication settled.
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var reader = new StreamReader(stream);
+                var text = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
+                if (int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var pid) && pid > 0)
+                    return pid;
+            }
+            catch (IOException) { } // Creation and writer closure can race the observer.
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+        throw new TimeoutException($"Fixture readiness PID was not published: {path}");
     }
 
     private static async Task WaitForFileAsync(string path, TimeSpan timeout)

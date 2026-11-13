@@ -1184,6 +1184,39 @@ internal static class Program
 
         switch (action)
         {
+            case "planning-draft":
+            case "planning-approve":
+            {
+                const string marker = "Host grounding (copy exactly into evidence):\n";
+                var grounding = JsonDocument.Parse(dispatchPrompt[(dispatchPrompt.LastIndexOf(marker, StringComparison.Ordinal) + marker.Length)..]).RootElement.Clone();
+                object evidence;
+                if (action == "planning-draft")
+                    evidence = new
+                    {
+                        schema = "nightweaver-plan-v1", grounding,
+                        tasks = new[] { new { id = "slice-1", title = "Deliver behavior", outcome = "Requested behavior works",
+                            context = "README.md describes the base contract", approach = "Extend the documented behavior",
+                            acceptanceCriteria = new[] { "Requested behavior is observable" }, verification = "Run the behavior check", dependsOn = Array.Empty<string>() } },
+                        constraints = Array.Empty<object>(),
+                        coverage = new[] { new { requirement = "Requested behavior", taskIds = new[] { "slice-1" }, satisfiedEvidence = (string?)null, authorizedExclusion = (string?)null } }
+                    };
+                else
+                {
+                    using var comments = JsonDocument.Parse(Run("bd", ["comments", beadId, "--json"]));
+                    var candidate = comments.RootElement.EnumerateArray().Last(c => c.GetProperty("text").GetString()!.Contains("nightweaver-plan-v1", StringComparison.Ordinal));
+                    var text = candidate.GetProperty("text").GetString()!;
+                    evidence = new
+                    {
+                        schema = "nightweaver-plan-review-v1", grounding,
+                        planCommentId = candidate.GetProperty("id").ToString(),
+                        planRevision = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text))),
+                        assessment = "Task is bounded, executable, verifies behavior and covers the complete Product.",
+                        revalidation = (string?)null, findings = Array.Empty<object>(), questions = Array.Empty<object>()
+                    };
+                }
+                Run("bd", ["comments", "add", beadId, JsonSerializer.Serialize(evidence)]);
+                break;
+            }
             case "manual-delivery-pilot":
             {
                 var stage = dispatchPrompt.Split('\n')

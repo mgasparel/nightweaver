@@ -81,6 +81,7 @@ internal sealed class OperationalRetryCoordinator
     private readonly Func<HostPaths, ProjectConfig, ValidatedTargetRepository, NeedsHumanRequest,
         CancellationToken, Task<NeedsHumanEscalationResult>> escalate;
     private readonly BeadsReader beadsReader;
+    private readonly PlanningEvidence planningEvidence;
     private readonly IAgentOutcomeClassifier outcomeClassifier;
     private readonly IDeliveryOutcomePublisher outcomePublisher;
     private readonly IDeliveryOutcomeVerifier outcomeVerifier;
@@ -114,6 +115,7 @@ internal sealed class OperationalRetryCoordinator
         this.compare = compare ?? this.classifier.CompareAsync;
         this.escalate = escalate ?? this.escalator.EscalateAsync;
         beadsReader = new BeadsReader(processRunner);
+        planningEvidence = new PlanningEvidence(processRunner);
         this.outcomeClassifier = outcomeClassifier ?? new AgentOutcomeClassifier();
         this.outcomePublisher = outcomePublisher ?? new DeliveryOutcomePublisher(processRunner);
         this.outcomeVerifier = outcomeVerifier ?? new DeliveryOutcomeVerifier(processRunner);
@@ -318,7 +320,7 @@ internal sealed class OperationalRetryCoordinator
         long attempts,
         CancellationToken cancellationToken)
     {
-        if (!AgentRoles.IsDeliveryRole(session.Role) || invocation.Failure is null) return null;
+        if (!(AgentRoles.IsDeliveryRole(session.Role) || session.Purpose == WorktreePurpose.Planning) || invocation.Failure is null) return null;
 
         var observations = invocation.Observations;
         var unsafeObservation = observations is null
@@ -475,6 +477,8 @@ internal sealed class OperationalRetryCoordinator
         if (session.Role == AgentRole.Merger)
             return await FinalizeSuccessfulMergerStageAsync(session, invocation, expectedAssignee, attempts,
                 cancellationToken).ConfigureAwait(false);
+        if (session.Purpose == WorktreePurpose.Planning)
+            return await FinalizePlanningAsync(session, invocation, expectedAssignee, releaseClaim, attempts, cancellationToken);
         if (!AgentRoles.IsDeliveryRole(session.Role))
             return Success(invocation, attempts);
 
@@ -541,6 +545,50 @@ internal sealed class OperationalRetryCoordinator
                 exception.Message, classification, cancellationToken).ConfigureAwait(false);
         }
         return Success(published, attempts);
+    }
+
+    private async Task<OperationalRetryOutcome> FinalizePlanningAsync(
+        AgentStageSession session, AgentStageResult invocation, string actor, bool releaseClaim,
+        long attempts, CancellationToken token)
+    {
+        AgentOutcomeClassificationResult classification;
+        var budgetExhausted = false;
+        try
+        {
+            var comments = await beadsReader.ReadCommentsAsync(session.Repository, session.BeadId, token);
+            classification = await outcomeClassifier.ClassifyAsync(session.HostPaths, session.Project,
+                session.DispatchContext, session.Worktree.Path, invocation, comments, token);
+            invocation = invocation with { OutcomeClassification = classification };
+            var mutation = await outcomeVerifier.VerifyNoClassifierMutationAsync(session.Repository,
+                session.Worktree.Path, invocation, actor, token);
+            if (mutation is not null) throw new AgentStageInputException(mutation);
+            if (classification.Outcome is not (AgentOutcomeChoice.ReadyForReview or AgentOutcomeChoice.Approved
+                or AgentOutcomeChoice.ChangesRequired or AgentOutcomeChoice.ProductDecisionRequired))
+                throw new AgentStageInputException(classification.Diagnostic);
+            if (invocation.Observations is not { WorktreeClean: true, ProcessStatus: AgentExecutionStatus.Exited, ExitCode: 0 })
+                throw new AgentStageInputException("Planning process and clean read-only checkout could not be verified.");
+            var grounding = await planningEvidence.CaptureAsync(session, token);
+            comments = await beadsReader.ReadCommentsAsync(session.Repository, session.BeadId, token);
+            var verified = PlanningEvidence.Verify(invocation, classification.Outcome.Value, grounding, comments);
+            if (verified.Error is not null) throw new AgentStageInputException(verified.Error);
+            invocation = invocation with { PlanningApproval = verified.Approval, OutcomeClassification = classification };
+            if (classification.Outcome == AgentOutcomeChoice.ChangesRequired
+                && (session.InitialState.RepairCycles == int.MaxValue
+                    || session.InitialState.RepairCycles >= session.Project.Limits.MaxRepairCycles))
+            {
+                budgetExhausted = true;
+                throw new AgentStageInputException("Planning repair budget exhausted; preserve the plan and findings for guarded Retry.");
+            }
+            var published = await outcomePublisher.PublishAsync(session, invocation, classification, releaseClaim || classification.Outcome == AgentOutcomeChoice.Approved, token);
+            return Success(published, attempts);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception)
+        {
+            return await EscalateDeliveryOutcomeAsync(session, invocation, actor, attempts,
+                $"Planning outcome was not verified: {exception.Message}", invocation.OutcomeClassification, token,
+                budgetExhausted ? NeedsHumanCause.RepairBudgetExhausted : NeedsHumanCause.DeliveryOutcomeFailure);
+        }
     }
 
     private async Task<OperationalRetryOutcome> FinalizeSuccessfulMergerStageAsync(
@@ -766,7 +814,8 @@ internal sealed class OperationalRetryCoordinator
         long attempts,
         string reason,
         AgentOutcomeClassificationResult? classification,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        NeedsHumanCause cause = NeedsHumanCause.DeliveryOutcomeFailure)
     {
         var failure = new AgentOperationalFailure(AgentOperationalFailureKind.OutcomeVerificationFailed, reason);
         var withFailure = invocation with
@@ -793,7 +842,7 @@ internal sealed class OperationalRetryCoordinator
             _ => throw new AgentStageInputException($"Cannot safely escalate Bead '{session.BeadId}' with unsupported type '{current.State.IssueType}'.")
         };
         return await EscalateAsync(session, expectedAssignee, withFailure, attempts,
-            NeedsHumanCause.DeliveryOutcomeFailure, findings, null, cleanupPurpose,
+            cause, findings, null, cleanupPurpose,
             cancellationToken, expectedWorkflowState: current.State).ConfigureAwait(false);
     }
 
@@ -843,6 +892,7 @@ internal sealed class OperationalRetryCoordinator
             NeedsHumanCause.OperationalRetriesExhausted => $"Operational retries exhausted after {attempts} attempt(s): {failure.Kind}.",
             NeedsHumanCause.DuplicateFailure => $"Duplicate operational failure detected after {attempts} attempt(s): {failure.Kind}.",
             NeedsHumanCause.EnvironmentBlocked => $"Operational retry environment is blocked after {attempts} attempt(s): {failure.Kind}.",
+            NeedsHumanCause.RepairBudgetExhausted => failure.Reason,
             NeedsHumanCause.DeliveryOutcomeFailure => $"Delivery outcome was not verified after {attempts} completed attempt(s): {failure.Reason}.",
             _ => throw new ArgumentOutOfRangeException(nameof(cause), cause, "Unsupported retry escalation cause")
         };

@@ -50,7 +50,10 @@ internal sealed record AgentStageResult(
     AgentOutcomeClassificationResult? OutcomeClassification = null,
     IReadOnlySet<string>? PreInvocationCommentIds = null,
     DeliveryOutcomePublicationReceipt? PublicationReceipt = null,
-    MergerCompletionReceipt? MergerCompletion = null)
+    MergerCompletionReceipt? MergerCompletion = null,
+    PlanningGrounding? PlanningGrounding = null,
+    PlanningApproval? PlanningApproval = null,
+    string? PlanningContext = null)
 {
     internal bool Succeeded => Failure is null;
 }
@@ -76,7 +79,6 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
         bool? worktreeClean = null;
         BeadsInventory? postInventory = null;
         BeadWorkflowState? after = null;
-        IReadOnlyList<BeadDependency>? dependencies = null;
         AuthorityMatrixResult? transition = null;
 
         try
@@ -95,13 +97,13 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
             diagnostics.Add($"Could not inspect worktree status: {exception.Message}");
         }
 
-        if (AgentRoles.IsDeliveryRole(role) || role == AgentRole.Merger)
+        if (role != AgentRole.Classifier)
         {
             try
             {
                 var branch = await RunGitAsync(["branch", "--show-current"], worktreePath, "git branch --show-current", cancellationToken);
                 branchName = branch.StandardOutput.TrimEnd('\r', '\n');
-                if (branchName.Length == 0) throw new ToolExecutionException("git branch --show-current returned an empty branch name");
+                if (branchName.Length == 0 && role is not (AgentRole.Planner or AgentRole.PlanChallenger)) throw new ToolExecutionException("git branch --show-current returned an empty branch name");
             }
             catch (OperationCanceledException) { throw; }
             catch (ToolExecutionException) when (cancellationToken.IsCancellationRequested)
@@ -144,31 +146,8 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
             diagnostics.Add($"Could not read the post-exit Bead state: {exception.Message}");
         }
 
-        if (after is { Planned: true } && role == AgentRole.Planner && before.Stage == "stage:plan-approved")
-        {
-            try
-            {
-                dependencies = await beadsReader.ReadUpDependenciesAsync(repository, before.Id, cancellationToken);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (ToolExecutionException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw new OperationCanceledException(cancellationToken);
-            }
-            catch (Exception exception)
-            {
-                diagnostics.Add($"Could not read discovered-from relationships: {exception.Message}");
-            }
-        }
-
-        var missingMaterializationEvidence = after is { Planned: true } && role == AgentRole.Planner
-            && before.Stage == "stage:plan-approved" && dependencies is null;
-        if (after is not null && postInventory is not null && !missingMaterializationEvidence)
-        {
-            transition = AgentRoles.IsDeliveryRole(role) || role == AgentRole.Merger
-                ? AuthorityMatrix.ValidateWorkerObservation(before, after, beforeAssignee, afterAssignee)
-                : AuthorityMatrix.Validate(role, before, after, postInventory.ById, dependencies);
-        }
+        if (after is not null && postInventory is not null)
+            transition = AuthorityMatrix.ValidateWorkerObservation(before, after, beforeAssignee, afterAssignee);
 
         var findings = new List<AgentOperationalFailure>();
         if (execution.Status == AgentExecutionStatus.TimedOut)
@@ -192,7 +171,7 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
         if (transition is { IsLegal: false })
             findings.Add(new(AgentOperationalFailureKind.IllegalBeadTransition, transition.Reason!));
 
-        var observations = (AgentRoles.IsDeliveryRole(role) || role == AgentRole.Merger) && after is not null
+        var observations = (role != AgentRole.Classifier) && after is not null
             ? new AgentStageObservations(before, after, beforeAssignee, afterAssignee,
                 execution.Status, execution.ExitCode, branchName, afterHead, porcelain, worktreeClean)
             : null;
@@ -203,10 +182,10 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
             foreach (var secondary in findings.Where(failure => !ReferenceEquals(failure, primary)))
                 diagnostics.Add($"{secondary.Kind}: {secondary.Reason}");
             return new(role, before.Id, execution.InvocationId, execution.LogFilePath, primary,
-                diagnostics.AsReadOnly(), AgentRoles.IsDeliveryRole(role) || role == AgentRole.Merger ? null : after, observations);
+                diagnostics.AsReadOnly(), role != AgentRole.Classifier ? null : after, observations);
         }
 
-        if ((AgentRoles.IsDeliveryRole(role) || role == AgentRole.Merger) && observations is null)
+        if ((role != AgentRole.Classifier) && observations is null)
             throw new AgentPostExitVerificationException(execution.InvocationId, execution.LogFilePath,
                 $"the completed {AgentRoles.ToConfigKey(role)} invocation lacks readable unchanged Bead state");
 
@@ -222,7 +201,7 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
         }
 
         return new(role, before.Id, execution.InvocationId, execution.LogFilePath, null,
-            diagnostics.AsReadOnly(), AgentRoles.IsDeliveryRole(role) || role == AgentRole.Merger ? null : after, observations);
+            diagnostics.AsReadOnly(), role != AgentRole.Classifier ? null : after, observations);
     }
 
     private async Task<ProcessResult> RunGitAsync(IReadOnlyList<string> arguments, string workingDirectory,

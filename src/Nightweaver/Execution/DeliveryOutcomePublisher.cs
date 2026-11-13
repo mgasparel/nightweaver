@@ -38,9 +38,9 @@ internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : I
         ArgumentNullException.ThrowIfNull(invocation);
         ArgumentNullException.ThrowIfNull(classification);
         cancellationToken.ThrowIfCancellationRequested();
-        if (!(AgentRoles.IsDeliveryRole(session.Role) || session.Role == AgentRole.Merger) || invocation.Role != session.Role
+        if (!(AgentRoles.IsDeliveryRole(session.Role) || session.Role is AgentRole.Merger or AgentRole.Planner or AgentRole.PlanChallenger) || invocation.Role != session.Role
             || invocation.Observations is null || classification.Outcome is null)
-            throw new AgentStageInputException("Only a classified Delivery or Merger invocation can publish an outcome.");
+            throw new AgentStageInputException("Only a classified lifecycle invocation can publish an outcome.");
 
         var expectedAssignee = session.InitialAssignee;
         if (string.IsNullOrWhiteSpace(expectedAssignee))
@@ -52,14 +52,15 @@ internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : I
         EnsureCurrent(initial, expectedState, expectedAssignee);
 
         var comment = JsonSerializer.Serialize(new OutcomeComment(
-            session.Role == AgentRole.Merger ? "nightweaver-merger-outcome-v1" : "nightweaver-delivery-outcome-v1",
+            session.Purpose == WorktreePurpose.Planning ? "nightweaver-planning-outcome-v1"
+                : session.Role == AgentRole.Merger ? "nightweaver-merger-outcome-v1" : "nightweaver-delivery-outcome-v1",
             session.BeadId,
             AgentRoles.ToConfigKey(session.Role),
             invocation.InvocationId,
             classification.Provider,
             classification.Outcome.Value.ToString(),
             classification.Diagnostic,
-            invocation.LogFilePath), JsonOptions);
+            invocation.LogFilePath, invocation.PlanningApproval), JsonOptions);
 
         await AddCommentVerifiedAsync(session.Repository, session.BeadId, comment, cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
@@ -70,6 +71,14 @@ internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : I
             if (!readiness.Readiness.RecoverableOwnedReady.Contains(session.BeadId))
                 throw new AgentStageInputException(
                     $"Merger outcome publication for Bead '{session.BeadId}' was refused because it is no longer in the native recoverable-owned ready set.");
+        }
+        if (session.Purpose == WorktreePurpose.Planning)
+        {
+            var grounding = await new PlanningEvidence(processRunner).CaptureAsync(session, cancellationToken);
+            var comments = await reader.ReadCommentsAsync(session.Repository, session.BeadId, cancellationToken);
+            var check = PlanningEvidence.Verify(invocation, classification.Outcome.Value, grounding, comments);
+            if (check.Error is not null || check.Approval != invocation.PlanningApproval)
+                throw new AgentStageInputException(check.Error ?? "Planning evidence changed before publication.");
         }
         var preWrite = await ReadBeadAsync(session.Repository, session.BeadId, cancellationToken).ConfigureAwait(false);
         EnsureCurrent(preWrite, expectedState, expectedAssignee);
@@ -132,6 +141,16 @@ internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : I
             || role == AgentRole.Qa && outcome == AgentOutcomeChoice.Approved;
         return (role, outcome) switch
         {
+            (AgentRole.Planner, AgentOutcomeChoice.ReadyForReview) =>
+                new("stage:plan-challenge", expected.Stage, null,
+                    expected with { Stage = "stage:plan-challenge", Status = release ? "open" : expected.Status }, release, false),
+            (AgentRole.PlanChallenger, AgentOutcomeChoice.Approved) =>
+                new("stage:plan-approved", expected.Stage, null,
+                    expected with { Stage = "stage:plan-approved", Status = release ? "open" : expected.Status }, release, false),
+            (AgentRole.PlanChallenger, AgentOutcomeChoice.ChangesRequired) => BuildRepairTransition(expected, release, "stage:plan"),
+            (AgentRole.Planner or AgentRole.PlanChallenger, AgentOutcomeChoice.ProductDecisionRequired) =>
+                new("product-decision-required", null, null,
+                    expected with { ProductDecisionRequired = true, Status = "open" }, true, false),
             (AgentRole.Implementer, AgentOutcomeChoice.ReadyForReview) =>
                 new("stage:review", expected.Stage, null, expected with { Stage = "stage:review", Status = release ? "open" : expected.Status }, release, false),
             (AgentRole.Reviewer, AgentOutcomeChoice.Approved) =>
@@ -149,7 +168,7 @@ internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : I
         };
     }
 
-    private static Transition BuildRepairTransition(BeadWorkflowState expected, bool release)
+    private static Transition BuildRepairTransition(BeadWorkflowState expected, bool release, string stage = "stage:implement")
     {
         int cycles;
         try { cycles = checked(expected.RepairCycles + 1); }
@@ -157,8 +176,8 @@ internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : I
         {
             throw new DeliveryRepairCounterOverflowException(expected.RepairCycles);
         }
-        return new("stage:implement", expected.Stage, cycles,
-            expected with { Stage = "stage:implement", RepairCycles = cycles, Status = release ? "open" : expected.Status },
+        return new(stage, expected.Stage, cycles,
+            expected with { Stage = stage, RepairCycles = cycles, Status = release ? "open" : expected.Status },
             release, false);
     }
 
@@ -252,5 +271,6 @@ internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : I
         [property: JsonPropertyName("provider")] string Provider,
         [property: JsonPropertyName("outcome")] string Outcome,
         [property: JsonPropertyName("classification_diagnostic")] string Diagnostic,
-        [property: JsonPropertyName("invocation_log")] string InvocationLog);
+        [property: JsonPropertyName("invocation_log")] string InvocationLog,
+        [property: JsonPropertyName("planning_approval")] PlanningApproval? PlanningApproval);
 }

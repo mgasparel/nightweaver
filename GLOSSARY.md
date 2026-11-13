@@ -21,7 +21,7 @@ The deterministic Nightweaver host process that discovers Beads, manages isolate
 _Avoid_: Runner, harness, daemon
 
 **Outcome classification**:
-The Orchestrator's bounded classification of one completed Implementer invocation's natural-language evidence into a role-specific outcome, followed by independent process, worktree, Git, pull request, and tracker verification before any workflow transition.
+The Orchestrator's bounded classification of one completed lifecycle Agent invocation's natural-language evidence into a role-specific outcome, followed by independent process, worktree, Git, pull request, and tracker verification before any workflow transition.
 _Avoid_: Agent-written stage, decision ledger
 
 **Agent**:
@@ -51,6 +51,10 @@ _Avoid_: Draft task authorization
 **Planning**:
 The pre-implementation stage in which a Planner Agent and Plan Challenger Agent evaluate a Product Bead and either create linked Plan Bead(s) for Delivery or defer the Product Bead back to a human with clarification questions.
 _Avoid_: Triage, grooming, intake, preflight
+
+**Approved plan**:
+An exact, recoverable Product decomposition supported by Challenger review and verified against its current requirements, constraints and repository context.
+_Avoid_: Approved prose, authorized task graph
 
 **Delivery**:
 The execution stage in which a Plan Bead is implemented, reviewed, verified by QA, and merged into the Target Repository inside an isolated worktree, followed by cleanup.
