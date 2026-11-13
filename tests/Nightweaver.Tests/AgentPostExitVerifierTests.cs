@@ -68,6 +68,19 @@ public sealed class AgentPostExitVerifierTests
     }
 
     [Theory]
+    [InlineData("dirty", "DirtyWorktree")]
+    [InlineData("head", "ForbiddenHeadMutation")]
+    [InlineData("timeout", "TimedOut")]
+    [InlineData("nonzero", "NonZeroExit")]
+    public async Task QaStillRejectsIntegrityAndExecutionFailures(string scenario, string expected)
+    {
+        var result = await VerifyAsync(AgentRole.Qa, scenario);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(Enum.Parse<AgentOperationalFailureKind>(expected), result.Failure?.Kind);
+    }
+
+    [Theory]
     [InlineData("all-timeout", "TimedOut", 3)]
     [InlineData("all-nonzero", "NonZeroExit", 3)]
     [InlineData("all-exited", "DirtyWorktree", 2)]
