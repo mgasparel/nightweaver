@@ -351,6 +351,8 @@ The store validates version, deployment/repository identity and progress on ever
 
 The internal Web-to-runtime Retry transport is a versioned atomic request inbox below the Project cleanup root, carrying only validated obligation ID, displayed revision fingerprint, live runtime ID and unique request ID. Web applies local mutation policy before queuing. The owner rechecks eligibility and reservation under cleanup serialization, rejects stale owner/revision and protected resources, expires old-owner requests on restart, and persists bounded acknowledgement history (100 completed requests, never evicting unconsumed requests). Acknowledged acceptance means queued, not verified removal. Explicit eligible Retry rearms a bounded cleanup cycle without resetting total attempts, prior failure/denial evidence or the Delivery repair budget. Store/inbox failures remain explicit. The console view and public mutation route belong to the following slice. Dry-run performs no obligation writes or removals.
 
+Cleanup Retry also requires the runtime-specific Windows acceptance signal, scoped to the deployment, Project, current user and runtime ID. The owner exposes it only after successful cleanup initialization. Graceful and force stop reset it synchronously under the stop gate before returning, even while pool drain keeps telemetry fresh; worker disposal closes it. Missing or closed acceptance refuses new requests explicitly. Owner-side stop serialization remains authoritative for processing. Requests queued before the stop boundary remain durable without granting a new cycle during drain; restart expires unconsumed old-owner requests and preserves already committed request outcomes.
+
 ### 5.4 Deterministic Cleanup Contract
 
 | Lifecycle Event | Cleanup Actions |

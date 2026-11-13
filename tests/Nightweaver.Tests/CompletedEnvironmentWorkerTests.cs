@@ -232,8 +232,10 @@ public sealed class CompletedEnvironmentWorkerTests
         Assert.Equal(2, denied.Attempts);
     }
 
-    [Fact]
-    public async Task GuardedInboxRejectsStaleAndStoppedOwnersAndCoalescesDuplicateRequests()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GuardedInboxRejectsStaleAndStoppedOwnersAndCoalescesDuplicateRequests(bool force)
     {
         using var fixture = new Fixture();
         var clock = new Clock();
@@ -248,6 +250,9 @@ public sealed class CompletedEnvironmentWorkerTests
         var inbox = new CleanupRetryInbox(fixture.Paths, config, fixture.Repository);
         await using var telemetry = new FactoryTelemetryPublisher(fixture.Paths, config, fixture.Repository, 2, 1);
         await telemetry.StartAsync(TestContext.Current.CancellationToken);
+        var gate = new ContinuousStopGate();
+        using var worker = Worker(fixture, clock, gate: gate, runtimeId: telemetry.RuntimeId);
+        await worker.InitializeAsync(TestContext.Current.CancellationToken);
         var requestId = Guid.NewGuid();
         await Assert.ThrowsAsync<InvalidOperationException>(() => inbox.QueueAsync("stale-owner", "done", CleanupRetryInbox.Revision(denied), requestId, TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<InvalidOperationException>(() => inbox.QueueAsync(telemetry.RuntimeId, "done", "stale-revision", requestId, TestContext.Current.CancellationToken));
@@ -255,24 +260,62 @@ public sealed class CompletedEnvironmentWorkerTests
         Assert.Equal(queued, await inbox.QueueAsync(telemetry.RuntimeId, "done", CleanupRetryInbox.Revision(denied), requestId, TestContext.Current.CancellationToken));
         // A duplicate ID with another request still refers to the original revision; it cannot grant two cycles.
         await inbox.QueueAsync(telemetry.RuntimeId, "done", CleanupRetryInbox.Revision(denied), Guid.NewGuid(), TestContext.Current.CancellationToken);
-        var gate = new ContinuousStopGate();
-        using var worker = Worker(fixture, clock, gate: gate, runtimeId: telemetry.RuntimeId);
         await worker.RunBatchAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, fixture.Read().Attempts);
         Assert.Equal(1, fixture.Read().CycleAttempts);
         Assert.Equal(denied.LastDenial, fixture.Read().LastDenial);
         Assert.Single(inbox.Read(), request => request.Outcome == "accepted");
         Assert.Single(inbox.Read(), request => request.Outcome == "stale");
-        gate.RequestStop();
+        // Keep telemetry and the worker alive to represent a held graceful pool drain.
+        // A request queued before stop is retained honestly but must not rearm on this owner.
         var stopped = fixture.Read();
-        await inbox.QueueAsync(telemetry.RuntimeId, "done", CleanupRetryInbox.Revision(stopped), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        var beforeStop = await inbox.QueueAsync(telemetry.RuntimeId, "done", CleanupRetryInbox.Revision(stopped), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        if (force) Assert.Empty(gate.RequestForceStop());
+        else gate.RequestStop();
+        Assert.Equal(FactoryTelemetryAvailability.Live, new FactoryTelemetryReader(fixture.Paths, config).Read().Availability);
+        var count = inbox.Read().Count;
+        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => inbox.QueueAsync(telemetry.RuntimeId, "done", CleanupRetryInbox.Revision(stopped), Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.Contains("accepting", refusal.Message, StringComparison.Ordinal);
+        Assert.Equal(count, inbox.Read().Count);
+        Assert.Equal(beforeStop, Assert.Single(inbox.Read(), request => request.RequestId == beforeStop.RequestId));
         await worker.RunBatchAsync(TestContext.Current.CancellationToken);
         Assert.Equal(stopped, fixture.Read());
         await telemetry.DisposeAsync();
         await Assert.ThrowsAsync<InvalidOperationException>(() => inbox.QueueAsync(telemetry.RuntimeId, "done", CleanupRetryInbox.Revision(stopped), Guid.NewGuid(), TestContext.Current.CancellationToken));
         using var restarted = Worker(fixture, clock);
         await restarted.InitializeAsync(TestContext.Current.CancellationToken);
-        Assert.Contains(inbox.Read(), request => request.Outcome == "expired");
+        Assert.Equal("expired", Assert.Single(inbox.Read(), request => request.RequestId == beforeStop.RequestId).Outcome);
+    }
+
+    [Fact]
+    public async Task FreshTelemetryAloneCannotQueueBeforeInitializationAfterDisposalOrOnAlreadyStoppedGate()
+    {
+        using var fixture = new Fixture();
+        var token = TestContext.Current.CancellationToken;
+        fixture.Runner.RemovalDenied = true;
+        await fixture.CleanAsync();
+        var before = fixture.Read();
+        var config = Config(fixture);
+        var inbox = new CleanupRetryInbox(fixture.Paths, config, fixture.Repository);
+        await using var telemetry = new FactoryTelemetryPublisher(fixture.Paths, config, fixture.Repository, 2, 1);
+        await telemetry.StartAsync(token);
+        var gate = new ContinuousStopGate();
+        using (var worker = Worker(fixture, new Clock(), gate: gate, runtimeId: telemetry.RuntimeId))
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => inbox.QueueAsync(telemetry.RuntimeId,
+                "done", CleanupRetryInbox.Revision(before), Guid.NewGuid(), token));
+            await worker.InitializeAsync(token);
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => inbox.QueueAsync(telemetry.RuntimeId,
+            "done", CleanupRetryInbox.Revision(before), Guid.NewGuid(), token));
+        gate.RequestStop();
+        using var stopped = Worker(fixture, new Clock(), gate: gate, runtimeId: telemetry.RuntimeId);
+        await stopped.InitializeAsync(token);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => inbox.QueueAsync(telemetry.RuntimeId,
+            "done", CleanupRetryInbox.Revision(before), Guid.NewGuid(), token));
+        Assert.Empty(inbox.Read());
+        Assert.Equal(before, fixture.Read());
+        Assert.Equal(FactoryTelemetryAvailability.Live, new FactoryTelemetryReader(fixture.Paths, config).Read().Availability);
     }
 
     [Fact]

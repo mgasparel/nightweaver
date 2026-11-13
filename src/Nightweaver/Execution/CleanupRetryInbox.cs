@@ -30,12 +30,14 @@ internal sealed class CleanupRetryInbox(HostPaths paths, ProjectConfig project, 
         var owner = new FactoryTelemetryReader(paths, project).Read();
         if (owner.Availability != FactoryTelemetryAvailability.Live || owner.Snapshot?.RuntimeId != runtimeId)
             throw new InvalidOperationException("Cleanup Retry requires the displayed live runtime owner.");
+        CleanupRetryAcceptance.RequireAccepting(paths, project, runtimeId);
         var record = new CompletedEnvironmentStore(paths, project.Name, repository).Read().Obligations
             .SingleOrDefault(item => item.BeadId == beadId);
         if (record is null || record.Status != CleanupStatus.NeedsAttention || Revision(record) != revision)
             throw new InvalidOperationException("Cleanup obligation changed or is not eligible for Retry.");
         var request = new CleanupRetryRequest(1, requestId.ToString("N"), runtimeId, beadId, revision,
             DateTimeOffset.UtcNow, "queued");
+        CleanupRetryAcceptance.RequireAccepting(paths, project, runtimeId);
         var existing = Read().SingleOrDefault(item => item.RequestId == request.RequestId);
         if (existing is not null)
         {

@@ -27,7 +27,13 @@ internal sealed class CompletedEnvironmentWorker(HostPaths paths, ProjectConfig 
     private readonly Dictionary<string, (AgentStageSession Session, MergerVerifiedMergeEvidence Evidence)> branchCompletions = new(StringComparer.Ordinal);
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
 
-    public void Dispose() => serial.Dispose();
+    private CleanupRetryAcceptance? acceptance;
+
+    public void Dispose()
+    {
+        Interlocked.Exchange(ref acceptance, null)?.Dispose();
+        serial.Dispose();
+    }
 
     internal void Wake() { if (!stopGate.IsStopRequested) wakeups.Writer.TryWrite(true); }
 
@@ -50,6 +56,7 @@ internal sealed class CompletedEnvironmentWorker(HostPaths paths, ProjectConfig 
         await SettleInterruptedAttemptsAsync(token).ConfigureAwait(false);
         foreach (var record in store.Read().Obligations.Where(record => record.Status == CleanupStatus.NeedsAttention))
             report($"Cleanup needs attention for '{record.BeadId}' at '{record.Worktree.Path}': {record.Diagnostic}");
+        acceptance = new CleanupRetryAcceptance(paths, project, runtimeId, stopGate);
     }
 
     private readonly ConcurrentDictionary<string, (AgentStageSession Session, MergerVerifiedMergeEvidence Evidence)> completions = new(StringComparer.Ordinal);
