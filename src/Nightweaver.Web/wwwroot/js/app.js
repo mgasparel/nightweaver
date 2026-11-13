@@ -2029,6 +2029,9 @@ let telemetryFollow = true;
 let telemetryCursor = 0;
 let telemetryText = "";
 let telemetryFocusSlot = null;
+let telemetryFocusRuntime = null;
+let telemetryFocusInvocation = null;
+let telemetryTruncated = false;
 let telemetrySourceEnded = false;
 
 function factoryText(tag, className, value) {
@@ -2052,6 +2055,7 @@ function appendFactoryInvocation(card, slot, runtimeId, poolName) {
   open.type = "button";
   open.dataset.openTelemetrySlot = slot.slot_id;
   open.dataset.invocationId = slot.invocation.invocation_id;
+  open.dataset.runtimeId = runtimeId;
   open.addEventListener("click", () => openTelemetry(runtimeId, poolName.toLowerCase(), slot));
   card.append(open);
 }
@@ -2150,9 +2154,29 @@ function renderFactory(snapshot, availability) {
   }
   renderedFactoryRuntime = snapshot.runtime_id;
   lastFactoryAvailability = availability;
-  factoryStatus.dataset.state = availability;
-  factoryStatus.textContent = availability + ": runtime " + snapshot.runtime_id + " · observed "
-    + factoryTime(snapshot.observed_at) + " · repository " + snapshot.target_repository;
+  if (invocationDialog.open && !telemetrySourceEnded) {
+    const selected = [...snapshot.delivery.slots, ...snapshot.merger.slots].find(slot => slot.slot_id === telemetryFocusSlot);
+    if (snapshot.runtime_id !== telemetryFocusRuntime || selected?.invocation?.invocation_id !== telemetryFocusInvocation)
+      invocationStatus.textContent = "— Selected invocation is no longer current. Showing retained output; following only the selected stream.";
+  }
+}
+
+function renderFactoryHealth(snapshot, availability, reason) {
+  const idle = snapshot && [...snapshot.delivery.slots, ...snapshot.merger.slots].every(slot => slot.status === "idle");
+  const state = availability === "live" ? (idle ? "idle" : "live") : availability;
+  const labels = { live: "● Live", idle: "◌ Idle · Fresh runtime", stale: "⚠ Stale",
+    disconnected: "✕ Disconnected", unavailable: "— Unavailable" };
+  factoryStatus.dataset.state = state;
+  const summary = factoryText("strong", "health-state", labels[state] ?? labels.unavailable);
+  const details = [];
+  if (availability === "unavailable") details.push("No active runtime observations (" + (reason ?? "unknown") + ")");
+  if (snapshot) {
+    details.push("Project " + (snapshot.project ?? "Unavailable"), "Runtime " + snapshot.runtime_id,
+      (availability === "live" ? "Observed " : "Last heartbeat ") + factoryTime(snapshot.observed_at),
+      "Target Repository · " + (snapshot.target_repository ?? "Unavailable"));
+    if (availability !== "live") details.push("Showing last validated snapshot");
+  }
+  factoryStatus.replaceChildren(summary, ...details.map(value => factoryText("span", "health-detail", value)));
 }
 
 async function refreshFactory() {
@@ -2168,30 +2192,28 @@ async function refreshFactory() {
     if (!response.ok) throw new Error("factory state unavailable");
     const result = await response.json();
     if (generation !== factoryGeneration) return;
-    if (result.snapshot) {
-      const key = result.snapshot.runtime_id + ":" + result.snapshot.revision;
-      if (!factoryHasSnapshot || key !== lastFactoryVersion || result.availability !== lastFactoryAvailability)
-        renderFactory(result.snapshot, result.availability);
-      else factoryStatus.textContent = result.availability + ": runtime " + result.snapshot.runtime_id
-        + " · observed " + factoryTime(result.snapshot.observed_at)
-        + " · repository " + result.snapshot.target_repository;
-      retainedFactorySnapshot = result.snapshot;
+    const snapshot = result.snapshot;
+    // Malformed observations must not replace the last validated snapshot.
+    const valid = snapshot && typeof snapshot.runtime_id === "string" && snapshot.runtime_id.length > 0
+      && Number.isFinite(Date.parse(snapshot.observed_at)) && Number.isSafeInteger(snapshot.revision)
+      && [snapshot.delivery, snapshot.merger].every(pool => pool && Number.isInteger(pool.capacity)
+        && Array.isArray(pool.slots) && pool.slots.every(slot => typeof slot.slot_id === "string" && typeof slot.status === "string"));
+    const availability = valid && ["live", "stale"].includes(result.availability) ? result.availability : "unavailable";
+    if (valid && ["live", "stale", "stopped"].includes(result.availability)) {
+      const key = snapshot.runtime_id + ":" + snapshot.revision;
+      if (!factoryHasSnapshot || key !== lastFactoryVersion || availability !== lastFactoryAvailability)
+        renderFactory(snapshot, availability);
+      retainedFactorySnapshot = snapshot;
       lastFactoryVersion = key;
       factoryHasSnapshot = true;
-    } else {
-      if (retainedFactorySnapshot) renderFactory(retainedFactorySnapshot, result.availability === "live" ? "unavailable" : result.availability);
-      factoryStatus.textContent = factoryHasSnapshot
-        ? "Runtime observations are " + result.availability + "; showing the last validated snapshot."
-        : "Runtime observations unavailable (" + (result.reason ?? "unknown") + ").";
-      factoryStatus.dataset.state = result.availability;
-    }
+    } else if (retainedFactorySnapshot) renderFactory(retainedFactorySnapshot, availability);
+    renderFactoryHealth(retainedFactorySnapshot, availability, result.reason
+      ?? (result.availability === "stopped" ? "runtime stopped" : "unknown"));
   } catch (error) {
     if (error.name !== "AbortError") {
-      if (retainedFactorySnapshot) renderFactory(retainedFactorySnapshot, "disconnected");
-      factoryStatus.textContent = factoryHasSnapshot
-        ? "Runtime observations are disconnected; showing the last validated snapshot."
-        : "Runtime observations are unavailable.";
-      factoryStatus.dataset.state = factoryHasSnapshot ? "disconnected" : "unavailable";
+      const availability = factoryHasSnapshot ? "disconnected" : "unavailable";
+      if (retainedFactorySnapshot) renderFactory(retainedFactorySnapshot, availability);
+      renderFactoryHealth(retainedFactorySnapshot, availability, "connection failed");
     }
   } finally {
     if (factoryRequest === controller) factoryRequest = null;
@@ -2202,16 +2224,22 @@ function appendTelemetryText(value) {
   const safe = value.replace(/\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))/g, "")
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
   telemetryText += safe;
-  let lines = telemetryText.split("\n");
-  let truncated = false;
-  while (lines.length > 2000 || telemetryText.length > 256 * 1024) {
-    lines.shift();
-    telemetryText = lines.join("\n");
-    lines = telemetryText.split("\n");
-    truncated = true;
+  const lines = telemetryText.split("\n");
+  if (lines.length > 2000) {
+    telemetryText = lines.slice(-2000).join("\n");
+    telemetryTruncated = true;
   }
+  const bytes = new TextEncoder().encode(telemetryText);
+  if (bytes.length > 256 * 1024) {
+    let start = bytes.length - 256 * 1024;
+    while ((bytes[start] & 0xc0) === 0x80) start++;
+    telemetryText = new TextDecoder().decode(bytes.subarray(start));
+    telemetryTruncated = true;
+  }
+  const scrollTop = invocationOutput.scrollTop;
   invocationOutput.textContent = telemetryText;
-  invocationTruncation.hidden = !truncated;
+  invocationTruncation.hidden = !telemetryTruncated;
+  if (!telemetryFollow) invocationOutput.scrollTop = scrollTop;
   if (telemetryFollow) invocationOutput.scrollTop = invocationOutput.scrollHeight;
 }
 
@@ -2223,8 +2251,9 @@ function closeTelemetry(restoreFocus = true) {
   if (invocationDialog.open) invocationDialog.close();
   if (restoreFocus && telemetryFocusSlot) {
     const trigger = Array.from(document.querySelectorAll("[data-open-telemetry-slot]"))
-      .find(node => node.dataset.openTelemetrySlot === telemetryFocusSlot);
-    requestAnimationFrame(() => trigger?.focus());
+      .find(node => node.dataset.openTelemetrySlot === telemetryFocusSlot
+        && node.dataset.runtimeId === telemetryFocusRuntime && node.dataset.invocationId === telemetryFocusInvocation);
+    (trigger ?? document.querySelector("#factory-title")).focus({ preventScroll: true });
   }
   telemetryFocusSlot = null;
   invocationPause.disabled = true;
@@ -2234,6 +2263,9 @@ function closeTelemetry(restoreFocus = true) {
 function openTelemetry(runtimeId, pool, slot) {
   closeTelemetry(false);
   telemetryFocusSlot = slot.slot_id;
+  telemetryFocusRuntime = runtimeId;
+  telemetryFocusInvocation = slot.invocation.invocation_id;
+  telemetryTruncated = false;
   telemetryGeneration += 1;
   const generation = telemetryGeneration;
   telemetryFollow = true;
@@ -2246,18 +2278,19 @@ function openTelemetry(runtimeId, pool, slot) {
   invocationPause.textContent = "Pause follow";
   invocationLatest.disabled = false;
   invocationTitle.textContent = (slot.role ?? "Retained invocation") + " · " + (slot.invocation.bead_id ?? slot.bead_id ?? "Unknown task");
-  invocationStatus.textContent = "Connecting to " + pool + " " + slot.slot_id + " · invocation " + slot.invocation.invocation_id;
+  invocationStatus.textContent = "◐ Connecting to " + pool + " " + slot.slot_id + " · invocation " + slot.invocation.invocation_id;
   invocationMetadata.replaceChildren();
   const values = [
     ["Runtime", runtimeId], ["Slot", slot.slot_id], ["Invocation", slot.invocation.invocation_id],
-    ["Task", slot.invocation.bead_id], ["CLI", slot.invocation.cli],
-    ["Configured model", slot.invocation.configured_model ?? "Unknown"],
-    ["Actual model", slot.invocation.actual_model ?? "Unknown"],
-    ["Worktree", slot.worktree_path ?? "Unknown"], ["Branch", slot.branch ?? "Unknown"]
+    ["Bead", slot.invocation.bead_id ?? slot.bead_id ?? "Unavailable"], ["CLI", slot.invocation.cli],
+    ["Configured model", slot.invocation.configured_model ?? "Unavailable"],
+    ["Actual model", slot.invocation.actual_model ?? "Unavailable"],
+    ["Worktree", slot.worktree_path ?? "Unavailable"], ["Branch", slot.branch ?? "Unavailable"]
   ];
   for (const [label, value] of values) {
     const row = document.createElement("div");
-    row.append(factoryText("dt", "", label), factoryText("dd", "", value));
+    if (label === "Worktree" || label === "Branch") row.className = "telemetry-path";
+    row.append(factoryText("dt", "", label), factoryText("dd", "", value ?? "Unavailable"));
     invocationMetadata.append(row);
   }
   if (!invocationDialog.open) invocationDialog.showModal();
@@ -2272,12 +2305,15 @@ function openTelemetry(runtimeId, pool, slot) {
     if (generation !== telemetryGeneration) return;
     try {
       const data = JSON.parse(event.data);
-      invocationStatus.textContent = data.availability + ": " + data.status;
+      const labels = { running: "● Running", completed: "✓ Exited · completed", failed: "✕ Failed", timed_out: "✕ Timed Out" };
+      invocationStatus.textContent = data.availability === "live"
+        ? (labels[data.status] ?? "◐ " + data.status) : "⚠ " + data.availability + " · " + data.status;
     } catch { invocationStatus.textContent = "Invocation status is unavailable."; }
   });
   source.addEventListener("reset", () => {
     if (generation !== telemetryGeneration) return;
     telemetryText = "";
+    telemetryTruncated = false;
     telemetryCursor = 0;
     invocationOutput.textContent = "";
     invocationTruncation.hidden = true;
@@ -2296,9 +2332,9 @@ function openTelemetry(runtimeId, pool, slot) {
     if (event instanceof MessageEvent) {
       try {
         const data = JSON.parse(event.data);
-        invocationStatus.textContent = "Log stream unavailable: " + (data.reason ?? "unknown");
-      } catch { invocationStatus.textContent = "Log stream unavailable."; }
-    } else if (!telemetrySourceEnded) invocationStatus.textContent = "Log stream disconnected; reconnecting…";
+        invocationStatus.textContent = "— Log stream unavailable: " + (data.reason ?? "unknown");
+      } catch { invocationStatus.textContent = "— Log stream unavailable."; }
+    } else if (!telemetrySourceEnded) invocationStatus.textContent = "✕ Disconnected · Reconnecting… Agent execution may still be running.";
   });
   source.addEventListener("end", event => {
     if (generation !== telemetryGeneration) return;
@@ -2307,7 +2343,12 @@ function openTelemetry(runtimeId, pool, slot) {
     if (telemetrySource === source) telemetrySource = null;
     try {
       const data = JSON.parse(event.data);
-      invocationStatus.textContent = "Stream ended: " + (data.status ?? data.reason ?? "complete");
+      const outcome = data.status ?? data.reason ?? "complete";
+      const knownOutcome = ["completed", "failed", "timed_out", "launch_failed", "launch_denied", "preparation_failed", "cancelled"].includes(data.status);
+      const glyph = data.status === "completed" ? "✓ "
+        : knownOutcome && data.status !== "cancelled" ? "✕ " : "— ";
+      invocationStatus.textContent = glyph + "Stream ended: " + outcome
+        + (!knownOutcome ? " · Agent outcome unavailable; retained output remains readable." : "");
     } catch { invocationStatus.textContent = "Stream ended."; }
   });
 }
@@ -2329,10 +2370,25 @@ invocationLatest.addEventListener("click", () => {
   invocationPause.textContent = "Pause follow";
   invocationOutput.scrollTop = invocationOutput.scrollHeight;
 });
+invocationDialog.addEventListener("keydown", event => {
+  if (event.key !== "Tab") return;
+  const controls = [...invocationDialog.querySelectorAll("button:not(:disabled), [tabindex='0']")]
+    .filter(node => node.getClientRects().length);
+  const first = controls[0];
+  const last = controls.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last?.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first?.focus();
+  }
+});
 invocationClose.addEventListener("click", () => closeTelemetry());
-invocationDialog.addEventListener("cancel", () => closeTelemetry(false));
-invocationDialog.addEventListener("close", () => { if (telemetrySource) closeTelemetry(); });
-window.addEventListener("hashchange", () => { if (invocationDialog.open) closeTelemetry(false); });
+invocationDialog.addEventListener("cancel", event => { event.preventDefault(); closeTelemetry(); });
+// Native close events are queued: an earlier close must not dismiss a newly opened inspection.
+invocationDialog.addEventListener("close", () => { if (!invocationDialog.open && telemetryFocusSlot) closeTelemetry(); });
+window.addEventListener("hashchange", () => { if (invocationDialog.open) closeTelemetry(false); }, { capture: true });
 window.addEventListener("beforeunload", () => {
   factoryRequest?.abort();
   closeTelemetry(false);

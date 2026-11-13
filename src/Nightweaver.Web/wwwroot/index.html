@@ -197,12 +197,17 @@
     </section>
 
     <section class="console-section" id="factory" aria-labelledby="factory-title">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Execution overview</p>
-          <h2 id="factory-title" tabindex="-1">Factory Execution Bays</h2>
+      <header class="factory-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Execution overview</p>
+            <h2 id="factory-title" tabindex="-1">Factory Execution Bays</h2>
+          </div>
         </div>
-      </div>
+        <div class="factory-health-bar">
+          <p class="factory-status" id="factory-status" role="status" aria-live="polite">Loading runtime observations…</p>
+        </div>
+      </header>
       <div class="bay-grid">
         <article class="surface bay-card planning-disabled">
           <h3>Planning Pool</h3>
@@ -219,7 +224,6 @@
           <div class="bay-slots" id="merger-slots" aria-live="polite"></div>
         </article>
       </div>
-      <p class="factory-status" id="factory-status" role="status" aria-live="polite">Loading runtime observations…</p>
     </section>
 
     <section class="console-section" id="beads" aria-labelledby="beads-title">

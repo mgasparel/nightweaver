@@ -61,6 +61,12 @@ The Release-shaped idle regression retains completed and failed invocations whil
 
 Retained idle evidence: [1440px](../../docs/acceptance/factory/idle-retained-1440.png), [375px](../../docs/acceptance/factory/idle-retained-375.png), and [720 CSS px](../../docs/acceptance/factory/idle-retained-720.png).
 
+## Runtime health and invocation inspection QA
+
+Run `node invocation-qa.mjs` against the discovered direct endpoint. Deterministic Factory observations and stream events exercise the five health presentations, initial unavailable/stopped observations, exact invocation identity across replacement polls, preserved output/follow/scroll/focus, UTF-8 byte and line bounds, ANSI/control sanitization, cursor de-duplication, reset, terminal status, keyboard containment, Escape/Close restoration and hash navigation to the Full Bead Workspace. The native endpoint and EventSource reconnect remain covered separately by `node telemetry.mjs`; run both, plus `node factory-qa.mjs`, on a fresh isolated stack and stop that same stack in `finally`.
+
+Screenshots under `TestResults/invocation` show long metadata and retained output at 1440×900, 375px and 720 CSS px, including the scrolled output/follow toolbar and live/idle/stale/disconnected/unavailable health. Review readability and reachable controls as well as the asserted absence of page overflow and uncaught browser errors. Representative evidence is retained under [docs/acceptance/invocation](../../docs/acceptance/invocation).
+
 ## Manual continuous-runtime pilot
 
 The native second-console-signal test waits for the resumed Delivery slot's capacity-release log before reading its persisted pause. This avoids repeated embedded-tracker subprocess reads during recovery while still checking the saved status, labels, retained worktree and foreign claim within the original two-minute recovery budget. Pilot tool cancellation kills and settles the child before returning; failures include runtime output in the test report.
