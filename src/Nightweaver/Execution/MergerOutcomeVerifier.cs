@@ -320,8 +320,9 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
             if (!string.Equals(finding.CheckedHead, expectedHead, StringComparison.OrdinalIgnoreCase))
                 return Failed("The rejection finding does not identify the retained current HEAD.");
 
-            var log = await FailureLogTailReader.ReadAsync(hostPaths, project.Name, invocation, cancellationToken)
-                .ConfigureAwait(false);
+            var log = finding is { Kind: "checks", CheckSource: "local" }
+                ? await MergerLocalCheckReader.ReadAsync(hostPaths, project.Name, invocation, cancellationToken).ConfigureAwait(false)
+                : await FailureLogTailReader.ReadAsync(hostPaths, project.Name, invocation, cancellationToken).ConfigureAwait(false);
             if (log.HadInvalidUtf8)
                 return Failed("The Merger invocation log contains invalid UTF-8 and cannot verify its rejection finding.");
             if (finding.Kind == "checks")
@@ -481,11 +482,24 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         var terminalResult = Array.FindLastIndex(lines, line =>
             line.Trim().Equals("Test run summary: Failed!", StringComparison.OrdinalIgnoreCase)
             || line.Trim().Equals("Test run summary: Passed!", StringComparison.OrdinalIgnoreCase));
-        return terminalResult >= 0
-            && lines[terminalResult].Trim().Equals("Test run summary: Failed!", StringComparison.OrdinalIgnoreCase)
-            && lines.Skip(terminalResult + 1).Any(line => System.Text.RegularExpressions.Regex.IsMatch(line.Trim(),
-                @"failed:\s*[1-9][0-9]*$",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant));
+        if (terminalResult < 0
+            || !lines[terminalResult].Trim().Equals("Test run summary: Failed!", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var totals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in lines.Skip(terminalResult + 1))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(line.Trim(),
+                @"^(total|failed|succeeded|skipped):\s*([0-9]+)$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+            if (!match.Success) continue;
+            if (!int.TryParse(match.Groups[2].Value, out var count) || !totals.TryAdd(match.Groups[1].Value, count))
+                return false;
+        }
+        return totals.TryGetValue("total", out var total) && total > 0
+            && totals.TryGetValue("failed", out var failed) && failed > 0 && failed <= total
+            && (!totals.TryGetValue("succeeded", out var succeeded) || succeeded <= total - failed)
+            && (!totals.TryGetValue("skipped", out var skipped) || skipped <= total - failed - succeeded)
+            && (totals.Count != 4 || (long)failed + succeeded + skipped == total);
     }
 
     private sealed record PullRequestObservation(string? State, string? HeadBranch, string? Head, string? Url);

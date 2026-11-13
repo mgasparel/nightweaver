@@ -16,6 +16,8 @@ QA stops its test services and verifies source/HEAD integrity and clean nonignor
 
 The integration tests use real Git and bd against disposable repositories and use native fake Agent apphosts for live execution. They require those tools and fail with a prerequisite error if a required tool is missing; the real-tool gate does not silently skip. A dry run does not need an Agent CLI, `gh`, a network connection, an `origin` remote, or credentials.
 
+Merger local build/test rejection evidence uses the paired transcript and JSON example in [`prompts/merger.md`](prompts/merger.md). The complete frame must fit within 32 KiB, with matching comment summary and diagnostic, current HEAD, observed nonzero exit, and terminal failure totals. Verification scans up to 8 MiB of the canonical settled log so unrelated earlier output can exceed the shared 32 KiB classifier tail. Missing, ambiguous, oversized, or mismatched evidence preserves the environment and diagnostic pause; it does not authorize repair handoff. Retained historical evidence is not rewritten or automatically resumed by this change.
+
 ## Durable completion cleanup
 
 Versioned per-Bead JSON records in `<nightweaver-root>/run/<project>/cleanup/` bind the deployment root, Project, Target Repository/common directory, purpose, original worktree registration, exact worktree/tmp paths and available verified merge evidence. They record attempt count/time, per-resource confirmed absence, bounded failure reason and resolution time independently of successful Delivery. The latest 100 resolved records are retained; unresolved records are never evicted.
