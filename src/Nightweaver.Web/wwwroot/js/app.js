@@ -520,6 +520,7 @@ let digestAllThreads = false;
 let digestAllStandalone = false;
 const expandedDigestSummaries = new Set();
 const expandedDigestThreads = new Set();
+const digestAllThreadItems = new Set();
 
 function digestNode(tagName, className, text) {
   const element = document.createElement(tagName);
@@ -659,13 +660,6 @@ function renderDigestThreadCard(thread) {
   } else {
     meta.append(digestNode("span", outcomePillClass(thread.root.outcome), thread.root.outcomeLabel));
   }
-  for (const sha of thread.root.commits ?? []) {
-    meta.append(digestNode("span", "digest-pill digest-pill-commit", sha));
-  }
-  for (const pr of thread.root.pullRequests ?? []) {
-    meta.append(digestNode("span", "digest-pill digest-pill-commit", pr));
-  }
-
   const title = digestNode("h4", "digest-thread-title");
   const titleLink = digestNode("a", "", `${thread.root.id} · ${thread.root.title}`);
   titleLink.href = `#bead/${encodeURIComponent(thread.root.id)}`;
@@ -674,28 +668,12 @@ function renderDigestThreadCard(thread) {
   title.append(titleLink);
   titleGroup.append(meta, title);
 
-  if (thread.root.activityKind !== "context" && thread.root.summary) {
-    const summaryKey = thread.root.id;
-    const isLong = thread.root.summary.length > 140;
-    const isExpanded = expandedDigestSummaries.has(summaryKey);
-    const rootSummary = digestNode("p", isLong && !isExpanded ? "digest-summary is-clamped" : "digest-summary", thread.root.summary);
-    rootSummary.style.marginTop = "0.35rem";
-    titleGroup.append(rootSummary);
-    if (isLong) {
-      const toggle = digestNode("button", "digest-inline-toggle", isExpanded ? "Show less" : "Show more");
-      toggle.type = "button";
-      toggle.dataset.digestFocus = `summary:${summaryKey}`;
-      toggle.setAttribute("aria-expanded", String(isExpanded));
-      rootSummary.id = `digest-summary-${encodeURIComponent(summaryKey)}`;
-      toggle.setAttribute("aria-controls", rootSummary.id);
-      toggle.style.marginTop = "0.25rem";
-      toggle.addEventListener("click", () => {
-        if (expandedDigestSummaries.has(summaryKey)) expandedDigestSummaries.delete(summaryKey);
-        else expandedDigestSummaries.add(summaryKey);
-        renderDigest();
-      });
-      titleGroup.append(toggle);
-    }
+  const latestActivity = [thread.root, ...(thread.items ?? [])]
+    .filter(item => item.activityKind !== "context" && item.activityAt)
+    .sort((a, b) => Date.parse(b.activityAt) - Date.parse(a.activityAt))[0];
+  if (latestActivity) {
+    titleGroup.append(digestNode("p", "digest-thread-context",
+      `Latest activity ${formatDigestRelativeTime(latestActivity.activityAt)} · ${latestActivity.outcomeLabel}`));
   }
 
   const counts = digestNode("div", "digest-thread-counts");
@@ -708,31 +686,42 @@ function renderDigestThreadCard(thread) {
   header.append(titleGroup, counts);
   card.append(header);
 
-  if (Array.isArray(thread.items) && thread.items.length > 0) {
-    const itemsContainer = digestNode("div", "digest-thread-items");
-    itemsContainer.id = `digest-thread-${encodeURIComponent(thread.root.id)}`;
-    const isThreadExpanded = expandedDigestThreads.has(thread.root.id);
-    const visibleItems = isThreadExpanded ? thread.items : thread.items.slice(0, DIGEST_INITIAL_THREAD_ITEMS);
-    for (const item of visibleItems) {
-      itemsContainer.append(renderDigestItemRow(item));
+  const items = thread.items ?? [];
+  if (items.length > 0 || thread.root.summary || thread.root.commits?.length || thread.root.pullRequests?.length) {
+    const isExpanded = expandedDigestThreads.has(thread.root.id);
+    const activity = digestNode("div", "digest-thread-activity");
+    activity.id = `digest-thread-${encodeURIComponent(thread.root.id)}`;
+    activity.hidden = !isExpanded;
+    const toggle = digestNode("button", "digest-inline-toggle digest-activity-toggle",
+      isExpanded ? "Hide activity" : `Show activity (${items.length})`);
+    toggle.type = "button";
+    toggle.dataset.digestFocus = `activity:${thread.root.id}`;
+    toggle.setAttribute("aria-label", `${isExpanded ? "Hide" : "Show"} activity for ${thread.root.id} (${items.length} items)`);
+    toggle.setAttribute("aria-expanded", String(isExpanded));
+    toggle.setAttribute("aria-controls", activity.id);
+    toggle.addEventListener("click", () => {
+      if (isExpanded) expandedDigestThreads.delete(thread.root.id);
+      else expandedDigestThreads.add(thread.root.id);
+      renderDigest();
+    });
+    counts.append(toggle);
+    if (isExpanded) {
+      // Root descriptions and evidence belong with requested history.
+      activity.append(renderDigestItemRow(thread.root, { isThreadRoot: true }));
+      const itemsContainer = digestNode("div", "digest-thread-items");
+      itemsContainer.id = `digest-thread-items-${encodeURIComponent(thread.root.id)}`;
+      const showAll = digestAllThreadItems.has(thread.root.id);
+      for (const item of showAll ? items : items.slice(0, DIGEST_INITIAL_THREAD_ITEMS)) {
+        itemsContainer.append(renderDigestItemRow(item));
+      }
+      activity.append(itemsContainer);
+      digestCollectionToggle(itemsContainer, items.length, DIGEST_INITIAL_THREAD_ITEMS,
+        showAll, "in thread", () => {
+          if (showAll) digestAllThreadItems.delete(thread.root.id);
+          else digestAllThreadItems.add(thread.root.id);
+        });
     }
-    card.append(itemsContainer);
-
-    if (thread.items.length > DIGEST_INITIAL_THREAD_ITEMS) {
-      const hiddenCount = thread.items.length - DIGEST_INITIAL_THREAD_ITEMS;
-      const moreBtn = digestNode("button", "digest-inline-toggle",
-        isThreadExpanded ? "Show fewer in thread" : `Show ${hiddenCount} more in thread`);
-      moreBtn.type = "button";
-      moreBtn.dataset.digestFocus = `thread:${thread.root.id}`;
-      moreBtn.setAttribute("aria-controls", itemsContainer.id);
-      moreBtn.setAttribute("aria-expanded", String(isThreadExpanded));
-      moreBtn.addEventListener("click", () => {
-        if (expandedDigestThreads.has(thread.root.id)) expandedDigestThreads.delete(thread.root.id);
-        else expandedDigestThreads.add(thread.root.id);
-        renderDigest();
-      });
-      card.append(moreBtn);
-    }
+    card.append(activity);
   }
 
   return card;
@@ -754,6 +743,7 @@ function resetDigestCollectionBounds() {
   digestAllThreads = false;
   digestAllStandalone = false;
   expandedDigestThreads.clear();
+  digestAllThreadItems.clear();
 }
 
 function renderDigest() {
@@ -885,7 +875,9 @@ async function loadDigest(windowOverride = undefined, expectedCheckpoint = undef
       throw new Error("The saved catch-up checkpoint could not be confirmed. Refresh to try again.");
     }
     const validThreads = new Set((payload.threads ?? []).map(thread => thread.root.id));
-    for (const id of expandedDigestThreads) if (!validThreads.has(id)) expandedDigestThreads.delete(id);
+    for (const state of [expandedDigestThreads, digestAllThreadItems]) {
+      for (const id of state) if (!validThreads.has(id)) state.delete(id);
+    }
     const validSummaries = new Set([
       ...(payload.threads ?? []).flatMap(thread => [thread.root.id, ...thread.items.map(item => item.id)]),
       ...[...(payload.standaloneCompleted ?? []), ...(payload.standaloneOpen ?? [])].map(item => item.id)
