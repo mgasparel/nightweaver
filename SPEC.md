@@ -62,7 +62,8 @@ stateDiagram-v2
 ```
 
 1. **Discovery & Eligibility**:
-   - Unblocked, unassigned **Product Beads** (`bd ready --type feature,bug --unassigned`) that do not carry `planned`, `product-decision-required`, or `needs-human` are eligible for **Planning** (subject to `max_active_plan_beads` backpressure; see Section 5.2).
+   - Unblocked, unassigned **Product Beads** (`bd ready --type feature,bug --unassigned`) that carry `ready-for-planning` and do not carry `planned`, `product-decision-required`, or `needs-human` are eligible for **Planning** (subject to `max_active_plan_beads` backpressure; see Section 5.2).
+   - Product intake and prose edits leave the Product in backlog. The workspace's explicit **Ready for Planning** action adds `ready-for-planning` after comparing the displayed workflow identity with fresh state. It accepts only open, unassigned, unpaused Products with a valid Planning stage (or no stage), using a native open/unassigned guarded update and a confirming read. Readiness persists through Planning and human pauses; Resume/Retry still govern the pause independently. Neither action starts an Agent or bypasses native readiness and capacity. Explicit stage dispatch requires the same readiness label.
 2. **Drafting & Clarification (`stage:plan`)**:
    - The **Planner Agent** evaluates the **Product Bead** (full description and comment history) against the codebase inside a detached-`HEAD` worktree at `origin/<default_branch>`.
    - **Clarification Deferral (`product-decision-required`)**: If product requirements are ambiguous or contradictory, the **Planner Agent** posts a structured clarification comment via `bd comments add <id>` and applies `product-decision-required`.
@@ -73,9 +74,10 @@ stateDiagram-v2
      - **Approve (`stage:plan-approved`)**: Posts approval comment and transitions the **Product Bead** to `stage:plan-approved`.
 4. **Plan Materialization (`stage:plan-approved` -> `planned`)**:
    - The **Planner Agent** creates the approved **Plan Beads** in `bd`:
-     - `bd create "<title>" -t task --deps discovered-from:<product-bead-id> -d "<spec>"`
+     - `bd create "<title>" -t task --labels plan-unpublished --deps discovered-from:<product-bead-id> -d "<spec>"`
      - Each **Plan Bead** description contains a complete, self-contained technical specification: **Summary**, **Current vs. Desired Behavior**, **Key Interfaces & Touchpoints**, **Testable Acceptance Criteria**, and **Out of Scope**.
      - Wires ordering constraints between sibling **Plan Beads** via `bd dep add <later-slice> <earlier-slice>`.
+   - **Publication hold contract**: every generated task includes `plan-unpublished` in its initial `bd create` write, so its first persisted visibility is already ineligible for Delivery and Merger, including explicit dispatch and recovered readiness. The hold also excludes it from active Plan backpressure. Keep the hold through partial creation, linking, verification failures, and recovery. Only verified publication of the approved task set may remove the hold; comments and the parent's `planned` label alone do not publish tasks. The later materialization/publication implementation owns that verification and guarded release; this contract does not enable automated Planning in the continuous runtime. Manually authored tasks, including parentless tasks and manually linked tasks, need no publication label and retain ordinary eligibility.
    - Transitions the **Product Bead** label from `stage:plan-approved` to `planned` (retaining its dispatch status and claim until post-exit verification; the Orchestrator then releases it to `open` and unassigned).
 5. **Automatic Product Bead Completion (`planned` -> `closed`)**:
    - Whenever a **Plan Bead** closes, the **Orchestrator** checks whether that **Plan Bead** has a `discovered-from` parent **Product Bead** labelled `planned`. If all **Plan Beads** linked via `discovered-from` to that **Product Bead** are `closed`, the **Orchestrator** automatically closes the parent **Product Bead** (`bd close <product-bead-id>`).
@@ -117,7 +119,7 @@ stateDiagram-v2
 ```
 
 1. **Discovery & Eligibility**:
-   - Unblocked, unassigned **Plan Beads** (`bd ready --type task --unassigned`) that do not carry `product-decision-required` or `needs-human` are eligible for **Delivery**.
+   - Unblocked, unassigned **Plan Beads** (`bd ready --type task --unassigned`) that do not carry `plan-unpublished`, `product-decision-required`, or `needs-human` are eligible for **Delivery**.
    - **Plan Beads** without a `stage:*` label or labelled `stage:implement`, `stage:review`, or `stage:qa` are scheduled by the **Delivery Pool**.
    - **Plan Beads** labelled `stage:merge` are scheduled exclusively by the **Singleton Merger Slot**.
 2. **Implementation (`stage:implement`)**:
@@ -269,7 +271,7 @@ flowchart TD
 1. **Planning Pool (`max_concurrent_planning`, default `2`)**:
    - Claims eligible Product Beads and holds the claim across the Planning stages. On planned, completed-environment cleanup may remove the detached worktree; on either pause label, the worktree and temporary files are retained and the still-owned claim is released.
 2. **Planning Backpressure (`max_active_plan_beads`, default `5`)**:
-   - To prevent **Planning** from building a large queue of pre-planned **Plan Beads** that go stale as `<default_branch>` evolves, the **Orchestrator** counts all active (non-closed, non-paused) **Plan Beads** (`--type task` with status `open` or `in_progress` that do not carry `product-decision-required` or `needs-human`).
+   - To prevent **Planning** from building a large queue of pre-planned **Plan Beads** that go stale as `<default_branch>` evolves, the **Orchestrator** counts all active published (non-closed, non-paused) **Plan Beads** (`--type task` with status `open` or `in_progress` that do not carry `plan-unpublished`, `product-decision-required`, or `needs-human`).
    - When `active_plan_beads >= max_active_plan_beads`, the **Orchestrator** pauses claiming *new* **Product Beads** for **Planning** until `active_plan_beads < max_active_plan_beads`. Any **Product Bead** already mid-Planning in an active slot finishes its current Planning loop cleanly.
 3. **Delivery Pool (`max_concurrent_delivery`, default `3`)**:
    - The current continuous runtime claims eligible **Plan Beads** (`bd update <id> --claim`) that are unlabeled or in `stage:implement`, `stage:review`, or `stage:qa`.

@@ -309,6 +309,36 @@ public sealed class Program
             return await ExecuteAttentionActionAsync(context, id,
                 () => tracker.RetryAsync(id, request.Expected, context.RequestAborted), logger);
         });
+        app.MapPost("/api/beads/{id}/ready-for-planning", async (HttpContext context, string id, TrackerBridge tracker,
+            LocalMutationRequestPolicy policy, ILogger<Program> logger) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (context.Request.Query.Count != 0)
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Attention Desk request", detail: "Query parameters are not supported.");
+            if (!policy.Allows(context.Request))
+                return Results.Problem(statusCode: StatusCodes.Status403Forbidden,
+                    title: "Request origin rejected", detail: "Use the local Nightweaver console to submit this action.");
+            if (!IsJsonContentType(context.Request.ContentType))
+                return Results.Problem(statusCode: StatusCodes.Status415UnsupportedMediaType,
+                    title: "Unsupported media type", detail: "Submit the Planning snapshot as application/json.");
+            var body = await BoundedRequestBody.ReadAsync(context.Request, context.RequestAborted, 32 * 1024);
+            if (body is null)
+                return Results.Problem(statusCode: StatusCodes.Status413PayloadTooLarge,
+                    title: "Request body too large", detail: "The request body cannot exceed 32 KiB.");
+            string expected;
+            try
+            {
+                expected = PlanningReadiness.ParseRequest(body);
+            }
+            catch (AttentionRequestValidationException exception)
+            {
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid Attention Desk request", detail: exception.Message);
+            }
+            return await ExecuteAttentionActionAsync(context, id,
+                () => tracker.AuthorizePlanningAsync(id, expected, context.RequestAborted), logger);
+        });
         app.MapPost("/api/beads/{id}/abort", async (HttpContext context, string id, TrackerBridge tracker,
             LocalMutationRequestPolicy policy, ILogger<Program> logger) =>
         {

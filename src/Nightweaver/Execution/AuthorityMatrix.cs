@@ -64,6 +64,10 @@ internal static class AuthorityMatrix
             return $"Role '{role}' requires a Product Bead of type feature or bug; '{state.Id}' is '{state.IssueType}'.";
         if (expectedTask && state.IssueType != "task")
             return $"Role '{role}' requires a Plan Bead of type task; '{state.Id}' is '{state.IssueType}'.";
+        if (expectedProduct && !state.ReadyForPlanning)
+            return $"Product Bead '{state.Id}' requires ready-for-planning before dispatch.";
+        if (expectedTask && state.PlanUnpublished)
+            return $"Plan Bead '{state.Id}' is unpublished and cannot be dispatched.";
 
         var accepted = role switch
         {
@@ -89,6 +93,8 @@ internal static class AuthorityMatrix
             return AuthorityMatrixResult.Illegal($"Bead identity changed from '{before.Id}' to '{after.Id}'.");
         if (!string.Equals(before.IssueType, after.IssueType, StringComparison.Ordinal))
             return AuthorityMatrixResult.Illegal($"Bead '{before.Id}' changed type from '{before.IssueType}' to '{after.IssueType}'.");
+        if (before.ReadyForPlanning != after.ReadyForPlanning || before.PlanUnpublished != after.PlanUnpublished)
+            return AuthorityMatrixResult.Illegal("Agents cannot change Planning readiness or publication holds.");
         if (after.NeedsHuman)
             return AuthorityMatrixResult.Illegal("needs-human is an Orchestrator escalation outcome, not a legal Agent transition in this matrix.");
 

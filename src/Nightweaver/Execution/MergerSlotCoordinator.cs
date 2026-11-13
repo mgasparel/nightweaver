@@ -288,6 +288,8 @@ internal sealed class MergerSlotCoordinator
     {
         if (bead.IssueType != "task")
             return $"Merger accepts Plan Beads of type task; '{bead.Id}' is '{bead.IssueType}'.";
+        if (state.PlanUnpublished)
+            return $"Plan Bead '{bead.Id}' is unpublished and cannot enter Merger.";
         var stages = StageLabelParser.Parse(bead.Labels);
         if (stages.Count != 1 || stages[0] != "stage:merge" || state.Stage != "stage:merge")
             return $"Merger requires exactly one stage label, stage:merge; observed '{string.Join(", ", stages)}'.";

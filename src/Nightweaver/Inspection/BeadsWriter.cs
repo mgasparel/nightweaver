@@ -283,6 +283,12 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
         CancellationToken cancellationToken) => ResumePausedBeadAsync(repository, beadId,
         "resolve product decision", cancellationToken);
 
+    internal Task AuthorizePlanningAsync(ValidatedTargetRepository repository, string beadId,
+        CancellationToken cancellationToken) => RunGuardedAsync(repository,
+        ["update", beadId, "--status", "open", "--assignee", "", "--if-status", "open", "--if-assignee", "",
+            "--add-label", "ready-for-planning", "--json"],
+        $"authorize Planning for Bead '{beadId}'", cancellationToken);
+
     internal Task RetryNeedsHumanAsync(ValidatedTargetRepository repository, string beadId,
         CancellationToken cancellationToken) => ResumePausedBeadAsync(repository, beadId,
         "reset the repair budget and retry", cancellationToken);

@@ -39,6 +39,6 @@ public sealed class PlanningReportTests
 
     private static string Row(string id, string status, string type, string[] labels) => JsonSerializer.Serialize(new
     {
-        id, status, issue_type = type, priority = 2, created_at = "2026-10-23T00:00:00Z", assignee = (string?)null, labels
+        id, status, issue_type = type, priority = 2, created_at = "2026-10-23T00:00:00Z", assignee = (string?)null, labels = type is "feature" or "bug" ? labels.Append("ready-for-planning").ToArray() : labels
     });
 }

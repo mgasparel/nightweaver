@@ -1238,6 +1238,7 @@ const workspaceStale = document.querySelector("#workspace-stale");
 const workspaceId = document.querySelector("#workspace-id");
 const workspaceTitle = document.querySelector("#workspace-title");
 const workspaceMeta = document.querySelector("#workspace-meta");
+const workspacePlanning = document.querySelector("#workspace-planning");
 const workspaceSpecs = document.querySelector("#workspace-specs");
 const workspaceHistory = document.querySelector("#workspace-history");
 const workspaceEnvironment = document.querySelector("#workspace-environment");
@@ -1608,6 +1609,25 @@ function renderWorkspaceGuidanceActions(data) {
   workspaceGuidanceInput.disabled = blocked || !decision || !attention.canDecide;
   workspaceGuidanceActions.replaceChildren();
 
+  workspacePlanning.replaceChildren();
+  workspacePlanning.hidden = !data.planning;
+  if (data.planning) {
+    const terminal = data.bead.status === "closed" || data.bead.labels.includes("planned");
+    const summary = document.createElement("div");
+    summary.append(workspaceText("p", "eyebrow", "Planning"), workspaceText("p", "",
+      terminal ? "Planning authorization is no longer available for this Product."
+        : data.planning.ready ? "Ready for Planning. Scheduling and pause rules still apply."
+          : data.planning.canAuthorize ? "Planning backlog: awaiting explicit authorization."
+            : "Planning authorization requires an open, unclaimed, unpaused Product."));
+    workspacePlanning.append(summary);
+    if (!terminal && !data.planning.ready) workspacePlanning.append(workspaceButton("Ready for Planning", "primary-action",
+      () => void authorizeWorkspacePlanning(data), blocked || !data.planning.canAuthorize));
+    if (!attention && attentionMessages.has(beadId)) {
+      const message = workspaceText("p", "field-help workspace-planning-message", attentionMessages.get(beadId));
+      message.setAttribute("role", "status");
+      workspacePlanning.append(message);
+    }
+  }
   if (decision) {
     workspaceGuidanceActions.append(
       workspaceButton("Save Note", "secondary-action", () => void submitWorkspaceAction("note_only"), blocked || !attention.canDecide),
@@ -1645,7 +1665,7 @@ function renderWorkspaceGuidanceActions(data) {
       attention?.unavailableReason || "Actions are available only for a valid, unclaimed human pause."));
   }
 
-  const message = attentionMessages.get(beadId);
+  const message = data.planning && !attention ? null : attentionMessages.get(beadId);
   if (message) {
     workspaceActionMessage.textContent = message;
     workspaceActionMessage.hidden = false;
@@ -1672,6 +1692,8 @@ function showWorkspaceLoading(id, message = "Loading Bead workspace…") {
   workspaceId.textContent = id;
   workspaceTitle.textContent = "Loading workspace…";
   workspaceMeta.replaceChildren();
+  workspacePlanning.hidden = true;
+  workspacePlanning.replaceChildren();
   workspaceStatus.textContent = message;
   workspaceError.hidden = true;
   workspaceStale.hidden = true;
@@ -1760,6 +1782,28 @@ async function loadWorkspace(id, { manual = false } = {}) {
       if (workspaceRefresh) workspaceRefresh.disabled = false;
     }
   }
+}
+
+async function authorizeWorkspacePlanning(data) {
+  if (workspaceIsStale || workspaceActionBlocked || workspaceCurrentId !== data.bead.id || !data.planning?.canAuthorize) return;
+  workspaceActionBlocked = true;
+  renderWorkspaceGuidanceActions(data);
+  try {
+    const response = await fetch(`/api/beads/${encodeURIComponent(data.bead.id)}/ready-for-planning`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Nightweaver-Request": "console-v1" },
+      body: JSON.stringify({ expected: data.planning.expected })
+    });
+    const result = await response.json();
+    if (!response.ok || result.beadId !== data.bead.id || result.stateChanged !== true)
+      throw new Error(result.detail || "Planning authorization could not be confirmed. Refresh before retrying.");
+    attentionMessages.set(data.bead.id, "Planning readiness saved. Normal scheduling rules still apply.");
+    await loadBeads();
+  } catch (error) {
+    attentionMessages.set(data.bead.id, error instanceof Error ? error.message : "Refresh before retrying.");
+    if (workspaceCurrentId === data.bead.id) renderWorkspaceGuidanceActions(workspaceData);
+    return;
+  }
+  if (workspaceCurrentId === data.bead.id) await loadWorkspace(data.bead.id, { manual: true });
 }
 
 async function submitWorkspaceAction(action) {

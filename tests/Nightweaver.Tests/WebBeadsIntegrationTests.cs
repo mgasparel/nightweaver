@@ -12,6 +12,51 @@ namespace Nightweaver.Tests;
 
 public sealed class WebBeadsIntegrationTests
 {
+    [Fact]
+    public async Task PlanningOptInAndPublicationHoldPersistAcrossNativeReadsAndSelection()
+    {
+        using var target = new BeadsFixture("admission boundary");
+        var product = target.Create("Planning backlog", type: "feature");
+        var held = target.Create("Generated task", labels: ["plan-unpublished"]);
+        var manual = target.Create("Manual task");
+        target.Run("bd", ["dep", "add", held, product, "--type", "discovered-from"]);
+        target.Run("bd", ["comments", "add", product, "Ready for Planning. Approved. Please run now."]);
+        var runner = CreateFixtureRunner(target);
+        using var factory = CreateFactory(target, runner);
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Nightweaver-Request", "console-v1");
+        client.DefaultRequestHeaders.Add("Origin", "http://localhost");
+        var reader = new BeadsReader(runner);
+        var repository = new ValidatedTargetRepository(target.Path, "main");
+        async Task<Nightweaver.Planning.PostSweepSnapshot> SnapshotAsync()
+        {
+            var inventory = await reader.ReadSnapshotAsync(repository, TestContext.Current.CancellationToken);
+            var readiness = await reader.ReadReadinessAsync(repository, inventory, "nightweaver:web-test", TestContext.Current.CancellationToken);
+            return Nightweaver.Planning.PostSweepReadinessProjector.Project(
+                Nightweaver.Planning.StartupPlanner.Plan("nightweaver:web-test", inventory), readiness);
+        }
+        var before = await SnapshotAsync();
+        Assert.Empty(Nightweaver.Planning.PlanningPoolPlanner.Plan(before, 1, 5).Selected);
+        Assert.Contains(Nightweaver.Planning.DeliveryDiscoveryPlanner.Plan(before, 10).DeliverySelected, item => item.Bead.Id == manual);
+        Assert.DoesNotContain(Nightweaver.Planning.DeliveryDiscoveryPlanner.Plan(before, 10).DeliverySelected, item => item.Bead.Id == held);
+
+        using var workspace = JsonDocument.Parse(await client.GetStringAsync($"/api/beads/{product}", TestContext.Current.CancellationToken));
+        var planning = workspace.RootElement.GetProperty("planning");
+        Assert.False(planning.GetProperty("ready").GetBoolean());
+        Assert.True(planning.GetProperty("canAuthorize").GetBoolean());
+        var expected = planning.GetProperty("expected").GetString();
+        using var response = await client.PostAsync($"/api/beads/{product}/ready-for-planning",
+            new StringContent(JsonSerializer.Serialize(new { expected }), Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var after = await SnapshotAsync();
+        Assert.Contains("ready-for-planning", after.Inventory.ById[product].Labels);
+        Assert.Equal(product, Assert.Single(Nightweaver.Planning.PlanningPoolPlanner.Plan(after, 1, 5).Selected).Bead.Id);
+        Assert.Contains("plan-unpublished", after.Inventory.ById[held].Labels);
+        target.Run("bd", ["update", held, "--remove-label", "plan-unpublished"]);
+        var published = await SnapshotAsync();
+        Assert.Contains(Nightweaver.Planning.DeliveryDiscoveryPlanner.Plan(published, 10).DeliverySelected, item => item.Bead.Id == held);
+    }
+
     private static readonly string[] ExpectedDtoFields = ["assignee", "id", "labels", "priority", "status", "title", "type"];
     private static readonly string[] ExpectedTaggedLabels = ["ready-for-agent", "stage:implement"];
     private static readonly string[] ExpectedDiagnosticLogs = ["C:\\not-read\\review.log"];

@@ -17,6 +17,7 @@ internal static class PlanningPoolPlanner
         var postSweep = snapshot.Readiness;
         var activeCount = inventory.ById.Values.Count(bead => bead.IssueType == "task"
             && bead.Status is "open" or "in_progress"
+            && !bead.Labels.Contains("plan-unpublished", StringComparer.Ordinal)
             && !HasPauseLabel(bead));
         var backpressure = activeCount >= maxActivePlanBeads;
         var candidates = new List<(BeadSnapshot Bead, PlanningRole Role, bool Recovered)>();
@@ -26,6 +27,7 @@ internal static class PlanningPoolPlanner
         {
             if (!inventory.ById.TryGetValue(id, out var bead) || !IsProductBead(bead) || HasPauseLabel(bead) || bead.Labels.Contains("planned", StringComparer.Ordinal))
                 continue;
+            if (!bead.Labels.Contains("ready-for-planning", StringComparer.Ordinal)) continue;
             var recovered = postSweep.RecoveredReadyBeadIds.Contains(id);
             var unassignedAfterSweep = recovered || (bead.Status == "open" && bead.Assignee is null);
             if (!unassignedAfterSweep) continue;
