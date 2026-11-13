@@ -123,3 +123,11 @@ aspire stop --non-interactive
 ```
 
 Each run creates a disposable Git repository and Beads tracker with sample issues. UI writes affect that fixture; stopping the AppHost removes it. The fixture is not a copy of the user's tracker. Do not use desktop Computer Use (`cua_repl/js`) to drive browser QA.
+
+## Housekeeping acceptance
+
+Run `node cleanup-qa.mjs` against the discovered direct `web` endpoint of a fresh isolated stack started with `NIGHTWEAVER_QA_SCENARIO=cleanup`, and stop that exact AppHost in `finally`. The fixture retains a native locked tmp report through four bounded attempts with injected time, reconstructs the cleanup worker from durable evidence, and waits for real same-origin browser Retry. The script checks stale/protected 409s, queue acceptance versus confirmed resolution, a fifth attempt, actual tmp absence, unchanged delivered Bead and preserved paused evidence. Existing native full-suite cleanup smokes additionally cover retained ignored worktree output, verified merge completion, Git registration absence and restart after lost responses.
+
+Deterministic read fixtures then verify all four states, expired owner acknowledgement, eight-row pagination/search over 27 obligations, disclosure/focus preservation, unavailable counts and no overflow/errors at 1440px, 375px and 720 CSS px. Screenshots are written under `TestResults/cleanup` (override `NIGHTWEAVER_QA_OUTPUT` to preserve prior evidence). Only those later reads are substituted; the Retry acceptance uses the real endpoint and atomic runtime inbox. The disposable fixture includes a protected paused tmp sentinel and never changes production data.
+
+Representative checks and reviewed screenshots are retained in [the Housekeeping acceptance report](../../docs/acceptance/cleanup.md).

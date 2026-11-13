@@ -187,6 +187,8 @@ internal sealed class CompletedEnvironmentWorker(HostPaths paths, ProjectConfig 
                     }
                 }
             }
+            // Retention also progresses on idle wakes with no due disposal work.
+            store.TrimResolvedHistory(clock.GetUtcNow());
             // Reserved environments wait for the existing completion/timer hint instead of spinning.
         }
         catch (Exception) when (!token.IsCancellationRequested)

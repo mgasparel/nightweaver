@@ -38,13 +38,17 @@ internal sealed class CleanupRetryInbox(HostPaths paths, ProjectConfig project, 
         var request = new CleanupRetryRequest(1, requestId.ToString("N"), runtimeId, beadId, revision,
             DateTimeOffset.UtcNow, "queued");
         CleanupRetryAcceptance.RequireAccepting(paths, project, runtimeId);
-        var existing = Read().SingleOrDefault(item => item.RequestId == request.RequestId);
+        var requests = Read();
+        var existing = requests.SingleOrDefault(item => item.RequestId == request.RequestId);
         if (existing is not null)
         {
             if (existing.RuntimeId != runtimeId || existing.BeadId != beadId || existing.Revision != revision)
                 throw new InvalidOperationException("Cleanup request ID was already used for different evidence.");
             return existing;
         }
+        var queued = requests.FirstOrDefault(item => item.RuntimeId == runtimeId && item.BeadId == beadId
+            && item.Revision == revision && item.Outcome == "queued");
+        if (queued is not null) return queued;
         await WriteAsync(request, cancellationToken).ConfigureAwait(false);
         return request;
     }

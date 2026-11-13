@@ -14,11 +14,13 @@ var userHome = Path.Combine(fixture, "home");
 var config = Path.Combine(fixture, "project.json");
 var nightweaverRoot = fixture;
 var manualScenario = string.Equals(Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO"), "manual-delivery", StringComparison.Ordinal);
+var cleanupScenario = string.Equals(Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO"), "cleanup", StringComparison.Ordinal);
 var manualManifestPointer = Path.Combine(Environment.CurrentDirectory, ".manual-delivery-manifest.json");
 ManualDeliveryPilotFixture? manualPilot = null;
 CancellationTokenSource? manualRuntimeControlStop = null;
 Task? manualRuntimeControl = null;
 FactoryTelemetryPublisher? telemetry = null;
+CleanupQaFixture? cleanupFixture = null;
 Task<AgentExecutionResult>[] telemetryRuns = [];
 string[] telemetryReleaseFiles = [];
 try
@@ -106,6 +108,17 @@ try
             new ValidatedTargetRepository(repository, "main"), project.Concurrency.MaxConcurrentDelivery,
             ConcurrencyConfig.MergerSlots);
         await telemetry.StartAsync(cancellationToken);
+        if (cleanupScenario)
+        {
+            var cleanupRepository = new ValidatedTargetRepository(repository, "main") { GitCommonDirectory = Path.Combine(repository, ".git") };
+            var protectedCleanup = new CompletedEnvironmentStore(paths, project.Name, cleanupRepository).Create(needsHumanId, WorktreePurpose.Delivery, null)
+                with { Status = CleanupStatus.NeedsAttention, Diagnostic = "Paused QA environment is protected." };
+            Directory.CreateDirectory(protectedCleanup.Tmp.Path);
+            await File.WriteAllTextAsync(Path.Combine(protectedCleanup.Tmp.Path, "protected-evidence"), "preserve", cancellationToken);
+            await new CompletedEnvironmentStore(paths, project.Name, cleanupRepository).WriteAsync(protectedCleanup, cancellationToken);
+            cleanupFixture = await CleanupQaFixture.CreateAsync(paths, project, telemetry.RuntimeId,
+                (executable, working, arguments, token) => RunAsync(executable, working, userHome, token, arguments), cancellationToken);
+        }
 
         var slots = new[]
         {
@@ -162,6 +175,15 @@ try
 }
 finally
 {
+    if (cleanupFixture is not null)
+    {
+        try { await cleanupFixture.DisposeAsync(); }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"Cleanup QA fixture did not settle cleanly: {exception.Message}");
+            Environment.ExitCode = 1;
+        }
+    }
     foreach (var releaseFile in telemetryReleaseFiles)
     {
         try { File.WriteAllText(releaseFile, "release", new UTF8Encoding(false)); }

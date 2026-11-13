@@ -259,13 +259,13 @@ public sealed class CompletedEnvironmentWorkerTests
         var queued = await inbox.QueueAsync(telemetry.RuntimeId, "done", CleanupRetryInbox.Revision(denied), requestId, TestContext.Current.CancellationToken);
         Assert.Equal(queued, await inbox.QueueAsync(telemetry.RuntimeId, "done", CleanupRetryInbox.Revision(denied), requestId, TestContext.Current.CancellationToken));
         // A duplicate ID with another request still refers to the original revision; it cannot grant two cycles.
-        await inbox.QueueAsync(telemetry.RuntimeId, "done", CleanupRetryInbox.Revision(denied), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        Assert.Equal(queued, await inbox.QueueAsync(telemetry.RuntimeId, "done", CleanupRetryInbox.Revision(denied), Guid.NewGuid(), TestContext.Current.CancellationToken));
         await worker.RunBatchAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, fixture.Read().Attempts);
         Assert.Equal(1, fixture.Read().CycleAttempts);
         Assert.Equal(denied.LastDenial, fixture.Read().LastDenial);
         Assert.Single(inbox.Read(), request => request.Outcome == "accepted");
-        Assert.Single(inbox.Read(), request => request.Outcome == "stale");
+        Assert.Single(inbox.Read());
         // Keep telemetry and the worker alive to represent a held graceful pool drain.
         // A request queued before stop is retained honestly but must not rearm on this owner.
         var stopped = fixture.Read();
