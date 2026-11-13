@@ -8,6 +8,79 @@ namespace Nightweaver.Tests;
 
 public sealed class CompletedEnvironmentCleanupTests
 {
+    [Theory]
+    [InlineData("tool")]
+    [InlineData("io")]
+    [InlineData("access")]
+    [InlineData("launch")]
+    [InlineData("cancel")]
+    public async Task CheckoutInspectionFailureRetainsOnlyItsEnvironmentAndPreservesCancellation(string failure)
+    {
+        using var fixture = new Fixture();
+        var otherWorktree = Directory.CreateDirectory(Path.Combine(fixture.Paths.WorktreesRoot(Fixture.Project), "other")).FullName;
+        var otherTmp = Directory.CreateDirectory(Path.Combine(fixture.Paths.TmpRoot(Fixture.Project), "other")).FullName;
+        var otherRegistered = true;
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            if (request.FileName == "bd")
+            {
+                var result = await fixture.Runner.RunAsync(request, token);
+                var inventory = JsonNode.Parse(result.StandardOutput)!.AsArray();
+                var other = inventory[0]!.DeepClone();
+                other["id"] = "other";
+                inventory.Add(other);
+                return result with { StandardOutput = inventory.ToJsonString() };
+            }
+            if (request.Arguments[0] == "status" && request.WorkingDirectory == fixture.Worktree)
+                throw failure switch
+                {
+                    "tool" => new ToolExecutionException("injected status failure"),
+                    "io" => new IOException("injected status failure"),
+                    "access" => new UnauthorizedAccessException("injected status failure"),
+                    "launch" => new System.ComponentModel.Win32Exception("injected status failure"),
+                    _ => new OperationCanceledException(token)
+                };
+            if (request.Arguments.Take(2).SequenceEqual(["worktree", "remove"]) && request.Arguments[^1] == otherWorktree)
+            {
+                Directory.Delete(otherWorktree, true);
+                otherRegistered = false;
+                return new ProcessResult(0, "", "");
+            }
+            var original = await fixture.Runner.RunAsync(request, token);
+            if (request.Arguments.Take(2).SequenceEqual(["worktree", "list"]) && otherRegistered)
+                return original with { StandardOutput = original.StandardOutput
+                    + $"worktree {otherWorktree}\0HEAD {fixture.Runner.Head}\0branch refs/heads/nightweaver/other\0\0" };
+            if (request.WorkingDirectory == otherWorktree && request.Arguments[0] == "rev-parse")
+                return original with { StandardOutput = original.StandardOutput.Replace(fixture.Worktree, otherWorktree, StringComparison.Ordinal)
+                    .Replace("nightweaver/done", "nightweaver/other", StringComparison.Ordinal)
+                    .Replace(Path.Combine("worktrees", "done"), Path.Combine("worktrees", "other"), StringComparison.Ordinal) };
+            return original;
+        });
+        Task<IReadOnlyList<Nightweaver.Application.StartupCleanupDiagnostic>> Clean() =>
+            new CompletedEnvironmentCleanup(new BeadsReader(runner), runner).ReconcileAsync(
+                fixture.Paths, Fixture.Project, fixture.Repository, "nightweaver:demo", TestContext.Current.CancellationToken);
+
+        if (failure == "cancel") await Assert.ThrowsAnyAsync<OperationCanceledException>(Clean);
+        else
+        {
+            var diagnostics = await Clean();
+            Assert.Contains(diagnostics, item => item.Path == fixture.Worktree && item.Reason.Contains("injected status failure", StringComparison.Ordinal));
+            var records = fixture.Store.Read().Obligations;
+            var retained = Assert.Single(records, item => item.BeadId == "done");
+            Assert.Equal(CleanupStatus.NeedsAttention, retained.Status);
+            Assert.Contains(fixture.Worktree, retained.Diagnostic, StringComparison.Ordinal);
+            Assert.Contains("injected status failure", retained.Diagnostic, StringComparison.Ordinal);
+            Assert.Equal(CleanupStatus.Resolved, Assert.Single(records, item => item.BeadId == "other").Status);
+            Assert.False(Directory.Exists(otherWorktree));
+            Assert.False(Directory.Exists(otherTmp));
+            Assert.False(otherRegistered);
+        }
+        Assert.True(Directory.Exists(fixture.Worktree));
+        Assert.True(Directory.Exists(fixture.Tmp));
+        Assert.Equal(0, fixture.Runner.Removals);
+        Assert.All(fixture.Runner.Requests.Where(request => request.FileName == "bd"), request => Assert.Contains("list", request.Arguments));
+    }
+
     [Fact]
     public async Task LostRemovalResponseSurvivesRestartAndResolvesFromFreshAbsenceWithoutReplayingGit()
     {

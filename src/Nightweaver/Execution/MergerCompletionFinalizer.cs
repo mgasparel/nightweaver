@@ -127,8 +127,17 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner)
         var diagnostics = await new CompletedEnvironmentCleanup(reader, processRunner).ReconcileAsync(
             session.HostPaths, session.Project.Name, session.Repository, session.Project.RecoveryActor,
             cancellationToken, session.BeadId, evidence).ConfigureAwait(false);
-        if (diagnostics.Count > 0)
-            throw new ToolExecutionException(string.Join("; ", diagnostics.Select(item => item.Reason)));
+        var cleanupDiagnostic = diagnostics.Count == 0 ? null
+            : string.Join("; ", diagnostics.Select(item => item.Reason));
+        if (cleanupDiagnostic is not null)
+        {
+            var obligation = new CompletedEnvironmentStore(session.HostPaths, session.Project.Name, session.Repository)
+                .Read().Obligations.SingleOrDefault(record => record.BeadId == session.BeadId);
+            var registrations = await new GitWorktreeReader(processRunner).ReadAsync(session.Repository, cancellationToken).ConfigureAwait(false);
+            if (obligation?.Worktree.ConfirmedAbsent != true || Directory.Exists(worktreePath) || File.Exists(worktreePath)
+                || registrations.Any(item => RuntimePaths.Comparer.Equals(item.Path, worktreePath)))
+                throw new ToolExecutionException(cleanupDiagnostic);
+        }
 
         // Branch cleanup remains the existing one-shot completion responsibility. Durable local
         // environment reconciliation never replays remote-ref operations or Product completion.
@@ -168,6 +177,7 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner)
             if (delete.ExitCode != 0 || await ReadRemoteBranchAsync(repository.Path, branchRef, cancellationToken).ConfigureAwait(false) is not null)
                 throw new ToolExecutionException("compare-and-delete of the exact owned origin branch was not confirmed");
         }
+        if (cleanupDiagnostic is not null) throw new ToolExecutionException(cleanupDiagnostic);
     }
 
     private async Task<bool> CompleteProductIfEligibleAsync(ValidatedTargetRepository repository, string taskId,

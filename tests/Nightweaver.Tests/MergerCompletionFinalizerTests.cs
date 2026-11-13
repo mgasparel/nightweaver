@@ -7,8 +7,10 @@ namespace Nightweaver.Tests;
 
 public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSupport
 {
-    [Fact]
-    public async Task QaRetainedArtifactsRecoverAfterLostClosureAndRemovalResponsesAcrossRestart()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task QaRetainedArtifactsRecoverAfterLostClosureAndRemovalResponsesAcrossRestart(bool tmpOnlyFailure)
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires native Windows CLI fixtures.");
         using var target = new AgentStageTargetFixture();
@@ -54,13 +56,29 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         target.LoseVerifiedTaskCloseResponseAfterCommitOnce = true;
         var lostRemoval = false;
         var removalCalls = 0;
+        using var lockedTmp = tmpOnlyFailure
+            ? new FileStream(Path.Combine(qaTmp, "evidence.txt"), FileMode.Open, FileAccess.Read, FileShare.Read)
+            : null;
+        var remotePresent = tmpOnlyFailure;
+        var remoteDeleted = false;
         var runner = new RecordingProcessRunner(async (request, token) =>
         {
+            // Inject an exact origin ref without adding a second native remote fixture.
+            if (tmpOnlyFailure && request.FileName == "git" && request.Arguments[0] == "ls-remote")
+                return new ProcessResult(0, remotePresent ? $"{worktree.HeadSha}\trefs/heads/nightweaver/{beadId}\n" : "", "");
+            if (tmpOnlyFailure && request.FileName == "git" && request.Arguments[0] == "push")
+            {
+                Assert.Equal(new[] { "push", $"--force-with-lease=refs/heads/nightweaver/{beadId}:{worktree.HeadSha}",
+                    "origin", $":refs/heads/nightweaver/{beadId}" }, request.Arguments);
+                remotePresent = false;
+                remoteDeleted = true;
+                return new ProcessResult(0, "", "");
+            }
             var result = await target.RunWithFixturePullRequestAsync(systemRunner, request, token);
             if (request.FileName == "git" && request.Arguments.Take(2).SequenceEqual(["worktree", "remove"]))
             {
                 removalCalls++;
-                if (!lostRemoval && result.ExitCode == 0)
+                if (!tmpOnlyFailure && !lostRemoval && result.ExitCode == 0)
                 {
                     lostRemoval = true;
                     return new ProcessResult(73, string.Empty, "fixture lost removal response after commit");
@@ -74,8 +92,13 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
             TestContext.Current.CancellationToken);
         Assert.True(completion.Succeeded, completion.Diagnostic);
         Assert.False(completion.Receipt!.CleanupSucceeded);
-        Assert.Contains("lost removal response", completion.Receipt.CleanupDiagnostic, StringComparison.Ordinal);
-        Assert.True(lostRemoval);
+        if (tmpOnlyFailure)
+        {
+            Assert.False(lostRemoval);
+            Assert.True(remoteDeleted);
+            Assert.False(target.RunTarget("git", ["branch", "--list", $"nightweaver/{beadId}"]).Length > 0);
+        }
+        else Assert.Contains("lost removal response", completion.Receipt.CleanupDiagnostic, StringComparison.Ordinal);
         var store = new CompletedEnvironmentStore(target.Host, project.Name, repository);
         var pending = Assert.Single(store.Read().Obligations);
         Assert.Equal(CleanupStatus.NeedsAttention, pending.Status);
@@ -86,15 +109,19 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         Assert.Single(AgentStageTargetFixture.ClaimWrites(runner.Requests, beadId));
         Assert.Equal("closed", target.ReadBead(beadId).Status);
         Assert.Equal("closed", target.ReadBead(productId).Status);
+        var branchCommandsBeforeRestart = runner.Requests.Count(request => request.FileName == "git"
+            && request.Arguments[0] is "update-ref" or "push");
+        lockedTmp?.Dispose();
         var restarted = new StartupEnvironmentCleaner(new BeadsReader(runner), new BeadsWriter(runner), runner);
         await restarted.CleanAsync(target.Host, project.Name, repository, project.RecoveryActor,
             TestContext.Current.CancellationToken);
         Assert.Equal(CleanupStatus.Resolved, Assert.Single(store.Read().Obligations).Status);
         Assert.Equal(1, removalCalls);
+        Assert.Equal(branchCommandsBeforeRestart, runner.Requests.Count(request => request.FileName == "git"
+            && request.Arguments[0] is "update-ref" or "push"));
         Assert.Equal("closed", target.ReadBead(beadId).Status);
         Assert.DoesNotContain("needs-human", target.ReadBead(beadId).Labels);
-        // Existing exact branch cleanup remains a separate completion operation, never a startup sweep.
-        await finalizer.CleanupOwnedEnvironmentAsync(session, evidence, TestContext.Current.CancellationToken);
+        // The original completion independently deletes eligible refs even while tmp remains.
 
         Assert.False(Directory.Exists(worktree.Path));
         Assert.False(Directory.Exists(Path.Combine(target.Host.TmpRoot(project.Name), beadId)));

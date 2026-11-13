@@ -366,15 +366,25 @@ internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRu
             || !string.Equals(entry.Id, candidate.BeadId, StringComparison.Ordinal))
             return entry?.FailureReason ?? "the canonical worktree directory is missing, linked, unusable, or ambiguous";
 
-        try { WorktreeProvisioner.ValidateNestedTree(candidate.Path); }
-        catch (ToolExecutionException exception) { return exception.Message; }
-
-        var failure = await ValidateCheckoutIdentityAsync(processRunner, repository, candidate, cancellationToken).ConfigureAwait(false);
-        if (failure is not null) return failure;
-        var status = await processRunner.RunAsync(GitCommand.Create(
-            ["status", "--porcelain=v1", "-z", "--untracked-files=all"], candidate.Path), cancellationToken).ConfigureAwait(false);
-        return status.ExitCode != 0 || status.StandardOutput.Length != 0
-            ? "Completed checkout has changed source or nonignored files; resources retained." : null;
+        // Shared-root/tracker failures remain fatal above this boundary. Checkout-local
+        // inspection failures retain only this environment and must not stop reconciliation.
+        try
+        {
+            WorktreeProvisioner.ValidateNestedTree(candidate.Path);
+            var failure = await ValidateCheckoutIdentityAsync(processRunner, repository, candidate, cancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
+            var status = await processRunner.RunAsync(GitCommand.Create(
+                ["status", "--porcelain=v1", "-z", "--untracked-files=all"], candidate.Path), cancellationToken).ConfigureAwait(false);
+            return status.ExitCode != 0 || status.StandardOutput.Length != 0
+                ? "Completed checkout has changed source or nonignored files; resources retained." : null;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception) when (exception is ToolExecutionException or IOException
+            or UnauthorizedAccessException or ArgumentException or NotSupportedException
+            or System.ComponentModel.Win32Exception)
+        {
+            return $"Completed checkout inspection at '{candidate.Path}' failed; resources retained: {exception.Message}";
+        }
     }
 
     internal static async Task<string?> ValidateCheckoutIdentityAsync(IProcessRunner processRunner,
