@@ -489,10 +489,15 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         foreach (var line in lines.Skip(terminalResult + 1))
         {
             var match = System.Text.RegularExpressions.Regex.Match(line.Trim(),
-                @"^(total|failed|succeeded|skipped):\s*([0-9]+)$",
+                @"^(total|failed|succeeded|skipped):\s*(.*)$",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
             if (!match.Success) continue;
-            if (!int.TryParse(match.Groups[2].Value, out var count) || !totals.TryAdd(match.Groups[1].Value, count))
+            // A recognized count field must be valid even when its value would otherwise
+            // look like unrelated output, including a malformed duplicate field.
+            if (!System.Text.RegularExpressions.Regex.IsMatch(match.Groups[2].Value, @"^[0-9]+$",
+                    System.Text.RegularExpressions.RegexOptions.CultureInvariant)
+                || !int.TryParse(match.Groups[2].Value, out var count)
+                || !totals.TryAdd(match.Groups[1].Value, count))
                 return false;
         }
         return totals.TryGetValue("total", out var total) && total > 0

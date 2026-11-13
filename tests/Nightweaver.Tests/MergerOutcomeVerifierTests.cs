@@ -88,6 +88,51 @@ public sealed class MergerOutcomeVerifierTests
         Assert.True(result.Succeeded, result.Diagnostic);
     }
 
+    [Theory]
+    [InlineData("total: -1")]
+    [InlineData("total: unknown")]
+    [InlineData("failed: -1")]
+    [InlineData("failed: unknown")]
+    [InlineData("succeeded: -1")]
+    [InlineData("succeeded: unknown")]
+    [InlineData("skipped: -1")]
+    [InlineData("skipped: unknown")]
+    [InlineData("succeeded: 0\nsucceeded: -1")]
+    [InlineData("succeeded: 0\nsucceeded: unknown")]
+    [InlineData("skipped: 0\nskipped: -1")]
+    [InlineData("skipped: 0\nskipped: unknown")]
+    [InlineData("succeeded:")]
+    [InlineData("succeeded: 2147483648")]
+    [InlineData("succeeded: +1")]
+    [InlineData("succeeded: 0 extra")]
+    public async Task RejectsMalformedSuppliedTestCountsWithoutRepairPublication(string counts)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetLocalCheckFinding("dotnet test", 2, trailingOutput: counts);
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("failure summary", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Equal("stage:merge", fixture.Runner.Stage);
+        Assert.Equal(0, fixture.Runner.RepairCycles);
+        Assert.Empty(fixture.Runner.PublicationWrites);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("succeeded: 0\nskipped: 0")]
+    public async Task AcceptsMinimalAndConsistentFullTestCounts(string counts)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetLocalCheckFinding("dotnet test", 2,
+            trailingOutput: counts + "\nDuration: 1 second\nUnrelated diagnostic output");
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
     [Fact]
     public async Task ShippedLocalTestExampleReachesGuardedRepairHandoffAfterLongOutput()
     {
@@ -642,7 +687,7 @@ public sealed class MergerOutcomeVerifierTests
             var terminal = command == "dotnet test"
                 ? "Test run summary: Failed!\ntotal: 1\nfailed: 1"
                 : "Build FAILED.\n1 Error(s)";
-            var transcript = $"NIGHTWEAVER_LOCAL_CHECK_V1 {envelope}\n{terminal}\n{summary}\n{details}\n{trailingOutput}\nEND_NIGHTWEAVER_LOCAL_CHECK_V1\n";
+            var transcript = $"NIGHTWEAVER_LOCAL_CHECK_V1 {envelope}\n{summary}\n{details}\n{terminal}\n{trailingOutput}\nEND_NIGHTWEAVER_LOCAL_CHECK_V1\n";
             SetFinding("checks", command, summary, details, "local", exitCode, transcript);
         }
 
