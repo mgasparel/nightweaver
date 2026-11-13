@@ -10,6 +10,36 @@ public sealed class PlanningExecutionTests
     [Theory]
     [InlineData("draft")]
     [InlineData("approval")]
+    public async Task IsolatedCheckoutGroundingIgnoresRootEditsAndRefusesDirtyRetainedApproval(string scenario)
+    {
+        using var fixture = new PlanningFixture(scenario, realGit: true);
+        var rootSource = Path.Combine(fixture.RepositoryPath, "Source.cs");
+        File.WriteAllText(rootSource, "unrelated root edit");
+
+        var result = await fixture.RunAsync();
+        Assert.True(result.Succeeded, result.StageResult.Failure?.Reason ?? fixture.Escalation?.Reason);
+        Assert.Equal(1, fixture.Executions);
+        Assert.Equal("unrelated root edit", File.ReadAllText(rootSource));
+        if (scenario == "draft") return;
+        var approval = Assert.IsType<PlanningApproval>(result.StageResult.PlanningApproval);
+        var current = await fixture.CaptureAsync();
+        Assert.True(PlanningEvidence.ApprovalStillCurrent(approval, current, fixture.Comments));
+        Assert.Equal("unrelated root edit", File.ReadAllText(rootSource));
+
+        // Leave the root clean so only the retained checkout can invalidate approval.
+        File.WriteAllText(rootSource, "original source");
+        var retainedSource = Path.Combine(fixture.WorktreePath, "Source.cs");
+        File.WriteAllText(retainedSource, "relevant retained checkout edit");
+        var exception = await Assert.ThrowsAsync<AgentStageInputException>(() => fixture.CaptureAsync());
+        Assert.Contains("clean isolated Planning checkout", exception.Message, StringComparison.Ordinal);
+        Assert.Equal("relevant retained checkout edit", File.ReadAllText(retainedSource));
+        Assert.Equal("original source", File.ReadAllText(rootSource));
+        Assert.True(File.Exists(fixture.Sentinel));
+    }
+
+    [Theory]
+    [InlineData("draft")]
+    [InlineData("approval")]
     [InlineData("repair")]
     [InlineData("question")]
     [InlineData("invalid-question")]
@@ -174,6 +204,9 @@ public sealed class PlanningExecutionTests
         private readonly HostPaths paths;
         private readonly ProjectConfig project;
         private readonly RecordingProcessRunner runner;
+        private readonly bool realGit;
+        internal string RepositoryPath { get; }
+        internal string WorktreePath { get; }
         internal BeadWorkflowState Initial { get; }
         internal BeadWorkflowState State { get; private set; }
         internal string? Owner { get; private set; } = "nightweaver:demo";
@@ -185,16 +218,28 @@ public sealed class PlanningExecutionTests
         internal string Sentinel { get; }
         private string DefaultSha => new(scenario == "grounding-change" && Executions > 0 ? 'b' : 'a', 40);
 
-        internal PlanningFixture(string scenario)
+        internal PlanningFixture(string scenario, bool realGit = false)
         {
             this.scenario = scenario;
+            this.realGit = realGit;
             paths = new(temp.Path);
+            RepositoryPath = temp.CreateDirectory("repository");
+            WorktreePath = Path.Combine(temp.Path, "planning");
+            if (realGit)
+            {
+                GitFixture.RunGit(RepositoryPath, ["init", "-b", "main"]);
+                temp.WriteFile("repository/Source.cs", "original source");
+                GitFixture.RunGit(RepositoryPath, ["add", "Source.cs"]);
+                GitFixture.RunGit(RepositoryPath, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "Initial source"]);
+                GitFixture.RunGit(RepositoryPath, ["worktree", "add", "--detach", WorktreePath, "HEAD"]);
+            }
+            else Directory.CreateDirectory(WorktreePath);
             Sentinel = temp.WriteFile("retained/ignored-cache", "preserve this work");
             Initial = new("product", "feature", "in_progress", scenario == "draft" ? "stage:plan" : "stage:plan-challenge",
                 false, false, false, scenario == "exhausted" ? 3 : scenario == "overflow" ? int.MaxValue : 0) { ReadyForPlanning = true };
             State = Initial;
             var settings = new AgentSettings(AgentCli.Codex, null, "low", 1);
-            project = new(ProjectSlug.Parse("demo"), "config.json", new(temp.Path, "main"), new(1, 1, 1), new(3, 2),
+            project = new(ProjectSlug.Parse("demo"), "config.json", new(RepositoryPath, "main"), new(1, 1, 1), new(3, 2),
                 settings, new(AgentRoles.All.ToDictionary(role => role, _ => settings)));
             runner = new(RespondAsync);
         }
@@ -213,7 +258,10 @@ public sealed class PlanningExecutionTests
             var args = request.Arguments.ToList();
             string Value(string option) => args[args.IndexOf(option) + 1];
             if (request.FileName == "git")
+            {
+                if (realGit) return new SystemProcessRunner().RunAsync(request, token);
                 output = args[0] switch { "status" => "", "branch" => "", "rev-parse" => DefaultSha, _ => throw new InvalidOperationException() };
+            }
             else if (args.Contains("comments"))
             {
                 if (args.Contains("add"))
@@ -243,8 +291,10 @@ public sealed class PlanningExecutionTests
         {
             var role = scenario == "draft" ? AgentRole.Planner : AgentRole.PlanChallenger;
             var stages = new AgentStageCoordinator(runner,
-                provision: (_, _, _, _, _, _) => Task.FromResult(new ProvisionedWorktree(temp.Path, new string('a', 40))),
-                prepare: (_, _, _, _, _, _) => Task.FromResult(new PreparedAgentInvocation("fixture", [], temp.Path, "prompt",
+                provision: async (_, _, _, _, _, token) => new ProvisionedWorktree(WorktreePath,
+                    realGit ? (await runner.RunAsync(GitCommand.Create(["rev-parse", "HEAD"], WorktreePath), token)).StandardOutput.Trim()
+                        : new string('a', 40)),
+                prepare: (_, _, _, _, _, _) => Task.FromResult(new PreparedAgentInvocation("fixture", [], WorktreePath, "prompt",
                     new Dictionary<string, string>(), TimeSpan.FromSeconds(10), "turn", temp.Path, temp.Path + "/log")),
                 execute: (_, _, invocation, _) =>
                 {
@@ -267,10 +317,7 @@ public sealed class PlanningExecutionTests
                 });
             if (scenario != "draft")
             {
-                var session = new AgentStageSession(paths, project, new(temp.Path, "main"), "product", role,
-                    WorktreePurpose.Planning, new(temp.Path, new string('a', 40)), Initial, Owner,
-                    new("product", "feature", Initial.Stage, Initial.RepairCycles), false);
-                var grounding = await new PlanningEvidence(runner).CaptureAsync(session, TestContext.Current.CancellationToken);
+                var grounding = await CaptureAsync();
                 Comments.Add(Comment("1", Plan(grounding)));
             }
             var classifier = scenario switch
@@ -289,9 +336,14 @@ public sealed class PlanningExecutionTests
                     Escalation = request;
                     return Task.FromResult(new NeedsHumanEscalationResult(true, true, true, true, []));
                 });
-            return await coordinator.RunAsync(paths, project, new(temp.Path, "main"), "product", role,
+            return await coordinator.RunAsync(paths, project, new(RepositoryPath, "main"), "product", role,
                 "nightweaver:demo", TestContext.Current.CancellationToken);
         }
+
+        internal Task<PlanningGrounding> CaptureAsync() => new PlanningEvidence(runner).CaptureAsync(
+            new(paths, project, new(RepositoryPath, "main"), "product", AgentRole.PlanChallenger,
+                WorktreePurpose.Planning, new(WorktreePath, new string('a', 40)), Initial, Owner,
+                new("product", "feature", Initial.Stage, Initial.RepairCycles), false), TestContext.Current.CancellationToken);
 
         public void Dispose() => temp.Dispose();
     }

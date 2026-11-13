@@ -32,9 +32,9 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
 
     internal async Task<PlanningGrounding> CaptureAsync(AgentStageSession session, CancellationToken token)
     {
-        var status = await runner.RunAsync(GitCommand.Create(["status", "--porcelain"], session.Repository.Path), token);
+        var status = await runner.RunAsync(GitCommand.Create(["status", "--porcelain"], session.Worktree.Path), token);
         if (status.ExitCode != 0 || status.StandardOutput.Length != 0)
-            throw new AgentStageInputException("Planning grounding requires an observable clean Target Repository checkout; preserve changes for inspection.");
+            throw new AgentStageInputException("Planning grounding requires an observable clean isolated Planning checkout; preserve changes for inspection.");
         var inventory = await reader.ReadSnapshotAsync(session.Repository, token);
         var bead = inventory.ById[session.BeadId];
         var comments = await reader.ReadCommentsAsync(session.Repository, session.BeadId, token);
