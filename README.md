@@ -12,9 +12,17 @@ Nightweaver is a discovery-driven software factory for Beads (`bd`) work. It is 
 
 Invocation temp-directory reservation and runtime native log, status, lock, diagnostic, and snapshot file boundaries support paths beyond the legacy Windows 248/260-character limits through extended-length native paths. Canonical runtime identities, reparse-point rejection, directory pins and exclusive reservation still apply; child `TEMP`, `TMP` and `TMPDIR` retain the ordinary invocation-scoped path. Filesystem component limits and the Agent CLI's own path restrictions still apply.
 
-QA stops its test services and verifies source/HEAD integrity and clean nonignored Git status. Generated ignored build/test output inside the managed worktree and evidence in invocation tmp remain available across stages; QA reports them as deferred housekeeping. Their pending disposal alone does not invalidate passing QA or require an agent-written deletion sweep. After verified merge, the Orchestrator removes the validated completed worktree and Bead tmp while retaining invocation logs. Completion cleanup failures remain explicit in finalization diagnostics; the startup sweep revalidates completed environments for recovery. Paused environments and inherited files remain protected. This does not yet provide a recurring janitor or a dedicated cleanup-status view.
+QA stops its test services and verifies source/HEAD integrity and clean nonignored Git status. Generated ignored build/test output inside the managed worktree and evidence in invocation tmp remain available across stages; QA reports them as deferred housekeeping. Their pending disposal alone does not invalidate passing QA or require an agent-written deletion sweep. After verified merge, the Orchestrator removes the validated completed worktree and Bead tmp while retaining invocation logs. Before local removal, completion persists an exact cleanup obligation under `run/<project>/cleanup/`. Failures remain explicit in that record and finalization diagnostics; the startup sweep uses the same disposal implementation and revalidates completed environments for recovery. Paused environments and inherited files remain protected. This does not yet provide a recurring janitor or a dedicated cleanup-status view.
 
 The integration tests use real Git and bd against disposable repositories and use native fake Agent apphosts for live execution. They require those tools and fail with a prerequisite error if a required tool is missing; the real-tool gate does not silently skip. A dry run does not need an Agent CLI, `gh`, a network connection, an `origin` remote, or credentials.
+
+## Durable completion cleanup
+
+Versioned per-Bead JSON records in `<nightweaver-root>/run/<project>/cleanup/` bind the deployment root, Project, Target Repository/common directory, purpose, original worktree registration, exact worktree/tmp paths and available verified merge evidence. They record attempt count/time, per-resource confirmed absence, bounded failure reason and resolution time independently of successful Delivery. The latest 100 resolved records are retained; unresolved records are never evicted.
+
+Completion and startup use one conservative local disposal implementation under repository exclusion, after owned processes settle. Every attempt rereads completion/pause/claim state and validates fresh filesystem and Git identity. Worktree resolution requires both directory and registration absence. Changed source/nonignored files, changed HEAD, foreign or active ownership, links, overlaps and uncertain identities retain resources. Startup recovers canonical completed environments missed between closure and enqueue; partial removal and lost responses recover from observation without blindly replaying deletion. Logs and external evidence are retained. Existing one-shot completion branch deletion remains separate; startup adds no branch sweeper.
+
+Local failures become cleanup `NeedsAttention`, preserving the Bead's status, stage, repair budget, claims and existing pause labels. Historical pauses are never automatically cleared. Malformed, inaccessible, old-root or mismatched records and interrupted atomic-write evidence are preserved and make the store unavailable; required store/shared-root failures stop startup. Inspect the exact record/path and diagnostic before repairing its storage or ownership problem. A copied deployment's old-root records do not authorize deletion at either location. There is no cleanup Retry command, recurring retry scheduler or dedicated console status view in this slice; those are subsequent work. Restart reconciliation revalidates current safety, and pending housekeeping alone never calls for rerunning successful QA. `--dry-run` writes no cleanup state.
 
 ## Build, test, and publish
 
@@ -22,7 +30,7 @@ Run these commands from the repository root:
 
 ```powershell
 dotnet build Nightweaver.slnx -warnaserror
-dotnet test --solution Nightweaver.slnx --minimum-expected-tests 644
+dotnet test --solution Nightweaver.slnx --minimum-expected-tests 714
 dotnet publish src/Nightweaver/Nightweaver.csproj -c Release --self-contained false -p:UseAppHost=true -o 'C:\Tools\Nightweaver'
 ```
 
