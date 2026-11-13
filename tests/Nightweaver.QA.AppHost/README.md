@@ -100,6 +100,8 @@ Run `node explorer-qa.mjs` against a fresh isolated stack's discovered direct en
 
 Representative Explorer evidence: [desktop](../../docs/acceptance/explorer/large-1440.png), [375px](../../docs/acceptance/explorer/large-375.png), [720 CSS px](../../docs/acceptance/explorer/large-720.png), [empty](../../docs/acceptance/explorer/empty.png) and [unavailable](../../docs/acceptance/explorer/error.png).
 
+Explorer focus checks also use 16 results to exercise keyboard Next/Previous onto both boundaries, then refresh down to one/zero results and an unavailable tracker. Focus moves to an enabled direction or the visible result range when neither direction is available. During loading the range holds focus; a response never restores pagination focus after the user moves elsewhere. The script asserts visible focus outlines and captures [boundary focus evidence](../../docs/acceptance/explorer/boundary-focus.png). Set `NIGHTWEAVER_QA_OUTPUT` to a separate directory to preserve evidence from earlier runs.
+
 ## Cleanup
 
 Always stop the same AppHost in a cleanup/finally step, including after a failed browser check:

@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 
 const url = process.env.NIGHTWEAVER_QA_URL;
 if (!url) throw new Error('Set NIGHTWEAVER_QA_URL from aspire describe.');
-const output = fileURLToPath(new URL('../../TestResults/explorer/', import.meta.url));
+const output = process.env.NIGHTWEAVER_QA_OUTPUT ?? fileURLToPath(new URL('../../TestResults/explorer/', import.meta.url));
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const errors = [];
@@ -16,6 +16,8 @@ let fail = false;
 let delay = false;
 let posts = 0;
 let created;
+let holdResponse;
+let releaseResponse;
 const queries = [];
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -29,6 +31,7 @@ try {
     const query = new URL(route.request().url()).searchParams;
     queries.push(query);
     assert.deepEqual([...query.keys()].sort(), query.has('q') ? ['q', 'view'] : ['view']);
+    if (holdResponse) await holdResponse;
     if (fail) return route.fulfill({ status: 503, json: { detail: 'Tracker unavailable' } });
     const response = data.filter(item => `${item.id} ${item.title}`.toLowerCase().includes((query.get('q') ?? '').toLowerCase()));
     if (delay && query.get('q') === 'slow') await new Promise(resolve => setTimeout(resolve, 600));
@@ -39,6 +42,11 @@ try {
   const rows = page.locator('#beads-table-body tr');
   const waitRange = text => page.waitForFunction(text => document.querySelector('#beads-range').textContent === text, text);
   const refresh = () => page.locator('#beads-retry').evaluate(button => button.click());
+  const assertFocus = async selector => {
+    assert.equal(await page.locator(selector).evaluate(element => element === document.activeElement), true);
+    assert.equal(await page.locator(selector).isVisible(), true);
+    assert.equal(await page.locator(selector).evaluate(element => getComputedStyle(element).outlineStyle), 'solid');
+  };
   const filter = async view => {
     await page.locator(`[data-view="${view}"]`).click();
     await waitRange(`Showing 1–15 of ${data.length} beads`);
@@ -58,6 +66,50 @@ try {
     await waitRange('Showing 16–30 of 211 beads');
     assert.equal(await page.locator('#beads-next-page').evaluate(button => button === document.activeElement), true);
   }
+  // Boundary navigation must transfer focus before the activated button becomes disabled.
+  data = items.slice(0, 16);
+  await filter('ready');
+  await page.locator('#beads-next-page').focus();
+  await page.keyboard.press('Enter');
+  await waitRange('Showing 16–16 of 16 beads');
+  await assertFocus('#beads-prev-page');
+  await page.keyboard.press('Enter');
+  await waitRange('Showing 1–15 of 16 beads');
+  await assertFocus('#beads-next-page');
+
+  // Refresh to one/zero pages or an error keeps a visible, stable range focus target.
+  for (const result of ['one', 'zero', 'error']) {
+    data = items.slice(0, 16);
+    await refresh();
+    await waitRange('Showing 1–15 of 16 beads');
+    await page.locator('#beads-next-page').focus();
+    await page.keyboard.press('Enter');
+    await waitRange('Showing 16–16 of 16 beads');
+    await assertFocus('#beads-prev-page');
+    data = result === 'one' ? items.slice(0, 1) : [];
+    fail = result === 'error';
+    await refresh();
+    await waitRange(result === 'error' ? 'Results unavailable' : result === 'one' ? 'Showing 1–1 of 1 beads' : 'Showing 0–0 of 0 beads');
+    await assertFocus('#beads-range');
+    assert.equal(await page.locator('#beads-prev-page').isDisabled(), true);
+    assert.equal(await page.locator('#beads-next-page').isDisabled(), true);
+    if (result === 'one') await page.locator('#beads-pagination').screenshot({ path: `${output}/boundary-focus.png` });
+    fail = false;
+  }
+  // A pending response must not steal focus after the user leaves pagination.
+  data = items;
+  await filter('ready');
+  await page.locator('#beads-next-page').focus();
+  await page.keyboard.press('ArrowRight');
+  holdResponse = new Promise(resolve => { releaseResponse = resolve; });
+  await refresh();
+  await waitRange('Loading results…');
+  await assertFocus('#beads-range');
+  await page.locator('#beads-search').focus();
+  releaseResponse();
+  holdResponse = null;
+  await waitRange('Showing 1–15 of 211 beads');
+  await assertFocus('#beads-search');
   await page.locator('#beads-search').fill('needle');
   await waitRange('Showing 1–1 of 1 beads');
   assert.match(await rows.first().textContent(), /qa-210/);

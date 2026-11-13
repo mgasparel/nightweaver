@@ -1049,7 +1049,14 @@ function beadLinkCell(value, className, beadId) {
   return cell;
 }
 
+function restoreExplorerPageFocus(control) {
+  const target = !control.disabled ? control
+    : [previousPage, nextPage].find(button => !button.disabled) ?? beadsRange;
+  target.focus({ preventScroll: true });
+}
+
 function renderBeads(beads) {
+  const focusedControl = [previousPage, nextPage].includes(document.activeElement) ? document.activeElement : null;
   const pages = Math.max(1, Math.ceil(beads.length / EXPLORER_PAGE_SIZE));
   explorerPage = Math.max(1, Math.min(explorerPage, pages));
   const start = (explorerPage - 1) * EXPLORER_PAGE_SIZE;
@@ -1083,6 +1090,7 @@ function renderBeads(beads) {
     rows.append(row);
   }
   beadsBody.replaceChildren(rows);
+  if (focusedControl) restoreExplorerPageFocus(focusedControl);
 }
 
 async function loadBeads() {
@@ -1103,6 +1111,8 @@ async function loadBeads() {
   beadsRange.textContent = "Loading results…";
   beadsPage.textContent = "";
   setExplorerMessage({ loading: true });
+  // Keep focus visible during the request, with a stable fallback if both directions disappear.
+  if (focusedPageControl) beadsRange.focus({ preventScroll: true });
 
   const parameters = new URLSearchParams();
   parameters.set("view", selectedView);
@@ -1147,8 +1157,9 @@ async function loadBeads() {
   } finally {
     if (generation === requestGeneration) {
       activeRequest = null;
-      if (focusedPageControl && document.activeElement === document.body && !focusedPageControl.disabled) {
-        focusedPageControl.focus({ preventScroll: true });
+      // A user who moved elsewhere during the request keeps their chosen focus.
+      if (focusedPageControl && document.activeElement === beadsRange) {
+        restoreExplorerPageFocus(focusedPageControl);
       }
     }
   }
