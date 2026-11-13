@@ -94,6 +94,12 @@ The Playwright script verifies the live factory snapshot, opens the gated invoca
 
 Run scripts from this directory so `playwright` resolves from its local installation. The `web-browser-logs` dashboard resource captures logs from its own tracked browser session, not arbitrary Playwright sessions.
 
+## Beads Explorer QA
+
+Run `node explorer-qa.mjs` against a fresh isolated stack's discovered direct endpoint. Deterministic 211-Bead list responses check Ready as the initial view, 15-row bounds for every filter, range/page announcements, keyboard focus across navigation and refresh, full-dataset search, stale-request cancellation, empty/end-page clamping and responsive overflow. Real same-origin intake writes to the disposable tracker and real Workspace navigation verify created-ID discovery on a later Ready page, successful creation followed by a failed refresh and Retry without reposting, and Show in All when absent from Ready. No page/size API parameters are used. Screenshots under `TestResults/explorer` cover the large tracker at 1440×900, 375px and 720 CSS px plus empty and unavailable states. Always stop the same AppHost in `finally`.
+
+Representative Explorer evidence: [desktop](../../docs/acceptance/explorer/large-1440.png), [375px](../../docs/acceptance/explorer/large-375.png), [720 CSS px](../../docs/acceptance/explorer/large-720.png), [empty](../../docs/acceptance/explorer/empty.png) and [unavailable](../../docs/acceptance/explorer/error.png).
+
 ## Cleanup
 
 Always stop the same AppHost in a cleanup/finally step, including after a failed browser check:

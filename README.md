@@ -129,6 +129,12 @@ The default local address is `http://localhost:5000`; set `ASPNETCORE_URLS` or p
 
 The web application serves the static Nightweaver console at `/`, with `/index.html` available directly. Its responsive shell links the Catch-Up Digest, Human Attention Desk, Factory Execution Bays, and Beads Explorer. The Beads Explorer, Attention Desk, and Full Bead Workspace read the configured Target Repository; factory bays show observations published by the actual continuous runtime. The Catch-Up Digest groups completed and open activity into Lineage Threads and Standalone Activity. Select an issue or an Attention Desk workspace link to open its full Bead workspace. The page uses local HTML, CSS, JavaScript, and vendored Markdown libraries from `wwwroot` beside the executable, so build and publish output can run independently of the source checkout. Static files remain restricted to that web root, unknown paths return 404, and there is no fallback route. `GET /health` continues to report host liveness after configuration validation without invoking Git or bd.
 
+### Beads Explorer
+
+Fresh visits select Ready. Ready uses the tracker's readiness view; it does not authorize dispatch. Active means stored in progress and does not indicate a live factory slot. Ready, Active, Blocked, All and Closed each display at most 15 Beads per page, with result ranges and Previous/Next controls. Search covers the complete matching tracker view, including undisplayed pages. Search and filter changes reset to page one; refresh clamps the current page if results shrink.
+
+Intake saves an open, unassigned Product in backlog without starting Planning. The console locates its Ready page or offers Show in All. If the list refresh fails after creation, the success ID stays visible and Retry refreshes the list without submitting the Product again.
+
 ### Factory telemetry contract
 
 The continuous CLI runtime is the sole writer of `<Nightweaver:Root>/telemetry/<project>/factory.json`; the standalone Web host reads this snapshot and the selected invocation log. Snapshot schema version 1 identifies the Project, canonical target repository, runtime ID, monotonic revision, observation time, runtime state, and configured Delivery/Merger capacities with stable slot IDs. Each slot reports only observed lifecycle and invocation fields. A missing, corrupt, oversized, or mismatched snapshot is unavailable; a heartbeat older than 10 seconds is stale; a graceful shutdown is stopped. These states do not imply healthy idle slots.

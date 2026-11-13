@@ -991,7 +991,14 @@ const createdMessage = document.querySelector("#beads-create-success");
 const createdMessageText = document.querySelector("#beads-create-success-text");
 const showCreatedButton = document.querySelector("#beads-show-created");
 
-let selectedView = "all";
+const EXPLORER_PAGE_SIZE = 15;
+const beadsRange = document.querySelector("#beads-range");
+const beadsPage = document.querySelector("#beads-page");
+const previousPage = document.querySelector("#beads-prev-page");
+const nextPage = document.querySelector("#beads-next-page");
+let selectedView = "ready";
+let explorerPage = 1;
+let explorerResults = [];
 let requestGeneration = 0;
 let activeRequest = null;
 let searchTimer = null;
@@ -1006,8 +1013,9 @@ function setExplorerMessage({ loading = false, empty = false, noMatches = false,
   beadsError.hidden = !error;
   beadsLive.textContent = loading ? "Loading beads."
     : error ? "The Beads tracker is unavailable."
-      : empty ? beadsEmpty.textContent
-        : noMatches ? "No beads match your search." : "Beads list updated.";
+      : empty ? `${beadsEmpty.textContent} ${beadsRange.textContent}. ${beadsPage.textContent}.`
+        : noMatches ? `No beads match your search. ${beadsRange.textContent}`
+          : `${beadsRange.textContent}. ${beadsPage.textContent}.`;
 }
 
 function setCreatedMessage(message, showInAll = false) {
@@ -1042,8 +1050,15 @@ function beadLinkCell(value, className, beadId) {
 }
 
 function renderBeads(beads) {
+  const pages = Math.max(1, Math.ceil(beads.length / EXPLORER_PAGE_SIZE));
+  explorerPage = Math.max(1, Math.min(explorerPage, pages));
+  const start = (explorerPage - 1) * EXPLORER_PAGE_SIZE;
+  beadsRange.textContent = `Showing ${beads.length ? start + 1 : 0}–${Math.min(start + EXPLORER_PAGE_SIZE, beads.length)} of ${beads.length} beads`;
+  beadsPage.textContent = `Page ${explorerPage} of ${pages}`;
+  previousPage.disabled = explorerPage === 1;
+  nextPage.disabled = explorerPage === pages;
   const rows = document.createDocumentFragment();
-  for (const bead of beads) {
+  for (const bead of beads.slice(start, start + EXPLORER_PAGE_SIZE)) {
     const row = document.createElement("tr");
     row.append(
       beadLinkCell(bead.id, "bead-id", bead.id),
@@ -1080,7 +1095,13 @@ async function loadBeads() {
   const generation = ++requestGeneration;
   const controller = new AbortController();
   activeRequest = controller;
+  const focusedPageControl = [previousPage, nextPage].includes(document.activeElement) ? document.activeElement : null;
+  explorerResults = [];
   beadsBody.replaceChildren();
+  previousPage.disabled = true;
+  nextPage.disabled = true;
+  beadsRange.textContent = "Loading results…";
+  beadsPage.textContent = "";
   setExplorerMessage({ loading: true });
 
   const parameters = new URLSearchParams();
@@ -1097,14 +1118,17 @@ async function loadBeads() {
     const beads = await response.json();
     if (generation !== requestGeneration) return;
     if (!Array.isArray(beads)) throw new Error("Beads response was invalid.");
-    renderBeads(beads);
+    explorerResults = beads;
     if (pendingCreatedCheck && selectedView === "ready" && query.length === 0) {
-      const found = beads.some(bead => bead.id === pendingCreatedCheck);
+      const index = beads.findIndex(bead => bead.id === pendingCreatedCheck);
+      const found = index >= 0;
+      if (found) explorerPage = Math.floor(index / EXPLORER_PAGE_SIZE) + 1;
       setCreatedMessage(found
         ? `Created ${pendingCreatedCheck}. It is in the Ready backlog.`
         : `Created ${pendingCreatedCheck}. Its state may have changed since creation.`, !found);
       pendingCreatedCheck = null;
     }
+    renderBeads(beads);
     if (beads.length === 0) {
       beadsEmpty.textContent = selectedView === "all" ? "No beads are in the tracker yet." : `No beads are in the ${selectedView} view.`;
       setExplorerMessage({ empty: query.length === 0, noMatches: query.length > 0 });
@@ -1114,20 +1138,33 @@ async function loadBeads() {
   } catch (error) {
     if (error?.name === "AbortError" || generation !== requestGeneration) return;
     beadsBody.replaceChildren();
+    beadsRange.textContent = "Results unavailable";
+    beadsPage.textContent = "";
     setExplorerMessage({ error: true });
     if (pendingCreatedCheck) {
       setCreatedMessage(`Created ${pendingCreatedCheck}. The Ready list could not be refreshed; use Retry to check its current state.`);
     }
   } finally {
-    if (generation === requestGeneration) activeRequest = null;
+    if (generation === requestGeneration) {
+      activeRequest = null;
+      if (focusedPageControl && document.activeElement === document.body && !focusedPageControl.disabled) {
+        focusedPageControl.focus({ preventScroll: true });
+      }
+    }
   }
 }
 
 function queueSearch() {
+  explorerPage = 1;
   if (searchTimer !== null) window.clearTimeout(searchTimer);
   activeRequest?.abort();
   requestGeneration += 1;
   beadsBody.replaceChildren();
+  explorerResults = [];
+  previousPage.disabled = true;
+  nextPage.disabled = true;
+  beadsRange.textContent = "Loading results…";
+  beadsPage.textContent = "";
   setExplorerMessage({ loading: true });
   searchTimer = window.setTimeout(() => {
     searchTimer = null;
@@ -1140,14 +1177,23 @@ if (beadsSearch && beadsBody && beadFilters.length > 0) {
   for (const button of beadFilters) {
     button.addEventListener("click", () => {
       selectedView = button.dataset.view;
+      explorerPage = 1;
       updateFilterControls();
       void loadBeads();
     });
   }
   retryButton?.addEventListener("click", () => void loadBeads());
+  for (const [button, direction] of [[previousPage, -1], [nextPage, 1]]) {
+    button?.addEventListener("click", () => {
+      explorerPage += direction;
+      renderBeads(explorerResults);
+      setExplorerMessage({});
+    });
+  }
   showCreatedButton?.addEventListener("click", () => {
     if (!createdBeadId) return;
     selectedView = "all";
+    explorerPage = 1;
     updateFilterControls();
     beadsSearch.value = createdBeadId;
     pendingCreatedCheck = null;
@@ -1284,6 +1330,7 @@ if (intakeTrigger && intakeDialog instanceof HTMLDialogElement && intakeForm ins
         setCreatedMessage(`Created ${id}. Checking the Ready backlog.`);
         if (beadsSearch && beadsBody && beadFilters.length > 0) {
           selectedView = "ready";
+          explorerPage = 1;
           beadsSearch.value = "";
           updateFilterControls();
           void loadBeads();

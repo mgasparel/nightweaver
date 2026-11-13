@@ -1286,6 +1286,33 @@ h3 {
   font-size: 0.85rem;
 }
 
+.explorer-pagination,
+.explorer-page-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.explorer-pagination {
+  justify-content: space-between;
+  margin-top: 1rem;
+  color: var(--color-secondary);
+  font-size: 0.9375rem;
+}
+
+.explorer-page-controls > span {
+  margin-right: 0.25rem;
+}
+
+.explorer-pagination button:disabled {
+  opacity: 0.5;
+  cursor: default;
+  border-color: var(--color-border);
+  color: var(--color-muted);
+}
+
 .explorer-message {
   margin-top: 1rem;
   padding: 0.9rem 1rem;
