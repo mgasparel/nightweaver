@@ -2038,64 +2038,121 @@ function factoryText(tag, className, value) {
   return node;
 }
 
-function renderFactorySlot(slot, runtimeId, poolName) {
+let renderedFactoryRuntime = null;
+let retainedFactorySnapshot = null;
+let lastFactoryAvailability = null;
+
+function factoryTime(value) {
+  return value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : "Unavailable";
+}
+
+function appendFactoryInvocation(card, slot, runtimeId, poolName) {
+  if (!slot.invocation) return;
+  const open = factoryText("button", "secondary-action", slot.status === "running" ? "Open live invocation" : "Open retained invocation");
+  open.type = "button";
+  open.dataset.openTelemetrySlot = slot.slot_id;
+  open.dataset.invocationId = slot.invocation.invocation_id;
+  open.addEventListener("click", () => openTelemetry(runtimeId, poolName.toLowerCase(), slot));
+  card.append(open);
+}
+
+function renderFactorySlot(slot, runtimeId, poolName, availability) {
   const card = document.createElement("article");
   card.className = "factory-slot";
   card.dataset.status = slot.status;
-  card.append(factoryText("h4", "", poolName + " " + slot.slot_id));
-  card.append(factoryText("p", "", "Observed state: " + slot.status));
+  card.dataset.slotId = slot.slot_id;
+  const retained = availability !== "live";
+  if (slot.status === "idle") {
+    card.classList.add("factory-slot-idle");
+    card.append(factoryText("p", "", slot.slot_id + " · ◌ Idle — "
+      + (retained ? "Last observed idle" : "Available for admission")));
+    appendFactoryInvocation(card, slot, runtimeId, poolName);
+    return card;
+  }
+  const states = { running: "● Running", preparing: "◐ Preparing", reserved: "◐ Reserved", settling: "◐ Settling",
+    failed: "✕ Failed", timed_out: "✕ Timed Out", paused: "⏸ Paused", completed: "✓ Completed" };
+  const outcome = { failed: "✕ Failed", timed_out: "✕ Timed Out", launch_failed: "✕ Launch Failed",
+    launch_denied: "✕ Launch Denied", preparation_failed: "✕ Preparation Failed" }[slot.invocation?.status];
+  if (outcome) card.dataset.outcome = slot.invocation.status;
+  const heading = factoryText("div", "slot-heading", "");
+  heading.append(factoryText("span", "slot-identifier", poolName + " · " + slot.slot_id),
+    factoryText("span", "slot-state", (retained ? "⚠ Last observed · " : "")
+      + (states[slot.status] ?? "— " + (slot.status ?? "Unavailable")) + (outcome ? " · " + outcome : "")));
+  card.append(heading);
+  const title = factoryText("h4", "slot-bead", "");
+  if (slot.bead_id) {
+    const link = factoryText("a", "", slot.bead_id);
+    link.href = "#bead/" + encodeURIComponent(slot.bead_id);
+    link.dataset.beadWorkspaceLink = "true";
+    title.append(link);
+  } else title.textContent = "Bead unavailable";
+  card.append(title, factoryText("p", "slot-activity", (slot.role ?? "Role unavailable") + " · " + (slot.stage ?? "Stage unavailable")));
+  card.append(factoryText("p", "slot-timing", "Started: " + factoryTime(slot.invocation?.started_at)
+    + " · Deadline: " + factoryTime(slot.invocation?.deadline_at)));
+  const metrics = factoryText("p", "slot-metrics", "");
+  if (slot.repair_cycles != null || slot.max_repair_cycles != null)
+    metrics.append(factoryText("span", "slot-repairs", "Repairs: " + (slot.repair_cycles ?? "Unavailable") + " / " + (slot.max_repair_cycles ?? "Unavailable")));
+  if (slot.diff?.status === "available")
+    metrics.append(factoryText("span", "slot-diff", "+" + (slot.diff.added ?? "Unavailable") + " / −" + (slot.diff.deleted ?? "Unavailable")));
+  if (metrics.childElementCount) card.append(metrics);
+  const details = document.createElement("details");
+  details.className = "slot-diagnostics";
+  details.append(factoryText("summary", "", "Diagnostics"));
   const fields = [
-    ["Task", slot.bead_id ?? "Unknown"],
-    ["Stage", slot.stage ?? "Unknown"],
-    ["Role", slot.role ?? "Unknown"],
-    ["CLI", slot.invocation?.cli ?? "Unknown"],
-    ["Configured model", slot.invocation?.configured_model ?? "Unknown"],
-    ["Actual model", slot.invocation?.actual_model ?? "Unknown"],
-    ["Worktree", slot.worktree_path ?? "Unknown"],
-    ["Branch", slot.branch ?? "Unknown"],
-    ["Repair cycles", slot.repair_cycles == null || slot.max_repair_cycles == null
-      ? "Unknown" : slot.repair_cycles + " / " + slot.max_repair_cycles],
+    ["Invocation ID", slot.invocation?.invocation_id], ["CLI", slot.invocation?.cli],
+    ["Configured model", slot.invocation?.configured_model], ["Actual model", slot.invocation?.actual_model],
+    ["Branch", slot.branch], ["Worktree path", slot.worktree_path],
+    ["Invocation outcome", slot.invocation?.status],
     ["Diff", slot.diff?.status === "available"
-      ? "+" + (slot.diff.added ?? "?") + " / −" + (slot.diff.deleted ?? "?") + "; binary " + (slot.diff.binary ?? "?") + "; untracked " + (slot.diff.untracked ?? "?")
-      : "Unknown"]
+      ? "Binary: " + (slot.diff.binary ?? "Unavailable") + " · Untracked: " + (slot.diff.untracked ?? "Unavailable")
+      : "Unavailable"]
   ];
-  for (const [label, value] of fields) {
-    const line = document.createElement("p");
-    const strong = document.createElement("strong");
-    strong.textContent = label + ": ";
-    line.append(strong, document.createTextNode(value));
-    card.append(line);
-  }
-  if (slot.invocation) {
-    card.append(factoryText("p", "", "Invocation: " + slot.invocation.invocation_id));
-    const started = slot.invocation.started_at ? new Date(slot.invocation.started_at).toLocaleString() : "Unknown";
-    const deadline = slot.invocation.deadline_at ? new Date(slot.invocation.deadline_at).toLocaleString() : "Unknown";
-    card.append(factoryText("p", "", "Started: " + started + "; deadline: " + deadline));
-    const outcome = slot.invocation.status === "timed_out" ? "Timed out (verified)" : slot.invocation.status;
-    card.append(factoryText("p", "", "Invocation outcome: " + outcome));
-    const open = document.createElement("button");
-    open.type = "button";
-    open.className = "secondary-action";
-    open.dataset.openTelemetrySlot = slot.slot_id;
-    open.textContent = slot.status === "running" ? "Open live invocation" : "Open retained invocation";
-    open.addEventListener("click", () => openTelemetry(runtimeId, poolName.toLowerCase(), slot));
-    card.append(open);
-  }
+  const metadata = document.createElement("dl");
+  for (const [label, value] of fields)
+    metadata.append(factoryText("dt", "", label), factoryText("dd", "", value ?? "Unavailable"));
+  details.append(metadata);
+  card.append(details);
+  appendFactoryInvocation(card, slot, runtimeId, poolName);
   return card;
 }
 
 function renderFactory(snapshot, availability) {
-  const delivery = snapshot.delivery;
-  const merger = snapshot.merger;
-  deliveryPoolStatus.textContent = delivery.slots.filter(slot => slot.status !== "idle").length
-    + " observed occupied / " + delivery.capacity + " configured slots";
-  mergerPoolStatus.textContent = merger.slots.filter(slot => slot.status !== "idle").length
-    + " observed occupied / " + merger.capacity + " configured slot";
-  deliverySlots.replaceChildren(...delivery.slots.map(slot => renderFactorySlot(slot, snapshot.runtime_id, "Delivery")));
-  mergerSlots.replaceChildren(...merger.slots.map(slot => renderFactorySlot(slot, snapshot.runtime_id, "Merger")));
+  const sameRuntime = renderedFactoryRuntime === snapshot.runtime_id;
+  const active = document.activeElement;
+  const focusedCard = active?.closest(".factory-slot");
+  const openSlots = new Set(sameRuntime ? [...document.querySelectorAll(".slot-diagnostics[open]")]
+    .map(details => details.closest(".factory-slot").dataset.slotId) : []);
+  const focusSlot = focusedCard?.dataset.slotId;
+  const focusKind = active?.matches("summary") ? "summary" : active?.matches("a") ? "a" : "button";
+  const focusIdentity = active?.dataset.invocationId ?? active?.getAttribute("href");
+  for (const [pool, container, status, name] of [
+    [snapshot.delivery, deliverySlots, deliveryPoolStatus, "Delivery"],
+    [snapshot.merger, mergerSlots, mergerPoolStatus, "Merger"]
+  ]) {
+    const occupied = pool.slots.filter(slot => slot.status !== "idle").length;
+    const idle = pool.slots.filter(slot => slot.status === "idle").length;
+    status.textContent = (availability !== "live" ? "Last observed: " : "") + occupied + " of " + pool.capacity
+      + (pool.capacity === 1 ? " slot active" : " slots active") + " · "
+      + (pool.capacity === 0 ? "Pool disabled" : idle + " idle");
+    container.replaceChildren(...pool.slots.map(slot => {
+      const card = renderFactorySlot(slot, snapshot.runtime_id, name, availability);
+      const details = card.querySelector("details");
+      if (details) details.open = openSlots.has(slot.slot_id);
+      return card;
+    }));
+  }
+  if (focusedCard) {
+    const replacement = sameRuntime ? [...document.querySelectorAll(".factory-slot")]
+      .find(card => card.dataset.slotId === focusSlot)?.querySelector(focusKind) : null;
+    if (replacement && (focusKind === "summary" || (replacement.dataset.invocationId ?? replacement.getAttribute("href")) === focusIdentity))
+      replacement.focus({ preventScroll: true });
+    else document.querySelector("#factory-title").focus({ preventScroll: true });
+  }
+  renderedFactoryRuntime = snapshot.runtime_id;
+  lastFactoryAvailability = availability;
+  factoryStatus.dataset.state = availability;
   factoryStatus.textContent = availability + ": runtime " + snapshot.runtime_id + " · observed "
-    + (snapshot.observed_at ? new Date(snapshot.observed_at).toLocaleTimeString() : "Unknown")
-    + " · repository " + snapshot.target_repository;
+    + factoryTime(snapshot.observed_at) + " · repository " + snapshot.target_repository;
 }
 
 async function refreshFactory() {
@@ -2113,13 +2170,16 @@ async function refreshFactory() {
     if (generation !== factoryGeneration) return;
     if (result.snapshot) {
       const key = result.snapshot.runtime_id + ":" + result.snapshot.revision;
-      if (!factoryHasSnapshot || key !== lastFactoryVersion || result.availability !== "live")
+      if (!factoryHasSnapshot || key !== lastFactoryVersion || result.availability !== lastFactoryAvailability)
         renderFactory(result.snapshot, result.availability);
-      else factoryStatus.textContent = "live: runtime " + result.snapshot.runtime_id
-        + " · heartbeat " + new Date(result.snapshot.observed_at).toLocaleTimeString();
+      else factoryStatus.textContent = result.availability + ": runtime " + result.snapshot.runtime_id
+        + " · observed " + factoryTime(result.snapshot.observed_at)
+        + " · repository " + result.snapshot.target_repository;
+      retainedFactorySnapshot = result.snapshot;
       lastFactoryVersion = key;
       factoryHasSnapshot = true;
     } else {
+      if (retainedFactorySnapshot) renderFactory(retainedFactorySnapshot, result.availability === "live" ? "unavailable" : result.availability);
       factoryStatus.textContent = factoryHasSnapshot
         ? "Runtime observations are " + result.availability + "; showing the last validated snapshot."
         : "Runtime observations unavailable (" + (result.reason ?? "unknown") + ").";
@@ -2127,10 +2187,11 @@ async function refreshFactory() {
     }
   } catch (error) {
     if (error.name !== "AbortError") {
+      if (retainedFactorySnapshot) renderFactory(retainedFactorySnapshot, "disconnected");
       factoryStatus.textContent = factoryHasSnapshot
         ? "Runtime observations are disconnected; showing the last validated snapshot."
         : "Runtime observations are unavailable.";
-      factoryStatus.dataset.state = "unavailable";
+      factoryStatus.dataset.state = factoryHasSnapshot ? "disconnected" : "unavailable";
     }
   } finally {
     if (factoryRequest === controller) factoryRequest = null;
@@ -2184,7 +2245,7 @@ function openTelemetry(runtimeId, pool, slot) {
   invocationPause.disabled = false;
   invocationPause.textContent = "Pause follow";
   invocationLatest.disabled = false;
-  invocationTitle.textContent = (slot.role ?? "Unknown role") + " · " + (slot.bead_id ?? "Unknown task");
+  invocationTitle.textContent = (slot.role ?? "Retained invocation") + " · " + (slot.invocation.bead_id ?? slot.bead_id ?? "Unknown task");
   invocationStatus.textContent = "Connecting to " + pool + " " + slot.slot_id + " · invocation " + slot.invocation.invocation_id;
   invocationMetadata.replaceChildren();
   const values = [

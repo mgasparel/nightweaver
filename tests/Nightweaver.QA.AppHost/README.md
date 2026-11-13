@@ -49,6 +49,18 @@ Run `node digest-qa.mjs` against a fresh default fixture using the same discover
 
 Representative evidence: [desktop compact](../../docs/acceptance/digest/busy-desktop.png), [375px compact](../../docs/acceptance/digest/busy-375.png), [720px expanded](../../docs/acceptance/digest/expanded-720.png), [caught up](../../docs/acceptance/digest/caught-up-desktop.png), [empty](../../docs/acceptance/digest/empty-desktop.png), and [retained-data error](../../docs/acceptance/digest/error-desktop.png).
 
+## Execution bay QA
+
+Run `node factory-qa.mjs` against the discovered direct endpoint of a fresh isolated stack. The real host supplies the shell and initial runtime identity; deterministic Factory responses exercise busy, idle, disabled, preparing, failed/timed-out, paused, stale and disconnected observations. The script checks observed occupancy, unavailable metadata, Bead Workspace links, live/retained invocation query identities, changed two-second polling, disclosure/focus preservation and reset on runtime replacement. Configured model never supplies the actual model. A failed invocation remains prominent while its slot settles.
+
+Factory section and viewport screenshots under `TestResults/factory` cover 1440px, 375px and 720 CSS px, including long identifiers and deep Windows paths with diagnostics expanded. The script requires no page overflow or uncaught browser errors. Run `telemetry.mjs` on the same fresh stack for the native invocation stream smoke, then stop that exact AppHost in `finally`, including on failure. Factory fixtures do not authorize tracker actions or simulate native execution evidence.
+
+Representative execution bay evidence is retained under [docs/acceptance/factory](../../docs/acceptance/factory).
+
+The Release-shaped idle regression retains completed and failed invocations while clearing current Bead/role/stage/path/repair/diff metadata. It checks both changed running-to-idle polls and initial idle loads: compact idle occupancy, no diagnostic dump, surviving button focus, retained Bead identity and exact runtime/slot/invocation output. Idle retained actions are also exercised at 1440px, 375px and 720 CSS px. Set `NIGHTWEAVER_QA_OUTPUT` to a separate output directory to preserve screenshots from earlier runs.
+
+Retained idle evidence: [1440px](../../docs/acceptance/factory/idle-retained-1440.png), [375px](../../docs/acceptance/factory/idle-retained-375.png), and [720 CSS px](../../docs/acceptance/factory/idle-retained-720.png).
+
 ## Manual continuous-runtime pilot
 
 The native second-console-signal test waits for the resumed Delivery slot's capacity-release log before reading its persisted pause. This avoids repeated embedded-tracker subprocess reads during recovery while still checking the saved status, labels, retained worktree and foreign claim within the original two-minute recovery budget. Pilot tool cancellation kills and settles the child before returning; failures include runtime output in the test report.
