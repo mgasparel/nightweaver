@@ -181,7 +181,6 @@
     <section class="console-section attention-section" id="attention" aria-labelledby="attention-title">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Pinned human triage</p>
           <h2 id="attention-title">Human Attention Desk</h2>
         </div>
         <button class="secondary-action" id="attention-refresh" type="button">Refresh</button>
@@ -191,7 +190,8 @@
         <span id="attention-error-text">The Attention Desk is unavailable. Refresh to try again.</span>
         <button class="retry-button" id="attention-retry" type="button">Retry</button>
       </div>
-      <div class="attention-empty" id="attention-empty" hidden>No Beads are waiting for human guidance.</div>
+      <div class="attention-empty" id="attention-empty" hidden><span aria-hidden="true">✓</span><span class="sr-only">No Beads are waiting for human guidance.</span></div>
+      <button class="secondary-action attention-more-toggle" id="attention-show-all" type="button" aria-expanded="false" aria-controls="attention-cards" hidden>Show all paused Beads</button>
       <div class="attention-cards" id="attention-cards" aria-label="Beads paused for human attention"></div>
       <noscript><p class="attention-empty">Enable JavaScript to load paused Beads from the configured tracker.</p></noscript>
     </section>
@@ -200,7 +200,6 @@
       <header class="factory-heading">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Execution overview</p>
             <h2 id="factory-title" tabindex="-1">Factory Execution Bays</h2>
           </div>
         </div>
@@ -229,7 +228,6 @@
     <section class="console-section" id="beads" aria-labelledby="beads-title">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Issue inventory</p>
           <h2 id="beads-title">Beads Explorer</h2>
         </div>
       </div>

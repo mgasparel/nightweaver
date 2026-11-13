@@ -102,6 +102,12 @@ Representative Explorer evidence: [desktop](../../docs/acceptance/explorer/large
 
 Explorer focus checks also use 16 results to exercise keyboard Next/Previous onto both boundaries, then refresh down to one/zero results and an unavailable tracker. Focus moves to an enabled direction or the visible result range when neither direction is available. During loading the range holds focus; a response never restores pagination focus after the user moves elsewhere. The script asserts visible focus outlines and captures [boundary focus evidence](../../docs/acceptance/explorer/boundary-focus.png). Set `NIGHTWEAVER_QA_OUTPUT` to a separate directory to preserve evidence from earlier runs.
 
+## Integrated console polish QA
+
+Run `node console-qa.mjs --baseline` before implementation, or set `NIGHTWEAVER_QA_BASELINE` to the pre-change commit (for ns-1b1.6: `566899e1993469cc9f4ab624956093d5dc1746f2`). Baseline mode serves only the historical shell HTML/CSS/JavaScript from Git; the same isolated host supplies the APIs. Run `node console-qa.mjs` for the candidate. Both modes use identical four-paused-Bead and busy Delivery/Merger fixtures and capture desktop, 375px and 720 CSS px busy, long-context, stale/read-error and idle screenshots under `TestResults/console`. Candidate assertions cover two-card priority order/count, Show all/fewer, disclosures, drafts, focus on changed refresh/collapse, a delayed note action across refresh, the clear row and initial execution/Explorer visibility. The delayed note response is substituted to test rendering only; `workspace-qa.mjs` separately verifies real same-origin tracker mutations.
+
+Run the existing `digest-qa.mjs`, `explorer-qa.mjs`, `factory-qa.mjs`, `invocation-qa.mjs`, `telemetry.mjs`, `workspace-qa.mjs` and `planning-readiness-qa.mjs` for the complete acceptance matrix: large histories/inventory, real intake and Workspace actions, guarded readiness, diagnostics and native reconnect/output. Use a fresh isolated stack for mutation checks, and always stop the exact AppHost in `finally`, including after failed checks. Retained integrated evidence and the measured release gate are in [the console acceptance report](../../docs/acceptance/console-polish.md).
+
 ## Cleanup
 
 Always stop the same AppHost in a cleanup/finally step, including after a failed browser check:

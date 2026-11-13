@@ -34,6 +34,23 @@ const attentionEmpty = document.querySelector("#attention-empty");
 const attentionRefresh = document.querySelector("#attention-refresh");
 const attentionRetry = document.querySelector("#attention-retry");
 
+const attentionShowAll = document.querySelector("#attention-show-all");
+const ATTENTION_INITIAL_LIMIT = 2;
+let attentionExpanded = false;
+const attentionDisclosures = new Map();
+function attentionDisclosure(item, key, label, className) {
+  const details = document.createElement("details");
+  details.className = className;
+  const identity = `${item.beadId}:${key}`;
+  details.open = attentionDisclosures.get(identity) ?? false;
+  const summary = makeAttentionText("summary", "", label);
+  summary.dataset.attentionFocus = key;
+  details.append(summary);
+  details.addEventListener("toggle", () => {
+    if (details.isConnected) attentionDisclosures.set(identity, details.open);
+  });
+  return details;
+}
 let attentionItems = [];
 let attentionRequestGeneration = 0;
 let activeAttentionRequest = null;
@@ -115,7 +132,10 @@ function restoreAttentionFocus(state) {
   const card = cardById(state.beadId);
   const target = Array.from(card?.querySelectorAll("[data-attention-focus]") ?? [])
     .find(element => element.dataset.attentionFocus === state.focusKey);
-  if (!target || target.disabled) return;
+  if (!target || target.disabled) {
+    (attentionShowAll && !attentionShowAll.hidden ? attentionShowAll : attentionStatus)?.focus();
+    return;
+  }
   target.focus();
   if (target instanceof HTMLTextAreaElement && Number.isInteger(state.selectionStart)
     && Number.isInteger(state.selectionEnd)) {
@@ -128,8 +148,14 @@ function restoreAttentionFocus(state) {
 function renderAttention() {
   if (!attentionCards || !attentionEmpty) return;
   const focus = captureAttentionFocus();
+  for (const card of attentionCards.children) {
+    for (const details of card.querySelectorAll("details")) {
+      const key = details.querySelector("summary")?.dataset.attentionFocus;
+      if (key) attentionDisclosures.set(`${card.dataset.beadId}:${key}`, details.open);
+    }
+  }
   const fragment = document.createDocumentFragment();
-  for (const item of attentionItems) {
+  for (const item of (attentionExpanded ? attentionItems : attentionItems.slice(0, ATTENTION_INITIAL_LIMIT))) {
     const card = document.createElement("article");
     card.className = `surface attention-card attention-card-${item.kind}`;
     card.dataset.beadId = item.beadId;
@@ -140,7 +166,7 @@ function renderAttention() {
     const headingText = document.createElement("div");
     headingText.append(
       makeAttentionText("p", "eyebrow", item.kind === "product-decision-required"
-        ? "Product decision required" : item.kind === "needs-human" ? "Needs human" : "Invalid workflow"),
+        ? "⏸ Decision Needed" : item.kind === "needs-human" ? "! Needs Human" : "Invalid workflow"),
       makeAttentionText("h3", "attention-title", item.title)
     );
     const badge = makeAttentionText("span", "attention-kind", `P${item.priority}`);
@@ -150,38 +176,20 @@ function renderAttention() {
     workspaceLink.className = "attention-workspace-link";
     workspaceLink.href = `#bead/${encodeURIComponent(item.beadId)}`;
     workspaceLink.dataset.beadWorkspaceLink = "true";
+    workspaceLink.dataset.attentionFocus = "workspace";
     workspaceLink.textContent = "Open Full Bead Workspace";
     card.append(workspaceLink);
 
-    const metadata = document.createElement("dl");
-    metadata.className = "attention-metadata";
-    for (const [label, value] of [
-      ["Bead", item.beadId],
-      ["Type", item.type || "Unknown"],
-      ["Status", item.status || "Unknown"],
-      ["Stage", item.stage || "Unknown"],
-      ["Role", formatRole(item.fromRole)],
-      ["Repair cycles", Number.isInteger(item.repairCycles)
-        ? `${item.repairCycles} / ${item.maxRepairCycles}` : `Unknown / ${item.maxRepairCycles}`]
-    ]) {
-      const pair = document.createElement("div");
-      pair.className = "attention-meta-pair";
-      pair.append(makeAttentionText("dt", "", label), makeAttentionText("dd", "", value));
-      metadata.append(pair);
-    }
-    card.append(metadata, makeAttentionText("p", "attention-pause-time", formatPauseTime(item)));
-
-    if (item.kind === "product-decision-required") {
-      card.append(makeAttentionText("p", "attention-context-label", "Latest comment/context (legacy selection; no shared question schema)"));
-      card.append(makeAttentionText("p", "attention-question", item.question || "No attributable clarification comment is available."));
-      card.append(makeAttentionText("p", "attention-source", `Comment author: ${item.sourceAuthor || "Unknown"}`));
-    } else {
-      card.append(makeAttentionText("p", "attention-context-label", "Failure diagnostic"));
-      const diagnostic = document.createElement("pre");
-      diagnostic.className = "attention-diagnostic";
-      diagnostic.textContent = item.diagnostic || "No valid diagnostic is available.";
-      card.append(diagnostic);
-    }
+    card.append(makeAttentionText("p", "attention-summary", `${item.beadId} · ${item.stage || "Stage unavailable"} · Repairs ${Number.isInteger(item.repairCycles) ? item.repairCycles : "Unknown"} / ${item.maxRepairCycles}`));
+    const context = item.kind === "product-decision-required"
+      ? item.question || "No attributable clarification comment is available."
+      : item.diagnostic || "No valid diagnostic is available.";
+    card.append(makeAttentionText("p", "attention-preview", context.length > 140 ? `${context.slice(0, 140)}…` : context));
+    const detail = attentionDisclosure(item, "context", "Read full context & pause details", "attention-context");
+    detail.append(makeAttentionText("p", item.kind === "product-decision-required" ? "attention-question" : "attention-diagnostic", context));
+    detail.append(makeAttentionText("p", "attention-source", `Type: ${item.type || "Unknown"} · Status: ${item.status || "Unknown"} · ${formatRole(item.fromRole)} · Comment author: ${item.sourceAuthor || "Unknown"}`));
+    detail.append(makeAttentionText("p", "attention-pause-time", formatPauseTime(item)));
+    card.append(detail);
 
     if (item.unavailableReason) card.append(makeAttentionText("p", "attention-unavailable", item.unavailableReason));
 
@@ -197,6 +205,7 @@ function renderAttention() {
     const busy = attentionActions.has(item.beadId);
     const blocked = busy || attentionActionBlocked.has(item.beadId);
     if (item.kind === "product-decision-required") {
+      const compose = attentionDisclosure(item, "compose", "Write guidance", "attention-compose");
       const form = document.createElement("div");
       form.className = "attention-guidance";
       const label = document.createElement("label");
@@ -224,7 +233,8 @@ function renderAttention() {
           blocked || !item.canDecide)
       );
       form.append(label, textarea, help, actions);
-      card.append(form);
+      compose.append(form);
+      card.append(compose);
     } else if (item.kind === "needs-human") {
       const actions = document.createElement("div");
       actions.className = "attention-actions";
@@ -270,6 +280,13 @@ function renderAttention() {
   }
   attentionCards.replaceChildren(fragment);
   attentionEmpty.hidden = attentionItems.length !== 0 || !attentionHasLoaded;
+  if (attentionShowAll) {
+    attentionShowAll.hidden = attentionItems.length <= ATTENTION_INITIAL_LIMIT;
+    attentionShowAll.textContent = attentionExpanded ? "Show fewer paused Beads"
+      : `Show all ${attentionItems.length} paused Beads (${attentionItems.length - ATTENTION_INITIAL_LIMIT} more)`;
+    attentionShowAll.setAttribute("aria-expanded", String(attentionExpanded));
+    if (attentionShowAll.hidden && document.activeElement === attentionShowAll) attentionStatus?.focus();
+  }
   restoreAttentionFocus(focus);
 }
 
@@ -290,6 +307,8 @@ async function loadAttention() {
   const controller = new AbortController();
   activeAttentionRequest = controller;
   setAttentionLoading(true);
+  document.querySelector("#attention")?.classList.remove("attention-clear");
+  if (attentionEmpty) attentionEmpty.hidden = true;
   if (attentionError) attentionError.hidden = true;
   try {
     const response = await fetch("/api/attention", {
@@ -313,6 +332,7 @@ async function loadAttention() {
     for (const beadId of attentionActionBlocked) {
       if (!attentionActions.has(beadId)) attentionActionBlocked.delete(beadId);
     }
+    document.querySelector("#attention")?.classList.toggle("attention-clear", items.length === 0);
     renderAttention();
     if (workspaceData) renderWorkspaceGuidanceActions(workspaceData);
     if (attentionStatus) attentionStatus.textContent = items.length === 0
@@ -449,6 +469,11 @@ function expectedFocusAfterAction(action, result) {
 }
 
 if (attentionCards) {
+  attentionShowAll?.addEventListener("click", () => {
+    if (attentionExpanded && attentionCards.contains(document.activeElement)) attentionShowAll.focus();
+    attentionExpanded = !attentionExpanded;
+    renderAttention();
+  });
   attentionRefresh?.addEventListener("click", () => void loadAttention());
   attentionRetry?.addEventListener("click", () => void loadAttention());
   void loadAttention();

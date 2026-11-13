@@ -194,10 +194,12 @@ try {
 
   // Attention Desk route and per-Bead navigation remain available.
   await page.locator('a[href="#attention"]').first().click();
+  if (await page.locator('#attention-show-all').isVisible()) await page.locator('#attention-show-all').click();
   const attentionCard = page.locator('#attention-cards .attention-card').filter({ hasText: 'QA product decision' });
   await attentionCard.waitFor({ timeout: 15000 });
 
   // Failed action plus failed automatic/manual Attention reads keeps the stale Desk card blocked.
+  await attentionCard.locator('.attention-compose > summary').click();
   const attentionGuidance = attentionCard.locator('textarea');
   await attentionGuidance.fill('Keep this Attention Desk draft.');
   failActionId = decisionId;
