@@ -36,7 +36,7 @@ internal sealed record BeadExplorerItem(
 }
 
 // The shared gate serializes embedded-Dolt reads and writes within this host.
-internal sealed class TrackerBridge(
+internal sealed partial class TrackerBridge(
     ProjectConfig project,
     BeadWorkspaceEnvironmentObserver environmentObserver,
     TargetRepositoryValidator targetRepositoryValidator,

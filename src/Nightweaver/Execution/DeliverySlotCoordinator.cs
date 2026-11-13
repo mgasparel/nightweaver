@@ -813,6 +813,8 @@ internal sealed class DeliverySlotCoordinator
             return $"Bead '{bead.Id}' must be open and unassigned before Delivery; observed status '{bead.Status}' and assignee '{bead.Assignee ?? "(none)"}'.";
         if (bead.IssueType != "task")
             return $"Delivery slot accepts Plan Beads of type task; '{bead.Id}' is '{bead.IssueType}'.";
+        if (state.PlanUnpublished)
+            return $"Plan Bead '{bead.Id}' is unpublished and cannot enter Delivery.";
         if (state.Planned || state.ProductDecisionRequired || state.NeedsHuman)
             return $"Bead '{bead.Id}' is planned or paused and cannot enter a Delivery slot.";
         if (state.Stage is not (null or "stage:implement" or "stage:review" or "stage:qa"))

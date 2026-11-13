@@ -16,6 +16,9 @@ internal sealed record BeadWorkflowState(
     bool NeedsHuman,
     int RepairCycles)
 {
+    internal bool ReadyForPlanning { get; init; }
+    internal bool PlanUnpublished { get; init; }
+
     private static readonly HashSet<string> KnownStages = new(StringComparer.Ordinal)
     {
         "stage:plan", "stage:plan-challenge", "stage:plan-approved",
@@ -40,7 +43,11 @@ internal sealed record BeadWorkflowState(
             throw new FormatException($"Bead '{bead.Id}' has contradictory workflow labels.");
 
         var repairCycles = ReadRepairCycles(bead);
-        return new(bead.Id, bead.IssueType, bead.Status, stage, planned, productDecision, needsHuman, repairCycles);
+        return new(bead.Id, bead.IssueType, bead.Status, stage, planned, productDecision, needsHuman, repairCycles)
+        {
+            ReadyForPlanning = bead.Labels.Contains("ready-for-planning", StringComparer.Ordinal),
+            PlanUnpublished = bead.Labels.Contains("plan-unpublished", StringComparer.Ordinal)
+        };
     }
 
     private static int ReadRepairCycles(BeadSnapshot bead)

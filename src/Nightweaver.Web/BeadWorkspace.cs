@@ -11,7 +11,11 @@ internal sealed record BeadWorkspaceResponse(
     [property: JsonPropertyName("comments")] IReadOnlyList<BeadWorkspaceComment> Comments,
     [property: JsonPropertyName("history")] BeadWorkspaceHistory History,
     [property: JsonPropertyName("attention")] AttentionDeskItem? Attention,
-    [property: JsonPropertyName("environment")] BeadWorkspaceEnvironment Environment);
+    [property: JsonPropertyName("environment")] BeadWorkspaceEnvironment Environment)
+{
+    [JsonPropertyName("planning")]
+    public PlanningReadiness? Planning { get; init; }
+}
 
 internal sealed record BeadWorkspaceBead(
     [property: JsonPropertyName("id")] string Id,
@@ -104,7 +108,10 @@ internal static class BeadWorkspaceProjector
         var activeCommentId = selectedAttention is null ? null : attention!.ActiveCommentId;
         var selectionSource = activeCommentId is null ? "none" : attention!.SelectionSource;
         var history = ProjectHistory(commentRows, activeCommentId, selectionSource);
-        return new(bead, ProjectRelations(detail.Payload), commentRows, history, selectedAttention, environment);
+        return new(bead, ProjectRelations(detail.Payload), commentRows, history, selectedAttention, environment)
+        {
+            Planning = PlanningReadiness.Project(detail)
+        };
     }
 
     internal static BeadWorkspaceHistory ProjectHistory(IReadOnlyList<BeadWorkspaceComment> comments,

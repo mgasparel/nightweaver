@@ -229,7 +229,7 @@ public sealed class AuthorityMatrixTests
             issue_type = type,
             priority = 2,
             created_at = "2026-10-24T00:00:00Z",
-            labels = allLabels,
+            labels = type is "feature" or "bug" ? allLabels.Append("ready-for-planning").ToArray() : allLabels,
             metadata = metadata ?? (repairCycles == 0 ? null : new { repair_cycles = repairCycles })
         };
         return BeadWorkflowState.Parse(BeadsReader.Parse(JsonSerializer.Serialize(new[] { row })).ById[id]);

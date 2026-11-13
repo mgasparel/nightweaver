@@ -139,7 +139,7 @@ public sealed class PlanningPoolPlannerTests
     private static string Row(string id, string status, string type, int priority, string createdAt, string? assignee,
         string[] labels, object? dependency = null) => JsonSerializer.Serialize(new
     {
-        id, status, issue_type = type, priority, created_at = createdAt, assignee, labels,
+        id, status, issue_type = type, priority, created_at = createdAt, assignee, labels = type is "feature" or "bug" ? labels.Append("ready-for-planning").ToArray() : labels,
         dependencies = dependency is null ? Array.Empty<object>() : new[] { dependency }
     });
 }

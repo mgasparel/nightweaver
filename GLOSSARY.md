@@ -9,7 +9,7 @@ A tracked unit of work in the Beads (`bd`) tracker managed by Nightweaver.
 _Avoid_: Ticket, issue, card, story
 
 **Product Bead**:
-A human-authored Bead describing user-level product requirements, feature requests, or bug reports that enters Nightweaver for Planning.
+A human-authored Bead describing user-level product requirements, feature requests, or bug reports held in backlog until explicitly authorized for Planning.
 _Avoid_: Feature request, intake ticket, user story
 
 **Plan Bead**:
@@ -39,6 +39,14 @@ _Avoid_: Workspace, profile, target
 **Target Repository**:
 The external Git repository and Beads (`bd`) tracker associated with a Project that the Orchestrator monitors and delivers changes into.
 _Avoid_: Client repo, host repo
+
+**Planning readiness**:
+Explicit human authorization for a Product Bead to become eligible for Planning, subject to ordinary scheduling and pause rules.
+_Avoid_: Intake approval, automatic opt-in
+
+**Publication hold**:
+The state of a generated Plan Bead that remains ineligible for Delivery until its approved plan has been verified and published.
+_Avoid_: Draft task authorization
 
 **Planning**:
 The pre-implementation stage in which a Planner Agent and Plan Challenger Agent evaluate a Product Bead and either create linked Plan Bead(s) for Delivery or defer the Product Bead back to a human with clarification questions.

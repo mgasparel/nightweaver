@@ -147,7 +147,7 @@ public sealed class AgentStageCoordinatorTests
     {
         using var target = new BeadsFixture("materialization provision race");
         var product = target.Create("Approved Product", type: "bug");
-        target.Run("bd", ["update", product, "--add-label", "stage:plan-approved"]);
+        target.Run("bd", ["update", product, "--add-label", "stage:plan-approved", "--add-label", "ready-for-planning"]);
         var baseline = BeadsReader.Parse(target.Run("bd", BeadsCommand.Create(target.Path).Arguments)).ById.Keys.ToHashSet(StringComparer.Ordinal);
         string? child = null;
         var dependencyReads = 0;
@@ -200,7 +200,7 @@ public sealed class AgentStageCoordinatorTests
 
     private static string Inventory(string id, string type, string status, string[] labels, int repairCycles = 0) => JsonSerializer.Serialize(new[]
     {
-        new { id, status, issue_type = type, priority = 2, created_at = "2026-10-24T00:00:00Z", labels,
+        new { id, status, issue_type = type, priority = 2, created_at = "2026-10-24T00:00:00Z", labels = type is "feature" or "bug" ? labels.Append("ready-for-planning").ToArray() : labels,
             metadata = new { repair_cycles = repairCycles } }
     });
 
