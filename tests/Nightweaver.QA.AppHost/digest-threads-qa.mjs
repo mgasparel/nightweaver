@@ -7,7 +7,7 @@ import { chromium } from 'playwright';
 const url = process.env.NIGHTWEAVER_QA_URL;
 if (!url) throw new Error('Set NIGHTWEAVER_QA_URL from aspire describe.');
 const baseline = process.argv.includes('--baseline');
-const output = fileURLToPath(new URL('../../TestResults/digest-threads/', import.meta.url));
+const output = process.env.NIGHTWEAVER_QA_OUTPUT ?? fileURLToPath(new URL('../../TestResults/digest-threads/', import.meta.url));
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch();
 try {
@@ -80,16 +80,30 @@ try {
     assert.equal(await toggle(1).getAttribute('aria-expanded'), 'true');
     await refresh();
     assert.equal(await page.evaluate(() => document.activeElement.dataset.digestFocus), 'activity:thread-0');
+    // Keep the boundary thread focused as incoming activity moves it beyond the preview.
+    await toggle(4).focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await toggle(4).getAttribute('aria-expanded'), 'true');
     data.threads.unshift({ ...structuredClone(data.threads[4]), root: item('new-thread') });
     await refresh();
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.digestFocus), 'activity:thread-4');
+    assert.equal(await toggle(4).getAttribute('aria-expanded'), 'true');
+    await count('#digest-threads > article', 8);
     assert.equal(await page.locator('[data-root-bead-id="new-thread"] .digest-activity-toggle').getAttribute('aria-expanded'), 'false');
     assert.equal(await toggle(1).getAttribute('aria-expanded'), 'true');
+    await toggle(4).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${output}/focused-boundary-refresh.png` });
+    await page.keyboard.press('Enter');
+    assert.equal(await toggle(4).getAttribute('aria-expanded'), 'false');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.digestFocus), 'activity:thread-4');
     const ids = await page.locator('[id]').evaluateAll(elements => elements.map(element => element.id));
     assert.equal(new Set(ids).size, ids.length);
     for (const control of await page.locator('.digest-activity-toggle').all()) {
       const target = await control.getAttribute('aria-controls');
       assert.equal(await page.locator(`[id="${target}"]`).count(), 1);
     }
+    await page.getByRole('button', { name: 'Show fewer threads', exact: true }).click();
+    await count('#digest-threads > article', 5);
     await page.getByRole('button', { name: 'Show 3 more threads', exact: true }).click();
     await count('#digest-threads > article', 8);
     await page.getByRole('button', { name: 'Show fewer threads', exact: true }).click();
@@ -115,6 +129,6 @@ try {
     assert.equal(decodeURIComponent(await page.evaluate(() => location.hash)), `#bead/${realId}`);
     await page.waitForFunction(id => document.querySelector('#workspace-id').textContent === id, realId);
     assert.deepEqual(errors, []);
-    console.log('Thread QA passed: zero default children/descriptions; independent 1/4/8 activity; preview/all; refresh/focus; new threads; unique IDs; navigation; 375/720 reflow.');
+    console.log('Thread QA passed: zero default children/descriptions; independent 1/4/8 activity; preview/all; refresh/focus across fifth-thread boundary; new threads; unique IDs; navigation; 375/720 reflow.');
   }
 } finally { await browser.close(); }

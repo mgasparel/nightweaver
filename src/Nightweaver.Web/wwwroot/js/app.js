@@ -750,7 +750,14 @@ function renderDigest() {
   if (!currentDigest || !digestSection) return;
   const focusKey = digestSection.contains(document.activeElement)
     ? document.activeElement.dataset.digestFocus : null;
+  const focusedThreadId = focusKey
+    ? document.activeElement.closest("[data-root-bead-id]")?.dataset.rootBeadId : null;
   const d = currentDigest;
+  // Incoming activity can reorder a surviving focused thread beyond the preview.
+  // Reveal the collection before replacing its DOM so that control stays reachable.
+  if (focusedThreadId && d.threads?.findIndex(thread => thread.root.id === focusedThreadId) >= DIGEST_INITIAL_THREADS) {
+    digestAllThreads = true;
+  }
   updateDigestWindowControls(d.window);
 
   if (digestCheckpointBadge) {
