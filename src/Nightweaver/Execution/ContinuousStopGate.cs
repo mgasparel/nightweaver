@@ -12,6 +12,7 @@ internal sealed class ContinuousStopGate
 {
     private readonly object sync = new();
     private readonly HashSet<IForceCloseAgentJob> activeAgents = [];
+    private readonly HashSet<EventWaitHandle> stopSignals = [];
     private bool stopRequested;
     private bool forceStopRequested;
 
@@ -27,7 +28,32 @@ internal sealed class ContinuousStopGate
 
     internal void RequestStop()
     {
-        lock (sync) stopRequested = true;
+        lock (sync)
+        {
+            stopRequested = true;
+            foreach (var signal in stopSignals) signal.Reset();
+        }
+    }
+
+    // OS signals expose cleanup admission across processes without relying on telemetry
+    // freshness or filesystem writes during graceful/force stop.
+    internal void RegisterStopSignal(EventWaitHandle signal)
+    {
+        lock (sync)
+        {
+            stopSignals.Add(signal);
+            if (stopRequested) signal.Reset();
+            else signal.Set();
+        }
+    }
+
+    internal void UnregisterStopSignal(EventWaitHandle signal)
+    {
+        lock (sync)
+        {
+            signal.Reset();
+            stopSignals.Remove(signal);
+        }
     }
 
     /// <summary>Closes every active Agent Job without entering executor cleanup or waiting for it.</summary>
@@ -38,6 +64,7 @@ internal sealed class ContinuousStopGate
         {
             forceStopRequested = true;
             stopRequested = true;
+            foreach (var signal in stopSignals) signal.Reset();
             agents = activeAgents.ToArray();
         }
 

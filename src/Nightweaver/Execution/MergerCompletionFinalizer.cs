@@ -14,13 +14,13 @@ internal sealed record MergerCompletionReceipt(
     bool ProductCompletionSucceeded,
     string? CleanupDiagnostic,
     string? ProductDiagnostic,
-    string? DiagnosticPersistenceDiagnostic);
+    string? DiagnosticPersistenceDiagnostic, bool CleanupQueued = false);
 
 internal sealed record MergerCompletionResult(bool Succeeded, BeadWorkflowState? FinalState,
     MergerCompletionReceipt? Receipt, string? Diagnostic);
 
 /// <summary>Closes a task only after independent merge proof, then attempts housekeeping independently.</summary>
-internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner)
+internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner, ICompletedEnvironmentQueue? cleanupQueue = null)
 {
     private readonly BeadsReader reader = new(processRunner);
     private readonly BeadsWriter writer = new(processRunner);
@@ -88,10 +88,16 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner)
         MergerVerifiedMergeEvidence evidence, BeadWorkflowState closedState, CancellationToken cancellationToken)
     {
         string? cleanupDiagnostic = null;
-        try { await CleanupOwnedEnvironmentAsync(session, evidence, cancellationToken).ConfigureAwait(false); }
+        try
+        {
+            if (cleanupQueue is not null)
+                await cleanupQueue.EnqueueAsync(session, evidence, cancellationToken).ConfigureAwait(false);
+            else await CleanupOwnedEnvironmentAsync(session, evidence, cancellationToken).ConfigureAwait(false);
+        }
         catch (OperationCanceledException) { throw; }
         catch (Exception exception) { cleanupDiagnostic = Limit(exception.Message); }
 
+        var cleanupState = cleanupQueue is null ? "completed" : "queued";
         string? productDiagnostic = null;
         var productSucceeded = false;
         try { productSucceeded = await CompleteProductIfEligibleAsync(session.Repository, session.BeadId, cancellationToken).ConfigureAwait(false); }
@@ -101,16 +107,16 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner)
         string? diagnosticPersistenceDiagnostic = null;
         if (cleanupDiagnostic is not null || productDiagnostic is not null)
         {
-            var diagnostic = $"Verified merge closure completed; cleanup={(cleanupDiagnostic is null ? "completed" : "failed: " + cleanupDiagnostic)}; Product completion={(productDiagnostic is null ? productSucceeded ? "completed or safely ineligible" : "safely ineligible" : "failed: " + productDiagnostic)}.";
+            var diagnostic = $"Verified merge closure completed; cleanup={(cleanupDiagnostic is null ? cleanupState : "failed: " + cleanupDiagnostic)}; Product completion={(productDiagnostic is null ? productSucceeded ? "completed or safely ineligible" : "safely ineligible" : "failed: " + productDiagnostic)}.";
             try { await AddCommentVerifiedAsync(session.Repository, session.BeadId, $"nightweaver-finalization-v1 {diagnostic}", CancellationToken.None).ConfigureAwait(false); }
             catch (Exception exception) { diagnosticPersistenceDiagnostic = Limit($"Required housekeeping diagnostic could not be persisted: {exception.Message}"); }
         }
 
         var receipt = new MergerCompletionReceipt(closedState, evidence.PullRequest, evidence.CheckedHead,
-            evidence.MergeCommit, cleanupDiagnostic is null, productDiagnostic is null, cleanupDiagnostic, productDiagnostic,
-            diagnosticPersistenceDiagnostic);
+            evidence.MergeCommit, cleanupDiagnostic is null && cleanupQueue is null, productDiagnostic is null, cleanupDiagnostic, productDiagnostic,
+            diagnosticPersistenceDiagnostic, CleanupQueued: cleanupDiagnostic is null && cleanupQueue is not null);
         var resultDiagnostic = cleanupDiagnostic is null && productDiagnostic is null && diagnosticPersistenceDiagnostic is null ? null
-            : $"Verified task closure succeeded; post-merge housekeeping needs attention. Cleanup: {cleanupDiagnostic ?? "completed"}; Product: {productDiagnostic ?? (productSucceeded ? "completed or safely ineligible" : "safely ineligible or already complete")}; diagnostic persistence: {diagnosticPersistenceDiagnostic ?? (cleanupDiagnostic is null && productDiagnostic is null ? "not required" : "recorded")}.";
+            : $"Verified task closure succeeded; post-merge housekeeping needs attention. Cleanup: {cleanupDiagnostic ?? cleanupState}; Product: {productDiagnostic ?? (productSucceeded ? "completed or safely ineligible" : "safely ineligible or already complete")}; diagnostic persistence: {diagnosticPersistenceDiagnostic ?? (cleanupDiagnostic is null && productDiagnostic is null ? "not required" : "recorded")}.";
         return new(true, closedState, receipt, resultDiagnostic);
     }
 
@@ -138,6 +144,20 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner)
                 || registrations.Any(item => RuntimePaths.Comparer.Equals(item.Path, worktreePath)))
                 throw new ToolExecutionException(cleanupDiagnostic);
         }
+
+        await CleanupBranchesAsync(session, evidence, cancellationToken).ConfigureAwait(false);
+        if (cleanupDiagnostic is not null) throw new ToolExecutionException(cleanupDiagnostic);
+    }
+
+    internal async Task CleanupBranchesAsync(AgentStageSession session, MergerVerifiedMergeEvidence evidence,
+        CancellationToken cancellationToken)
+    {
+        var worktreePath = RuntimePaths.Normalize(session.Worktree.Path);
+        if (!RuntimePaths.Comparer.Equals(worktreePath, Path.Combine(session.HostPaths.WorktreesRoot(session.Project.Name), session.BeadId))
+            || Directory.Exists(worktreePath) || File.Exists(worktreePath)
+            || (await new GitWorktreeReader(processRunner).ReadAsync(session.Repository, cancellationToken).ConfigureAwait(false))
+                .Any(item => RuntimePaths.Comparer.Equals(item.Path, worktreePath)))
+            throw new ToolExecutionException("Completed worktree absence is not confirmed; one-shot branch cleanup was retained.");
 
         // Branch cleanup remains the existing one-shot completion responsibility. Durable local
         // environment reconciliation never replays remote-ref operations or Product completion.
@@ -177,7 +197,6 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner)
             if (delete.ExitCode != 0 || await ReadRemoteBranchAsync(repository.Path, branchRef, cancellationToken).ConfigureAwait(false) is not null)
                 throw new ToolExecutionException("compare-and-delete of the exact owned origin branch was not confirmed");
         }
-        if (cleanupDiagnostic is not null) throw new ToolExecutionException(cleanupDiagnostic);
     }
 
     private async Task<bool> CompleteProductIfEligibleAsync(ValidatedTargetRepository repository, string taskId,

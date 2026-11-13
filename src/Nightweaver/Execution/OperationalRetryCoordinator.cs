@@ -102,7 +102,8 @@ internal sealed class OperationalRetryCoordinator
         IAgentOutcomeClassifier? outcomeClassifier = null,
         IDeliveryOutcomePublisher? outcomePublisher = null,
         IDeliveryOutcomeVerifier? outcomeVerifier = null,
-        IMergerOutcomeVerifier? mergerOutcomeVerifier = null)
+        IMergerOutcomeVerifier? mergerOutcomeVerifier = null,
+        ICompletedEnvironmentQueue? cleanupQueue = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         this.stages = stages ?? new AgentStageCoordinator(processRunner);
@@ -117,7 +118,7 @@ internal sealed class OperationalRetryCoordinator
         this.outcomePublisher = outcomePublisher ?? new DeliveryOutcomePublisher(processRunner);
         this.outcomeVerifier = outcomeVerifier ?? new DeliveryOutcomeVerifier(processRunner);
         this.mergerOutcomeVerifier = mergerOutcomeVerifier ?? new MergerOutcomeVerifier(processRunner);
-        mergerCompletionFinalizer = new MergerCompletionFinalizer(processRunner);
+        mergerCompletionFinalizer = new MergerCompletionFinalizer(processRunner, cleanupQueue);
     }
 
     internal async Task<OperationalRetryOutcome> RunAsync(
