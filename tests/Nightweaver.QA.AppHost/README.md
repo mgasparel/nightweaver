@@ -114,6 +114,12 @@ Run `node console-qa.mjs --baseline` before implementation, or set `NIGHTWEAVER_
 
 Run the existing `digest-qa.mjs`, `explorer-qa.mjs`, `factory-qa.mjs`, `invocation-qa.mjs`, `telemetry.mjs`, `workspace-qa.mjs` and `planning-readiness-qa.mjs` for the complete acceptance matrix: large histories/inventory, real intake and Workspace actions, guarded readiness, diagnostics and native reconnect/output. Use a fresh isolated stack for mutation checks, and always stop the exact AppHost in `finally`, including after failed checks. Retained integrated evidence and the measured release gate are in [the console acceptance report](../../docs/acceptance/console-polish.md).
 
+## Schema message QA
+
+Start a fresh isolated stack with `NIGHTWEAVER_QA_SCENARIO=schema-messages`, discover the direct `web` resource's `http` URL with `aspire describe --format Json`, set `NIGHTWEAVER_QA_URL` and run `node schema-messages-qa.mjs`. Always stop that exact AppHost in `finally`. The scenario seeds actual disposable tracker comments for local/remote checks, conflict/design rejections, both escalation generations, supplemental failures, structured questions followed by notes, newer unsupported diagnostics, malformed/foreign payloads, hostile text and long nested findings/paths.
+
+The script checks the shared projection on all three message surfaces, exact original/source identity, independent corrective prose, keyboard disclosure state/focus across refresh, explicit uncertainty, no automatic payload requests or mutations, and desktop/375px/720 CSS px reflow. Screenshots and result data go to `TestResults/schema-messages`; set `NIGHTWEAVER_QA_OUTPUT` to preserve another run. Review those screenshots visually. Run `workspace-qa.mjs` separately against a fresh default stack for real guarded actions and legacy questions.
+
 ## Cleanup
 
 Always stop the same AppHost in a cleanup/finally step, including after a failed browser check:

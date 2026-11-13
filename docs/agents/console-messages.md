@@ -1,0 +1,15 @@
+# Console message presentation
+
+Bead comments remain exact, immutable inputs to the console's read-only presentation projection. `CommentPresenter` supports Merger rejection, needs-human escalation (current `environment_retention` and historical `cleanup_preflight`), supplemental pause/cleanup failure, and nested Planning question v1 comments. The same projected message is rendered in Workspace history, selected Workspace pause context and Human Attention Desk.
+
+Reported failures and host verification failures are separate events. The display never establishes a new check result, infers root cause from a scenario name, or joins events because they are close in time. Supplemental pause reports stay separately attributed; up to three are available alongside selected context, with the full history available in the Workspace. Cause, reason, findings, retention warnings and evidence references have separate labels. Nested JSON inside a findings string remains literal text.
+
+Source selection uses the containing Bead identity and stable comment identity. The newest primary schema-like diagnostic or structured question is selected even when unsupported or malformed, so an older explanation cannot silently appear current. Ordinary notes do not replace structured pause evidence. Legacy prose questions remain supported when no structured question is available. Unsupported or mismatched records explicitly qualify uncertainty and retain the original for inspection. Chronological selection does not verify that a workflow transition succeeded.
+
+Parsing is bounded to 256 Ki characters and 24 JSON levels. Adapters validate required fields, provided field types, allowed enums and duplicate properties, including nested data. Harmless extra fields are preserved in the original disclosure. Unsupported contracts, including classifier-only contracts, remain inspectable fallbacks. Delivery/Planning publication and other audit presentation are a subsequent slice; existing human guidance behavior remains available.
+
+Verbose fields use bounded excerpts and keyboard disclosures; exact comments and additional technical data remain available. Disclosure identity includes the surface and source comment ID, retaining state and focus across refresh. Payload text is inserted as text, never HTML. Evidence paths and URLs are literal, selectable references: rendering does not fetch them, serve files, or invoke actions.
+
+Presentation state never controls workflow authority. Existing fresh status, claim, stage, full pause-label and repair-count guards continue to govern explicit human actions. Neither a displayed question nor an ordinary note authorizes Resume or Retry.
+
+Verification is in `CommentPresentationTests`, the existing Web action/boundary suite, and the isolated `schema-messages` browser scenario documented in the QA AppHost README.

@@ -50,7 +50,10 @@ internal sealed record BeadWorkspaceComment(
     [property: JsonPropertyName("body")] string Body,
     [property: JsonPropertyName("kind")] string Kind,
     [property: JsonPropertyName("role")] string? Role,
-    [property: JsonPropertyName("stage")] string? Stage);
+    [property: JsonPropertyName("stage")] string? Stage)
+{
+    [JsonPropertyName("message")] public CommentPresentation? Message { get; init; }
+}
 
 internal sealed record BeadWorkspaceHistory(
     [property: JsonPropertyName("olderCommentIds")] IReadOnlyList<string> OlderCommentIds,
@@ -162,8 +165,12 @@ internal static class BeadWorkspaceProjector
     private static BeadWorkspaceComment ProjectComment(BeadSnapshot bead, BeadsCommentSnapshot comment)
     {
         var classification = AttentionDeskProjector.ClassifyComment(comment, bead);
+        var presentation = CommentPresenter.Project(comment, bead);
         return new(comment.Id, comment.Author, comment.CreatedAt.ToUniversalTime(), comment.Text,
-            classification.Kind, classification.Role, classification.Stage);
+            classification.Kind, classification.Role, classification.Stage)
+        {
+            Message = presentation.State == "ordinary" ? null : presentation
+        };
     }
 
     private static BeadWorkspaceRelation[] ProjectRelations(JsonElement payload)

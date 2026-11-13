@@ -1,10 +1,10 @@
 # Test suite
 
-Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection. The current retained suite discovers 813 tests.
+Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection. The current retained suite discovers 844 tests.
 
 ```powershell
 $timer = [Diagnostics.Stopwatch]::StartNew()
-dotnet test --solution Nightweaver.slnx --minimum-expected-tests 813 --report-xunit-xml --report-xunit-xml-filename timing.xml --show-slowest-tests 20
+dotnet test --solution Nightweaver.slnx --minimum-expected-tests 844 --report-xunit-xml --report-xunit-xml-filename timing.xml --show-slowest-tests 20
 $testExit = $LASTEXITCODE
 $timer.Stop()
 Write-Host "Suite wall time (build, fixture publishing, tests, teardown): $($timer.Elapsed)"

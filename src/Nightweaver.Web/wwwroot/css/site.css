@@ -2557,3 +2557,15 @@ h3 {
 .cleanup-row summary, #cleanup-disclosure > summary { cursor: pointer; color: var(--color-secondary); }
 .cleanup-pagination { justify-content: flex-start; margin-top: 1rem; }
 .cleanup-panel button:disabled { opacity: .55; cursor: default; }
+
+/* Literal message content reflows within the containing disclosure. */
+.semantic-message { min-width: 0; overflow-wrap: anywhere; line-height: 1.55; }
+.semantic-message h4 { margin: .5rem 0; font-size: 1rem; }
+.semantic-message h5 { margin: .8rem 0 .15rem; font-size: .8rem; color: #a6b3c5; }
+.semantic-message p { white-space: pre-wrap; margin: .25rem 0; }
+.semantic-message pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; max-height: 30rem; overflow: auto; }
+.message-original { margin-top: .8rem; min-width: 0; }
+.message-original summary { cursor: pointer; overflow-wrap: anywhere; }
+.message-original summary:focus-visible { outline: 2px solid #8cd9ff; outline-offset: 3px; }
+.message-attribution, .message-source { font-size: .78rem; opacity: .8; }
+.semantic-fallback { border-left: 3px solid #e8b968; padding-left: .75rem; }
