@@ -77,6 +77,7 @@ internal sealed class DeliveryPoolCoordinator
     {
         internal string BeadId { get; } = beadId;
         internal string SlotId { get; } = slotId;
+        internal IDisposable? EnvironmentLease { get; set; }
         internal TaskCompletionSource<DeliveryPoolCompletion> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -94,6 +95,7 @@ internal sealed class DeliveryPoolCoordinator
     private readonly int capacityLimit;
     private readonly CancellationToken slotLifetimeToken;
     private readonly ContinuousStopGate? stopGate;
+    private readonly EnvironmentReservations? environments;
     private readonly FactoryTelemetryPublisher? telemetry;
     private readonly DeliveryPoolSnapshotReader readSnapshot;
     private readonly DeliveryPoolSlotRunner runSlot;
@@ -113,6 +115,7 @@ internal sealed class DeliveryPoolCoordinator
         DeliveryPoolSlotRunner? runSlot = null,
         ContinuousStopGate? stopGate = null,
         FactoryTelemetryPublisher? telemetry = null,
+        EnvironmentReservations? environments = null,
         CancellationToken slotLifetimeToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
@@ -125,6 +128,7 @@ internal sealed class DeliveryPoolCoordinator
         this.repository = repository;
         this.slotLifetimeToken = slotLifetimeToken;
         this.stopGate = stopGate;
+        this.environments = environments;
         this.telemetry = telemetry;
         capacityLimit = project.Concurrency.MaxConcurrentDelivery;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacityLimit);
@@ -293,9 +297,16 @@ internal sealed class DeliveryPoolCoordinator
                     return false;
                 }
 
+                var environmentLease = environments?.TryAcquire(beadId);
+                if (environments is not null && environmentLease is null)
+                {
+                    refusal = new DeliveryPoolDiagnostic(beadId, DeliveryPoolDiagnosticCode.AlreadyReserved,
+                        "The environment is reserved by another pool or completed-environment cleanup.");
+                    return false;
+                }
                 var slotId = telemetry?.SlotForReservation("delivery", beadId)
                     ?? $"delivery-{Enumerable.Range(1, capacityLimit).First(index => reservations.Values.All(active => active.SlotId != $"delivery-{index}"))}";
-                reservation = new ReservationState(beadId, slotId);
+                reservation = new ReservationState(beadId, slotId) { EnvironmentLease = environmentLease };
                 reservations.Add(beadId, reservation);
                 telemetry?.Reserve("delivery", slotId, beadId);
                 return true;
@@ -378,6 +389,7 @@ internal sealed class DeliveryPoolCoordinator
         {
             telemetry?.Release("delivery", reservation.SlotId, reservation.BeadId);
             reservations.Remove(reservation.BeadId);
+            reservation.EnvironmentLease?.Dispose();
             // Capacity is released before notification. Keep that transition and publication under
             // one lock so a drain cannot observe an empty reservation set before this result exists.
             // The channel is unbounded and remains open for the pool lifetime.

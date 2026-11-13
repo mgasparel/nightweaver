@@ -14,7 +14,8 @@ internal sealed class ContinuousDiscoveryCoordinator(
     TextWriter error,
     DiscoveryTimerTicks? timerTicks = null,
     Func<Action, CancellationToken, Task>? journalWatcher = null,
-    ContinuousStopGate? stopGate = null)
+    ContinuousStopGate? stopGate = null,
+    Action? onDiscoveryRequested = null)
 {
     internal static readonly TimeSpan DiscoveryInterval = TimeSpan.FromSeconds(30);
 
@@ -31,7 +32,12 @@ internal sealed class ContinuousDiscoveryCoordinator(
         FullMode = BoundedChannelFullMode.Wait
     });
 
-    internal bool RequestDiscovery() => stopGate?.IsStopRequested != true && requests.Writer.TryWrite(true);
+    internal bool RequestDiscovery()
+    {
+        if (stopGate?.IsStopRequested == true) return false;
+        onDiscoveryRequested?.Invoke();
+        return requests.Writer.TryWrite(true);
+    }
 
     internal async Task<bool> RunAsync(CancellationToken cancellationToken, CancellationToken forceStopToken = default)
     {

@@ -95,7 +95,10 @@ public sealed class CompletedEnvironmentCleanupTests
         Assert.True(Directory.Exists(fixture.Tmp));
         Assert.Equal(1, fixture.Runner.Removals);
 
-        // A new service and store represent a new runtime, with no retained in-memory receipt.
+        // Unknown/lost responses need explicit inspection; restart alone cannot rearm them.
+        Assert.NotEmpty(await fixture.CleanAsync());
+        Assert.Equal(pending, fixture.Read());
+        await fixture.Store.WriteAsync(pending with { Status = CleanupStatus.Pending, CycleAttempts = 0 }, CancellationToken.None);
         Assert.Empty(await fixture.CleanAsync());
         var resolved = fixture.Read();
         Assert.Equal(CleanupStatus.Resolved, resolved.Status);
@@ -317,7 +320,7 @@ public sealed class CompletedEnvironmentCleanupTests
         Assert.DoesNotContain(records, record => record.BeadId == "old-101");
     }
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         private readonly TempDirectory temp = new();
         internal static ProjectSlug Project { get; } = new("demo");
@@ -355,11 +358,12 @@ public sealed class CompletedEnvironmentCleanupTests
         public void Dispose() => temp.Dispose();
     }
 
-    private sealed class CleanupRunner(Fixture fixture) : IProcessRunner
+    internal sealed class CleanupRunner(Fixture fixture) : IProcessRunner
     {
         internal bool Registered { get; set; } = true;
         internal bool LoseRemovalResponse { get; set; }
         internal bool FalseRemovalSuccess { get; set; }
+        internal int TransientFailures { get; set; }
         internal bool RemovalDenied { get; set; }
         internal string? AdditionalRegistration { get; set; }
         internal bool Locked { get; set; }
@@ -404,6 +408,7 @@ public sealed class CompletedEnvironmentCleanupTests
                 Assert.Equal(CleanupStatus.Pending, fixture.Read().Status);
                 if (RemovalDenied) throw new UnauthorizedAccessException("fixture policy denied removal");
                 Removals++;
+                if (TransientFailures-- > 0) return Task.FromResult(new ProcessResult(1, "", "resource busy: sharing violation"));
                 if (!FalseRemovalSuccess) fixture.RemoveWorktree();
                 if (LoseRemovalResponse) { LoseRemovalResponse = false; return Task.FromResult(new ProcessResult(1, "", "lost removal response")); }
                 return Result("");

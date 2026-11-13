@@ -57,7 +57,7 @@ internal sealed class MergerSlotCoordinator
     private readonly MergerRepairBudgetEscalator escalateRepairBudget;
 
     internal MergerSlotCoordinator(IProcessRunner processRunner, MergerRoleRunner? runRole = null,
-        MergerRepairBudgetEscalator? escalateRepairBudget = null)
+        MergerRepairBudgetEscalator? escalateRepairBudget = null, ICompletedEnvironmentQueue? cleanupQueue = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         reader = new BeadsReader(processRunner);
@@ -66,7 +66,7 @@ internal sealed class MergerSlotCoordinator
         this.escalateRepairBudget = escalateRepairBudget ?? escalator.EscalateAsync;
         if (runRole is null)
         {
-            var retries = new OperationalRetryCoordinator(processRunner);
+            var retries = new OperationalRetryCoordinator(processRunner, cleanupQueue: cleanupQueue);
             this.runRole = (paths, project, repository, beadId, role, actor, expectedState, token, progress) =>
                 retries.RunAsync(paths, project, repository, beadId, role, actor, token, progress, expectedState);
         }

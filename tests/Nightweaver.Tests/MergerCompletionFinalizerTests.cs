@@ -101,7 +101,7 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         else Assert.Contains("lost removal response", completion.Receipt.CleanupDiagnostic, StringComparison.Ordinal);
         var store = new CompletedEnvironmentStore(target.Host, project.Name, repository);
         var pending = Assert.Single(store.Read().Obligations);
-        Assert.Equal(CleanupStatus.NeedsAttention, pending.Status);
+        Assert.Equal(tmpOnlyFailure ? CleanupStatus.RetryScheduled : CleanupStatus.NeedsAttention, pending.Status);
         Assert.True(pending.Worktree.ConfirmedAbsent);
         Assert.True(Directory.Exists(qaTmp));
         Assert.True(completion.Receipt.ProductCompletionSucceeded, completion.Diagnostic);
@@ -112,9 +112,15 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         var branchCommandsBeforeRestart = runner.Requests.Count(request => request.FileName == "git"
             && request.Arguments[0] is "update-ref" or "push");
         lockedTmp?.Dispose();
-        var restarted = new StartupEnvironmentCleaner(new BeadsReader(runner), new BeadsWriter(runner), runner);
-        await restarted.CleanAsync(target.Host, project.Name, repository, project.RecoveryActor,
-            TestContext.Current.CancellationToken);
+        // Restart retains automatic timing; an unknown result requires explicit inspection.
+        if (!tmpOnlyFailure)
+            await store.WriteAsync(pending with { Status = CleanupStatus.Pending, CycleAttempts = 0 }, TestContext.Current.CancellationToken);
+        var clock = new CompletedEnvironmentWorkerTests.Clock
+        { Now = pending.NextAttempt ?? DateTimeOffset.UtcNow };
+        using var restarted = new CompletedEnvironmentWorker(target.Host, project, repository, runner,
+            new EnvironmentReservations(), new ContinuousStopGate(), "native-restarted-owner", _ => { }, clock);
+        await restarted.InitializeAsync(TestContext.Current.CancellationToken);
+        await restarted.RunBatchAsync(TestContext.Current.CancellationToken);
         Assert.Equal(CleanupStatus.Resolved, Assert.Single(store.Read().Obligations).Status);
         Assert.Equal(1, removalCalls);
         Assert.Equal(branchCommandsBeforeRestart, runner.Requests.Count(request => request.FileName == "git"

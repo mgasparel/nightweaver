@@ -15,7 +15,13 @@ internal sealed record CompletedEnvironmentObligation(
     string? VerifiedHead, string? PullRequest, string? MergeCommit,
     CleanupResource Worktree, CleanupResource Tmp, CleanupStatus Status,
     int Attempts, DateTimeOffset? LastAttempt, DateTimeOffset? NextAttempt,
-    DateTimeOffset? ResolvedAt, string? Diagnostic);
+    DateTimeOffset? ResolvedAt, string? Diagnostic)
+{
+    public string? LastRetryRequestId { get; init; }
+    public int? CycleAttempts { get; init; }
+    public string? LastFailure { get; init; }
+    public string? LastDenial { get; init; }
+}
 
 internal sealed record CleanupStoreSnapshot(bool Exists, IReadOnlyList<CompletedEnvironmentObligation> Obligations);
 
@@ -39,6 +45,11 @@ internal sealed class CompletedEnvironmentStore(HostPaths paths, ProjectSlug pro
         var records = new List<CompletedEnvironmentObligation>();
         foreach (var entry in root.Entries)
         {
+            if (entry.Path == Path.Combine(paths.CleanupRoot(project), "requests"))
+            {
+                SharedRuntimeRootValidator.EnsureExistingSafe(entry.Path);
+                continue;
+            }
             // An interrupted atomic write is evidence, not an empty queue. Preserve it for inspection.
             if (!entry.Path.EndsWith(".json", StringComparison.Ordinal))
                 throw new InvalidDataException($"Unexpected cleanup store entry: '{entry.Path}'.");
@@ -125,6 +136,8 @@ internal sealed class CompletedEnvironmentStore(HostPaths paths, ProjectSlug pro
             || record.Purpose is not (WorktreePurpose.Delivery or WorktreePurpose.Planning)
             || !Enum.IsDefined(record.Status) || record.Attempts < 0
             || (record.Attempts == 0) != (record.LastAttempt is null)
+            || record.LastRetryRequestId is not null && !Guid.TryParseExact(record.LastRetryRequestId, "N", out _)
+            || record.CycleAttempts is < 0 or > 4 || record.LastFailure?.Length > 384 || record.LastDenial?.Length > 384
             || record.Diagnostic?.Length > 384
             || (record.Status == CleanupStatus.Resolved) != (record.ResolvedAt is not null)
             || record.Status == CleanupStatus.Resolved && (!record.Worktree.ConfirmedAbsent || !record.Tmp.ConfirmedAbsent)

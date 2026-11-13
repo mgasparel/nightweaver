@@ -63,6 +63,7 @@ internal sealed class MergerPoolCoordinator
     {
         internal string BeadId { get; } = beadId;
         internal string SlotId { get; } = slotId;
+        internal IDisposable? EnvironmentLease { get; set; }
         internal TaskCompletionSource<MergerPoolCompletion> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -78,6 +79,7 @@ internal sealed class MergerPoolCoordinator
     private readonly ValidatedTargetRepository repository;
     private readonly CancellationToken slotLifetimeToken;
     private readonly ContinuousStopGate? stopGate;
+    private readonly EnvironmentReservations? environments;
     private readonly FactoryTelemetryPublisher? telemetry;
     private readonly MergerPoolSnapshotReader readSnapshot;
     private readonly MergerPoolSlotRunner runSlot;
@@ -98,6 +100,8 @@ internal sealed class MergerPoolCoordinator
         MergerPoolSlotRunner? runSlot = null,
         ContinuousStopGate? stopGate = null,
         FactoryTelemetryPublisher? telemetry = null,
+        EnvironmentReservations? environments = null,
+        ICompletedEnvironmentQueue? cleanupQueue = null,
         CancellationToken slotLifetimeToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
@@ -109,6 +113,7 @@ internal sealed class MergerPoolCoordinator
         this.repository = repository;
         this.slotLifetimeToken = slotLifetimeToken;
         this.stopGate = stopGate;
+        this.environments = environments;
         this.telemetry = telemetry;
         if (readSnapshot is null)
         {
@@ -127,7 +132,7 @@ internal sealed class MergerPoolCoordinator
 
         if (runSlot is null)
         {
-            var slot = new MergerSlotCoordinator(processRunner);
+            var slot = new MergerSlotCoordinator(processRunner, cleanupQueue: cleanupQueue);
             this.runSlot = (host, config, target, beadId, agentAttemptStarted, cancellationToken) =>
                 slot.RunAsync(host, config, target, beadId, agentAttemptStarted, cancellationToken);
         }
@@ -280,6 +285,7 @@ internal sealed class MergerPoolCoordinator
         {
             telemetry?.Release("merger", reservation.SlotId, reservation.BeadId);
             reservations.Remove(reservation.BeadId);
+            reservation.EnvironmentLease?.Dispose();
             // Publish the result in the same critical section that releases capacity. A drain
             // which observes no reservations can then safely place its accounting barrier next.
             if (!completions.Writer.TryWrite(completion))
@@ -309,8 +315,15 @@ internal sealed class MergerPoolCoordinator
                     return false;
                 }
 
+                var environmentLease = environments?.TryAcquire(beadId);
+                if (environments is not null && environmentLease is null)
+                {
+                    refusal = new MergerPoolDiagnostic(beadId, MergerPoolDiagnosticCode.AlreadyReserved,
+                        "The environment is reserved by another pool or completed-environment cleanup.");
+                    return false;
+                }
                 var slotId = telemetry?.SlotForReservation("merger", beadId) ?? "merger-1";
-                reservation = new ReservationState(beadId, slotId);
+                reservation = new ReservationState(beadId, slotId) { EnvironmentLease = environmentLease };
                 reservations.Add(beadId, reservation);
                 telemetry?.Reserve("merger", slotId, beadId);
                 return true;

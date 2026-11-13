@@ -11,15 +11,16 @@ internal interface ICompletedEnvironmentCleanup
 {
     Task<IReadOnlyList<StartupCleanupDiagnostic>> ReconcileAsync(HostPaths paths, ProjectSlug project,
         ValidatedTargetRepository repository, string actor, CancellationToken cancellationToken,
-        string? onlyBeadId = null, MergerVerifiedMergeEvidence? evidence = null);
+        string? onlyBeadId = null, MergerVerifiedMergeEvidence? evidence = null, bool discoverOnly = false);
 }
 
-internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRunner processRunner) : ICompletedEnvironmentCleanup
+internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRunner processRunner, TimeProvider? timeProvider = null) : ICompletedEnvironmentCleanup
 {
     public async Task<IReadOnlyList<StartupCleanupDiagnostic>> ReconcileAsync(HostPaths paths, ProjectSlug project,
         ValidatedTargetRepository repository, string actor, CancellationToken cancellationToken,
-        string? onlyBeadId = null, MergerVerifiedMergeEvidence? evidence = null)
+        string? onlyBeadId = null, MergerVerifiedMergeEvidence? evidence = null, bool discoverOnly = false)
     {
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
         var diagnostics = new List<StartupCleanupDiagnostic>();
         var protectedIds = new HashSet<string>(RuntimePaths.Comparer);
         // A completion session can have no tmp yet. Startup already initializes these roots;
@@ -45,8 +46,9 @@ internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRu
         var registry = await new GitWorktreeReader(processRunner).ReadAsync(repository, cancellationToken).ConfigureAwait(false);
         var worktrees = RuntimeDirectoryReader.ReadRoot(paths.WorktreesRoot(project));
         var tmp = RuntimeDirectoryReader.ReadRoot(paths.TmpRoot(project));
-        if (onlyBeadId is not null && (!inventory.ById.TryGetValue(onlyBeadId, out var completed)
-                || completed.IssueType != "task" || !StartupEnvironmentClassifier.IsCompletedTmpOwner(completed, actor)))
+        if (onlyBeadId is not null && evidence is not null && (!inventory.ById.TryGetValue(onlyBeadId, out var completed)
+                || !StartupEnvironmentClassifier.IsCompletedTmpOwner(completed, actor)
+                || completed.IssueType != "task"))
             throw new ToolExecutionException("Completed task is no longer closed, unassigned and unpaused; resources retained.");
         var plan = StartupPlanner.PlanForStartup(actor, inventory, registry, worktrees, tmp);
         AddInspectionDiagnostics(plan, diagnostics);
@@ -88,14 +90,30 @@ internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRu
             await store.WriteAsync(record, cancellationToken).ConfigureAwait(false);
             records.Add(bead.Id, record);
         }
-        foreach (var id in records.Keys.ToArray())
+        foreach (var record in records.Values.Where(record => record.Status == CleanupStatus.Resolved).ToArray())
         {
-            var record = records[id];
-            if (record.Status == CleanupStatus.Resolved) continue;
-            record = record with { Attempts = record.Attempts + 1, LastAttempt = DateTimeOffset.UtcNow,
-                Status = CleanupStatus.Pending, NextAttempt = null, ResolvedAt = null };
-            await SaveAsync(record).ConfigureAwait(false);
+            if (registry.Any(entry => RuntimePaths.Comparer.Equals(entry.Path, record.Worktree.Path))
+                || worktrees.Entries.Any(entry => RuntimePaths.Comparer.Equals(entry.Path, record.Worktree.Path))
+                || tmp.Entries.Any(entry => RuntimePaths.Comparer.Equals(entry.Path, record.Tmp.Path)))
+            {
+                var changed = CleanupRetryPolicy.Fail(record,
+                    "Resources reappeared after confirmed absence; identity requires operator inspection.", false, now);
+                await store.WriteAsync(changed, cancellationToken).ConfigureAwait(false);
+                records[record.BeadId] = changed;
+            }
         }
+        if (discoverOnly) return diagnostics.AsReadOnly();
+        // Interrupted removals cannot be replayed without confirming process settlement.
+        foreach (var record in records.Values.ToArray())
+        {
+            if (record.Status == CleanupStatus.Pending && record.Attempts > 0 && record.CycleAttempts != 0)
+                await SaveAsync(CleanupRetryPolicy.Fail(record,
+                    "Cleanup attempt was interrupted; fresh operator inspection is required.", false, now)).ConfigureAwait(false);
+        }
+        var due = records.Values.Where(record => CleanupRetryPolicy.IsDue(record, now))
+            .Select(record => record.BeadId).ToHashSet(RuntimePaths.Comparer);
+        foreach (var id in due)
+            await SaveAsync(CleanupRetryPolicy.Begin(records[id], now)).ConfigureAwait(false);
 
         async Task SaveAsync(CompletedEnvironmentObligation record)
         {
@@ -104,16 +122,15 @@ internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRu
             records[record.BeadId] = record;
         }
 
-        async Task RetainAsync(string beadId, string path, string reason)
+        async Task RetainAsync(string beadId, string path, string reason, bool transient = false)
         {
             diagnostics.Add(new(beadId, path, reason));
             if (records.TryGetValue(beadId, out var record))
-                await SaveAsync(record with { Status = CleanupStatus.NeedsAttention,
-                    ResolvedAt = null, NextAttempt = null, Diagnostic = Limit(reason) }).ConfigureAwait(false);
+                await SaveAsync(CleanupRetryPolicy.Fail(record, reason, transient, (timeProvider ?? TimeProvider.System).GetUtcNow())).ConfigureAwait(false);
         }
 
 
-        foreach (var candidate in plan.Removals.Where(candidate => onlyBeadId is null || candidate.BeadId == onlyBeadId))
+        foreach (var candidate in plan.Removals.Where(candidate => due.Contains(candidate.BeadId)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!records.TryGetValue(candidate.BeadId, out var obligation)
@@ -174,7 +191,7 @@ internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRu
                 or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
             {
                 await RetainAsync(currentCandidate.BeadId, currentCandidate.Path,
-                    exception.Message).ConfigureAwait(false);
+                    exception.Message, CleanupRetryPolicy.IsTransient(exception)).ConfigureAwait(false);
                 protectedIds.Add(currentCandidate.BeadId);
                 continue;
             }
@@ -185,7 +202,7 @@ internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRu
                     ? $"git worktree remove exited {removal.ExitCode}"
                     : $"git worktree remove exited {removal.ExitCode}: {removal.StandardError.TrimEnd()}";
                 await RetainAsync(currentCandidate.BeadId, currentCandidate.Path,
-                    reason).ConfigureAwait(false);
+                    reason, CleanupRetryPolicy.IsTransientGitFailure(reason)).ConfigureAwait(false);
                 protectedIds.Add(currentCandidate.BeadId);
                 continue;
             }
@@ -212,7 +229,7 @@ internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRu
         // Tmp ownership is determined only after all worktree commands have settled.
         var postWorktree = await ReadCurrentPlanAsync(paths, project, repository, actor, cancellationToken).ConfigureAwait(false);
         AddInspectionDiagnostics(postWorktree.Plan, diagnostics);
-        foreach (var candidate in postWorktree.Plan.OrphanTmp.Where(candidate => onlyBeadId is null || candidate.BeadId == onlyBeadId))
+        foreach (var candidate in postWorktree.Plan.OrphanTmp.Where(candidate => due.Contains(candidate.BeadId)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!records.TryGetValue(candidate.BeadId, out var obligation) || obligation.Tmp.ConfirmedAbsent)
@@ -301,14 +318,14 @@ internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRu
                 or System.ComponentModel.Win32Exception)
             {
                 await RetainAsync(candidate.BeadId, candidate.Path,
-                    exception.Message).ConfigureAwait(false);
+                    exception.Message, CleanupRetryPolicy.IsTransient(exception)).ConfigureAwait(false);
                 protectedIds.Add(candidate.BeadId);
             }
         }
 
         var observed = await ReadCurrentPlanAsync(paths, project, repository, actor, cancellationToken).ConfigureAwait(false);
         EnsureSharedRoots(paths, project);
-        foreach (var record in records.Values.ToArray())
+        foreach (var record in records.Values.Where(record => due.Contains(record.BeadId)).ToArray())
         {
             var worktreeAbsent = !observed.Registry.Any(entry => RuntimePaths.Comparer.Equals(entry.Path, record.Worktree.Path))
                 && !observed.Worktrees.Entries.Any(entry => RuntimePaths.Comparer.Equals(entry.Path, record.Worktree.Path));
@@ -318,16 +335,19 @@ internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRu
             if (worktreeAbsent && tmpAbsent && eligible)
                 await SaveAsync(record with { Worktree = record.Worktree with { ConfirmedAbsent = true },
                     Tmp = record.Tmp with { ConfirmedAbsent = true }, Status = CleanupStatus.Resolved,
-                    NextAttempt = null, Diagnostic = null, ResolvedAt = record.ResolvedAt ?? DateTimeOffset.UtcNow }).ConfigureAwait(false);
+                    NextAttempt = null, Diagnostic = null, ResolvedAt = record.ResolvedAt ?? (timeProvider ?? TimeProvider.System).GetUtcNow() }).ConfigureAwait(false);
             else
             {
                 await SaveAsync(record with { Worktree = record.Worktree with { ConfirmedAbsent = record.Worktree.ConfirmedAbsent || worktreeAbsent },
-                    Tmp = record.Tmp with { ConfirmedAbsent = record.Tmp.ConfirmedAbsent || tmpAbsent }, Status = CleanupStatus.NeedsAttention,
-                    NextAttempt = null, ResolvedAt = null,
+                    Tmp = record.Tmp with { ConfirmedAbsent = record.Tmp.ConfirmedAbsent || tmpAbsent },
+                    Status = eligible && record.Status == CleanupStatus.RetryScheduled ? CleanupStatus.RetryScheduled : CleanupStatus.NeedsAttention,
+                    NextAttempt = eligible && record.Status == CleanupStatus.RetryScheduled ? record.NextAttempt : null, ResolvedAt = null,
                     Diagnostic = record.Diagnostic ?? "Current Bead or resource identity does not authorize completed-environment disposal." }).ConfigureAwait(false);
                 diagnostics.Add(new(record.BeadId, record.Worktree.Path, records[record.BeadId].Diagnostic!));
             }
         }
+        foreach (var record in records.Values.Where(record => !due.Contains(record.BeadId) && record.Status != CleanupStatus.Resolved))
+            diagnostics.Add(new(record.BeadId, record.Worktree.Path, record.Diagnostic ?? "Cleanup is pending a later eligible attempt."));
         store.TrimResolvedHistory();
         return diagnostics.Where(item => onlyBeadId is null || item.BeadId == onlyBeadId).Distinct().ToList().AsReadOnly();
     }
@@ -462,8 +482,6 @@ internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRu
 
     private static bool MatchesPurpose(CompletedEnvironmentObligation record, BeadSnapshot bead) =>
         record.Purpose == WorktreePurpose.Delivery ? bead.IssueType == "task" : bead.IssueType is "feature" or "bug";
-
-    private static string Limit(string reason) => reason.Length <= 384 ? reason : reason[..384];
 
     private sealed record CurrentPlan(BeadsInventory Inventory, IReadOnlyList<GitWorktreeSnapshot> Registry,
         RuntimeDirectorySnapshot Worktrees, RuntimeDirectorySnapshot Tmp, StartupPlan Plan);

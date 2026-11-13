@@ -45,11 +45,6 @@ internal static class ContinuousApplication
         var beadsWriter = new BeadsWriter(processRunner);
         await new StartupRecoveryCoordinator(beadsReader, beadsWriter)
             .RecoverAsync(repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
-        var cleanupDiagnostics = await new StartupEnvironmentCleaner(beadsReader, beadsWriter, processRunner)
-            .CleanAsync(hostPaths, project.Name, repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
-        foreach (var diagnostic in cleanupDiagnostics)
-            environment.Err.WriteLine($"nightweaver: startup cleanup retained '{diagnostic.BeadId}' at '{diagnostic.Path}': {diagnostic.Reason}");
-
         await using var telemetry = new FactoryTelemetryPublisher(hostPaths, project, repository,
             project.Concurrency.MaxConcurrentDelivery, ConcurrencyConfig.MergerSlots,
             message => environment.Err.WriteLine("nightweaver: " + message), processRunner);
@@ -59,14 +54,20 @@ internal static class ContinuousApplication
 
         using var slotLifetime = new CancellationTokenSource();
         var stopGate = shutdownSignals?.StopGate ?? new ContinuousStopGate();
+        var environments = new EnvironmentReservations();
+        using var cleanup = new CompletedEnvironmentWorker(hostPaths, project, repository, processRunner,
+            environments, stopGate, telemetry.RuntimeId, message => environment.Err.WriteLine("nightweaver: " + message));
+        await cleanup.InitializeAsync(cancellationToken).ConfigureAwait(false);
+        using var cleanupLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var cleanupTask = Task.Run(() => cleanup.RunAsync(cleanupLifetime.Token), CancellationToken.None);
         var pool = new DeliveryPoolCoordinator(hostPaths, project, repository, processRunner,
             slotLifetimeToken: slotLifetime.Token,
             stopGate: stopGate,
-            telemetry: telemetry);
+            telemetry: telemetry, environments: environments);
         var mergerPool = new MergerPoolCoordinator(hostPaths, project, repository, processRunner,
             slotLifetimeToken: slotLifetime.Token,
             stopGate: stopGate,
-            telemetry: telemetry);
+            telemetry: telemetry, environments: environments, cleanupQueue: cleanup);
         var configuredPools = new[]
         {
             new ContinuousPoolRegistration(
@@ -108,12 +109,25 @@ internal static class ContinuousApplication
             journalWatcher: (requestDiscovery, token) => new BeadsJournalWatcher(
                 new BeadsJournalClient(processRunner), requestDiscovery, environment.Err)
                 .RunAsync(repository, token),
-            stopGate: stopGate);
+            stopGate: stopGate, onDiscoveryRequested: cleanup.Wake);
 
         environment.Out.WriteLine($"Continuous Delivery runtime starting with singleton Merger for Project '{project.Name.Value}' and Target Repository '{repository.Path}'.");
         environment.Out.WriteLine($"Delivery capacity: {pool.CapacityLimit}; Merger capacity: {mergerPool.CapacityLimit}; periodic discovery: 30 seconds; press Ctrl+C to stop.");
-        var drained = await runtime.RunAsync(cancellationToken).ConfigureAwait(false);
-        return drained ? ExitCodes.Success : ExitCodes.InspectionFailure;
+        try
+        {
+            var drained = await runtime.RunAsync(cancellationToken).ConfigureAwait(false);
+            return drained ? ExitCodes.Success : ExitCodes.InspectionFailure;
+        }
+        finally
+        {
+            cleanupLifetime.Cancel();
+            try { await cleanupTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) when (cleanupLifetime.IsCancellationRequested) { }
+            // All completion producers have drained. Persistence failures are required operational
+            // failures; closure remains intact and startup reconciliation recovers after repair.
+            if (!stopGate.IsForceStopRequested)
+                await cleanup.FlushCompletionsAsync(CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     internal static void EnsureInitialRoots(HostPaths hostPaths, ProjectSlug project)

@@ -120,7 +120,7 @@ internal sealed record ContinuousPoolRegistration
             var disposition = completion.Outcome?.Disposition;
             var receipt = completion.Outcome?.Stage?.StageResult.MergerCompletion;
             var requiredHousekeepingFailed = receipt is { } completedMerge
-                && (!completedMerge.CleanupSucceeded
+                && (!completedMerge.CleanupSucceeded && !completedMerge.CleanupQueued
                     || completedMerge.ProductDiagnostic is not null
                     || completedMerge.DiagnosticPersistenceDiagnostic is not null);
             var failed = completion.Exception is not null
