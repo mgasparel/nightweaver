@@ -10,7 +10,7 @@ namespace Nightweaver.Tests;
 public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestSupport
 {
     [Fact]
-    public async Task DeliveryCompletesWhileMergerPreparationIsHeldThenBothTasksMerge()
+    public async Task DeliveryCompletesWhileMergerPreparationIsHeldThenQueuedTaskIsAdmitted()
     {
         await using var fixture = await ManualPilot.CreateAsync(seedProfile: ManualPilotSeedProfile.ParentlessOnly,
             cancellationToken: TestContext.Current.CancellationToken);
@@ -34,6 +34,7 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var preparing = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var successorStarted = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var roles = new ConcurrentQueue<(string Bead, AgentRole Role)>();
         var mergerStarts = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         var preparer = new AgentInvocationPreparer();
@@ -74,7 +75,19 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             runSlot: (host, config, target, bead, token) => deliverySlot.RunAsync(host, config, target, bead, token),
             slotLifetimeToken: lifetime.Token);
         var merger = new MergerPoolCoordinator(paths, project, repository, runner,
-            runSlot: mergerSlot.RunAsync, slotLifetimeToken: lifetime.Token);
+            runSlot: async (host, config, target, bead, attemptStarted, token) =>
+            {
+                if (bead != heldBead)
+                {
+                    // Prove that the queued successor gets the singleton reservation.
+                    // Native merge completion is already exercised by the first slot
+                    // here and by MergerPoolIntegrationTests; do not repeat that full
+                    // pipeline merely to observe the pool's next admission.
+                    successorStarted.TrySetResult(bead);
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                return await mergerSlot.RunAsync(host, config, target, bead, attemptStarted, token);
+            }, slotLifetimeToken: lifetime.Token);
         Exception? primary = null;
         Exception? cleanupFailure = null;
         try
@@ -114,15 +127,13 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             Assert.True(firstMerge.MergeCompleted, firstMerge.Diagnostic);
             var next = Assert.Single((await merger.EvaluateAsync(lifetime.Token)).Admitted);
             Assert.Equal(lateBead, next.BeadId);
-            var secondMerge = await next.Completion.WaitAsync(TimeSpan.FromMinutes(3), lifetime.Token);
-            Assert.True(secondMerge.MergeCompleted, secondMerge.Diagnostic);
+            Assert.Equal(lateBead, await successorStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), lifetime.Token));
+            Assert.Equal(lateBead, Assert.Single(merger.ActiveReservations).BeadId);
+            Assert.False(next.Completion.IsCompleted);
             Assert.Equal(1, mergerStarts[heldBead]);
-            Assert.Equal(1, mergerStarts[lateBead]);
-            foreach (var bead in new[] { heldBead, lateBead })
-            {
-                Assert.Equal("closed", (await fixture.ReadBeadAsync(bead, lifetime.Token)).GetProperty("status").GetString());
-                Assert.Contains(bead, await fixture.ReadRemoteMainFileAsync($"merger-verified-{bead}.txt", lifetime.Token), StringComparison.Ordinal);
-            }
+            Assert.False(mergerStarts.ContainsKey(lateBead));
+            Assert.Equal("closed", (await fixture.ReadBeadAsync(heldBead, lifetime.Token)).GetProperty("status").GetString());
+            Assert.Contains(heldBead, await fixture.ReadRemoteMainFileAsync($"merger-verified-{heldBead}.txt", lifetime.Token), StringComparison.Ordinal);
         }
         catch (Exception exception)
         {
