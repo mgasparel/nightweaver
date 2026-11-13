@@ -66,6 +66,8 @@ internal static class DispatchApplication
             environment.Err.WriteLine($"nightweaver: startup cleanup retained '{diagnostic.BeadId}' at '{diagnostic.Path}': {diagnostic.Reason}");
         var (inventory, readiness) = await beadsReader
             .ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
+        if (await new PlanningGraphReconciler(processRunner).PauseChangedGraphsAsync(repository, inventory, project.RecoveryActor, cancellationToken))
+            (inventory, readiness) = await beadsReader.ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor, cancellationToken);
 
         if (!inventory.ById.TryGetValue(beadId, out var bead))
             return Fail(environment, $"Bead '{beadId}' was not found in Target Repository '{repository.Path}'.");

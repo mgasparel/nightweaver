@@ -152,7 +152,7 @@ public sealed class AgentStageCoordinatorTests
         var failure = await Assert.ThrowsAsync<AgentStageInputException>(() => coordinator.RunAsync(
             Host(), Project("target"), new("target", "main"), "product", AgentRole.Planner,
             TestContext.Current.CancellationToken));
-        Assert.Contains("materialization is not enabled", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("Orchestrator publication path", failure.Message, StringComparison.Ordinal);
         Assert.Single(runner.Requests);
     }
 

@@ -88,7 +88,7 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
             using var json = JsonDocument.Parse(text);
             return json.RootElement.TryGetProperty("schema", out var schema)
                 && schema.GetString() is CandidateSchema or ReviewSchema or QuestionSchema
-                    or "nightweaver-planning-outcome-v1";
+                    or "nightweaver-planning-outcome-v1" or PlanningPublisher.ReleaseSchema;
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException) { return false; }
     }

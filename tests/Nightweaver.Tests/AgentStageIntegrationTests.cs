@@ -108,7 +108,7 @@ public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTe
 public sealed class PlanningNativeTurnTests : AgentStageIntegrationTestSupport
 {
     [Fact]
-    public async Task NativePlannerAndChallengerPublishExactApprovalWithoutCreatingTasks()
+    public async Task NativeApprovedGraphPublishesAndEntersDeliveryWithoutAnotherAgentTurn()
     {
         using var target = new AgentStageTargetFixture();
         var product = target.CreateBead("Requested behavior", "feature", "ready-for-planning");
@@ -124,6 +124,23 @@ public sealed class PlanningNativeTurnTests : AgentStageIntegrationTestSupport
         Assert.Equal(before, target.ReadInventory().ById.Count);
         Assert.Contains("planning_approval", target.ReadComments(product), StringComparison.Ordinal);
         Assert.True(Directory.Exists(target.WorktreePath(product)));
+        var publication = await target.RunRetryAgentAsync(product, AgentRole.Planner, []);
+        Assert.True(publication.Succeeded, publication.StageResult.Failure?.Reason);
+        Assert.True(publication.StageResult.VerifiedState?.Planned);
+        Assert.Equal(0, target.LastRetryLifecycleCount);
+        var generated = target.ReadInventory().ById.Values.Where(b => PlanningPublisher.Metadata(b, "publication_product") == product).ToArray();
+        Assert.Equal(2, generated.Length);
+        var task = Assert.Single(generated, b => PlanningPublisher.Metadata(b, "publication_entry") == "slice-1");
+        var dependent = Assert.Single(generated, b => PlanningPublisher.Metadata(b, "publication_entry") == "slice-2");
+        Assert.DoesNotContain("plan-unpublished", task.Labels);
+        Assert.True(PlanningPublicationGate.Allows(task, target.ReadInventory()), target.ReadBead(product).Payload.GetRawText() + task.Payload.GetRawText());
+        var ready = BeadsReader.Parse(target.RunTarget("bd", ["ready", "--unassigned", "--limit", "0", "--json"]));
+        Assert.Contains(task.Id, ready.ById.Keys);
+        Assert.DoesNotContain(dependent.Id, ready.ById.Keys);
+        var observations = Path.Combine(target.RootPath, "publication-delivery.jsonl");
+        var delivery = await target.RunDeliverySlotAsync(task.Id,
+            [(AgentRole.Implementer, "slot-implement-unlabeled"), (AgentRole.Reviewer, "slot-review"), (AgentRole.Qa, "slot-qa")], observations);
+        Assert.True(delivery.MergeReady, delivery.Diagnostic);
     }
 }
 

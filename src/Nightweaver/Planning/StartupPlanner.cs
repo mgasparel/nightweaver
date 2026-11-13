@@ -189,10 +189,9 @@ internal static class StartupPlanner
         return IsSameOrAncestor(left, right) || IsSameOrAncestor(right, left);
     }
 
-    // A held claim at this boundary cannot distinguish verified completion from
-    // partial tracker writes or a crash before verification. Labels alone are insufficient.
+    // Approved-stage publication is now reconciled from stable task identities on
+    // redispatch. A claimed planned Product remains an ambiguous legacy completion.
     private static bool RequiresMaterializationRecovery(BeadSnapshot bead) =>
         bead.IssueType is "feature" or "bug" && bead.Status == "in_progress"
-        && (bead.Labels.Contains("stage:plan-approved", StringComparer.Ordinal)
-            || bead.Labels.Contains("planned", StringComparer.Ordinal));
+        && bead.Labels.Contains("planned", StringComparer.Ordinal);
 }

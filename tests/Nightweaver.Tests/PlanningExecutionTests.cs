@@ -162,12 +162,14 @@ public sealed class PlanningExecutionTests
         {
             roles.Add(role);
             var approval = roles.Count == 4;
-            state = role == AgentRole.Planner ? before with { Stage = "stage:plan-challenge" }
-                : approval ? before with { Stage = "stage:plan-approved", Status = "open" }
+            var publication = before.Stage == "stage:plan-approved";
+            state = publication ? before with { Stage = null, Planned = true, Status = "open" }
+                : role == AgentRole.Planner ? before with { Stage = "stage:plan-challenge" }
+                : approval ? before with { Stage = "stage:plan-approved" }
                 : before with { Stage = "stage:plan", RepairCycles = before.RepairCycles + 1 };
             var choice = approval ? AgentOutcomeChoice.Approved : role == AgentRole.Planner ? AgentOutcomeChoice.ReadyForReview : AgentOutcomeChoice.ChangesRequired;
             var result = new AgentStageResult(role, "product", "turn", "log", null, [], state,
-                PublicationReceipt: new(role, choice, state, approval ? null : "nightweaver:demo", approval, false));
+                PublicationReceipt: new(role, choice, state, publication ? null : "nightweaver:demo", publication, false));
             return Task.FromResult(new OperationalRetryOutcome(OperationalRetryStatus.Succeeded, result, 1, null, null, null));
         });
         if (paused)
@@ -181,9 +183,10 @@ public sealed class PlanningExecutionTests
         var result = await coordinator.RunClaimedAsync(new(temp.Path), project, new(temp.Path, "main"), "product", state,
             TestContext.Current.CancellationToken);
         Assert.True(result?.Succeeded);
-        Assert.Equal(new[] { AgentRole.Planner, AgentRole.PlanChallenger, AgentRole.Planner, AgentRole.PlanChallenger }, roles);
+        Assert.Equal(new[] { AgentRole.Planner, AgentRole.PlanChallenger, AgentRole.Planner, AgentRole.PlanChallenger, AgentRole.Planner }, roles);
         Assert.Equal(1, state.RepairCycles);
-        Assert.Equal("stage:plan-approved", state.Stage);
+        Assert.True(state.Planned);
+        Assert.Null(state.Stage);
     }
 
     internal static PlanningDocument Plan(PlanningGrounding grounding) => new(PlanningEvidence.CandidateSchema, grounding,

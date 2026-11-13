@@ -82,6 +82,7 @@ internal sealed class OperationalRetryCoordinator
         CancellationToken, Task<NeedsHumanEscalationResult>> escalate;
     private readonly BeadsReader beadsReader;
     private readonly PlanningEvidence planningEvidence;
+    private readonly PlanningPublisher planningPublisher;
     private readonly IAgentOutcomeClassifier outcomeClassifier;
     private readonly IDeliveryOutcomePublisher outcomePublisher;
     private readonly IDeliveryOutcomeVerifier outcomeVerifier;
@@ -116,6 +117,7 @@ internal sealed class OperationalRetryCoordinator
         this.escalate = escalate ?? this.escalator.EscalateAsync;
         beadsReader = new BeadsReader(processRunner);
         planningEvidence = new PlanningEvidence(processRunner);
+        planningPublisher = new PlanningPublisher(processRunner);
         this.outcomeClassifier = outcomeClassifier ?? new AgentOutcomeClassifier();
         this.outcomePublisher = outcomePublisher ?? new DeliveryOutcomePublisher(processRunner);
         this.outcomeVerifier = outcomeVerifier ?? new DeliveryOutcomeVerifier(processRunner);
@@ -151,12 +153,26 @@ internal sealed class OperationalRetryCoordinator
         try
         {
             session = await stages.OpenSessionAsync(paths, project, repository, beadId, role,
-                expectedAssignee, cancellationToken, expectedState).ConfigureAwait(false);
+                expectedAssignee, cancellationToken, expectedState, allowPublication: true).ConfigureAwait(false);
         }
         catch (BeadEnvironmentException exception)
         {
             return await EscalateProvisionFailureAsync(paths, project, repository, beadId, role, expectedAssignee,
                 expectedState, 0, exception, cancellationToken).ConfigureAwait(false);
+        }
+        if (role == AgentRole.Planner && session.InitialState.Stage == "stage:plan-approved")
+        {
+            try
+            {
+                var published = await planningPublisher.PublishAsync(session, cancellationToken, releaseRevalidationClaim: expectedState is null);
+                return new(OperationalRetryStatus.Succeeded, published, 0, null, null, null);
+            }
+            catch (Exception exception) when (exception is AgentStageInputException or ToolExecutionException or IOException)
+            {
+                var failed = new AgentStageResult(role, beadId, "planning-publication", "", null, []);
+                return await EscalateDeliveryOutcomeAsync(session, failed, expectedAssignee, 0,
+                    exception.Message, null, cancellationToken);
+            }
         }
         var attemptCount = 1L;
         var beforeState = session.InitialState;
@@ -182,15 +198,6 @@ internal sealed class OperationalRetryCoordinator
 
         if (ContinuousAgentLaunchContext.StopRequested)
             return StoppedForDrain(latest, attemptCount);
-
-        // Materialization writes multiple durable tracker records and is not replay-safe,
-        // even when failure happened before a discovered-from edge became observable.
-        if (role == AgentRole.Planner && session.InitialState.Stage == "stage:plan-approved")
-            throw new AgentStageInputException(
-                $"Planning materialization for Bead '{beadId}' requires explicit recovery after attempt {attemptCount}: "
-                + $"{latest.Failure!.Kind}: {latest.Failure.Reason}; invocation '{latest.InvocationId}'; log '{latest.LogFilePath}'. "
-                + $"{string.Join("; ", latest.Diagnostics)} Claim and runtime evidence are retained. "
-                + "Inspect existing tasks and discovered-from relationships before guarded finalization; do not replay the Planner.");
 
         AgentStageResult previous = latest;
         DuplicateFailureClassificationResult? lastClassification = null;

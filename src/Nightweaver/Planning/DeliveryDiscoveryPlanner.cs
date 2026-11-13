@@ -17,6 +17,7 @@ internal static class DeliveryDiscoveryPlanner
         {
             if (!snapshot.Inventory.ById.TryGetValue(id, out var bead)
                 || bead.IssueType != "task"
+                || !Execution.PlanningPublicationGate.Allows(bead, snapshot.Inventory)
                 || bead.Labels.Contains("plan-unpublished", StringComparer.Ordinal)
                 || HasPauseLabel(bead))
                 continue;
