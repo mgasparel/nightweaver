@@ -142,6 +142,7 @@ const getDetail = async id => {
 try {
   await page.goto(baseUrl, { waitUntil: 'networkidle' });
   await page.getByRole('heading', { name: 'Nightweaver console' }).waitFor();
+  await page.locator('[data-view="all"]').click();
   await page.locator('#beads-table-body tr').first().waitFor({ timeout: 15000 });
 
   const decisionId = await readId('QA product decision');

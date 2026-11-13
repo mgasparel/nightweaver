@@ -10,6 +10,7 @@ try {
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(url, { waitUntil: 'networkidle' });
   await page.getByRole('heading', { name: 'Nightweaver console' }).waitFor();
+  await page.locator('[data-view="active"]').click();
   await page.getByText('Active QA task', { exact: true }).waitFor();
   if (errors.length) throw new Error(errors.join('\n'));
   console.log(`Playwright reached ${url}: ${await page.title()}; seeded issue is visible.`);
