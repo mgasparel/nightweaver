@@ -22,10 +22,10 @@ public sealed class AgentStageCoordinatorTests
         {
             if (request.FileName == "bd")
             {
+                if (request.Arguments.Contains("comments")) return Task.FromResult(new ProcessResult(0, "[]", ""));
                 Assert.Contains("list", request.Arguments);
                 order.Add(inventoryReads++ switch { 0 => "initial", 1 => "fresh", _ => "post" });
-                var labels = inventoryReads <= 2 ? PlanLabels : ChallengeLabels;
-                return Task.FromResult(new ProcessResult(0, Inventory("product", "feature", "open", labels), ""));
+                return Task.FromResult(new ProcessResult(0, Inventory("product", "task", "open", []), ""));
             }
             if (request.FileName == "git" && request.Arguments.SequenceEqual(StatusArguments))
             {
@@ -37,6 +37,8 @@ public sealed class AgentStageCoordinatorTests
                 order.Add("verify-head");
                 return Task.FromResult(new ProcessResult(0, new string('a', 40) + "\n", ""));
             }
+            if (request.FileName == "git" && request.Arguments.SequenceEqual(["branch", "--show-current"]))
+                return Task.FromResult(new ProcessResult(0, "nightweaver/product", ""));
             throw new InvalidOperationException($"Unexpected process: {request.FileName} {string.Join(' ', request.Arguments)}");
         });
 
@@ -45,14 +47,14 @@ public sealed class AgentStageCoordinatorTests
             {
                 order.Add("provision");
                 Assert.Equal("product", beadId);
-                Assert.Equal(WorktreePurpose.Planning, purpose);
+                Assert.Equal(WorktreePurpose.Delivery, purpose);
                 return Task.FromResult(new ProvisionedWorktree("C:\\host\\worktrees\\demo\\product", new string('a', 40)));
             },
             prepare: (_, _, role, context, _, _) =>
             {
                 order.Add("prepare");
-                Assert.Equal(AgentRole.Planner, role);
-                Assert.Equal(new AgentDispatchContext("product", "feature", "stage:plan", 0), context);
+                Assert.Equal(AgentRole.Implementer, role);
+                Assert.Equal(new AgentDispatchContext("product", "task", null, 0), context);
                 prepared = Invocation();
                 return Task.FromResult(prepared);
             },
@@ -64,7 +66,7 @@ public sealed class AgentStageCoordinatorTests
             });
 
         var result = await coordinator.RunAsync(Host(), Project("target"), new("target", "main"), "product",
-            AgentRole.Planner, TestContext.Current.CancellationToken);
+            AgentRole.Implementer, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Failure?.Reason);
         Assert.Equal(["initial", "provision", "fresh", "prepare", "execute", "verify-status", "verify-head", "post"], order);
@@ -140,59 +142,18 @@ public sealed class AgentStageCoordinatorTests
         Assert.Equal((0, 0), (provisionCount, prepareCount));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ApprovedMaterializationRechecksChildrenAfterProvisioning(bool dependencyReadFails)
+    [Fact]
+    public async Task ApprovedPlanningRefusesPrematureMaterializationBeforeProvisioning()
     {
-        using var target = new BeadsFixture("materialization provision race");
-        var product = target.Create("Approved Product", type: "bug");
-        target.Run("bd", ["update", product, "--add-label", "stage:plan-approved", "--add-label", "ready-for-planning"]);
-        var baseline = BeadsReader.Parse(target.Run("bd", BeadsCommand.Create(target.Path).Arguments)).ById.Keys.ToHashSet(StringComparer.Ordinal);
-        string? child = null;
-        var dependencyReads = 0;
-        var prepareCount = 0;
-        var executeCount = 0;
-        var runner = new RecordingProcessRunner((request, token) =>
-        {
-            if (request.FileName == "bd" && request.Arguments.Contains("dep"))
-            {
-                dependencyReads++;
-                if (dependencyReadFails && dependencyReads == 2)
-                    return Task.FromResult(new ProcessResult(1, "", "injected dependency read failure"));
-            }
-            var environment = new Dictionary<string, string?>(target.Environment);
-            foreach (var pair in request.Environment) environment[pair.Key] = pair.Value;
-            return new SystemProcessRunner().RunAsync(request with { Environment = environment }, token);
-        });
+        var runner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(0,
+            Inventory("product", "feature", "open", ["stage:plan-approved"]), "")));
         var coordinator = new AgentStageCoordinator(runner,
-            provision: (_, _, _, _, _, _) =>
-            {
-                child = target.Create("Task linked during provisioning", type: "task");
-                target.Run("bd", ["dep", "add", child, product, "--type", "discovered-from"]);
-                return Task.FromResult(new ProvisionedWorktree(target.Path, new string('a', 40)));
-            },
-            prepare: (_, _, _, _, _, _) =>
-            {
-                prepareCount++;
-                return Task.FromResult(Invocation());
-            },
-            execute: (_, _, _, _) =>
-            {
-                executeCount++;
-                throw new InvalidOperationException("No Agent may run over materialized children.");
-            });
-
-        var failure = await Assert.ThrowsAnyAsync<NightweaverException>(() => coordinator.RunAsync(
-            Host(), Project(target.Path), new(target.Path, "main"), product, AgentRole.Planner,
+            provision: (_, _, _, _, _, _) => throw new InvalidOperationException("No provisioning is authorized."));
+        var failure = await Assert.ThrowsAsync<AgentStageInputException>(() => coordinator.RunAsync(
+            Host(), Project("target"), new("target", "main"), "product", AgentRole.Planner,
             TestContext.Current.CancellationToken));
-
-        Assert.Contains(dependencyReadFails ? "exited 1" : "already has materialized children", failure.Message, StringComparison.Ordinal);
-        Assert.Equal(2, dependencyReads);
-        Assert.Equal((0, 0), (prepareCount, executeCount));
-        var inventory = BeadsReader.Parse(target.Run("bd", BeadsCommand.Create(target.Path).Arguments));
-        Assert.Equal(child, Assert.Single(inventory.ById.Values, bead => !baseline.Contains(bead.Id)).Id);
-        Assert.Contains("stage:plan-approved", inventory.ById[product].Labels);
+        Assert.Contains("materialization is not enabled", failure.Message, StringComparison.Ordinal);
+        Assert.Single(runner.Requests);
     }
 
     private static PreparedAgentInvocation Invocation() => new("claude", [], "C:\\worktree", "prompt",

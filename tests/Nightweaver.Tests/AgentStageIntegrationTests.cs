@@ -105,6 +105,28 @@ public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTe
     }
 }
 
+public sealed class PlanningNativeTurnTests : AgentStageIntegrationTestSupport
+{
+    [Fact]
+    public async Task NativePlannerAndChallengerPublishExactApprovalWithoutCreatingTasks()
+    {
+        using var target = new AgentStageTargetFixture();
+        var product = target.CreateBead("Requested behavior", "feature", "ready-for-planning");
+        var before = target.ReadInventory().ById.Count;
+        var draft = await target.RunRetryAgentAsync(product, AgentRole.Planner, ["planning-draft"]);
+        Assert.True(draft.Succeeded, ReadInvocationLog(draft.StageResult.LogFilePath));
+        Assert.Equal("stage:plan-challenge", draft.StageResult.VerifiedState?.Stage);
+        var review = await target.RunRetryAgentAsync(product, AgentRole.PlanChallenger, ["planning-approve"]);
+        Assert.True(review.Succeeded, ReadInvocationLog(review.StageResult.LogFilePath));
+        Assert.Equal("stage:plan-approved", review.StageResult.VerifiedState?.Stage);
+        Assert.NotNull(review.StageResult.PlanningApproval);
+        Assert.True(review.StageResult.PublicationReceipt?.ClaimReleased);
+        Assert.Equal(before, target.ReadInventory().ById.Count);
+        Assert.Contains("planning_approval", target.ReadComments(product), StringComparison.Ordinal);
+        Assert.True(Directory.Exists(target.WorktreePath(product)));
+    }
+}
+
 public abstract class AgentStageIntegrationTestSupport
 {
     private protected static void AssertSuccess(AgentStageResult result, string action)

@@ -28,6 +28,8 @@ internal static class FixtureOutcomeClassifier
                 ? "product_decision_required"
                 : role switch
                 {
+                    "planner" => "ready_for_review",
+                    "plan_challenger" => "approved",
                     "implementer" => "ready_for_review",
                     "reviewer" when sources.Contains("blocking finding:", StringComparison.OrdinalIgnoreCase) => "changes_required",
                     "reviewer" => "approved",
@@ -40,6 +42,8 @@ internal static class FixtureOutcomeClassifier
                 };
             var question = role switch
             {
+                "planner" => "planner_outcome",
+                "plan_challenger" => "plan_challenger_outcome",
                 "implementer" => AgentOutcomeClassifier.QuestionName,
                 "reviewer" => "reviewer_outcome",
                 "qa" => "qa_outcome",

@@ -8,13 +8,13 @@ namespace Nightweaver.Tests;
 public sealed class AuthorityMatrixTests
 {
     [Fact]
-    public void PlannedProductRetainingDispatchClaimIsAcceptedBeforeHandoff()
+    public void PlannerCannotPublishPlannedEvenWhileRetainingClaim()
     {
         var before = State("product", "bug", "stage:plan-approved", status: "in_progress");
         var after = State("product", "bug", status: "in_progress", labels: ["planned"]);
         var result = AuthorityMatrix.Validate(AgentRole.Planner, before, after,
             Beads(State("task", "task")), [new("task", "product", "discovered-from")]);
-        Assert.True(result.IsLegal, result.Reason);
+        Assert.False(result.IsLegal);
     }
 
     [Fact]
@@ -25,7 +25,7 @@ public sealed class AuthorityMatrixTests
         var result = AuthorityMatrix.Validate(AgentRole.Planner, before, after,
             Beads(State("task", "task")), [new("task", "product", "discovered-from")]);
         Assert.False(result.IsLegal);
-        Assert.Contains("retain", result.Reason!, StringComparison.Ordinal);
+        Assert.Contains("cannot mutate", result.Reason!, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -43,13 +43,8 @@ public sealed class AuthorityMatrixTests
         var cases = new (AgentRole Role, BeadWorkflowState Before, BeadWorkflowState After,
             IReadOnlyDictionary<string, BeadSnapshot> Beads, IReadOnlyList<BeadDependency>? Dependencies)[]
         {
-            (AgentRole.Planner, State("p0", "feature"), State("p0", "feature", labels: ["stage:plan-challenge"]), Beads(), null),
-            (AgentRole.Planner, State("p1", "bug", "stage:plan"), State("p1", "bug", "stage:plan-challenge"), Beads(), null),
-            (AgentRole.Planner, State("p2", "feature", "stage:plan"), State("p2", "feature", "stage:plan", labels: ["product-decision-required"]), Beads(), null),
-            (AgentRole.Planner, State("p3", "bug", "stage:plan-approved"), State("p3", "bug", labels: ["planned"]),
-                Beads(State("task-child", "task")), [new("task-child", "p3", "discovered-from")]),
-            (AgentRole.PlanChallenger, State("p4", "feature", "stage:plan-challenge"), State("p4", "feature", "stage:plan-approved"), Beads(), null),
-            (AgentRole.PlanChallenger, State("p5", "bug", "stage:plan-challenge", repairCycles: 2), State("p5", "bug", "stage:plan", repairCycles: 3), Beads(), null),
+            (AgentRole.Planner, State("p0", "feature"), State("p0", "feature"), Beads(), null),
+            (AgentRole.PlanChallenger, State("p4", "feature", "stage:plan-challenge"), State("p4", "feature", "stage:plan-challenge"), Beads(), null),
             (AgentRole.Implementer, State("t0", "task"), State("t0", "task"), Beads(), null),
             (AgentRole.Implementer, State("t1", "task", "stage:implement"), State("t1", "task", "stage:implement"), Beads(), null),
             (AgentRole.Reviewer, State("t2", "task", "stage:review"), State("t2", "task", "stage:review"), Beads(), null),
@@ -151,7 +146,7 @@ public sealed class AuthorityMatrixTests
         Assert.False(AuthorityMatrix.Validate(AgentRole.Planner, before, after, Beads(task), [new("product", "task", "discovered-from")]).IsLegal);
         Assert.False(AuthorityMatrix.Validate(AgentRole.Planner, before, after, Beads(task), [new("task", "other-product", "discovered-from")]).IsLegal);
         Assert.False(AuthorityMatrix.Validate(AgentRole.Planner, before, after, Beads(task), [new("task", "product", "blocks")]).IsLegal);
-        Assert.True(AuthorityMatrix.Validate(AgentRole.Planner, before, after, Beads(task), [new("task", "product", "discovered-from")]).IsLegal);
+        Assert.False(AuthorityMatrix.Validate(AgentRole.Planner, before, after, Beads(task), [new("task", "product", "discovered-from")]).IsLegal);
     }
 
     [Fact]
@@ -214,7 +209,7 @@ public sealed class AuthorityMatrixTests
 
         var challengerMax = State("max-challenger", "feature", "stage:plan-challenge", repairCycles: int.MaxValue);
         var challengerOverflow = State("max-challenger", "feature", "stage:plan", repairCycles: int.MaxValue);
-        Assert.Contains("overflowing", AuthorityMatrix.Validate(AgentRole.PlanChallenger, challengerMax,
+        Assert.Contains("cannot mutate", AuthorityMatrix.Validate(AgentRole.PlanChallenger, challengerMax,
             challengerOverflow, Beads(), null).Reason!, StringComparison.Ordinal);
     }
 

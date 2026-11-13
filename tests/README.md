@@ -1,10 +1,10 @@
 # Test suite
 
-Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection. The current retained suite discovers 788 tests.
+Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection. The current retained suite discovers 842 tests.
 
 ```powershell
 $timer = [Diagnostics.Stopwatch]::StartNew()
-dotnet test --solution Nightweaver.slnx --minimum-expected-tests 788 --report-xunit-xml --report-xunit-xml-filename timing.xml --show-slowest-tests 20
+dotnet test --solution Nightweaver.slnx --minimum-expected-tests 842 --report-xunit-xml --report-xunit-xml-filename timing.xml --show-slowest-tests 20
 $testExit = $LASTEXITCODE
 $timer.Stop()
 Write-Host "Suite wall time (build, fixture publishing, tests, teardown): $($timer.Elapsed)"
@@ -32,3 +32,5 @@ The retained suite keeps broad, fast decision and security checks in unit/coordi
 The ns-e5i reduction removed 138 costly overlapping integration scenarios: the comprehensive parentless/planned pilot variants, held-Merger and crash-recovery journeys, most repeated published stop/restart and dispatch/repair/admission cross-products, and most full Bead/Web request permutations. The resumed-admission and preparation-held Merger boundaries were subsequently restored as focused regressions. Historical incident causes and dispositions remain tracked in Beads; removing coverage does not establish a causal repair.
 
 The prior ns-e5i baseline discovered and passed 607 tests with no skips in 179.366 seconds, including the normal solution build, native fixture publishing, test execution, and teardown. Four focused Git cases cover short/deep pilot rebases and preservation of interrupted merge/apply rebases. One native resumed-admission regression covers dependency, capacity, and restart with explicit fixture priorities; it launches no Agent process. The pool-concurrency regression holds Merger preparation before its Agent clock starts, then proves native Implementer/Reviewer/QA progress and both real merge closures under the unchanged singleton reservation. The five-minute budget remains the acceptance threshold. Record the exact command, artifact path, measured duration, and any further coverage changes in the Bead result.
+
+Planning execution adds fast component cases for exact approval identity, grounding revalidation, coverage and dependency structure, evidenced assumption repair, questions, classification failure, configured budgets and guarded pause eligibility. One native Planner/Challenger smoke verifies the real Agent/Beads boundary and retained approved environment without creating tasks. The ns-47f.2 branch suite passed 698 tests with no skips in 112.48 seconds wall time, including build, fixture publishing and teardown; this is branch validation, not a timing measurement of a later main.

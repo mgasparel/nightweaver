@@ -104,7 +104,7 @@ internal sealed class AgentStageCoordinator
         if (expectedState is not null && initial.State != expectedState)
             throw new AgentStageInputException($"Bead '{beadId}' workflow state changed before stage opening; refusing to dispatch against stale verified state.");
 
-        await EnsureNoMaterializedChildrenAsync(repository, role, initial.State, cancellationToken);
+        EnsurePlanningExecutionBoundary(role, initial.State);
 
         var purpose = role is AgentRole.Planner or AgentRole.PlanChallenger
             ? WorktreePurpose.Planning : WorktreePurpose.Delivery;
@@ -117,7 +117,7 @@ internal sealed class AgentStageCoordinator
             && !string.Equals(fresh.Bead.Assignee, initial.Bead.Assignee, StringComparison.Ordinal)))
             throw new AgentStageInputException($"Bead '{beadId}' workflow state changed during provisioning; refusing to dispatch a stale stage.");
 
-        await EnsureNoMaterializedChildrenAsync(repository, role, fresh.State, cancellationToken);
+        EnsurePlanningExecutionBoundary(role, fresh.State);
 
         _ = ParseProvisionedHead(worktree.HeadSha);
         return new AgentStageSession(hostPaths, project, sessionRepository, beadId, role, purpose, worktree,
@@ -126,13 +126,10 @@ internal sealed class AgentStageCoordinator
             worktree.WasDirty);
     }
 
-    private async Task EnsureNoMaterializedChildrenAsync(ValidatedTargetRepository repository,
-        AgentRole role, BeadWorkflowState state, CancellationToken cancellationToken)
+    private static void EnsurePlanningExecutionBoundary(AgentRole role, BeadWorkflowState state)
     {
         if (role != AgentRole.Planner || state.Stage != "stage:plan-approved") return;
-        var dependencies = await beadsReader.ReadUpDependenciesAsync(repository, state.Id, cancellationToken);
-        if (dependencies.Any(edge => edge.Type == "discovered-from" && edge.DependsOnId == state.Id))
-            throw new AgentStageInputException($"Bead '{state.Id}' already has materialized children; explicit recovery is required before dispatch to prevent duplicate tasks.");
+        throw new AgentStageInputException("Approved Planning evidence is retained for verified task publication; materialization is not enabled by this execution slice.");
     }
 
     internal async Task<AgentStageResult> RunAttemptAsync(
@@ -153,17 +150,32 @@ internal sealed class AgentStageCoordinator
             session.Worktree.Path, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         IReadOnlySet<string>? preInvocationCommentIds = null;
-        if (AgentRoles.IsDeliveryRole(session.Role) || session.Role == AgentRole.Merger)
+        if (session.Role != AgentRole.Classifier)
         {
             var comments = await beadsReader.ReadCommentsAsync(session.Repository, session.BeadId, cancellationToken)
                 .ConfigureAwait(false);
             preInvocationCommentIds = comments.Select(comment => comment.Id).ToHashSet(StringComparer.Ordinal);
         }
+        PlanningGrounding? grounding = null;
+        string? planningContext = null;
+        if (session.Purpose == WorktreePurpose.Planning)
+        {
+            var evidence = new PlanningEvidence(processRunner);
+            grounding = await evidence.CaptureAsync(session, cancellationToken);
+            planningContext = await evidence.ReadContextAsync(session, cancellationToken);
+            invocation = new PreparedAgentInvocation(invocation.Executable, invocation.Arguments,
+                invocation.WorkingDirectory, invocation.StandardInput + "\n\nHost grounding (copy exactly into evidence):\n"
+                    + System.Text.Json.JsonSerializer.Serialize(grounding, PlanningEvidence.JsonOptions),
+                invocation.EnvironmentOverrides, invocation.Timeout, invocation.InvocationId,
+                invocation.TemporaryDirectory, invocation.LogFilePath, invocation.Purpose,
+                invocation.Stage, invocation.RepairCycles, invocation.MaxRepairCycles,
+                invocation.ConfiguredModel, invocation.Effort);
+        }
         cancellationToken.ThrowIfCancellationRequested();
         var execution = await execute(session.HostPaths, session.Project.Name, invocation, cancellationToken);
         var result = await verifier.VerifyAsync(session.Repository, session.Worktree.Path, session.Role, before,
             session.InitialAssignee, validHead, execution, cancellationToken).ConfigureAwait(false);
-        return result with { PreInvocationCommentIds = preInvocationCommentIds };
+        return result with { PreInvocationCommentIds = preInvocationCommentIds, PlanningGrounding = grounding, PlanningContext = planningContext };
     }
 
     internal async Task<(BeadSnapshot Bead, BeadWorkflowState State)> ReadRequestedStateAsync(
