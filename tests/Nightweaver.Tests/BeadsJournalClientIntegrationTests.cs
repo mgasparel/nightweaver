@@ -141,14 +141,20 @@ public sealed class BeadsJournalClientIntegrationTests
         var completions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
         var error = new StringWriter();
         var reader = new BeadsReader(processRunner);
+        using var trackerAccess = new SemaphoreSlim(1, 1);
         var runtime = new ContinuousDiscoveryCoordinator(
             [new ContinuousPoolRegistration(
                 ContinuousPoolKind.Delivery,
                 async cancellationToken =>
                 {
-                    var inventory = await reader.ReadSnapshotAsync(repository, cancellationToken);
-                    inventories.Writer.TryWrite(inventory);
-                    return Array.Empty<DeliveryPoolDiagnostic>();
+                    await trackerAccess.WaitAsync(cancellationToken);
+                    try
+                    {
+                        var inventory = await reader.ReadSnapshotAsync(repository, cancellationToken);
+                        inventories.Writer.TryWrite(inventory);
+                        return Array.Empty<DeliveryPoolDiagnostic>();
+                    }
+                    finally { trackerAccess.Release(); }
                 },
                 completions.Reader,
                 static () => { },
@@ -194,7 +200,16 @@ public sealed class BeadsJournalClientIntegrationTests
 
             await reconnectDelayEntered.Task.WaitAsync(TimeSpan.FromSeconds(20), lifetime.Token);
 
-            var unjournaledId = await InsertUnjournaledBeadAsync(processRunner, target.Path, lifetime.Token);
+            string unjournaledId;
+            // The standalone Dolt writer does not participate in bd's tracker gate.
+            // Drain in-flight discovery reads after tail termination before opening
+            // the embedded store for a write; otherwise Dolt can open it read-only.
+            await trackerAccess.WaitAsync(lifetime.Token);
+            try
+            {
+                unjournaledId = await InsertUnjournaledBeadAsync(processRunner, target.Path, lifetime.Token);
+            }
+            finally { trackerAccess.Release(); }
             Assert.Equal(firstHead,
                 await ReadJournalHeadAsync(processRunner, target.Path, lifetime.Token));
 
