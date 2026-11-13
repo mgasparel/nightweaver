@@ -20,7 +20,8 @@ internal static class BackgroundControlProtocol
         Func<BackgroundControlRequest, CancellationToken, Task<BackgroundControlResponse>> handle,
         CancellationToken cancellationToken,
         Action<BackgroundControlRequest>? afterResponse = null,
-        TimeSpan? clientTimeout = null)
+        TimeSpan? clientTimeout = null,
+        TimeProvider? timeProvider = null)
     {
         var connectionTimeout = clientTimeout ?? DefaultClientTimeout;
         while (!cancellationToken.IsCancellationRequested)
@@ -31,8 +32,8 @@ internal static class BackgroundControlProtocol
             try
             {
                 await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
-                using var clientLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                clientLifetime.CancelAfter(connectionTimeout);
+                using var deadline = new CancellationTokenSource(connectionTimeout, timeProvider ?? TimeProvider.System);
+                using var clientLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
                 BackgroundControlRequest? acceptedAction = null;
                 try
                 {
