@@ -79,20 +79,22 @@ try {
   await page.locator('#digest-toggle').focus();
   await page.keyboard.press('Enter');
   await count('#digest-threads > article', 5);
-  await count('#digest-threads > article:first-child .digest-item-row', 4);
+  await count('#digest-threads .digest-item-row', 0);
+  await page.locator('#digest-threads > article:first-child .digest-activity-toggle').click();
+  await count('#digest-threads > article:first-child .digest-thread-items > .digest-item-row', 4);
   await count('#digest-standalone > .digest-item-row', 6);
   await count('[data-bead-id="child-0-0"] .digest-inline-toggle', 0);
   await count('[data-bead-id="child-0-1"] .digest-summary.is-clamped', 1);
   const threadMore = page.getByRole('button', { name: 'Show 4 more in thread', exact: true }).first();
   await threadMore.focus();
   await page.keyboard.press('Space');
-  await count('#digest-threads > article:first-child .digest-item-row', 8);
+  await count('#digest-threads > article:first-child .digest-thread-items > .digest-item-row', 8);
   assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Show fewer in thread');
   await refresh();
   assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Show fewer in thread');
-  await count('#digest-threads > article:first-child .digest-item-row', 8);
+  await count('#digest-threads > article:first-child .digest-thread-items > .digest-item-row', 8);
   assert.equal(await page.locator('#digest-threads > article:first-child .digest-summary').first().getAttribute('class'), 'digest-summary is-clamped');
-  const summary = page.locator('#digest-threads > article:first-child .digest-inline-toggle').first();
+  const summary = page.locator('#digest-threads > article:first-child .digest-thread-activity > .digest-item-row .digest-inline-toggle');
   await summary.focus();
   await page.keyboard.press('Enter');
   assert.equal(await summary.getAttribute('aria-expanded'), 'true');
@@ -114,7 +116,7 @@ try {
   await page.getByRole('button', { name: 'Show 4 more standalone items', exact: true }).click();
   await page.locator('[data-digest-window="7d"]').click();
   await page.waitForFunction(() => !document.querySelector('#digest-refresh').disabled);
-  await count('#digest-threads > article:first-child .digest-item-row', 4);
+  await count('#digest-threads .digest-item-row', 0);
   await count('#digest-threads > article', 5);
   await count('#digest-standalone > .digest-item-row', 6);
   assert.equal(await page.locator('#digest-body').isVisible(), true);
@@ -166,7 +168,7 @@ try {
   // Removal of the focused item falls back to the persistent section control.
   data = structuredClone(busy);
   await refresh();
-  await summary.focus();
+  await page.locator('#digest-threads > article:first-child .digest-activity-toggle').focus();
   data = structuredClone(empty);
   await refresh();
   assert.equal(await page.evaluate(() => document.activeElement.id), 'digest-toggle');
@@ -192,7 +194,7 @@ try {
   }
   // Deliberate HTTP error fixtures emit network console errors; all other errors fail QA.
   assert.deepEqual(errors.filter(error => !/Failed to load resource.*(503|409)/.test(error)), []);
-  console.log('Digest QA passed: actual checkpoint persistence, 5/4/6 bounds, summary disclosure, focus, windows, failures, newer activity and responsive screenshots.');
+  console.log('Digest QA passed: actual checkpoint persistence, collapsed activity and 5/4/6 bounds, summary disclosure, focus, windows, failures, newer activity and responsive screenshots.');
 } finally {
   await browser.close();
 }

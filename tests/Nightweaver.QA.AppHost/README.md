@@ -43,6 +43,12 @@ Run the full fixture interaction checks with `node workspace-qa.mjs`; this cover
 
 Run `node planning-readiness-qa.mjs` against a fresh default fixture to check the Product backlog control, a stale 409 request, explicit Ready for Planning, persisted readiness after reload, and the 375px layout. It saves desktop/mobile screenshots under `TestResults`. This authorizes only the disposable Product; continuous Planning remains outside the runtime.
 
+## Compact lineage thread QA
+
+Run `node digest-threads-qa.mjs --baseline` and `node digest-threads-qa.mjs` on the discovered direct endpoint. Baseline mode serves the pre-change 855c2b1 JS/CSS from Git. The identical long-title fixture initially shows five threads, with one, four and eight child cases and mixed completed/open activity. It retains section/viewport screenshots and measured heights under `TestResults/digest-threads`. Candidate checks cover zero default child rows/descriptions, independent keyboard activity controls, preview/all access, refresh/focus, newly added collapsed threads, unique disclosure IDs, real root Workspace navigation, and 375/720 CSS px reflow. Review screenshots for readability; always stop the exact isolated stack in finally.
+
+The refresh regression expands and focuses the fifth thread before prepending new activity. Its original control must remain rendered, focused and expanded when moved past the initial bound; the incoming thread stays collapsed. The full collection becomes visible, and Show fewer restores the five-thread preview. Set `NIGHTWEAVER_QA_OUTPUT` to a separate directory to preserve earlier evidence.
+
 ## Digest disclosure QA
 
 Run `node digest-qa.mjs` against a fresh default fixture using the same discovered direct endpoint. It first saves a real checkpoint through the UI and independently reads persistence. Deterministic digest response fixtures then exercise long histories (5 threads / 4 children / 6 standalone initial bounds), summary disclosure, keyboard focus across refresh and removed items, window selection, retained data and save failures, and newer concurrent activity after catch-up. Screenshots under `TestResults/digest` cover busy, empty, caught-up and error states at desktop, plus compact and expanded long content at 375px and 720 CSS px. Only the digest responses are substituted; the shell and other sections use the running isolated host. Expected HTTP error fixtures may emit network console errors; uncaught page errors and other console errors fail the check. Always stop the same AppHost in `finally` afterward.
