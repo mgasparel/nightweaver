@@ -135,6 +135,48 @@ public sealed class CommentPresentationTests
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void InvalidTopLevelSchemaClaimsDisplaceOlderEvidenceWithoutChangingGuards(bool question, bool notes)
+    {
+        var schema = question ? "nightweaver-plan-question-v1" : "nightweaver-needs-human-v1";
+        var older = question ? JsonSerializer.Serialize(new { schema,
+            grounding = new { checkoutRevision = "checkout", defaultRevision = "main", productInputs = "inputs" },
+            questions = new[] { new { question = "Older question", recommendedAnswer = "Keep policy", tradeoffs = "Disk space" } } }) : Diagnostic();
+        var bead = Bead(question);
+        foreach (var invalid in new[]
+        {
+            $"{{\"schema\":\"{schema}\",\"schema\":false}}",
+            $"{{\"schema\":false,\"schema\":\"{schema}\"}}",
+            $"{{\"schema\":\"{schema}\",\"schema\":\"ordinary\"}}",
+            $"{{\"schema\":[\"{schema}\"]}}",
+            $"{{\"schema\":{{\"invalid\":\"{schema}\"}}}}"
+        })
+        {
+            var comments = new List<BeadsCommentSnapshot> { Comment(older, "older") };
+            if (notes) comments.Add(Comment("Interposed ordinary note", "note"));
+            comments.Add(Comment(invalid, "newer"));
+            if (notes) comments.Add(Comment("Later ordinary note", "later-note"));
+            var baseline = AttentionDeskProjector.ProjectWithSelection(bead, [Comment(older, "older")], 3);
+            var selected = AttentionDeskProjector.ProjectWithSelection(bead, comments, 3);
+            Assert.Equal("newer", selected.ActiveCommentId);
+            Assert.Equal("fallback", selected.Item.Message!.State);
+            Assert.Equal(invalid, selected.Item.Message.Original);
+            Assert.Contains("uncertain", selected.Item.Message.Summary);
+            Assert.Equal(baseline.Item.CanDecide, selected.Item.CanDecide);
+            Assert.Equal(baseline.Item.CanRetry, selected.Item.CanRetry);
+            Assert.Equal(baseline.Item.CanAbort, selected.Item.CanAbort);
+            var workspace = BeadWorkspaceProjector.Project(bead, comments, selected, BeadWorkspaceProjector.UnavailableEnvironment("unavailable"));
+            Assert.Equal(selected.Item.Message, workspace.Comments.Single(c => c.Id == "newer").Message);
+            Assert.Contains("older", workspace.History.OlderCommentIds);
+        }
+        Assert.False(CommentPresenter.IsPauseCandidate(JsonSerializer.Serialize(new { example = new { schema } }), question));
+        Assert.False(CommentPresenter.IsPauseCandidate(JsonSerializer.Serialize(new { schema = false, note = schema }), question));
+    }
+
+    [Theory]
     [InlineData("operational-retries-exhausted")]
     [InlineData("duplicate-failure")]
     [InlineData("repair-budget-exhausted")]

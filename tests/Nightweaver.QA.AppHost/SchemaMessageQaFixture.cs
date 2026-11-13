@@ -16,7 +16,7 @@ internal static class SchemaMessageQaFixture
         foreach (var (kind, origin) in new[] { ("conflict", "remote"), ("design", "remote"), ("checks", "remote"), ("checks", "local") })
             await Add(primary, new { schema = "nightweaver-merger-rejection-v1", kind, check_source = origin, local_exit_code = 1,
                 subject = "dotnet test", summary = $"Reported {origin} {kind} failure", details = "Reported failing check; scenario name is not verified as a root cause.",
-                pull_request = "javascript:window.__schemaInjected=true", checked_head = new string('a', 40) });
+                pull_request = origin == "local" ? "https://github.com/mgasparel/nightweaver/pull/28" : "javascript:window.__schemaInjected=true", checked_head = new string('a', 40) });
         await Add(primary, new { schema = "nightweaver-needs-human-v1", bead_id = primary, bead_type = "task", stage = "stage:merge",
             cause = "repair-budget-exhausted", failed_role = "merger", reason = "Historical budget exhaustion", latest_findings = "Historical findings",
             cleanup_preflight = "Historical locked directory warning" });
@@ -47,5 +47,19 @@ internal static class SchemaMessageQaFixture
         await run(["comments", "add", malformed, "{\"schema\":\"nightweaver-needs-human-v1\",\"reason\":"]);
         await Add(malformed, new { schema = "nightweaver-needs-human-v1", bead_id = "foreign", reason = "Foreign identity" });
         await run(["comments", "add", malformed, "Mixed prose {\"schema\":\"nightweaver-needs-human-v1\"} preserved exactly"]);
+        foreach (var isQuestion in new[] { false, true })
+        {
+            var duplicate = await Create("Schema messages: duplicate " + (isQuestion ? "question" : "diagnostic"), isQuestion);
+            var schema = isQuestion ? "nightweaver-plan-question-v1" : "nightweaver-needs-human-v1";
+            if (isQuestion)
+                await Add(duplicate, new { schema, grounding = new { checkoutRevision = "checkout", defaultRevision = "main", productInputs = "inputs" },
+                    questions = new[] { new { question = "Older supported question", recommendedAnswer = "Keep policy", tradeoffs = "Disk space" } } });
+            else
+                await Add(duplicate, new { schema, bead_id = duplicate, bead_type = "task", stage = "stage:merge", cause = "duplicate-failure", failed_role = "merger",
+                    reason = "Older supported diagnostic", environment_retention = "retained" });
+            await run(["comments", "add", duplicate, "Interposed ordinary note"]);
+            await run(["comments", "add", duplicate, $"{{\"schema\":\"{schema}\",\"schema\":false}}"]);
+            await run(["comments", "add", duplicate, "Later ordinary note"]);
+        }
     }
 }

@@ -1581,7 +1581,7 @@ function renderWorkspaceMeta(bead) {
   }
 }
 
-// Shared read-only display path. Payload references stay literal and never fetch resources.
+// Shared read-only display path. Evidence navigation requires explicit user activation.
 const messageDisclosures = new Map();
 function captureMessageState(root) {
   for (const summary of root.querySelectorAll('summary[data-message-focus]'))
@@ -1604,7 +1604,10 @@ function renderSemanticMessage(message, surface) {
     const field = document.createElement("div");
     field.className = "message-field";
     field.append(workspaceText("h5", "", section.label));
-    if (section.text.length > 900) {
+    const evidenceLink = ["Pull request", "Log directory", "Log references"].includes(section.label)
+      ? messageEvidenceLink(section.text, `${surface}:${message.sourceId}:field:${index}:link`) : null;
+    if (evidenceLink) field.append(evidenceLink);
+    else if (section.text.length > 900) {
       field.append(workspaceText("p", "message-excerpt", `${section.text.slice(0, 280)}…`),
         messageDisclosure(`${surface}:${message.sourceId}:field:${index}`, `Read full ${section.label.toLowerCase()}`,
           workspaceText("pre", "", section.text)));
@@ -1616,6 +1619,21 @@ function renderSemanticMessage(message, surface) {
   box.append(workspaceText("p", "message-source", `Source comment: ${message.sourceId}`));
   box.append(messageDisclosure(`${surface}:${message.sourceId}`, "View exact stored comment & technical details", workspaceText("pre", "", message.original)));
   return box;
+}
+
+function messageEvidenceLink(text, key) {
+  // Only absolute HTTP(S) references can navigate. Paths and unsafe schemes remain text.
+  if (!/^https?:\/\//i.test(text) || /[\s\\\u0000-\u001f\u007f]/.test(text)) return null;
+  try {
+    const url = new URL(text);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return null;
+    const link = workspaceText("a", "message-evidence-link", text);
+    link.href = url.href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.dataset.messageFocus = key;
+    return link;
+  } catch { return null; }
 }
 
 function messageDisclosure(key, label, body) {

@@ -27,13 +27,13 @@ internal static class CommentPresenter
             var root = document.RootElement;
             if (!root.TryGetProperty("schema", out var schemaValue))
                 return new("ordinary", "Comment", text, null, null, [], text, comment.Id);
+            claimedContract = ClaimsSchema(root, value => value.StartsWith("nightweaver-", StringComparison.Ordinal));
+            if (claimedContract) ValidateUnique(root);
             var schema = schemaValue.ValueKind == JsonValueKind.String ? schemaValue.GetString()! : "";
-            claimedContract = schema.StartsWith("nightweaver-", StringComparison.Ordinal);
-            if (schemaValue.ValueKind != JsonValueKind.String && text.Contains("nightweaver-", StringComparison.Ordinal))
+            if (schemaValue.ValueKind != JsonValueKind.String && claimedContract)
                 throw new JsonException("Invalid schema type.");
             if (!schema.StartsWith("nightweaver-", StringComparison.Ordinal))
                 return new("ordinary", "Comment", text, null, null, [], text, comment.Id);
-            ValidateUnique(root);
             if (string.IsNullOrWhiteSpace(comment.Id) || comment.IssueId != bead.Id)
                 throw new JsonException("Missing or mismatched source identity.");
             string Read(JsonElement value, string name)
@@ -159,9 +159,7 @@ internal static class CommentPresenter
         {
             if (text.Length > 262144) throw new JsonException("Display parse limit.");
             using var json = JsonDocument.Parse(text, new JsonDocumentOptions { MaxDepth = 24 });
-            return json.RootElement.ValueKind == JsonValueKind.Object
-                && json.RootElement.TryGetProperty("schema", out var schema)
-                && schema.ValueKind == JsonValueKind.String && Family(schema.GetString()!);
+            return ClaimsSchema(json.RootElement, Family);
         }
         catch (JsonException)
         {
@@ -172,6 +170,21 @@ internal static class CommentPresenter
                         || text.Contains("nightweaver-product-decision-pause-failure-", StringComparison.Ordinal));
         }
     }
+
+    // Inspect every top-level schema claim, including duplicates and invalid value types.
+    // Examples in other properties never become pause evidence.
+    private static bool ClaimsSchema(JsonElement root, Func<string, bool> family)
+        => root.ValueKind == JsonValueKind.Object && root.EnumerateObject().Any(property =>
+            property.NameEquals("schema") && ClaimsValue(property.Value, family));
+
+    private static bool ClaimsValue(JsonElement value, Func<string, bool> family)
+        => value.ValueKind switch
+        {
+            JsonValueKind.String => family(value.GetString()!),
+            JsonValueKind.Array => value.EnumerateArray().Any(item => ClaimsValue(item, family)),
+            JsonValueKind.Object => value.EnumerateObject().Any(property => ClaimsValue(property.Value, family)),
+            _ => false
+        };
 
     internal static bool IsSupplemental(CommentPresentation message) => message.State == "supported"
         && message.Title is "Supplemental pause failure" or "Historical cleanup warning";
