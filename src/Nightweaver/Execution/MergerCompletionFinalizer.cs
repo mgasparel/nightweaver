@@ -117,75 +117,25 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner)
     internal async Task CleanupOwnedEnvironmentAsync(AgentStageSession session, MergerVerifiedMergeEvidence evidence,
         CancellationToken cancellationToken)
     {
-        var paths = session.HostPaths;
-        var project = session.Project.Name;
-        var repository = session.Repository;
-        var beadId = session.BeadId;
-        var branchName = $"nightweaver/{beadId}";
-        var branchRef = $"refs/heads/{branchName}";
         var worktreePath = RuntimePaths.Normalize(session.Worktree.Path);
-        var worktreeRoot = RuntimePaths.Normalize(paths.WorktreesRoot(project));
-        if (!RuntimePaths.SafeId(beadId) || !RuntimePaths.Comparer.Equals(RuntimePaths.ChildId(worktreeRoot, worktreePath), beadId)
-            || !RuntimePaths.Comparer.Equals(worktreePath, Path.Combine(worktreeRoot, beadId))
-            || WorktreeProvisioner.PathsOverlap(worktreePath, repository.Path))
+        var worktreeRoot = RuntimePaths.Normalize(session.HostPaths.WorktreesRoot(session.Project.Name));
+        if (!RuntimePaths.SafeId(session.BeadId)
+            || !RuntimePaths.Comparer.Equals(worktreePath, Path.Combine(worktreeRoot, session.BeadId))
+            || WorktreeProvisioner.PathsOverlap(worktreePath, session.Repository.Path))
             throw new ToolExecutionException("owned worktree is not the exact safe Bead child under the current Project root");
 
-        var task = await ReadTaskAsync(repository, beadId, cancellationToken).ConfigureAwait(false);
-        if (task.Status != "closed" || task.Labels.Contains("needs-human", StringComparer.Ordinal)
-            || task.Labels.Contains("product-decision-required", StringComparer.Ordinal))
-            throw new ToolExecutionException("completed task is no longer closed and unpaused; owned resources were retained");
+        var diagnostics = await new CompletedEnvironmentCleanup(reader, processRunner).ReconcileAsync(
+            session.HostPaths, session.Project.Name, session.Repository, session.Project.RecoveryActor,
+            cancellationToken, session.BeadId, evidence).ConfigureAwait(false);
+        if (diagnostics.Count > 0)
+            throw new ToolExecutionException(string.Join("; ", diagnostics.Select(item => item.Reason)));
 
+        // Branch cleanup remains the existing one-shot completion responsibility. Durable local
+        // environment reconciliation never replays remote-ref operations or Product completion.
+        var repository = session.Repository;
+        var beadId = session.BeadId;
+        var branchRef = $"refs/heads/nightweaver/{beadId}";
         var registry = new GitWorktreeReader(processRunner);
-        var commonDirectory = RuntimePaths.Normalize(await ReadGitValueAsync(repository.Path,
-            ["rev-parse", "--path-format=absolute", "--git-common-dir"], cancellationToken).ConfigureAwait(false));
-        var trustedCommonDirectory = RuntimePaths.Normalize(repository.GitCommonDirectory);
-        if (RuntimePaths.Comparer.Equals(trustedCommonDirectory, RuntimePaths.Normalize(repository.Path)))
-            throw new ToolExecutionException("Target Repository has no validated Git common-directory identity");
-        if (!RuntimePaths.Comparer.Equals(trustedCommonDirectory, commonDirectory))
-            throw new ToolExecutionException("Target Repository Git common directory changed from its validated identity");
-        var registrations = await registry.ReadAsync(repository, cancellationToken).ConfigureAwait(false);
-        var registration = registrations.SingleOrDefault(item => RuntimePaths.Comparer.Equals(item.Path, worktreePath));
-        var runtime = RuntimeDirectoryReader.ReadRoot(worktreeRoot);
-        if (runtime.State == DirectoryState.Present)
-        {
-            var entry = runtime.Entries.SingleOrDefault(item => RuntimePaths.Comparer.Equals(item.Path, worktreePath));
-            if (entry is null)
-            {
-                if (registration is not null)
-                    throw new ToolExecutionException("worktree registration remains after its canonical directory disappeared; it was retained for safe recovery");
-            }
-            else
-            {
-                if (entry.State != DirectoryState.Present || entry.AmbiguousIdentity || entry.Id != beadId)
-                    throw new ToolExecutionException(entry.FailureReason ?? "owned worktree directory is unsafe or ambiguous");
-                if (registration is null)
-                    throw new ToolExecutionException("canonical worktree directory has no matching Git registration");
-                if (registration.Main || registration.Bare || registration.Locked || registration.Prunable
-                    || registration.Branch != branchRef || !string.Equals(registration.Head, evidence.CheckedHead, StringComparison.OrdinalIgnoreCase))
-                    throw new ToolExecutionException("Git registration is locked, prunable, shared, or no longer matches the verified Merger worktree");
-                WorktreeProvisioner.ValidateNestedTree(worktreePath);
-                var checkoutFailure = await StartupEnvironmentCleaner.ValidateCheckoutIdentityAsync(processRunner, repository,
-                    new RemoveWorktree(beadId, registration, DirectoryState.Present, Array.Empty<string>()), cancellationToken)
-                    .ConfigureAwait(false);
-                if (checkoutFailure is not null) throw new ToolExecutionException(checkoutFailure);
-
-                await EnsureClosedUnpausedTaskAsync(repository, beadId, cancellationToken).ConfigureAwait(false);
-                var freshRegistrations = await registry.ReadAsync(repository, cancellationToken).ConfigureAwait(false);
-                if (!freshRegistrations.Any(item => SameRegistration(item, registration)))
-                    throw new ToolExecutionException("worktree registration changed before targeted removal");
-                await RunGitAsync(["worktree", "remove", "--force", worktreePath], repository.Path, cancellationToken).ConfigureAwait(false);
-                if (Directory.Exists(worktreePath) || File.Exists(worktreePath)
-                    || (await registry.ReadAsync(repository, cancellationToken).ConfigureAwait(false)).Any(item => RuntimePaths.Comparer.Equals(item.Path, worktreePath)))
-                    throw new ToolExecutionException("targeted worktree removal did not remove the exact registration and directory");
-            }
-        }
-        else if (runtime.State == DirectoryState.Missing)
-        {
-            if (registration is not null)
-                throw new ToolExecutionException("worktree root disappeared while its exact Git registration remains");
-        }
-        else throw new ToolExecutionException("shared worktree root became unsafe or unavailable");
-
         var localRef = await RunGitAllowFailureAsync(["show-ref", "--verify", "--quiet", branchRef], repository.Path, cancellationToken).ConfigureAwait(false);
         if (localRef.ExitCode == 0)
         {
@@ -218,23 +168,6 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner)
             if (delete.ExitCode != 0 || await ReadRemoteBranchAsync(repository.Path, branchRef, cancellationToken).ConfigureAwait(false) is not null)
                 throw new ToolExecutionException("compare-and-delete of the exact owned origin branch was not confirmed");
         }
-
-        var tmpRoot = RuntimePaths.Normalize(paths.TmpRoot(project));
-        var beadTmp = RuntimePaths.Normalize(Path.Combine(tmpRoot, beadId));
-        if (!RuntimePaths.Comparer.Equals(RuntimePaths.ChildId(tmpRoot, beadTmp), beadId))
-            throw new ToolExecutionException("Bead temporary path is not an exact child of the current Project root");
-        var tmp = RuntimeDirectoryReader.ReadRoot(tmpRoot);
-        if (tmp.State == DirectoryState.Missing) return;
-        if (tmp.State != DirectoryState.Present) throw new ToolExecutionException("shared temporary root became unsafe or unavailable");
-        var tmpEntry = tmp.Entries.SingleOrDefault(item => RuntimePaths.Comparer.Equals(item.Path, beadTmp));
-        if (tmpEntry is null) return;
-        if (tmpEntry.State != DirectoryState.Present || tmpEntry.AmbiguousIdentity || tmpEntry.Id != beadId)
-            throw new ToolExecutionException(tmpEntry.FailureReason ?? "Bead temporary directory is unsafe or ambiguous");
-        WorktreeProvisioner.ValidateNestedTree(beadTmp);
-        await EnsureClosedUnpausedTaskAsync(repository, beadId, cancellationToken).ConfigureAwait(false);
-        Directory.Delete(beadTmp, recursive: true);
-        if (Directory.Exists(beadTmp) || File.Exists(beadTmp))
-            throw new ToolExecutionException("Bead temporary directory still exists after targeted removal");
     }
 
     private async Task<bool> CompleteProductIfEligibleAsync(ValidatedTargetRepository repository, string taskId,
@@ -385,10 +318,6 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner)
     private Task<ProcessResult> RunGitAllowFailureAsync(IReadOnlyList<string> arguments, string workingDirectory,
         CancellationToken cancellationToken) =>
         processRunner.RunAsync(GitCommand.Create(arguments, workingDirectory), cancellationToken);
-
-    private static bool SameRegistration(GitWorktreeSnapshot left, GitWorktreeSnapshot right) =>
-        left.Path == right.Path && left.Head == right.Head && left.Branch == right.Branch && left.Detached == right.Detached
-        && left.Bare == right.Bare && left.Main == right.Main && left.Locked == right.Locked && left.Prunable == right.Prunable;
 
     private static string Limit(string value) => value.Length <= 384 ? value : value[..384];
 }

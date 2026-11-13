@@ -1,3 +1,4 @@
+using Nightweaver.Application;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
 using Nightweaver.Configuration;
@@ -7,7 +8,7 @@ namespace Nightweaver.Tests;
 public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSupport
 {
     [Fact]
-    public async Task QaRetainedArtifactsAreRemovedAfterMergeEvenWhenTaskCloseResponseIsLost()
+    public async Task QaRetainedArtifactsRecoverAfterLostClosureAndRemovalResponsesAcrossRestart()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires native Windows CLI fixtures.");
         using var target = new AgentStageTargetFixture();
@@ -51,19 +52,48 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         var invocation = new AgentStageResult(AgentRole.Merger, beadId, "fixture-invocation", logPath, null, [],
             Observations: observations);
         target.LoseVerifiedTaskCloseResponseAfterCommitOnce = true;
-        var runner = new RecordingProcessRunner((request, token) =>
-            target.RunWithFixturePullRequestAsync(systemRunner, request, token));
+        var lostRemoval = false;
+        var removalCalls = 0;
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            var result = await target.RunWithFixturePullRequestAsync(systemRunner, request, token);
+            if (request.FileName == "git" && request.Arguments.Take(2).SequenceEqual(["worktree", "remove"]))
+            {
+                removalCalls++;
+                if (!lostRemoval && result.ExitCode == 0)
+                {
+                    lostRemoval = true;
+                    return new ProcessResult(73, string.Empty, "fixture lost removal response after commit");
+                }
+            }
+            return result;
+        });
         var finalizer = new MergerCompletionFinalizer(runner);
 
         var completion = await finalizer.CompleteAsync(session, invocation, project.RecoveryActor, evidence,
             TestContext.Current.CancellationToken);
         Assert.True(completion.Succeeded, completion.Diagnostic);
-        Assert.True(completion.Receipt!.CleanupSucceeded, completion.Diagnostic);
+        Assert.False(completion.Receipt!.CleanupSucceeded);
+        Assert.Contains("lost removal response", completion.Receipt.CleanupDiagnostic, StringComparison.Ordinal);
+        Assert.True(lostRemoval);
+        var store = new CompletedEnvironmentStore(target.Host, project.Name, repository);
+        var pending = Assert.Single(store.Read().Obligations);
+        Assert.Equal(CleanupStatus.NeedsAttention, pending.Status);
+        Assert.True(pending.Worktree.ConfirmedAbsent);
+        Assert.True(Directory.Exists(qaTmp));
         Assert.True(completion.Receipt.ProductCompletionSucceeded, completion.Diagnostic);
         Assert.False(target.LoseVerifiedTaskCloseResponseAfterCommitOnce);
         Assert.Single(AgentStageTargetFixture.ClaimWrites(runner.Requests, beadId));
         Assert.Equal("closed", target.ReadBead(beadId).Status);
         Assert.Equal("closed", target.ReadBead(productId).Status);
+        var restarted = new StartupEnvironmentCleaner(new BeadsReader(runner), new BeadsWriter(runner), runner);
+        await restarted.CleanAsync(target.Host, project.Name, repository, project.RecoveryActor,
+            TestContext.Current.CancellationToken);
+        Assert.Equal(CleanupStatus.Resolved, Assert.Single(store.Read().Obligations).Status);
+        Assert.Equal(1, removalCalls);
+        Assert.Equal("closed", target.ReadBead(beadId).Status);
+        Assert.DoesNotContain("needs-human", target.ReadBead(beadId).Labels);
+        // Existing exact branch cleanup remains a separate completion operation, never a startup sweep.
         await finalizer.CleanupOwnedEnvironmentAsync(session, evidence, TestContext.Current.CancellationToken);
 
         Assert.False(Directory.Exists(worktree.Path));
@@ -108,7 +138,7 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         var result = await finalizer.FinalizeHousekeepingAsync(session, Evidence(worktree.HeadSha),
             BeadWorkflowState.Parse(target.ReadBead(beadId)), TestContext.Current.CancellationToken);
 
-        Assert.True(moved);
+        Assert.True(moved, result.Diagnostic);
         Assert.False(result.Receipt!.CleanupSucceeded);
         Assert.Contains("local branch changed since validation", result.Receipt.CleanupDiagnostic, StringComparison.Ordinal);
         Assert.False(Directory.Exists(worktree.Path));

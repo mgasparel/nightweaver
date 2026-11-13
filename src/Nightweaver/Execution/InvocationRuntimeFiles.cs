@@ -175,6 +175,10 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         return OpenPinnedReadOnlyFile(expected, FileShareRead | FileShareWrite | 0x00000004, "factory snapshot");
     }
 
+    /// <summary>Reads committed cleanup evidence without following links and permits atomic replacement.</summary>
+    internal static PinnedLogReadStream OpenExistingCleanupRecordForRead(string path) =>
+        OpenPinnedReadOnlyFile(RuntimePaths.Normalize(path), FileShareRead | FileShareWrite | 0x00000004, "cleanup record");
+
     /// <summary>Publishes a factory snapshot while pinning its directory chain and creating a fresh sibling file.</summary>
     internal static async Task WriteFactorySnapshotAtomicallyAsync(
         HostPaths hostPaths, ProjectSlug project, string runtimeId, ReadOnlyMemory<byte> bytes,
