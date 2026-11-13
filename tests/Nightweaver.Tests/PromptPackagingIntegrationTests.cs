@@ -97,7 +97,10 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
         Assert.Contains("build and run it as needed", qa, StringComparison.Ordinal);
         Assert.Contains("Record exact commands, results, and reproducible failures in your evidence report", qa, StringComparison.Ordinal);
         Assert.Contains("Stop any test services", qa, StringComparison.Ordinal);
-        Assert.Contains("Remove only test artifacts created by this QA run", qa, StringComparison.Ordinal);
+        Assert.Contains("Deferred housekeeping", qa, StringComparison.Ordinal);
+        Assert.Contains("The Orchestrator owns disposal of retained worktree output and invocation temporary files after verified completion", qa, StringComparison.Ordinal);
+        Assert.Contains("Blocking teardown", qa, StringComparison.Ordinal);
+        Assert.DoesNotContain("verify no QA-created files remain", qa, StringComparison.Ordinal);
         Assert.Contains("If inherited content prevents required checks, report it and preserve the environment for inspection and resume", qa, StringComparison.Ordinal);
         Assert.Contains("Do not use `bd update` or otherwise change stage labels", qa, StringComparison.Ordinal);
         Assert.Contains("atomic Delivery-to-Merger handoff", qa, StringComparison.Ordinal);

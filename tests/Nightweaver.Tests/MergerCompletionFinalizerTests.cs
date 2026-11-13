@@ -7,11 +7,11 @@ namespace Nightweaver.Tests;
 public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSupport
 {
     [Fact]
-    public async Task LostTaskCloseResponseStillCompletesHousekeepingAndAllowsRepeatedCleanup()
+    public async Task QaRetainedArtifactsAreRemovedAfterMergeEvenWhenTaskCloseResponseIsLost()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires native Windows CLI fixtures.");
         using var target = new AgentStageTargetFixture();
-        var beadId = target.CreateBead("Repeat exact Merger cleanup", "task", "stage:merge");
+        var beadId = target.CreateBead("QA artifacts await verified Merger cleanup", "task", "stage:qa");
         var productId = target.CreateBead("Native planned Product completion", "feature", "planned");
         target.RunTarget("bd", ["dep", "add", beadId, productId, "--type", "discovered-from"]);
         var project = target.CreateProject(AgentCli.Codex);
@@ -20,6 +20,25 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         var systemRunner = new SystemProcessRunner();
         var worktree = await new WorktreeProvisioner(systemRunner).ProvisionAsync(target.Host, project.Name,
             repository, beadId, WorktreePurpose.Delivery, TestContext.Current.CancellationToken);
+        var ignoredDirectory = Directory.CreateDirectory(Path.Combine(worktree.Path, ".nightweaver-ignored")).FullName;
+        var inheritedCache = Path.Combine(ignoredDirectory, "inherited-cache.txt");
+        File.WriteAllText(inheritedCache, "warm build cache");
+        var qaReport = Path.Combine(ignoredDirectory, "qa-report.xml");
+        File.WriteAllText(qaReport, "passing QA with disposal pending");
+        var qaTmp = Directory.CreateDirectory(Path.Combine(target.Host.TmpRoot(project.Name), beadId, "qa-invocation")).FullName;
+        File.WriteAllText(Path.Combine(qaTmp, "evidence.txt"), "retained QA evidence");
+        var qaState = BeadWorkflowState.Parse(target.ReadBead(beadId));
+        var qa = await new AgentPostExitVerifier(systemRunner, new BeadsReader(systemRunner)).VerifyAsync(
+            repository, worktree.Path, AgentRole.Qa, qaState, project.RecoveryActor, worktree.HeadSha,
+            new AgentExecutionResult(AgentExecutionStatus.Exited, 0, "qa-invocation", "qa.log"),
+            TestContext.Current.CancellationToken);
+        Assert.True(qa.Succeeded, qa.Failure?.Reason);
+        Assert.True(qa.Observations!.WorktreeClean);
+        Assert.Equal(worktree.HeadSha, qa.Observations.HeadSha);
+        Assert.Equal("warm build cache", File.ReadAllText(inheritedCache));
+        Assert.True(File.Exists(qaReport));
+        Assert.True(Directory.Exists(qaTmp));
+        target.RunTarget("bd", ["update", beadId, "--remove-label", "stage:qa", "--add-label", "stage:merge"]);
         var unrelatedPath = Path.Combine(target.RootPath, "unrelated-checkout");
         target.RunTarget("git", ["worktree", "add", "-b", "unrelated-checkout", unrelatedPath, "main"]);
         var logPath = Path.Combine(target.Host.LogsRoot(project.Name), beadId, "invocation.log");
@@ -48,6 +67,7 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         await finalizer.CleanupOwnedEnvironmentAsync(session, evidence, TestContext.Current.CancellationToken);
 
         Assert.False(Directory.Exists(worktree.Path));
+        Assert.False(Directory.Exists(Path.Combine(target.Host.TmpRoot(project.Name), beadId)));
         Assert.False(target.RunTarget("git", ["branch", "--list", $"nightweaver/{beadId}"]).Length > 0);
         Assert.True(Directory.Exists(unrelatedPath));
         Assert.Equal("unrelated-checkout", target.RunTarget("git", ["branch", "--show-current"], unrelatedPath).Trim());

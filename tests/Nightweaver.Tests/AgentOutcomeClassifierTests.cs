@@ -260,6 +260,13 @@ public sealed class AgentOutcomeClassifierTests
             Assert.Contains($"\"role\":\"{AgentRoles.ToConfigKey(role)}\"", evidence, StringComparison.Ordinal);
             var question = Assert.Single(body.RootElement.GetProperty("questions").EnumerateArray());
             Assert.Equal(questionName, question.GetProperty("name").GetString());
+            if (role == AgentRole.Qa)
+            {
+                var instructions = question.GetProperty("instructions").GetString();
+                Assert.Contains("Orchestrator-owned completion cleanup", instructions, StringComparison.Ordinal);
+                Assert.Contains("housekeeping rather than a QA blocker", instructions, StringComparison.Ordinal);
+                Assert.Contains("process teardown or source integrity remains a technical blocker", instructions, StringComparison.Ordinal);
+            }
             var choices = question.GetProperty("choices").EnumerateArray()
                 .Select(choice => choice.GetProperty("value").GetString()).ToArray();
             Assert.Contains("approved", choices);
