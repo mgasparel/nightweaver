@@ -111,7 +111,7 @@ try {
   await writeFile(releaseFiles[0], 'release', 'utf8');
   await page.waitForFunction(() => document.querySelector('#invocation-output')?.textContent.includes('live-marker-after-release slot-one'),
     null, { timeout: 15000 });
-  await page.getByText('Stream ended: completed', { exact: true }).waitFor({ timeout: 15000 });
+  await page.getByText('✓ Stream ended: completed', { exact: true }).waitFor({ timeout: 15000 });
   const completedRequestCount = streamRequests;
   await page.waitForTimeout(3500);
   if (streamRequests !== completedRequestCount)
@@ -157,7 +157,7 @@ try {
   staleState.reason = 'heartbeat-expired';
   staleState.snapshot.observed_at = new Date(Date.now() - 20000).toISOString();
   await page.route('**/api/factory/state', route => route.fulfill({ json: staleState }));
-  await page.waitForFunction(() => document.querySelector('#factory-status')?.textContent.startsWith('stale:'),
+  await page.waitForFunction(() => document.querySelector('#factory-status')?.dataset.state === 'stale',
     null, { timeout: 5000 });
   const staleCards = await page.locator('#delivery-slots .factory-slot[data-status="running"]').count();
   if (staleCards < 2) throw new Error('The stale snapshot did not retain its last observed occupied slots explicitly.');

@@ -51,7 +51,7 @@ try {
   });
   const inspect = async (card, label, expected) => {
     await card.getByRole('button', { name: label, exact: true }).click();
-    await page.getByText('Stream ended: completed', { exact: true }).waitFor();
+    await page.getByText('✓ Stream ended: completed', { exact: true }).waitFor();
     for (const [key, value] of Object.entries(expected)) assert.equal(streamIdentity.get(key), value);
     assert.equal(await page.locator('#invocation-output').innerText(), 'Retained output for ' + expected.invocation_id);
     await page.keyboard.press('Escape');
@@ -124,7 +124,7 @@ try {
   assert.match(await idleRow.innerText(), /Last observed idle/);
   assert.ok(!(await idleRow.innerText()).includes('Available for admission'));
   await page.evaluate(async () => { await refreshFactory(); });
-  assert.match(await page.locator('#factory-status').innerText(), /^stale:/);
+  assert.match(await page.locator('#factory-status').innerText(), /^⚠ Stale/);
   for (const width of [1440, 375, 720]) {
     await page.setViewportSize({ width, height: 900 });
     await shot(`stale-${width}`);
@@ -135,7 +135,7 @@ try {
   assert.match(await page.locator('#delivery-pool-status').innerText(), /^Last observed:/);
   fail = true;
   await refresh();
-  assert.match(await page.locator('#factory-status').innerText(), /disconnected/);
+  assert.match(await page.locator('#factory-status').innerText(), /Disconnected/);
   assert.ok(!(await idleRow.innerText()).includes('Available for admission'));
   await shot('disconnected-desktop');
   fail = false;
