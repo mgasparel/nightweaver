@@ -88,6 +88,7 @@ public sealed class Program
         app.UseStaticFiles();
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
         app.MapFactoryTelemetry();
+        app.MapCleanup();
         app.MapGet("/api/beads", async (HttpContext context, TrackerBridge explorer, ILogger<Program> logger) =>
         {
             context.Response.Headers.CacheControl = "no-store";

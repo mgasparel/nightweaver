@@ -2538,3 +2538,22 @@ h3 {
   .attention-more-toggle { grid-column: 1 / -1; justify-self: start; }
   .attention-clear { gap: 0.5rem; }
 }
+
+/* Housekeeping remains independent of workflow attention. */
+.cleanup-panel { padding: 1.25rem; overflow-wrap: anywhere; }
+.cleanup-heading, .cleanup-row-heading, .cleanup-pagination { display: flex; justify-content: space-between; align-items: center; gap: .75rem; flex-wrap: wrap; }
+.cleanup-heading h2, .cleanup-heading p { margin: 0; }
+.cleanup-counts { display: flex; flex-wrap: wrap; gap: .5rem; margin: .75rem 0; }
+.cleanup-count { padding: .2rem .6rem; background: var(--color-surface-raised); border: 1px solid var(--color-border); border-radius: .5rem; font-size: .85rem; }
+.cleanup-needs-attention .cleanup-state, .cleanup-count.cleanup-needs-attention { color: #fcd98a; }
+.cleanup-resolved .cleanup-state { color: #86efac; }
+.cleanup-help, #cleanup-health, #cleanup-range { color: var(--color-muted); font-size: .875rem; }
+.cleanup-controls { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0; }
+.cleanup-controls label { display: flex; flex-direction: column; gap: .3rem; flex: 1 1 12rem; }
+.cleanup-controls input, .cleanup-controls select { width: 100%; min-width: 0; padding: .5rem; color: var(--color-text); background: var(--color-page); border: 1px solid var(--color-border); border-radius: .4rem; font: inherit; }
+.cleanup-row { padding: 1rem 0; border-top: 1px solid var(--color-border); min-width: 0; overflow-wrap: anywhere; }
+.cleanup-row p { margin: .5rem 0; }
+.cleanup-row code { display: block; white-space: normal; overflow-wrap: anywhere; font-size: .8rem; }
+.cleanup-row summary, #cleanup-disclosure > summary { cursor: pointer; color: var(--color-secondary); }
+.cleanup-pagination { justify-content: flex-start; margin-top: 1rem; }
+.cleanup-panel button:disabled { opacity: .55; cursor: default; }

@@ -9,6 +9,7 @@
   <script src="/vendor/markdown-it.min.js" defer></script>
   <script src="/vendor/purify.min.js" defer></script>
   <script src="/js/app.js" defer></script>
+  <script src="/js/cleanup.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -222,6 +223,30 @@
           <p class="bay-pool-status" id="merger-pool-status">Runtime observations unavailable.</p>
           <div class="bay-slots" id="merger-slots" aria-live="polite"></div>
         </article>
+      </div>
+    </section>
+
+    <section class="console-section" id="housekeeping" aria-labelledby="cleanup-title">
+      <div class="surface cleanup-panel">
+        <div class="cleanup-heading">
+          <div><p class="eyebrow">Completed environments</p><h2 id="cleanup-title">Housekeeping</h2></div>
+          <button type="button" class="secondary-action" id="cleanup-refresh">Refresh housekeeping</button>
+        </div>
+        <p id="cleanup-health" role="status">Loading cleanup evidence…</p>
+        <div id="cleanup-counts" class="cleanup-counts"></div>
+        <details id="cleanup-disclosure">
+          <summary>Inspect cleanup obligations</summary>
+          <p class="cleanup-help">Delivery stays completed while housekeeping runs. Cleanup Retry queues owner inspection; only confirmed absence means cleanup completed.</p>
+          <p class="cleanup-help" id="cleanup-scope"></p>
+          <div class="cleanup-controls">
+            <label>State<select id="cleanup-filter"><option value="">All states</option><option value="pending">Pending</option><option value="retry-scheduled">Retry scheduled</option><option value="needs-attention">Needs attention</option><option value="resolved">Resolved</option></select></label>
+            <label>Search all obligations<input id="cleanup-search" type="search" maxlength="200" placeholder="Bead, path or reason"></label>
+          </div>
+          <p id="cleanup-range" tabindex="-1" role="status"></p>
+          <div id="cleanup-rows"></div>
+          <nav class="cleanup-pagination" aria-label="Cleanup pages"><button class="secondary-action" id="cleanup-previous" type="button">Previous</button><button class="secondary-action" id="cleanup-next" type="button">Next</button></nav>
+        </details>
+        <p id="cleanup-message" role="status" aria-live="polite"></p>
       </div>
     </section>
 

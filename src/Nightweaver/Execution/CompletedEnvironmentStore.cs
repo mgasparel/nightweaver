@@ -84,11 +84,12 @@ internal sealed class CompletedEnvironmentStore(HostPaths paths, ProjectSlug pro
             ?? throw new InvalidDataException($"Null cleanup record: '{path}'.");
     }
 
-    internal void TrimResolvedHistory()
+    internal void TrimResolvedHistory(DateTimeOffset? now = null)
     {
+        var cutoff = (now ?? DateTimeOffset.UtcNow).AddDays(-30);
         foreach (var record in Read().Obligations.Where(record => record.Status == CleanupStatus.Resolved)
                      .OrderByDescending(record => record.ResolvedAt).ThenBy(record => record.BeadId, StringComparer.Ordinal)
-                     .Skip(ResolvedHistoryLimit))
+                     .Where((record, index) => index >= ResolvedHistoryLimit || record.ResolvedAt < cutoff))
         {
             var path = Path.Combine(paths.CleanupRoot(project), record.BeadId + ".json");
             if (OperatingSystem.IsWindows())
