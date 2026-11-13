@@ -585,6 +585,20 @@ public sealed class MergerOutcomeVerifierTests
     {
         internal const string BeadId = "ns-ver.1";
         internal const string Owner = "nightweaver:demo";
+        private static readonly Lazy<(TempDirectory Directory, string Head)> Template = new(() =>
+        {
+            var directory = new TempDirectory();
+            RunGit(directory.Path, "init", "--initial-branch=main");
+            RunGit(directory.Path, "config", "user.name", "Verifier Fixture");
+            RunGit(directory.Path, "config", "user.email", "verifier@example.invalid");
+            File.WriteAllText(Path.Combine(directory.Path, "README.md"), "fixture\n");
+            RunGit(directory.Path, "add", "README.md");
+            RunGit(directory.Path, "commit", "-m", "fixture base");
+            RunGit(directory.Path, "checkout", "-b", $"nightweaver/{BeadId}");
+            var head = RunGit(directory.Path, "rev-parse", "HEAD");
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => directory.Dispose();
+            return (directory, head);
+        });
         private readonly TempDirectory temp = new();
         private readonly ProjectConfig project;
         private readonly ValidatedTargetRepository repository;
@@ -600,14 +614,12 @@ public sealed class MergerOutcomeVerifierTests
             var host = new HostPaths(temp.CreateDirectory("host"));
             var worktrees = host.WorktreesRoot(ProjectSlug.Parse("demo"));
             Worktree = Directory.CreateDirectory(Path.Combine(worktrees, BeadId)).FullName;
-            RunGit(Worktree, "init", "--initial-branch=main");
-            RunGit(Worktree, "config", "user.name", "Verifier Fixture");
-            RunGit(Worktree, "config", "user.email", "verifier@example.invalid");
-            File.WriteAllText(Path.Combine(Worktree, "README.md"), "fixture\n");
-            RunGit(Worktree, "add", "README.md");
-            RunGit(Worktree, "commit", "-m", "fixture base");
-            RunGit(Worktree, "checkout", "-b", $"nightweaver/{BeadId}");
-            Head = RunGit(Worktree, "rev-parse", "HEAD");
+            // Copy fully initialized bytes, including Git objects and refs, into
+            // each case. All production Git checks still run against independent
+            // real repositories; setup no longer launches eight tools per case.
+            var template = Template.Value;
+            TestDirectoryTemplate.Copy(template.Directory.Path, Worktree);
+            Head = template.Head;
 
             project = new ProjectConfig(ProjectSlug.Parse("demo"), "fixture.json", new("target", "main"),
                 new(1, 1, 1), new(3, 1), new(AgentCli.Codex, null, "low", 1),
