@@ -8,6 +8,103 @@ namespace Nightweaver.Tests;
 
 public sealed class CompletedEnvironmentWorkerTests
 {
+    [Theory]
+    [InlineData("paused")]
+    [InlineData("reopened")]
+    [InlineData("assigned")]
+    [InlineData("missing")]
+    public async Task ProtectedCompletionPersistsAttentionWithoutBlockingOtherCleanupOrDrain(string change)
+    {
+        using var fixture = new Fixture();
+        var token = TestContext.Current.CancellationToken;
+        var inventory = await new BeadsReader(fixture.Runner).ReadSnapshotAsync(fixture.Repository, token);
+        var state = BeadWorkflowState.Parse(inventory.ById["done"]);
+        var session = new AgentStageSession(fixture.Paths, Config(fixture), fixture.Repository, "done", AgentRole.Merger,
+            WorktreePurpose.Delivery, new(fixture.Worktree, fixture.Runner.Head), state, null,
+            new("done", "task", "stage:merge", state.RepairCycles), true);
+        var otherTmp = Directory.CreateDirectory(Path.Combine(fixture.Paths.TmpRoot(Fixture.Project), "other")).FullName;
+        File.WriteAllText(Path.Combine(otherTmp, "disposable"), "done");
+        await fixture.Store.WriteAsync(fixture.Store.Create("other", WorktreePurpose.Delivery, null), token);
+        var runner = new RecordingProcessRunner(async (request, cancellation) =>
+        {
+            var result = await fixture.Runner.RunAsync(request, cancellation);
+            if (request.FileName != "bd") return result;
+            var beads = System.Text.Json.Nodes.JsonNode.Parse(result.StandardOutput)!.AsArray();
+            if (change == "missing") beads.Clear();
+            beads.Add(System.Text.Json.Nodes.JsonNode.Parse("""
+                {"id":"other","status":"closed","issue_type":"task","priority":1,"created_at":"2026-11-13T00:00:00Z","labels":[]}
+                """));
+            return result with { StandardOutput = beads.ToJsonString() };
+        });
+        var gate = new ContinuousStopGate();
+        using var worker = Worker(fixture, new Clock(), gate: gate, runner: runner);
+        await worker.EnqueueAsync(session, new("https://example.invalid/pull/1", fixture.Runner.Head,
+            fixture.Runner.Head, "squash", "comment-1"), token);
+        fixture.Runner.Paused = change == "paused";
+        fixture.Runner.Status = change == "reopened" ? "open" : "closed";
+        fixture.Runner.Assignee = change == "assigned" ? "human:other" : null;
+
+        await worker.RunBatchAsync(token);
+        var records = fixture.Store.Read().Obligations;
+        var protectedRecord = Assert.Single(records, record => record.BeadId == "done");
+        Assert.Equal(CleanupStatus.NeedsAttention, protectedRecord.Status);
+        Assert.Equal(0, protectedRecord.Attempts);
+        Assert.Equal(fixture.Runner.Head, protectedRecord.VerifiedHead);
+        Assert.Equal(CleanupStatus.Resolved, Assert.Single(records, record => record.BeadId == "other").Status);
+        Assert.False(Directory.Exists(otherTmp));
+        await worker.RunBatchAsync(token);
+        gate.RequestStop();
+        await worker.FlushCompletionsAsync(token);
+        Assert.Equal(protectedRecord, Assert.Single(fixture.Store.Read().Obligations, record => record.BeadId == "done"));
+        Assert.True(Directory.Exists(fixture.Worktree));
+        Assert.True(Directory.Exists(fixture.Tmp));
+        Assert.Equal(0, fixture.Runner.Removals);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ObservationFailureAfterBeginBecomesAttentionWithoutRestartOrRemovalReplay(bool afterRemoval)
+    {
+        using var fixture = new Fixture();
+        var token = TestContext.Current.CancellationToken;
+        var fail = true;
+        var runner = new RecordingProcessRunner(async (request, cancellation) =>
+        {
+            if (fail && request.FileName == "bd" && File.Exists(fixture.RecordPath)
+                && fixture.Read() is { Status: CleanupStatus.Pending, Attempts: 1 }
+                && (!afterRemoval || fixture.Runner.Removals == 1))
+            {
+                fail = false;
+                throw new ToolExecutionException("tracker unavailable after Begin");
+            }
+            return await fixture.Runner.RunAsync(request, cancellation);
+        });
+        var clock = new Clock();
+        using var worker = Worker(fixture, clock, runner: runner);
+        await worker.InitializeAsync(token);
+        await Assert.ThrowsAsync<ToolExecutionException>(() => worker.RunBatchAsync(token));
+        var interrupted = fixture.Read();
+        Assert.Equal(CleanupStatus.NeedsAttention, interrupted.Status);
+        Assert.Equal(1, interrupted.Attempts);
+        Assert.Equal(1, interrupted.CycleAttempts);
+        Assert.Contains("interrupted", interrupted.Diagnostic, StringComparison.Ordinal);
+        clock.Now += TimeSpan.FromDays(1);
+        await worker.RunBatchAsync(token);
+        Assert.Equal(interrupted, fixture.Read());
+        Assert.Equal(afterRemoval ? 1 : 0, fixture.Runner.Removals);
+        Assert.True(Directory.Exists(fixture.Tmp));
+
+        var inbox = new CleanupRetryInbox(fixture.Paths, Config(fixture), fixture.Repository);
+        await inbox.WriteAsync(new(1, Guid.NewGuid().ToString("N"), "test-runtime-owner-0001", "done",
+            CleanupRetryInbox.Revision(interrupted), clock.Now, "queued"), token);
+        await worker.RunBatchAsync(token);
+        Assert.Equal("accepted", Assert.Single(inbox.Read()).Outcome);
+        Assert.Equal(CleanupStatus.Resolved, fixture.Read().Status);
+        Assert.Equal(2, fixture.Read().Attempts);
+        Assert.Equal(1, fixture.Runner.Removals);
+    }
+
     [Fact]
     public async Task RetryIntervalsAndBudgetSurviveEveryRestartWithoutHotLoop()
     {

@@ -9,6 +9,12 @@ internal static class CleanupRetryPolicy
         record.Status == CleanupStatus.Pending && (record.Attempts == 0 || record.CycleAttempts == 0)
         || record.Status == CleanupStatus.RetryScheduled && record.NextAttempt <= now;
 
+    internal static bool IsInterrupted(CompletedEnvironmentObligation record) =>
+        record.Status == CleanupStatus.Pending && record.Attempts > 0 && record.CycleAttempts != 0;
+
+    internal static CompletedEnvironmentObligation Interrupted(CompletedEnvironmentObligation record, DateTimeOffset now) =>
+        Fail(record, "Cleanup attempt was interrupted; process settlement and resource identity require inspection before Retry.", false, now);
+
     internal static CompletedEnvironmentObligation Begin(CompletedEnvironmentObligation record, DateTimeOffset now) => record with
     {
         Attempts = checked(record.Attempts + 1), CycleAttempts = checked((record.CycleAttempts ?? record.Attempts) + 1),

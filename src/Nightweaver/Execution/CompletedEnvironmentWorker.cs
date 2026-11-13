@@ -47,14 +47,20 @@ internal sealed class CompletedEnvironmentWorker(HostPaths paths, ProjectConfig 
                      && record.Diagnostic is not null && CleanupRetryPolicy.IsTransientGitFailure(record.Diagnostic)))
             await store.WriteAsync(CleanupRetryPolicy.Fail(legacy with { CycleAttempts = legacy.Attempts },
                 legacy.Diagnostic!, true, legacy.LastAttempt!.Value), token).ConfigureAwait(false);
-        foreach (var record in store.Read().Obligations.Where(record => record.Status == CleanupStatus.Pending && record.Attempts > 0 && record.CycleAttempts != 0))
-            await store.WriteAsync(CleanupRetryPolicy.Fail(record,
-                "Cleanup attempt was interrupted; process settlement requires inspection before Retry.", false, clock.GetUtcNow()), token).ConfigureAwait(false);
+        await SettleInterruptedAttemptsAsync(token).ConfigureAwait(false);
         foreach (var record in store.Read().Obligations.Where(record => record.Status == CleanupStatus.NeedsAttention))
             report($"Cleanup needs attention for '{record.BeadId}' at '{record.Worktree.Path}': {record.Diagnostic}");
     }
 
     private readonly ConcurrentDictionary<string, (AgentStageSession Session, MergerVerifiedMergeEvidence Evidence)> completions = new(StringComparer.Ordinal);
+
+    // Only under serialization after the owned reconciliation has returned. Never replay an
+    // uncertain removal; preserve its budget and require guarded operator inspection/Retry.
+    private async Task SettleInterruptedAttemptsAsync(CancellationToken token)
+    {
+        foreach (var record in store.Read().Obligations.Where(CleanupRetryPolicy.IsInterrupted))
+            await store.WriteAsync(CleanupRetryPolicy.Interrupted(record, clock.GetUtcNow()), token).ConfigureAwait(false);
+    }
 
     public Task EnqueueAsync(AgentStageSession session, MergerVerifiedMergeEvidence evidence, CancellationToken token)
     {
@@ -81,7 +87,8 @@ internal sealed class CompletedEnvironmentWorker(HostPaths paths, ProjectConfig 
             var record = store.Read().Obligations.Single(record => record.BeadId == item.Key);
             if (record.Status == CleanupStatus.NeedsAttention)
                 report($"Cleanup needs attention for '{record.BeadId}': {record.Diagnostic}");
-            branchCompletions.TryAdd(item.Key, item.Value);
+            else
+                branchCompletions.TryAdd(item.Key, item.Value);
             completions.TryRemove(item.Key, out _);
         }
     }
@@ -106,6 +113,7 @@ internal sealed class CompletedEnvironmentWorker(HostPaths paths, ProjectConfig 
         await serial.WaitAsync(token).ConfigureAwait(false);
         try
         {
+            await SettleInterruptedAttemptsAsync(token).ConfigureAwait(false);
             await PersistCompletionsAsync(token).ConfigureAwait(false);
             foreach (var request in inbox.Read().Where(request => request.Outcome == "queued").Take(8))
             {
@@ -173,6 +181,14 @@ internal sealed class CompletedEnvironmentWorker(HostPaths paths, ProjectConfig 
                 }
             }
             // Reserved environments wait for the existing completion/timer hint instead of spinning.
+        }
+        catch (Exception) when (!token.IsCancellationRequested)
+        {
+            // Required observations can fail after Begin or even after removal. Persist
+            // honest uncertainty while the owner is still live, then report the failure.
+            // If persistence itself fails, the next wake retries this settlement first.
+            await SettleInterruptedAttemptsAsync(token).ConfigureAwait(false);
+            throw;
         }
         finally { serial.Release(); }
     }

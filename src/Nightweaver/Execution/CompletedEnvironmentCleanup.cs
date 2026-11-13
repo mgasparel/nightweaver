@@ -49,7 +49,22 @@ internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRu
         if (onlyBeadId is not null && evidence is not null && (!inventory.ById.TryGetValue(onlyBeadId, out var completed)
                 || !StartupEnvironmentClassifier.IsCompletedTmpOwner(completed, actor)
                 || completed.IssueType != "task"))
-            throw new ToolExecutionException("Completed task is no longer closed, unassigned and unpaused; resources retained.");
+        {
+            const string reason = "Completed task is missing or no longer closed, unassigned and unpaused; resources retained.";
+            // Completion evidence still accounts for these resources, but grants no disposal
+            // authority after a workflow change. Persist before the worker dequeues the hint.
+            var registrations = registry.Where(entry => RuntimePaths.Comparer.Equals(entry.Path,
+                Path.Combine(paths.WorktreesRoot(project), onlyBeadId))).ToArray();
+            var registration = registrations.Length == 1 && !registrations[0].Main && !registrations[0].Bare
+                && !registrations[0].Detached && registrations[0].Branch == $"refs/heads/nightweaver/{onlyBeadId}"
+                && string.Equals(registrations[0].Head, evidence.CheckedHead, StringComparison.OrdinalIgnoreCase)
+                ? registrations[0] : null;
+            var retained = records.TryGetValue(onlyBeadId, out var existing) ? existing
+                : store.Create(onlyBeadId, WorktreePurpose.Delivery, registration, evidence);
+            await store.WriteAsync(CleanupRetryPolicy.Fail(retained, reason, false, now), cancellationToken).ConfigureAwait(false);
+            diagnostics.Add(new(onlyBeadId, retained.Worktree.Path, reason));
+            return diagnostics.AsReadOnly();
+        }
         var plan = StartupPlanner.PlanForStartup(actor, inventory, registry, worktrees, tmp);
         AddInspectionDiagnostics(plan, diagnostics);
 
@@ -106,9 +121,8 @@ internal sealed class CompletedEnvironmentCleanup(BeadsReader reader, IProcessRu
         // Interrupted removals cannot be replayed without confirming process settlement.
         foreach (var record in records.Values.ToArray())
         {
-            if (record.Status == CleanupStatus.Pending && record.Attempts > 0 && record.CycleAttempts != 0)
-                await SaveAsync(CleanupRetryPolicy.Fail(record,
-                    "Cleanup attempt was interrupted; fresh operator inspection is required.", false, now)).ConfigureAwait(false);
+            if (CleanupRetryPolicy.IsInterrupted(record))
+                await SaveAsync(CleanupRetryPolicy.Interrupted(record, now)).ConfigureAwait(false);
         }
         var due = records.Values.Where(record => CleanupRetryPolicy.IsDue(record, now))
             .Select(record => record.BeadId).ToHashSet(RuntimePaths.Comparer);
