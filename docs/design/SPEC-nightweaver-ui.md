@@ -317,6 +317,8 @@ After `POST /api/beads`, retain the created ID/success notice, clear search and 
 
 Busy previews retain identity, pause reason/stage, repair count, short current context, Full Bead Workspace link, and guarded actions. Long questions/diagnostics have keyboard-accessible disclosure or the Workspace detail path, never silent loss of the current question. Preserve drafts, action progress, show-all state and focus during refresh; if collapsing would hide focused content, move focus to Show all/fewer first. Expanded queues may extend below the fold. Keep `data-attention-focus` and card `data-bead-id` identity hooks.
 
+The preview shows the first 140 characters of current context. “Read full context & pause details” exposes the complete question/diagnostic, source attribution and timing; “Write guidance” opens the existing draft and guarded Save Note / Send & Resume actions. Both disclosures retain their state per Bead across refresh and queue collapse. A removed focused card falls back to the queue toggle or Attention status. Full Bead Workspace links retain focus by Bead identity.
+
 Preserve `POST /api/beads/{id}/decide` (`note_only` / `resume`), `/retry`, `/abort`, and Workspace readiness behavior. Resume/Retry carry the displayed stage, full pause-label set and repair count; conflicts require refresh and a new explicit action. Save Note never authorizes scheduling. Abort retains pause labels and repair budget. No visual refresh may erase in-progress guidance or bypass these guards.
 
 ### Hook ownership and compatibility inventory
