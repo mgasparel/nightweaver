@@ -16,12 +16,14 @@ public sealed class PlanningPublicationTests
     [InlineData(4)]
     [InlineData(5)]
     [InlineData(6)]
+    [InlineData(7)]
     public async Task CrashAfterEveryCreateLinkReceiptOrReleaseResumesWithoutDuplicates(int stop)
     {
         using var fixture = new Fixture { CrashAfterWrite = stop };
         await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
         Assert.DoesNotContain("planned", fixture.Parent.Labels);
         Assert.All(fixture.Tasks, task => Assert.False(PlanningPublicationGate.Allows(task, fixture.Inventory)));
+        Assert.False(await fixture.Reconcile()); // A valid incomplete publication is not a graph conflict.
         fixture.CrashAfterWrite = null;
         var result = await fixture.Publish();
         Assert.True(result.Succeeded);
@@ -39,6 +41,7 @@ public sealed class PlanningPublicationTests
     [InlineData(5)]
     [InlineData(6)]
     [InlineData(7)]
+    [InlineData(8)]
     public async Task LostResponsesReconcileActualEffectsWithoutRepeatingWrites(int lost)
     {
         using var fixture = new Fixture { LoseResponseAt = lost };
@@ -46,7 +49,7 @@ public sealed class PlanningPublicationTests
         Assert.True(result.Succeeded);
         Assert.True(result.VerifiedState!.Planned);
         Assert.Equal(2, fixture.CreateCount);
-        Assert.Equal(7, fixture.WriteCount);
+        Assert.Equal(8, fixture.WriteCount);
     }
 
     [Theory]
@@ -85,7 +88,8 @@ public sealed class PlanningPublicationTests
     [InlineData(3)]
     [InlineData(4)]
     [InlineData(5)]
-    [InlineData(7)]
+    [InlineData(6)]
+    [InlineData(8)]
     public async Task FailedWritesRemainNonexecutableAndCanBeReconciled(int rejected)
     {
         using var fixture = new Fixture { RejectWriteAt = rejected };
@@ -99,7 +103,7 @@ public sealed class PlanningPublicationTests
     [Fact]
     public async Task ChangedReleasedGraphRequiresReplanningAndManualTasksRemainIndependent()
     {
-        using var fixture = new Fixture { CrashAfterWrite = 5 };
+        using var fixture = new Fixture { CrashAfterWrite = 6 };
         await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
         fixture.CrashAfterWrite = null;
         var child = fixture.Rows.Values.Last();
@@ -108,7 +112,7 @@ public sealed class PlanningPublicationTests
         var before = JsonSerializer.Serialize(fixture.Rows);
         await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
         Assert.Equal(before, JsonSerializer.Serialize(fixture.Rows));
-        var manual = fixture.Parent with { Id = "manual", IssueType = "task" };
+        var manual = fixture.Parent with { Id = "manual", IssueType = "task", Payload = JsonSerializer.SerializeToElement(new { }) };
         Assert.True(PlanningPublicationGate.Allows(manual, fixture.Inventory));
     }
 
@@ -248,6 +252,39 @@ public sealed class PlanningPublicationTests
         Assert.Equal("manual", Assert.Single(discovery.DeliverySelected).Bead.Id);
         Assert.Equal("manual", (await fixture.ReadRequestedState("manual")).Bead.Id);
         Assert.False(await fixture.Reconcile());
+    }
+
+    [Theory]
+    [InlineData(5, "content")]
+    [InlineData(5, "pause")]
+    [InlineData(6, "content")]
+    [InlineData(6, "pause")]
+    [InlineData(7, "content")]
+    [InlineData(7, "pause")]
+    public async Task LostProvenanceDuringPartialReleaseCannotBecomeManualWork(int stop, string change)
+    {
+        using var fixture = new Fixture { CrashAfterWrite = stop };
+        await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
+        var task = fixture.Rows.Values.ElementAt(1);
+        var id = task["id"]!.GetValue<string>();
+        Assert.Equal(stop == 5, fixture.Inventory.ById[id].Labels.Contains("plan-unpublished"));
+        Assert.DoesNotContain("planned", fixture.Parent.Labels);
+        task["metadata"] = new JsonObject();
+        if (change == "content") task["acceptance_criteria"] = "edited during interrupted publication";
+        else fixture.Rows["product"]["labels"]!.AsArray().Add("needs-human");
+        task["assignee"] = null;
+        var before = task.ToJsonString();
+        var ready = new HashSet<string>([id], StringComparer.Ordinal);
+        var discovery = DeliveryDiscoveryPlanner.Plan(new(fixture.Inventory,
+            new(ready, new HashSet<string>(StringComparer.Ordinal), ready, new HashSet<string>(StringComparer.Ordinal))), 1);
+        Assert.Empty(discovery.DeliverySelected);
+        await Assert.ThrowsAsync<AgentStageInputException>(() => fixture.ReadRequestedState(id));
+        Assert.Equal(before, task.ToJsonString());
+        Assert.True(await fixture.Reconcile());
+        Assert.Contains("needs-human", fixture.Inventory.ById[id].Labels);
+        var paused = task.DeepClone().AsObject();
+        paused["labels"] = JsonNode.Parse(before)!["labels"]!.DeepClone();
+        Assert.Equal(before, paused.ToJsonString());
     }
 
     [Theory]

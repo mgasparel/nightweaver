@@ -33,6 +33,9 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         if (invalid is not null) throw Refuse(invalid);
         var tasks = plan.Tasks!;
         var ids = tasks.ToDictionary(t => t.Id, t => TaskId(session.BeadId, approval.PlanRevision, t.Id), StringComparer.Ordinal);
+        var graph = tasks.Select(t => new PublishedPlanningTask(ids[t.Id], t.Title, Description(t, plan),
+            string.Join("\n", t.AcceptanceCriteria), t.DependsOn.Select(d => ids[d]).ToArray())).ToArray();
+        var graphJson = JsonSerializer.Serialize(graph, PlanningEvidence.JsonOptions);
         var receipt = JsonSerializer.Serialize(new { schema = ReleaseSchema, product = session.BeadId,
             revision = approval.PlanRevision, tasks = ids }, PlanningEvidence.JsonOptions);
         var releasing = comments.Any(c => c.Text == receipt);
@@ -82,6 +85,24 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
             }
         }
         await VerifyGraphAsync(session, approval, plan, ids, releasing, token);
+        // Persist independent membership before any hold removal. Otherwise loss of
+        // child metadata during partial release could disguise generated work as manual.
+        var retained = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
+        if (Metadata(retained, "publication_graph") is { } existingGraph && existingGraph != graphJson
+            || Metadata(retained, "publication_revision") is { } existingRevision && existingRevision != approval.PlanRevision)
+            throw Refuse("Retained publication identity conflicts with the approved graph; preserve it for human reconciliation.");
+        if (Metadata(retained, "publication_graph") != graphJson || Metadata(retained, "publication_revision") != approval.PlanRevision)
+        {
+            await CheckAuthorityAsync(session, approval, token);
+            await WriteUncertainAsync(session, ["update", session.BeadId,
+                "--set-metadata", "publication_revision=" + approval.PlanRevision,
+                "--set-metadata", "publication_graph=" + graphJson,
+                "--status", "in_progress", "--assignee", session.InitialAssignee!,
+                "--if-status", "in_progress", "--if-assignee", session.InitialAssignee!, "--json"], token);
+            retained = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
+            if (Metadata(retained, "publication_graph") != graphJson || Metadata(retained, "publication_revision") != approval.PlanRevision)
+                throw Refuse("Independent publication membership was not confirmed; all remaining holds are preserved.");
+        }
         if (!releasing)
         {
             await WriteUncertainAsync(session, ["comments", "add", session.BeadId, receipt], token);
@@ -106,18 +127,16 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         await CheckAuthorityAsync(session, approval, token);
         // All task holds are gone, but generated-task admission still requires this
         // exact parent revision and planned state. No multi-row transaction is assumed.
-        var graph = tasks.Select(t => new PublishedPlanningTask(ids[t.Id], t.Title, Description(t, plan),
-            string.Join("\n", t.AcceptanceCriteria), t.DependsOn.Select(d => ids[d]).ToArray())).ToArray();
         await WriteUncertainAsync(session, ["update", session.BeadId, "--add-label", "planned",
             "--remove-label", "stage:plan-approved", "--set-metadata", "publication_revision=" + approval.PlanRevision,
-            "--set-metadata", "publication_graph=" + JsonSerializer.Serialize(graph, PlanningEvidence.JsonOptions),
+            "--set-metadata", "publication_graph=" + graphJson,
             "--status", "open", "--assignee", "", "--if-status", "in_progress",
             "--if-assignee", session.InitialAssignee!, "--json"], token);
         var parent = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
         var desired = session.InitialState with { Stage = null, Planned = true, Status = "open" };
         if (BeadWorkflowState.Parse(parent) != desired || parent.Assignee is not null
             || Metadata(parent, "publication_revision") != approval.PlanRevision
-            || Metadata(parent, "publication_graph") != JsonSerializer.Serialize(graph, PlanningEvidence.JsonOptions))
+            || Metadata(parent, "publication_graph") != graphJson)
             throw Refuse("Final planned publication was not confirmed; preserve the graph and claim for inspection.");
         return new(AgentRole.Planner, session.BeadId, "planning-publication", "", null, [], desired,
             PublicationReceipt: new(AgentRole.Planner, AgentOutcomeChoice.Approved, desired, null, true, false),

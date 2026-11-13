@@ -6,6 +6,12 @@ namespace Nightweaver.Execution;
 internal static class PlanningPublicationGate
 {
     internal static bool Allows(BeadSnapshot bead, BeadsInventory inventory)
+        => CheckGraph(bead, inventory, requirePublished: true);
+
+    internal static bool HasGraphConflict(BeadSnapshot bead, BeadsInventory inventory)
+        => !CheckGraph(bead, inventory, requirePublished: false);
+
+    private static bool CheckGraph(BeadSnapshot bead, BeadsInventory inventory, bool requirePublished)
     {
         if (bead.IssueType != "task") return true;
         var product = PlanningPublisher.Metadata(bead, "publication_product");
@@ -15,9 +21,9 @@ internal static class PlanningPublicationGate
         if (product is null || products.Count != 1 || !products.Contains(product)) return false;
         var revision = PlanningPublisher.Metadata(bead, "publication_revision");
         if (!(revision is not null && inventory.ById.TryGetValue(product, out var parent)
-            && parent.Labels.Contains("planned", StringComparer.Ordinal)
-            && !parent.Labels.Contains("needs-human", StringComparer.Ordinal)
-            && !parent.Labels.Contains("product-decision-required", StringComparer.Ordinal)
+            && (!requirePublished || parent.Labels.Contains("planned", StringComparer.Ordinal)
+                && !parent.Labels.Contains("needs-human", StringComparer.Ordinal)
+                && !parent.Labels.Contains("product-decision-required", StringComparer.Ordinal))
             && PlanningPublisher.Metadata(parent, "publication_revision") == revision)) return false;
         try
         {
