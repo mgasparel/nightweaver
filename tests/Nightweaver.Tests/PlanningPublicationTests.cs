@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
+using Nightweaver.Planning;
 
 namespace Nightweaver.Tests;
 
@@ -191,6 +192,89 @@ public sealed class PlanningPublicationTests
         Assert.Equal(writes, fixture.WriteCount);
     }
 
+    [Theory]
+    [InlineData("missing", "content")]
+    [InlineData("invalid", "pause")]
+    [InlineData("all", "content")]
+    [InlineData("all", "native-only")]
+    [InlineData("all", "snapshot-only")]
+    [InlineData("conflicting", "content")]
+    public async Task LostProvenanceRefusesDiscoveryAndExplicitDispatchAndSurfacesAttention(string provenance, string change)
+    {
+        using var fixture = new Fixture(singleTask: true);
+        await fixture.Publish();
+        var task = fixture.Rows.Values.Last();
+        var id = task["id"]!.GetValue<string>();
+        if (provenance == "all") task["metadata"] = new JsonObject();
+        else if (provenance == "missing") task["metadata"]!.AsObject().Remove("publication_product");
+        else task["metadata"]!["publication_product"] = provenance == "invalid" ? JsonValue.Create(42) : JsonValue.Create("other");
+        if (change == "pause") fixture.Rows["product"]["labels"]!.AsArray().Add("needs-human");
+        else task["acceptance_criteria"] = "edited contract";
+        if (change == "native-only") fixture.Rows["product"]["metadata"]!.AsObject().Remove("publication_graph");
+        if (change == "snapshot-only")
+        {
+            task["dependencies"] = new JsonArray();
+            fixture.Edges.RemoveAll(e => e.IssueId == id);
+        }
+        var before = task.ToJsonString();
+        var inventory = fixture.Inventory;
+        var ready = new HashSet<string>([id], StringComparer.Ordinal);
+        var discovery = DeliveryDiscoveryPlanner.Plan(new(inventory,
+            new(ready, new HashSet<string>(StringComparer.Ordinal), ready, new HashSet<string>(StringComparer.Ordinal))), 1);
+        Assert.Empty(discovery.DeliverySelected);
+        await Assert.ThrowsAsync<AgentStageInputException>(() => fixture.ReadRequestedState(id));
+        Assert.Equal(before, task.ToJsonString());
+        Assert.True(await fixture.Reconcile());
+        Assert.Contains("needs-human", fixture.Inventory.ById[id].Labels);
+        var paused = task.DeepClone().AsObject();
+        paused["labels"] = new JsonArray();
+        Assert.Equal(before, paused.ToJsonString());
+        Assert.Equal("open", task["status"]!.GetValue<string>());
+        Assert.Null(task["assignee"]);
+    }
+
+    [Fact]
+    public async Task NativeManualTaskWithoutPublicationEvidenceRetainsDiscoveryAndDispatch()
+    {
+        using var fixture = new Fixture();
+        fixture.Rows["manual"] = new JsonObject { ["id"] = "manual", ["title"] = "Manual work",
+            ["issue_type"] = "task", ["status"] = "open", ["priority"] = 2,
+            ["labels"] = new JsonArray(), ["created_at"] = "2026-11-13T00:00:00Z",
+            ["dependencies"] = JsonSerializer.SerializeToNode(new[] { new { issue_id = "manual", depends_on_id = "product", type = "discovered-from" } }) };
+        var inventory = fixture.Inventory;
+        var ready = new HashSet<string>(["manual"], StringComparer.Ordinal);
+        var discovery = DeliveryDiscoveryPlanner.Plan(new(inventory,
+            new(ready, new HashSet<string>(StringComparer.Ordinal), ready, new HashSet<string>(StringComparer.Ordinal))), 1);
+        Assert.Equal("manual", Assert.Single(discovery.DeliverySelected).Bead.Id);
+        Assert.Equal("manual", (await fixture.ReadRequestedState("manual")).Bead.Id);
+        Assert.False(await fixture.Reconcile());
+    }
+
+    [Theory]
+    [InlineData("foreign")]
+    [InlineData("content")]
+    [InlineData("hold")]
+    public async Task DependencyReconciliationRefreshesTargetAfterInitialValidation(string change)
+    {
+        using var fixture = new Fixture();
+        string? preserved = null;
+        fixture.BeforeDependencyRead = id =>
+        {
+            var task = fixture.Rows[id];
+            if (task["metadata"]!["publication_entry"]!.GetValue<string>() != "second") return;
+            if (change == "foreign") task["assignee"] = "another-owner";
+            else if (change == "content") task["description"] = "human edited contract";
+            else task["labels"] = new JsonArray();
+            preserved = task.ToJsonString();
+        };
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+        Assert.NotNull(preserved);
+        Assert.Equal(preserved, fixture.Rows.Values.Last().ToJsonString());
+        Assert.DoesNotContain(fixture.Edges, e => e.Type == "blocks");
+        Assert.Equal(2, fixture.WriteCount);
+        Assert.DoesNotContain("planned", fixture.Parent.Labels);
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly TempDirectory temp = new();
@@ -202,6 +286,7 @@ public sealed class PlanningPublicationTests
         internal int? RejectWriteAt { get; set; }
         internal int WriteCount { get; private set; }
         internal int CreateCount { get; private set; }
+        internal Action<string>? BeforeDependencyRead { get; set; }
         private readonly AgentStageSession session;
         private readonly PlanningPublisher publisher;
         private readonly RecordingProcessRunner runner;
@@ -209,7 +294,7 @@ public sealed class PlanningPublicationTests
         internal BeadSnapshot Parent => Inventory.ById["product"];
         internal IEnumerable<BeadSnapshot> Tasks => Inventory.ById.Values.Where(b => b.IssueType == "task");
 
-        internal Fixture()
+        internal Fixture(bool singleTask = false)
         {
             Rows["product"] = new JsonObject { ["id"] = "product", ["title"] = "Requested behavior", ["issue_type"] = "feature",
                 ["description"] = "Contract", ["status"] = "in_progress", ["assignee"] = "nightweaver:demo",
@@ -228,6 +313,7 @@ public sealed class PlanningPublicationTests
                 Tasks: [new("first", "First behavior", "Observable first", "Api.cs", "Advisory", ["First works"], "Check first", []),
                     new("second", "Second behavior", "Observable second", "Contract.cs", "Advisory", ["Second works"], "Check second", ["first"])],
                 Constraints: [new("Preserve data", "Product contract")], Coverage: [new("Behavior", ["first", "second"], null, null)]);
+            if (singleTask) plan = plan with { Tasks = [plan.Tasks![0]], Coverage = [new("Behavior", ["first"], null, null)] };
             AddComment(JsonSerializer.Serialize(plan, PlanningEvidence.JsonOptions));
             var review = new PlanningDocument(PlanningEvidence.ReviewSchema, grounding, PlanCommentId: "1",
                 PlanRevision: PlanningEvidence.Hash(Comments[0].Text), Assessment: "Complete", Findings: [], Questions: []);
@@ -238,6 +324,8 @@ public sealed class PlanningPublicationTests
         }
 
         internal Task<AgentStageResult> Publish() => publisher.PublishAsync(session, TestContext.Current.CancellationToken);
+        internal Task<(BeadSnapshot Bead, BeadWorkflowState State)> ReadRequestedState(string id) =>
+            new AgentStageCoordinator(runner).ReadRequestedStateAsync(session.Repository, id, TestContext.Current.CancellationToken);
         internal Task<bool> Reconcile() => new PlanningGraphReconciler(runner).PauseChangedGraphsAsync(session.Repository,
             Inventory, "nightweaver:demo", TestContext.Current.CancellationToken);
         internal void AddComment(string text) => Comments.Add(new((Comments.Count + 1).ToString(System.Globalization.CultureInfo.InvariantCulture), text,
@@ -295,6 +383,7 @@ public sealed class PlanningPublicationTests
                 else
                 {
                     var id = args[args.IndexOf("list") + 1];
+                    if (Value("--direction") == "down") BeforeDependencyRead?.Invoke(id);
                     output = JsonSerializer.Serialize(Edges.Where(e => Value("--direction") == "up" ? e.DependsOnId == id : e.IssueId == id)
                         .Select(e => new { issue_id = e.IssueId, depends_on_id = e.DependsOnId, type = e.Type }));
                 }

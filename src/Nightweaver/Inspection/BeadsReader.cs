@@ -594,6 +594,13 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
                 continue;
             }
 
+            // Embedded issue dependencies may omit the containing issue's ID.
+            if (values.TryGetValue("depends_on_id", out var embeddedDependencyId)
+                && values.TryGetValue("type", out var embeddedType))
+            {
+                dependencies.Add(new Execution.BeadDependency(beadId, embeddedDependencyId, embeddedType));
+                continue;
+            }
             if (!values.TryGetValue("id", out var dependencyId) || !values.TryGetValue("dependency_type", out var dependencyType))
                 throw new JsonException($"{path}: bd dep list row must include id and dependency_type");
             dependencies.Add(new Execution.BeadDependency(beadId, dependencyId, dependencyType));

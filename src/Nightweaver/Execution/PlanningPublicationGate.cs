@@ -7,8 +7,12 @@ internal static class PlanningPublicationGate
 {
     internal static bool Allows(BeadSnapshot bead, BeadsInventory inventory)
     {
+        if (bead.IssueType != "task") return true;
         var product = PlanningPublisher.Metadata(bead, "publication_product");
-        if (product is null) return true; // Native manual tasks retain their existing admission contract.
+        var products = Products(bead, inventory);
+        if (products.Count == 0)
+            return !HasPublicationMetadata(bead); // Native manual tasks retain their admission contract.
+        if (product is null || products.Count != 1 || !products.Contains(product)) return false;
         var revision = PlanningPublisher.Metadata(bead, "publication_revision");
         if (!(revision is not null && inventory.ById.TryGetValue(product, out var parent)
             && parent.Labels.Contains("planned", StringComparer.Ordinal)
@@ -42,6 +46,35 @@ internal static class PlanningPublicationGate
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException) { return false; }
     }
+
+    // Child metadata is mutable. Retained parent membership and native provenance
+    // independently identify generated tasks even when that metadata is lost.
+    internal static HashSet<string> Products(BeadSnapshot bead, BeadsInventory inventory)
+    {
+        var products = new HashSet<string>(StringComparer.Ordinal);
+        if (PlanningPublisher.Metadata(bead, "publication_product") is { } product) products.Add(product);
+        var nativeParents = bead.Payload.TryGetProperty("dependencies", out var edges)
+            ? BeadsReader.ParseDownDependencies(edges, bead.Id).Where(e => e.Type == "discovered-from")
+                .Select(e => e.DependsOnId).ToHashSet(StringComparer.Ordinal) : [];
+        foreach (var parent in inventory.ById.Values)
+        {
+            if (nativeParents.Contains(parent.Id) && HasPublicationMetadata(parent)) products.Add(parent.Id);
+            var graph = PlanningPublisher.Metadata(parent, "publication_graph");
+            if (graph is null) continue;
+            try
+            {
+                if (JsonSerializer.Deserialize<PublishedPlanningTask[]>(graph, PlanningEvidence.JsonOptions)
+                    ?.Any(t => t is not null && t.Id == bead.Id) == true) products.Add(parent.Id);
+            }
+            catch (Exception exception) when (exception is JsonException or InvalidOperationException) { }
+        }
+        return products;
+    }
+
+    private static bool HasPublicationMetadata(BeadSnapshot bead) =>
+        bead.Payload.TryGetProperty("metadata", out var metadata) && metadata.ValueKind == JsonValueKind.Object
+        && (metadata.TryGetProperty("publication_product", out _) || metadata.TryGetProperty("publication_revision", out _)
+            || metadata.TryGetProperty("publication_entry", out _) || metadata.TryGetProperty("publication_graph", out _));
 
     private static string? Text(BeadSnapshot bead, string name) =>
         bead.Payload.TryGetProperty(name, out var value) ? value.GetString() : null;

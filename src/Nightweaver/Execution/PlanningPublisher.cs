@@ -71,6 +71,11 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
             foreach (var missing in expected.Except(actual))
             {
                 if (releasing) throw Refuse("Released task dependencies changed; preserve executing work for human-guided replanning.");
+                // dep add has no native status/assignee compare-and-swap guards.
+                // Read the target last, immediately before each mutation, rather
+                // than relying on its earlier creation-loop snapshot.
+                CheckTask(await reader.ReadDetailAsync(session.Repository, missing.IssueId, token), task, plan,
+                    session.BeadId, approval.PlanRevision, allowReleased: false);
                 await WriteUncertainAsync(session, ["dep", "add", missing.IssueId, missing.DependsOnId, "--type", missing.Type], token);
                 if (!(await reader.ReadDownDependenciesAsync(session.Repository, missing.IssueId, token)).Contains(missing))
                     throw Refuse($"Dependency '{missing.IssueId}' -> '{missing.DependsOnId}' was not confirmed.");

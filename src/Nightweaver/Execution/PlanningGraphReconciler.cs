@@ -15,10 +15,10 @@ internal sealed class PlanningGraphReconciler(IProcessRunner runner)
         var changed = false;
         foreach (var candidate in inventory.ById.Values)
         {
-            var product = PlanningPublisher.Metadata(candidate, "publication_product");
+            var product = PlanningPublicationGate.Products(candidate, inventory)
+                .Order(StringComparer.Ordinal).FirstOrDefault(id => inventory.ById.TryGetValue(id, out var parent)
+                    && parent.Labels.Contains("planned", StringComparer.Ordinal));
             if (candidate.IssueType != "task" || product is null
-                || !inventory.ById.TryGetValue(product, out var parent)
-                || !parent.Labels.Contains("planned", StringComparer.Ordinal)
                 || PlanningPublicationGate.Allows(candidate, inventory)) continue;
             if (ContinuousAgentLaunchContext.StopRequested) break;
             var fresh = await reader.ReadSnapshotAsync(repository, token);
