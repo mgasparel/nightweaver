@@ -743,7 +743,7 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
         "GIT_CEILING_DIRECTORIES", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"
     ];
 
-    private static async Task<string> RunToolAsync(string executable, IReadOnlyList<string> arguments, string workingDirectory,
+    internal static async Task<string> RunToolAsync(string executable, IReadOnlyList<string> arguments, string workingDirectory,
         IReadOnlyDictionary<string, string?> environment, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
         var start = new ProcessStartInfo(executable)

@@ -10,24 +10,32 @@ public sealed class ManualDeliveryPilotFixtureTemplateTests
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        await using var fixture = await ManualPilotFixture.CreateAsync(
-            seedProfile: ManualPilotSeedProfile.Empty,
-            cancellationToken: TestContext.Current.CancellationToken);
+        using var temp = new TempDirectory();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var marker = Path.Combine(fixture.Root, "cancelled-tool.pid");
-        var script = Path.Combine(fixture.Root, "hold-tool.ps1");
-        await File.WriteAllTextAsync(script,
-            "param([string]$Marker)\n[IO.File]::WriteAllText($Marker, [string]$PID)\nStart-Sleep -Seconds 60\n",
-            TestContext.Current.CancellationToken);
-        var run = fixture.RunToolForTestAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-File", script, marker],
-            fixture.Repository, cancellation.Token);
+        var marker = Path.Combine(temp.Path, "cancelled-tool.pid");
+        var executable = Path.Combine(AppContext.BaseDirectory, "AgentInvocationFixture.exe");
+        var environment = new Dictionary<string, string?>
+        {
+            ["NIGHTWEAVER_FIXTURE_ACTION"] = null,
+            ["NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION"] = null,
+            ["NIGHTWEAVER_INVOCATION_PURPOSE"] = null
+        };
+        var run = ManualPilotFixture.RunToolAsync(executable, ["never-read", marker], temp.Path,
+            environment, TimeSpan.FromSeconds(30), cancellation.Token);
         System.Diagnostics.Process? child = null;
         try
         {
             using var ready = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
             ready.CancelAfter(TimeSpan.FromSeconds(10));
             while (!File.Exists(marker) || new FileInfo(marker).Length == 0)
+            {
+                if (run.IsCompleted)
+                {
+                    await run;
+                    throw new InvalidOperationException("The cancellation probe exited before reporting its PID.");
+                }
                 await Task.Delay(20, ready.Token);
+            }
             child = System.Diagnostics.Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(marker, ready.Token),
                 System.Globalization.CultureInfo.InvariantCulture));
             cancellation.Cancel();
@@ -37,6 +45,8 @@ public sealed class ManualDeliveryPilotFixtureTemplateTests
         finally
         {
             cancellation.Cancel();
+            try { await run; }
+            catch (OperationCanceledException) { }
             if (child is not null)
             {
                 if (!child.HasExited) child.Kill(entireProcessTree: true);
