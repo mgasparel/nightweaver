@@ -61,6 +61,7 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
         var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var successorStarted = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var roles = new ConcurrentQueue<(string Bead, AgentRole Role)>();
+        OperationalRetryOutcome? generatedOutcome = null;
         var mergerStarts = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         var preparer = new AgentInvocationPreparer();
         var launcher = new AgentStageTargetFixture.FixtureEnvironmentOverlayProcessLauncher(environment);
@@ -113,7 +114,11 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
         {
             var outcome = await retries.RunAsync(host, config, target, bead, role, actor, token, progress, state);
             roleOutcomes.Enqueue($"{bead} {role}: {JsonSerializer.Serialize(outcome)}");
-            if (bead.StartsWith(product + "-p", StringComparison.Ordinal)) deliveryStop.RequestStop();
+            if (bead.StartsWith(product + "-p", StringComparison.Ordinal))
+            {
+                generatedOutcome = outcome;
+                deliveryStop.RequestStop();
+            }
             if (bead == product && role == AgentRole.PlanChallenger) planningStop.RequestStop();
             return outcome;
         };
@@ -213,19 +218,36 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             Assert.Equal("preserve interruption and pause", File.ReadAllText(sentinel));
             Assert.Equal(new[] { AgentRole.Planner, AgentRole.PlanChallenger }, roles.Where(item => item.Bead == product).Select(item => item.Role));
             Assert.Equal(PlanningSlotDisposition.Published, planned.Outcome?.Disposition);
+            Assert.True(planned.Outcome?.FinalState?.Planned);
             Assert.True(planned.ClaimHandoffCompleted, planned.Diagnostic);
             Assert.Empty(planning.ActiveReservations);
             var inventory = await new BeadsReader(runner).ReadSnapshotAsync(repository, lifetime.Token);
             var generated = inventory.ById.Values.Where(bead => PlanningPublisher.Metadata(bead, "publication_product") == product).ToArray();
             Assert.Equal(2, generated.Length);
+            var task = Assert.Single(generated, bead => PlanningPublisher.Metadata(bead, "publication_entry") == "slice-1");
+            var dependent = Assert.Single(generated, bead => PlanningPublisher.Metadata(bead, "publication_entry") == "slice-2");
+            Assert.DoesNotContain("plan-unpublished", task.Labels);
             Assert.All(generated, bead => Assert.True(PlanningPublicationGate.Allows(bead, inventory)));
+            var readiness = await runner.RunAsync(BeadsCommand.CreateUnassignedReadiness(repository.Path), lifetime.Token);
+            Assert.Equal(0, readiness.ExitCode);
+            var ready = BeadsReader.Parse(readiness.StandardOutput).ById.Keys;
+            Assert.Contains(task.Id, ready);
+            Assert.DoesNotContain(dependent.Id, ready);
             var generatedAdmission = Assert.Single((await delivery.EvaluateAsync(lifetime.Token)).Admitted);
-            Assert.Contains(generatedAdmission.BeadId, generated.Select(bead => bead.Id));
+            Assert.Equal(task.Id, generatedAdmission.BeadId);
             var generatedTurn = await generatedAdmission.Completion.WaitAsync(TimeSpan.FromMinutes(2), lifetime.Token);
             Assert.True(generatedTurn.ClaimHandoffCompleted, generatedTurn.Diagnostic);
+            Assert.NotNull(generatedOutcome);
+            Assert.True(generatedOutcome.Succeeded, generatedOutcome.StageResult.Failure?.Reason);
             Assert.Contains((generatedAdmission.BeadId, AgentRole.Implementer), roles);
+            Assert.Single(roles, item => item.Bead == task.Id);
             Assert.Equal("stage:review", (await new BeadsReader(runner).ReadSnapshotAsync(repository, lifetime.Token))
                 .ById[generatedAdmission.BeadId].Labels.Single(label => label.StartsWith("stage:", StringComparison.Ordinal)));
+            var generatedWorktree = Path.Combine(paths.WorktreesRoot(project.Name), task.Id);
+            var branch = await runner.RunAsync(GitCommand.Create(["branch", "--show-current"], generatedWorktree), lifetime.Token);
+            Assert.Equal(0, branch.ExitCode);
+            Assert.Equal($"nightweaver/{task.Id}", branch.StandardOutput.Trim());
+            Assert.True(File.Exists(Path.Combine(generatedWorktree, "delivery-slot.txt")));
             var observed = telemetryReader.Read().Snapshot;
             Assert.NotNull(observed?.Planning);
             Assert.Contains(observed.Planning.Slots, slot => slot.Invocation?.ProcessId is > 0
