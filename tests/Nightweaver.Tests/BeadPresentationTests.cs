@@ -125,6 +125,8 @@ public sealed class BeadPresentationTests
     [InlineData("published", "Published graph observed")]
     [InlineData("held", "Publication hold")]
     [InlineData("partial", "Publication hold / verification unavailable")]
+    [InlineData("partial-revision-conflict", "Publication needs attention")]
+    [InlineData("partial-product-conflict", "Publication needs attention")]
     [InlineData("metadata-loss", "Publication needs attention")]
     [InlineData("content", "Publication needs attention")]
     [InlineData("unpublished", "Awaiting complete publication")]
@@ -140,18 +142,30 @@ public sealed class BeadPresentationTests
         });
         var parentMetadata = JsonSerializer.Serialize(new { publication_revision = "revision", publication_graph = graph });
         var taskMetadata = JsonSerializer.Serialize(new { publication_product = "product", publication_revision = "revision" });
-        var task = Bead(labels: scenario is "held" or "partial" ? ["plan-unpublished"] : [],
+        var partial = scenario.StartsWith("partial", StringComparison.Ordinal);
+        if (scenario == "partial-revision-conflict")
+            taskMetadata = JsonSerializer.Serialize(new { publication_product = "product", publication_revision = "old" });
+        if (scenario == "partial-product-conflict")
+            taskMetadata = JsonSerializer.Serialize(new { publication_product = "other", publication_revision = "revision" });
+        var task = Bead(labels: scenario == "held" || partial ? ["plan-unpublished"] : [],
             metadata: scenario == "metadata-loss" ? "{}" : taskMetadata,
             dependencies: new[] { new { issue_id = "bead", depends_on_id = "product", type = "discovered-from" } });
         if (scenario == "content") task = task with { Payload = JsonSerializer.SerializeToElement(new { title = "Changed", metadata = JsonSerializer.Deserialize<object>(taskMetadata) }) };
         var parent = Bead("feature", scenario == "unpublished" ? [] : ["planned"], id: "product",
-            metadata: scenario == "partial" ? "{\"publication_revision\":\"revision\"}" : parentMetadata);
+            metadata: partial ? "{\"publication_revision\":\"revision\"}" : parentMetadata);
         var inventory = new BeadsInventory(scenario == "missing" ? [task] : [task, parent]);
         Assert.Equal(expected, BeadPresenter.Project(task, 3, inventory).Publication);
         if (scenario != "missing")
             Assert.Equal(scenario is "metadata-loss" or "content" or "malformed" ? "Publication needs attention"
-                : scenario == "partial" ? "Publication observation unavailable" : "Publication graph observed",
+                : partial ? "Publication observation unavailable" : "Publication graph observed",
                 BeadPresenter.Project(parent, 3, inventory).Publication);
+        if (partial)
+        {
+            Assert.Equal(scenario == "partial" ? (bool?)null : true,
+                PlanningPublicationGate.ObserveGraphConflict(task, inventory));
+            Assert.False(PlanningPublicationGate.Allows(task, inventory));
+            Assert.True(PlanningPublicationGate.HasGraphConflict(task, inventory));
+        }
         if (scenario == "published")
             Assert.Equal("Publication needs attention", BeadPresenter.Project(parent, 3,
                 new BeadsInventory([task with { IssueType = "epic" }, parent])).Publication);

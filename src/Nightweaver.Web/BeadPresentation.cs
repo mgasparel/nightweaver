@@ -87,12 +87,10 @@ internal static class BeadPresenter
             var products = PlanningPublicationGate.Products(bead, inventory);
             var metadata = PlanningPublicationGate.HasPublicationMetadata(bead);
             if (products.Count == 0 && !metadata) return held ? "Publication hold / verification unavailable" : null;
-            // Before the publisher records its immutable snapshot, a partial held graph is
-            // observable but cannot yet be verified. Do not call it a verified graph or conflict.
-            if (held && products.Count == 1 && inventory.ById.TryGetValue(products.Single(), out var parent)
-                && PlanningPublisher.Metadata(parent, "publication_graph") is null)
+            var conflict = PlanningPublicationGate.ObserveGraphConflict(bead, inventory);
+            if (held && conflict is null)
                 return "Publication hold / verification unavailable";
-            if (PlanningPublicationGate.HasGraphConflict(bead, inventory)) return "Publication needs attention";
+            if (conflict != false) return "Publication needs attention";
             if (held) return "Publication hold";
             return PlanningPublicationGate.Allows(bead, inventory) ? "Published graph observed" : "Awaiting complete publication";
         }

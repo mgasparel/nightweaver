@@ -25,20 +25,22 @@ internal static class BeadPresentationQaFixture
         var claimed = await Create("claimed stored work", "task", "stage:review", "{\"repair_cycles\":2}");
         await run(["update", claimed, "--status", "in_progress", "--assignee", "fixture-owner"]);
         await Create("long literal content", "task", "stage:qa,<img-onerror=hostile>," + new string('x', 250));
-        foreach (var scenario in new[] { "published", "held", "conflict", "partial" })
+        foreach (var scenario in new[] { "published", "held", "conflict", "partial", "partial revision conflict" })
         {
-            var parent = await Create(scenario + " parent", "feature", scenario == "partial" ? "stage:plan-approved" : "planned");
+            var partial = scenario.StartsWith("partial", StringComparison.Ordinal);
+            var parent = await Create(scenario + " parent", "feature", partial ? "stage:plan-approved" : "planned");
             var metadata = JsonSerializer.Serialize(new { publication_product = parent, publication_revision = "fixture-revision" });
-            var task = await Create(scenario + " graph", labels: scenario is "held" or "partial" ? "plan-unpublished" : "", metadata: metadata);
+            var task = await Create(scenario + " graph", labels: scenario == "held" || partial ? "plan-unpublished" : "", metadata: metadata);
             await run(["dep", "add", task, parent, "--type", "discovered-from"]);
             await run(["update", parent, "--set-metadata", "publication_revision=fixture-revision"]);
-            if (scenario != "partial")
+            if (!partial)
             {
                 var graph = JsonSerializer.Serialize(new[] { new { id = task, title = "Workflow: " + scenario + " graph",
                     description = "Description", acceptanceCriteria = "Acceptance", dependencies = Array.Empty<string>() } });
                 await run(["update", parent, "--set-metadata", "publication_graph=" + graph]);
             }
             if (scenario == "conflict") await run(["update", task, "--set-metadata", "publication_product=missing"]);
+            if (scenario == "partial revision conflict") await run(["update", task, "--set-metadata", "publication_revision=old"]);
         }
     }
 }

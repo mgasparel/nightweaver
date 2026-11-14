@@ -6,10 +6,15 @@ namespace Nightweaver.Execution;
 internal static class PlanningPublicationGate
 {
     internal static bool Allows(BeadSnapshot bead, BeadsInventory inventory)
-        => CheckGraph(bead, inventory, requirePublished: true);
+        => CheckGraph(bead, inventory, requirePublished: true) == true;
 
     internal static bool HasGraphConflict(BeadSnapshot bead, BeadsInventory inventory)
-        => !CheckGraph(bead, inventory, requirePublished: false);
+        => CheckGraph(bead, inventory, requirePublished: false) != true;
+
+    // A missing snapshot cannot verify a partial publication, but independently
+    // observed provenance/revision conflicts still take precedence over that absence.
+    internal static bool? ObserveGraphConflict(BeadSnapshot bead, BeadsInventory inventory)
+        => CheckGraph(bead, inventory, requirePublished: false) is { } valid ? !valid : null;
 
     // Read-only Product observation uses the same complete graph check as task admission.
     // Absence of a snapshot supplies no evidence of graph validity.
@@ -27,7 +32,7 @@ internal static class PlanningPublicationGate
         catch (Exception error) when (error is JsonException or InvalidOperationException or ArgumentException) { return true; }
     }
 
-    private static bool CheckGraph(BeadSnapshot bead, BeadsInventory inventory, bool requirePublished)
+    private static bool? CheckGraph(BeadSnapshot bead, BeadsInventory inventory, bool requirePublished)
     {
         if (bead.IssueType != "task") return true;
         var product = PlanningPublisher.Metadata(bead, "publication_product");
@@ -44,7 +49,7 @@ internal static class PlanningPublicationGate
         try
         {
             var graph = PlanningPublisher.Metadata(parent, "publication_graph");
-            if (graph is null) return false;
+            if (graph is null) return null;
             var intended = JsonSerializer.Deserialize<PublishedPlanningTask[]>(graph, PlanningEvidence.JsonOptions);
             if (intended is not { Length: > 0 } || intended.Any(t => t is null || t.Dependencies is null)
                 || !intended.Any(t => t.Id == bead.Id)) return false;

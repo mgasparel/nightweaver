@@ -41,6 +41,7 @@ try {
   assert.equal(find('published graph').presentation.publication, 'Published graph observed');
   assert.equal(find('held graph').presentation.publication, 'Publication hold');
   assert.equal(find('partial graph').presentation.publication, 'Publication hold / verification unavailable');
+  assert.equal(find('partial revision conflict graph').presentation.publication, 'Publication needs attention');
   assert.equal(find('conflict graph').presentation.publication, 'Publication needs attention');
   assert(find('unknown stage').presentation.diagnostic);
   assert(find('conflicting pauses').presentation.diagnostic);
@@ -92,6 +93,7 @@ try {
     await capture('historical technical attention', width, true);
     await capture('held graph', width, false);
     await capture('partial graph', width, true);
+    await capture('partial revision conflict graph', width, true);
     await capture('conflict graph', width, true);
   }
   assert.equal(await page.locator('#workspace-workflow img, #workspace-workflow script').count(), 0);
