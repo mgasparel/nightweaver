@@ -13,8 +13,9 @@ The first screen answers: what needs me, what is running, and can I trust the ob
   #attention                        Clear row or two-card paused preview + Show all
   #factory
     #factory-status                 Runtime health in the section header
-    .bay-card.planning-disabled      Compact manual Planning notice
-    .bay-grid                       Delivery Floor | Singleton Merger
+    .bay-grid                       Planning Pool | Delivery Floor | Singleton Merger
+      #planning-pool-status         Observed occupancy or Planning unavailable
+      #planning-slots               Real Planning slots when supported by the runtime
       occupied .factory-slot        Bead · role/stage · state · timing · repairs · diff
         .slot-diagnostics           Invocation/model/branch/worktree details on demand
         invocation CTA              Live or retained output in #invocation-dialog
@@ -24,7 +25,7 @@ The first screen answers: what needs me, what is running, and can I trust the ob
 #bead-workspace                     Separate full reading and guidance view
 ```
 
-The Attention Desk is pinned by document order, ahead of Factory; it does not overlay controls. Invocation telemetry is a modal detail path. Manual Planning remains explicit: only Delivery and singleton Merger execute in the current continuous runtime. Intake creates backlog work, not automatic Planning authorization. Tracker Active means stored in progress, not a live slot.
+The Attention Desk is pinned by document order, ahead of Factory; it does not overlay controls. Invocation telemetry is a modal detail path. The continuous runtime evaluates Planning, Delivery and singleton Merger in that order with independent capacities. Planning requires explicit `ready-for-planning` authorization plus ordinary native readiness and backpressure checks. Intake creates backlog work. Older two-pool snapshots show Planning unavailable; tracker Active means stored in progress, not a live slot.
 
 ## Representative layouts
 
@@ -41,17 +42,18 @@ Use approximately 64px of header, 84px of collapsed digest, 280px of Attention p
 │ ns-a · Decision Needed             │ ns-b · Needs Human                 │
 │ short context + actions/workspace  │ short diagnostic + actions         │
 ├ Factory · ● Live · Runtime … · Observed … · repository …                ┤
-│ Planning Pool · Observed activity for authorized Products      │
-│ Delivery: 2 of 3 active             │ Merger: 1 of 1 active              │
-│ ns-c · Implementer · ● Running      │ ns-e · Merger · ● Running          │
-│ Started … Deadline … Repairs +/−   │ Started … Deadline … Repairs +/−   │
-│ ▸ Diagnostics · Open live          │ ▸ Diagnostics · Open live          │
-│ ns-d · Reviewer · ● Running …      │                                    │
-│ delivery-3 · ◌ Idle                │                                    │
+│ Planning: 1/2 active │ Delivery: 2/3 active       │ Merger: 1/1 active   │
+│ ns-p · Planner      │ ns-c · Implementer        │ ns-e · Merger        │
+│ ● Running          │ ● Running                 │ ● Running           │
+│ Started … Deadline …│ Started … Repairs … +/−   │ Started … Deadline … │
+│ ▸ Diagnostics      │ ▸ Diagnostics             │ ▸ Diagnostics       │
+│ Open live           │ Open live                 │ Open live            │
+│ planning-2 · ◌ Idle │ ns-d · Reviewer · Running │                      │
+│                     │ delivery-3 · ◌ Idle       │                      │
 └ Beads Explorer · Ready selected · Showing 1–15 of 200 beads              ┘
 ```
 
-The sketch conveys order and grouping; exact rows may combine within the height budget. Busy Attention cards sit side by side, with current context disclosed rather than expanded histories. Higher slot capacities may extend below the fold while pool occupancy and the beginning of both bays remain visible.
+The sketch conveys order and grouping; exact rows may combine within the height budget. Planning uses the same slot summaries, diagnostics and invocation controls as the other bays. Busy Attention cards sit side by side, with current context disclosed rather than expanded histories. Higher slot capacities may extend below the fold while pool occupancy and the beginning of each bay remain visible.
 
 ### Idle and caught up
 
@@ -82,7 +84,7 @@ Exercise 200-character titles, deep Windows worktree paths, 40-character SHAs, 5
 
 The dedicated `#bead/<encoded-id>` view retains specification reading, current context, collapsible history, environment metadata and spacious guidance. At desktop it uses a main reading column with metadata sidebar; at narrow width it stacks. Older iterations may collapse, while the current question/failure stays prominent. Preserve intake and Workspace IDs and `data-bead-workspace-link` navigation across all overview sections.
 
-Save Note (`note_only`) supplies context only. Resume and Retry require the displayed stage, complete pause-label set, and repair count. The host verifies current state and applies guarded updates; stale, closed or claimed work requires refresh and a new explicit action. Successful Resume/Retry makes work eligible for ordinary scheduling, not immediate dispatch. Abort retains pause state and repair budget. Workspace Ready for Planning remains a distinct explicit authorization; continuous automated Planning is still out of scope.
+Save Note (`note_only`) supplies context only. Resume and Retry require the displayed stage, complete pause-label set, and repair count. The host verifies current state and applies guarded updates; stale, closed or claimed work requires refresh and a new explicit action. Successful Resume/Retry makes work eligible for ordinary scheduling, not immediate dispatch. Abort retains pause state and repair budget. Workspace Ready for Planning remains a distinct explicit authorization for eligible Products; continuous Planning then follows native readiness, independent capacity and `max_active_plan_beads` backpressure. Generated tasks enter Delivery only after complete verified publication.
 
 ## Integration acceptance matrix
 
@@ -90,11 +92,11 @@ Save Note (`note_only`) supplies context only. Resume and Retry require the disp
 
 | Scenario | Functional and visual evidence |
 | --- | --- |
-| Busy desktop | Two attention previews from four paused Beads, two occupied plus one idle Delivery slots and one occupied Merger; health/attention/execution visible initially at 1440×900; no expanded history crowding. |
+| Busy desktop | Two attention previews from four paused Beads, observed Planning slots alongside two occupied plus one idle Delivery slots and one occupied Merger; health/attention/execution visible initially at 1440×900; no expanded history crowding. |
 | Idle/caught up | Collapsed digest, clear Attention row, truthful fresh idle runtime, compact idle slots, Explorer begins in initial viewport. |
 | Expanded histories | 5/4/6 bounds, 140-character summary disclosure, Show more/fewer via keyboard/pointer; accurate totals/checkpoint/window; full text and Workspace links reachable. |
 | Large tracker/intake | 200+ Beads; 15 rows/page on every filter; range/Previous/Next; off-page server search; empty/end-page clamp; created Bead located or Show in All fallback. |
-| Stale/disconnected/error | Last confirmed data labeled, observation timestamp, distinct loading/empty/error, Retry, truthful invocation lifecycle; no mutation authority changes. |
+| Stale/disconnected/error | Last confirmed data labeled, observation timestamp, distinct loading/empty/error, Retry, truthful invocation lifecycle; legacy two-pool snapshots show Planning unavailable; no mutation authority changes. |
 | Diagnostic/invocation detail | Correct runtime/slot/invocation; open diagnostics survive changed 2-second snapshots; follow/pause/latest, reconnect without duplicates, end, Escape/Close and focus restoration. |
 | Long content/mobile/zoom | 200-character titles, paths/SHAs and large data at 375px and 720 CSS px; readable text, wrapped actions/metadata; `scrollWidth <= clientWidth`; no clipped controls or lost focus. |
 | Retained flows | Intake, Workspace navigation/history, guidance drafts and guarded Resume/Retry/Abort still work; stale conflict is refreshable, not blindly resubmitted. |
