@@ -9,6 +9,92 @@ namespace Nightweaver.Tests;
 
 public sealed class AgentOutcomeClassifierTests
 {
+    [Theory]
+    [InlineData(null, null, "json-fixture-secret")]
+    [InlineData(null, "", "json-fixture-secret")]
+    [InlineData(null, " \t", "json-fixture-secret")]
+    [InlineData(null, "environment-fixture-secret", "environment-fixture-secret")]
+    [InlineData("override-fixture-secret", "environment-fixture-secret", "override-fixture-secret")]
+    public async Task PrimaryUsesCredentialPrecedenceAndKeepsKeysOutOfEvidence(
+        string? overrideKey, string? environmentKey, string expectedKey)
+    {
+        using var fixture = new OutcomeFixture();
+        var project = fixture.LoadProjectWithKey("json-fixture-secret");
+        var calls = 0;
+        using var client = new HttpClient(new DelegateHttpMessageHandler(async request =>
+        {
+            calls++;
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            Assert.Equal(expectedKey, request.Headers.Authorization?.Parameter);
+            var body = await request.Content!.ReadAsStringAsync();
+            Assert.DoesNotContain("fixture-secret", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("fixture-secret", request.RequestUri!.ToString(), StringComparison.Ordinal);
+            return JsonResponse("ready_for_review");
+        }));
+        var classifier = new AgentOutcomeClassifier(client,
+            executeFallback: (_, _, _, _, _) => throw new InvalidOperationException("Unexpected fallback."),
+            apiKeyOverride: overrideKey,
+            getEnvironmentVariable: name =>
+            {
+                Assert.Equal("OPENAI_API_KEY", name);
+                return environmentKey;
+            });
+
+        var result = await classifier.ClassifyAsync(fixture.Paths, project, fixture.Context, fixture.Worktree,
+            fixture.Invocation, [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(AgentOutcomeChoice.ReadyForReview, result.Outcome);
+        Assert.Equal(1, calls);
+        Assert.DoesNotContain("fixture-secret", result.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(" \t")]
+    public async Task MissingCredentialsSkipPrimaryAndRetainFallback(string? environmentKey)
+    {
+        using var fixture = new OutcomeFixture();
+        using var client = new HttpClient(new DelegateHttpMessageHandler(_ =>
+            throw new InvalidOperationException("Missing credentials must not send HTTP.")));
+        var fallbackCalls = 0;
+        var classifier = new AgentOutcomeClassifier(client, executeFallback: (_, _, invocation, _, _) =>
+        {
+            fallbackCalls++;
+            return Task.FromResult(ValidFallbackResult(invocation));
+        }, getEnvironmentVariable: _ => environmentKey);
+
+        var result = await fixture.ClassifyAsync(classifier);
+
+        Assert.Equal(AgentOutcomeChoice.ReadyForReview, result.Outcome);
+        Assert.Equal("standard-agent-cli", result.Provider);
+        Assert.Equal(1, fallbackCalls);
+    }
+
+    [Fact]
+    public async Task ConfiguredKeyIsAbsentFromFailureDiagnosticsAndFallbackInput()
+    {
+        const string key = "json-fixture-secret";
+        using var fixture = new OutcomeFixture();
+        var project = fixture.LoadProjectWithKey(key);
+        using var client = new HttpClient(new DelegateHttpMessageHandler(_ => throw new HttpRequestException(key)));
+        var fallbackCalls = 0;
+        var classifier = new AgentOutcomeClassifier(client, executeFallback: (_, _, invocation, _, _) =>
+        {
+            fallbackCalls++;
+            Assert.DoesNotContain(key, invocation.StandardInput!, StringComparison.Ordinal);
+            Assert.DoesNotContain(key, invocation.ToString(), StringComparison.Ordinal);
+            return Task.FromResult(ValidFallbackResult(invocation));
+        }, getEnvironmentVariable: _ => null);
+
+        var result = await classifier.ClassifyAsync(fixture.Paths, project, fixture.Context, fixture.Worktree,
+            fixture.Invocation, [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(AgentOutcomeChoice.ReadyForReview, result.Outcome);
+        Assert.Equal(1, fallbackCalls);
+        Assert.DoesNotContain(key, result.ToString(), StringComparison.Ordinal);
+        Assert.Contains("HttpRequestException", result.Diagnostic, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task PrimaryDecisionsRequestContainsOneBoundedNamedChoiceQuestionAndDoesNotFallbackOnValidUnclear()
     {
@@ -496,6 +582,16 @@ public sealed class AgentOutcomeClassifierTests
 
         internal HostPaths Paths { get; }
         internal ProjectConfig Project { get; }
+        internal ProjectConfig LoadProjectWithKey(string key)
+        {
+            var configPath = temp.WriteFile("project.json", JsonSerializer.Serialize(new
+            {
+                name = Project.Name.Value,
+                target_repository = new { path = "target" },
+                openai_api_key = key
+            }));
+            return ProjectConfigLoader.Load(configPath, Project.Name, Paths);
+        }
         internal string Worktree { get; }
         internal AgentDispatchContext Context { get; }
         internal AgentStageResult Invocation { get; }

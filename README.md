@@ -74,6 +74,20 @@ A minimal valid Project config is:
 
 JSON uses `\\` to represent a Windows path separator. The target path may also be relative to the config file's directory.
 
+To configure authentication for the primary outcome classifier, add the optional top-level field:
+
+```json
+{
+  "name": "demo",
+  "openai_api_key": "REPLACE_WITH_YOUR_KEY",
+  "target_repository": { "path": "H:/Work/Demo Product" }
+}
+```
+
+Replace `REPLACE_WITH_YOUR_KEY` with a real OpenAI API key before primary authentication can succeed. Agent CLI login does not fill this setting. A nonblank `OPENAI_API_KEY` environment value takes precedence over the JSON key; an absent or blank environment value uses the JSON key. Omitting the field preserves environment-only authentication. Restart the Nightweaver host after changing configuration or its environment. The constructor credential override is a test seam and takes precedence over both sources.
+
+The field accepts a nonempty string without surrounding whitespace or control characters; `null` is invalid. Loading configuration does not validate key prefixes or contact OpenAI. Keep real keys out of tracked examples and source control. The selected key is sent only in the primary API request's Authorization header. Missing or unavailable primary credentials retain the existing configured Agent CLI classifier fallback.
+
 Both selectors work from an unrelated working directory. These PowerShell examples use paths containing spaces:
 
 ```powershell

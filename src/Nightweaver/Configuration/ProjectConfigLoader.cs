@@ -74,6 +74,7 @@ internal static class ProjectConfigLoader
             }
 
             ProjectSlug? name = null;
+            string? openAiApiKey = null;
             TargetRepositoryConfig? targetRepository = null;
             var concurrency = new ConcurrencyConfig(
                 ProjectConfigDefaults.MaxConcurrentPlanning,
@@ -96,6 +97,9 @@ internal static class ProjectConfigLoader
 
                 switch (property.Name)
                 {
+                    case "openai_api_key":
+                        openAiApiKey = ReadOpenAiApiKey(property.Value, path);
+                        break;
                     case "name":
                         sawName = true;
                         name = ReadName(property.Value, path);
@@ -142,7 +146,25 @@ internal static class ProjectConfigLoader
                 concurrency,
                 limits,
                 resolvedSettings.AgentDefaults,
-                resolvedSettings.Roles);
+                resolvedSettings.Roles) { OpenAiApiKey = openAiApiKey };
+        }
+
+        private string? ReadOpenAiApiKey(JsonElement element, string path)
+        {
+            if (element.ValueKind != JsonValueKind.String)
+            {
+                AddError("must be a nonempty string without surrounding whitespace or control characters", path);
+                return null;
+            }
+
+            var value = element.GetString()!;
+            if (string.IsNullOrWhiteSpace(value) || value != value.Trim() || value.Any(char.IsControl))
+            {
+                AddError("must be a nonempty string without surrounding whitespace or control characters", path);
+                return null;
+            }
+
+            return value;
         }
 
         private ProjectSlug? ReadName(JsonElement element, string path)

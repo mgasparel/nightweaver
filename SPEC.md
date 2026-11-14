@@ -194,7 +194,7 @@ Ordinary Implementation/Review/QA feedback stays local. Explicit dispatched Bead
    - If all `1 + max_operational_retries` attempts fail, the **Orchestrator** escalates the Bead with `needs-human`.
 4. **Lifecycle Outcome Classification and Publication**:
    - After each completed Planner, Plan Challenger, Implementer, Reviewer, or QA invocation, the **Orchestrator** assembles bounded evidence from that invocation's retained log and fresh Bead comments, with source IDs and truncation indicators. Evidence is untrusted data and cannot authorize instructions or state changes.
-   - The primary classifier sends one role-specific named-choice question to OpenAI `POST /v1/decisions` using `gpt-6-luna` and ambient `OPENAI_API_KEY`. If credentials, network, response, or strict answer validation are unavailable, the **Orchestrator** makes at most one fallback attempt through the configured standard Agent CLI `classifier` role, using the identical question, choices, and evidence. The classifier has no workflow mutation authority. Cancellation does not start a fallback.
+   - The primary classifier sends one role-specific named-choice question to OpenAI `POST /v1/decisions` using `gpt-6-luna`. Credentials resolve from an explicit constructor override (test seam), then nonblank ambient `OPENAI_API_KEY`, then the optional Project `openai_api_key`. The key is sent only as the API Authorization header and omitted from configuration formatting, diagnostics and classifier evidence. If credentials, network, response, or strict answer validation are unavailable, the **Orchestrator** makes at most one fallback attempt through the configured standard Agent CLI `classifier` role, using the identical question, choices, and evidence. The classifier has no workflow mutation authority. Cancellation does not start a fallback.
    - Planner outcomes are `ready_for_review`, `product_decision_required`, `technical_blocker` and `incomplete_or_unclear`; Plan Challenger uses `approved`, `changes_required`, `product_decision_required`, `technical_blocker` and `incomplete_or_unclear`. Planning additionally includes complete bounded Product/candidate context and refuses truncated comment evidence. Implementer outcomes are `ready_for_review`, `product_decision_required`, `technical_blocker`, and `incomplete_or_unclear`. Reviewer and QA outcomes are `approved`, `changes_required`, `product_decision_required`, `technical_blocker`, and `incomplete_or_unclear`. A valid unclear or other non-approval result is not sent for a more decisive second opinion. Malformed, ambiguous, missing, oversized, timed-out, or non-zero fallback output escalates directly.
    - Model approval is not sufficient: successful process exit, unchanged tracker ownership/workflow state, role-appropriate clean worktree, exact `nightweaver/<bead-id>` branch and valid HEAD are verified independently. Implementer approval also requires the matching remote branch and an open pull request with the configured base and matching head commit. QA approval requires one guarded publication of `stage:merge`, status `open`, and empty assignee.
    - The Orchestrator publishes stage changes and `repair_cycles` together under current status and assignee guards. QA approval and claim release are atomic. If publication reports an ambiguous result, the Orchestrator rereads state once and treats the handoff as confirmed only if the expected stage and released ownership match; it does not repeat the write. A confirmed QA handoff returns immediately without subsequent Bead or worktree operations.
@@ -399,6 +399,8 @@ Planning candidate and review comments, host outcome evidence, worktree and tmp 
 
 Each **Project** configuration binds one **Target Repository** to the **Orchestrator** settings used to run Nightweaver against it.
 
+The optional top-level `openai_api_key` accepts a nonempty string without surrounding whitespace or control characters; explicit `null`, nonstrings and duplicate properties are invalid. Omission preserves environment-only credentials. No prefix validation or API request occurs at load time. The example dummy must be replaced with a real key for primary authentication; Agent CLI login does not populate it. Restart the host after changing the setting or environment. Real keys must stay out of tracked examples.
+
 - **Built-in defaults**:
   - `target_repository.default_branch`: `"main"`
   - `concurrency`: `max_concurrent_planning = 2`, `max_concurrent_delivery = 3`, `max_active_plan_beads = 5` (plus singleton Merger slot = `1`)
@@ -411,6 +413,7 @@ Each **Project** configuration binds one **Target Repository** to the **Orchestr
 ```json
 {
   "name": "my-app",
+  "openai_api_key": "REPLACE_WITH_YOUR_KEY",
   "target_repository": {
     "path": "H:/code/my-app",
     "default_branch": "main"

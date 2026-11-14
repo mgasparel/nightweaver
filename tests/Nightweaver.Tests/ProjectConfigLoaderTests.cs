@@ -20,6 +20,71 @@ public sealed class ProjectConfigLoaderTests
         Assert.Equal(repository, config.TargetRepository.Path);
         Assert.Equal("main", config.TargetRepository.DefaultBranch);
         Assert.Equal("nightweaver:demo", config.RecoveryActor);
+        Assert.Null(config.OpenAiApiKey);
+    }
+
+    [Theory]
+    [InlineData("REPLACE_WITH_YOUR_KEY")]
+    [InlineData("fixture-secret-without-required-prefix")]
+    public void LoaderStoresOptionalKeyWithoutExposingItInRecordFormatting(string key)
+    {
+        using var temp = new TempDirectory();
+        var configPath = temp.WriteFile("project.json", JsonSerializer.Serialize(new
+        {
+            name = "demo",
+            target_repository = new { path = "repository" },
+            openai_api_key = key
+        }));
+
+        var config = ProjectConfigLoader.Load(configPath, null, new HostPaths(temp.CreateDirectory("host")));
+
+        Assert.Equal(key, config.OpenAiApiKey);
+        Assert.DoesNotContain(key, config.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(key, $"{config with { }}", StringComparison.Ordinal);
+        Assert.DoesNotContain(key, JsonSerializer.Serialize(config), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("42")]
+    [InlineData("true")]
+    [InlineData("[\"fixture-secret\"]")]
+    [InlineData("{\"value\":\"fixture-secret\"}")]
+    [InlineData("\"\"")]
+    [InlineData("\"   \"")]
+    [InlineData("\" fixture-secret\"")]
+    [InlineData("\"fixture-secret \"")]
+    [InlineData("\"fixture-secret\\nembedded\"")]
+    [InlineData("\"fixture-secret\\u0000embedded\"")]
+    [InlineData("\"fixture-secret\\u007fembedded\"")]
+    public void LoaderRejectsInvalidKeysWithoutEchoingTheirValues(string jsonValue)
+    {
+        using var temp = new TempDirectory();
+        var configPath = temp.WriteFile("project.json",
+            "{\"name\":\"demo\",\"target_repository\":{\"path\":\"repository\"},\"openai_api_key\":" + jsonValue + "}");
+
+        var exception = Assert.Throws<ProjectConfigurationException>(() => ProjectConfigLoader.Load(
+            configPath, null, new HostPaths(temp.CreateDirectory("host"))));
+
+        Assert.Equal("$.openai_api_key", exception.JsonPath);
+        Assert.DoesNotContain("fixture-secret", exception.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LoaderRejectsDuplicateKeysWithoutEchoingEitherValue()
+    {
+        using var temp = new TempDirectory();
+        var configPath = temp.WriteFile("project.json", """
+            {"name":"demo","target_repository":{"path":"repository"},
+             "openai_api_key":"fixture-secret-one","openai_api_key":"fixture-secret-two"}
+            """);
+
+        var exception = Assert.Throws<ProjectConfigurationException>(() => ProjectConfigLoader.Load(
+            configPath, null, new HostPaths(temp.CreateDirectory("host"))));
+
+        Assert.Equal("$.openai_api_key", exception.JsonPath);
+        Assert.Contains("duplicate property", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("fixture-secret", exception.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

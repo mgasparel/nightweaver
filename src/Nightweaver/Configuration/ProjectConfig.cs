@@ -9,5 +9,9 @@ internal sealed record ProjectConfig(
     AgentSettings AgentDefaults,
     RoleSettings Roles)
 {
+    // Keep credentials out of synthesized record formatting and debugger property expansion.
+    [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
+    internal string? OpenAiApiKey { get; init; }
+
     internal string RecoveryActor => $"nightweaver:{Name.Value}";
 }
