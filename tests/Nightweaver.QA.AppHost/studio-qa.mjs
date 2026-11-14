@@ -47,6 +47,21 @@ try {
   await page.goForward();
   await page.getByRole('heading', { name: 'Delivery floor', exact: true, level: 1 }).waitFor();
 
+  for (const beadId of ['ns-mbd.1', 'ns-mbd.1.2']) {
+    await page.goto(`${url}/studio#bead/${beadId}`);
+    await page.waitForURL(`**${base}/beads/${beadId}`);
+    assert.equal((await page.reload()).status(), 200);
+    await page.getByRole('heading', { name: `Bead ${beadId}`, exact: true }).waitFor();
+    await page.getByRole('link', { name: 'History', exact: true }).click();
+    await page.waitForURL(`**${base}/beads/${beadId}?tab=history`);
+    assert.equal((await page.reload()).status(), 200);
+    await page.getByRole('heading', { name: `Bead ${beadId}`, exact: true }).waitFor();
+    await page.getByRole('heading', { name: 'History', exact: true }).waitFor();
+  }
+  for (const path of ['/api/missing', '/studio/assets/missing.js', `${base}/beads/ns-mbd.1/missing.js`]) {
+    assert.equal((await page.request.get(`${url}${path}`)).status(), 404);
+  }
+
   await page.goto(`${url}/studio#bead/qa-%3Cscript%3E`);
   await page.waitForURL(`**${base}/beads/qa-%3Cscript%3E`);
   await page.getByRole('heading', { name: 'Bead qa-<script>', exact: true }).waitFor();
@@ -77,7 +92,14 @@ try {
       await page.getByRole('dialog').waitFor();
       await page.getByText('Unavailable in this preview', { exact: true }).waitFor();
       assert.equal(await page.getByRole('dialog').locator('input,textarea,select').count(), 0);
+      // Escape restores native focus before the queued close event runs React's
+      // onClose. Wait for that event before checking focus or moving it again.
+      const closeEvent = await page.getByRole('dialog').evaluateHandle(dialog => ({
+        closed: new Promise(resolve => dialog.addEventListener('close', () => resolve(true), { once: true }))
+      }));
       await page.keyboard.press('Escape');
+      await closeEvent.evaluate(event => event.closed);
+      await closeEvent.dispose();
       assert.equal(await trigger.evaluate(node => node === document.activeElement), true);
     }
     await nav.getByRole('link', { name: 'Attention', exact: true }).focus();

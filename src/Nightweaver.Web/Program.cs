@@ -94,6 +94,9 @@ public sealed class Program
             return Results.Ok(new { projectId = project.Name.Value });
         });
         app.MapFallbackToFile("/studio/{*path:nonfile}", "studio/index.html");
+        // Bead IDs may contain hierarchy dots; the generic nonfile constraint
+        // treats them as file extensions. Scope this exception to Workspace IDs.
+        app.MapFallbackToFile("/projects/{projectId}/beads/{beadId}", "studio/index.html");
         app.MapFallbackToFile("/projects/{*path:nonfile}", "studio/index.html");
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
         app.MapFactoryTelemetry();

@@ -2,7 +2,7 @@
 
 ## Studio candidate shell
 
-On a fresh isolated default fixture, use the discovered direct `web` HTTP URL below and run `node studio-qa.mjs` and `node smoke.mjs`. Studio checks candidate routes at `/studio` and `/projects/...`; the root console remains operational. Reference and candidate screenshots at 1440, 375 and 720 CSS pixels are saved under `TestResults/studio`. Checks include direct reload, Back/Forward, URL preferences, legacy Bead translation, keyboard/focus, unavailable project controls, no mutations and no browser errors. Review the screenshots visually and stop the same exact AppHost afterward.
+On a fresh isolated default fixture, use the discovered direct `web` HTTP URL below and run `node studio-qa.mjs` and `node smoke.mjs`. Studio checks candidate routes at `/studio` and `/projects/...`; the root console remains operational. Reference and candidate screenshots at 1440, 375 and 720 CSS pixels are saved under `TestResults/studio`. Checks include direct reload, Back/Forward, URL preferences, legacy Bead translation (including dotted hierarchical IDs reloaded with and without Workspace query state), missing-asset/API 404s, keyboard/focus, unavailable project controls, no mutations and no browser errors. Review the screenshots visually and stop the same exact AppHost afterward.
 
 Requires .NET 10, Aspire CLI, Git, `bd`, Node.js and npm. From this directory, install the browser tools once:
 

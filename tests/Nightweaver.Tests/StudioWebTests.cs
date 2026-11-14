@@ -30,6 +30,10 @@ public sealed partial class StudioWebTests
     [InlineData("/projects/web-test/catch-up")]
     [InlineData("/projects/web-test/beads?q=retained&view=all&page=3")]
     [InlineData("/projects/web-test/beads/ns-123?tab=history")]
+    [InlineData("/projects/web-test/beads/ns-mbd.1")]
+    [InlineData("/projects/web-test/beads/ns-mbd.1?tab=history")]
+    [InlineData("/projects/web-test/beads/ns-mbd.1.2")]
+    [InlineData("/projects/web-test/beads/ns-mbd.1.2?tab=output")]
     public async Task DirectRoutesServeBuiltSpaAndResolvableVersionedAssets(string route)
     {
         using var factory = new NightweaverWebApplicationFactory();
@@ -53,6 +57,7 @@ public sealed partial class StudioWebTests
     [InlineData("/api/missing")]
     [InlineData("/studio/assets/missing.js")]
     [InlineData("/projects/missing.js")]
+    [InlineData("/projects/web-test/beads/ns-mbd.1/missing.js")]
     [InlineData("/missing")]
     public async Task MissingAssetsAndApisNeverReturnSpa(string route)
     {
