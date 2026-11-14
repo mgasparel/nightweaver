@@ -90,6 +90,8 @@ jobs:
         run: |
           dotnet build Nightweaver.slnx -warnaserror
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Studio coordinator tests
+        run: npm test --prefix src/Nightweaver.Web/Studio
       - name: Complete correctness suite (diagnostic timing)
         id: suite
         shell: pwsh

@@ -48,6 +48,20 @@ No browser UI changed in this investigation. See the
 
 ## Studio candidate shell
 
+`node refresh-timeout-qa.mjs` holds real reconciliation 202 responses while the
+operational stream and resource reads continue. It verifies deadline abort,
+visible failure at 375px, a second explicit POST, replacement deduplication after
+late settlement, and no automatic replay or page errors. Screenshots go to
+`NIGHTWEAVER_QA_OUTPUT` or `TestResults/refresh-timeout`. Use the same exact-stack
+start, direct endpoint discovery and finally-stop lifecycle below.
+
+After discovering the exact isolated direct endpoint, `node read-timeout-qa.mjs`
+holds a real resource response while the operational SSE remains live. It checks
+the ten-second abort, retained stale/error display at 375px, a successful explicit
+Refresh, wake recovery, a replacement read and rejection of the late held response.
+The probe never replays commands. Screenshots go to `NIGHTWEAVER_QA_OUTPUT` or
+`TestResults/read-timeout`. Stop the same AppHost in `finally` after all probes.
+
 On a fresh isolated default fixture, use the discovered direct `web` HTTP URL below and run `node studio-qa.mjs` and `node smoke.mjs`. Studio checks candidate routes at `/studio` and `/projects/...`; the root console remains operational. Reference and candidate screenshots at 1440, 375 and 720 CSS pixels are saved under `TestResults/studio`. Checks include direct reload, Back/Forward, URL preferences, legacy Bead translation (including dotted hierarchical IDs reloaded with and without Workspace query state), missing-asset/API 404s, keyboard/focus, unavailable project controls, no mutations and no browser errors. Review the screenshots visually and stop the same exact AppHost afterward.
 
 Requires .NET 10, Aspire CLI, Git, `bd`, Node.js and npm. From this directory, install the browser tools once:
@@ -173,6 +187,18 @@ The script checks the shared projection on all three message surfaces, exact ori
 The same scenario also seeds mixed delivery publications, all four human audit actions, failed-request corrective prose, agent/host merge records with an in-history source link, finalization diagnostics, and classifier-only/malformed fallbacks. Planning fixtures include a 40-task/40-coverage candidate, a review with findings/questions/revalidation, and a snake_case host approval with resolved candidate and unresolved review references. Checks cover bounded default content, complete nested details, exact originals, source-link keyboard focus and preserved disclosure state across refresh. Additional screenshots use `verified-merge-*`, `human-resume-*`, `planning-candidate-*` and `planning-review-*` names.
 
 ## Operational protocol ordering
+
+For the implemented SSE/coordinator browser smoke, start a fresh exact isolated
+AppHost as above. Set `NIGHTWEAVER_QA_URL` from the direct `web` HTTP endpoint and
+`NIGHTWEAVER_QA_CONFIG` from that resource's `Nightweaver__ConfigPath` environment.
+From this directory run `node operations-qa.mjs`, then `node studio-qa.mjs` and
+`node smoke.mjs`. The operations probe validates disposable fixture identity,
+creates one external paused Bead, deliberately misses invalidations, verifies
+count convergence, forces real stream replacement, and checks manual refresh,
+one connection per tab and no replayed commands. It records screenshots/results
+under `TestResults/operations`. Review desktop/375/720 screenshots and stop the
+same exact AppHost in `finally`. Frontend deterministic tests: `npm test` in
+`src/Nightweaver.Web/Studio`; see [synchronization](../../docs/design/operational-synchronization.md).
 
 For the proposed operational protocol's eviction/reconnect ordering rules, run
 `python tests/Nightweaver.QA.AppHost/observation-ordering.py` from the repository

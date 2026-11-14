@@ -1,0 +1,16 @@
+{
+  "initial": 4,
+  "converged": 5,
+  "stream": {
+    "active": 1,
+    "maximum": 1,
+    "opened": 2,
+    "hello": 2,
+    "invalidation": 13,
+    "drop": false
+  },
+  "posts": [
+    "/api/operations/v1/projects/qa/refresh"
+  ],
+  "errors": []
+}
