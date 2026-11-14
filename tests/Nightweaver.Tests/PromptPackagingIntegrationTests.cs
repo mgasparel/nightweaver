@@ -18,6 +18,34 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
     ];
 
     [Fact]
+    public async Task DeliveryPromptsReserveReadinessForMergerAndScopeHostedExceptions()
+    {
+        var root = FindRepositoryRoot();
+        var implementer = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "implementer.md"), TestContext.Current.CancellationToken);
+        var merger = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "merger.md"), TestContext.Current.CancellationToken);
+        Assert.Contains("gh pr ready <number-or-url> --undo", implementer, StringComparison.Ordinal);
+        Assert.True(implementer.IndexOf("--undo", StringComparison.Ordinal)
+            < implementer.IndexOf("git push -u", StringComparison.Ordinal));
+        Assert.Contains("--head nightweaver/<bead-id> --draft", implementer, StringComparison.Ordinal);
+        Assert.Contains("including on resumed work", implementer, StringComparison.Ordinal);
+        Assert.Contains("even for an unchanged head", merger, StringComparison.Ordinal);
+        Assert.Contains("gh pr ready <number-or-url>", merger, StringComparison.Ordinal);
+        Assert.Contains("wait for it to register and complete successfully", merger, StringComparison.Ordinal);
+        Assert.Contains("draft-skipped or historical results", merger, StringComparison.Ordinal);
+        Assert.Contains("--match-head-commit <checked-head>", merger, StringComparison.Ordinal);
+        Assert.Contains("restore draft before handing back", merger, StringComparison.Ordinal);
+
+        foreach (var name in new[] { "implementer", "reviewer", "qa" })
+        {
+            var prompt = await File.ReadAllTextAsync(Path.Combine(root, "prompts", name + ".md"), TestContext.Current.CancellationToken);
+            Assert.Contains("docs/agents/hosted-verification.md", prompt, StringComparison.Ordinal);
+            Assert.Contains("dispatched Bead", prompt, StringComparison.Ordinal);
+            Assert.Contains("tested revision", prompt, StringComparison.Ordinal);
+            Assert.Contains("outcome", prompt, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task MergerPromptRequiresCurrentHeadChecksAndEvidenceOnlyLifecycleAuthority()
     {
         var root = FindRepositoryRoot();

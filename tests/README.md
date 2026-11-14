@@ -1,6 +1,6 @@
 # Test suite
 
-Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection. The current retained suite discovers 995 tests.
+Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection; use at least the committed floor of 995 tests and report the actual discovered total.
 
 ```powershell
 $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -13,6 +13,8 @@ if ($timer.Elapsed.TotalSeconds -ge 300) { throw 'Suite exceeded the five-minute
 ```
 
 The five-minute budget covers the normal solution build, native fixture publishing, tests, and teardown. Keep the committed six-thread parallelism in `TestScheduling.cs`. For a cold-machine run, report package restore and first build separately from this warm, normal suite command. A filtered run never establishes full-suite acceptance.
+
+This is the **local latest-main performance requirement**. Candidate timing is reported separately and latest main must be measured after integration. Hosted correctness CI reports timing diagnostically and uses a separate 15-minute hang timeout; it does not fail solely for exceeding five minutes. Local Implementation/Review/QA iteration uses draft PRs, with final hosted verification owned by Merger. See [hosted verification](../docs/agents/hosted-verification.md) for triggers and the explicit CI-investigation dispatch exception.
 
 Use `--report-xunit-xml --report-xunit-xml-filename timing.xml` to collect per-test and per-collection durations in `TestResults`.
 
@@ -44,6 +46,6 @@ The ns-47f.3 hosted runtime repair refreshes collection weights from Windows CI 
 
 The follow-up runtime repair shares one fresh Product/discussion/grounding observation per publication authority check, removing duplicate bd reads without caching across mutations. Tracker observations follow Git grounding reads so ownership, status and pauses changed during grounding stop the next write. Three cheap regressions cover these changes (870 total); the original 867 cases remain. The initial weight-only repair passed locally but still exceeded hosted runtime and encountered a restart-smoke timeout, so local timing and historical replays alone did not establish hosted acceptance.
 
-After synchronization with main, hosted run 43535447629 passed all 905 cases but took 303.759 seconds. Its native Planning collection measured 255.284 seconds and now receives the highest scheduling weight. Independent read-only Git grounding queries overlap within each fresh observation; all settle before tracker reads and authority checks. A controlled regression fails on serial grounding and verifies overlap plus tracker ordering. All 905 synchronized cases remain, with this one additional case; six-thread test scheduling and the 300-second gate remain unchanged. Hosted complete-suite timing is still required to establish acceptance.
+After synchronization with main, historical hosted run 43535447629 passed all 905 cases but took 303.759 seconds. Its native Planning collection measured 255.284 seconds and now receives the highest scheduling weight. Independent read-only Git grounding queries overlap within each fresh observation; all settle before tracker reads and authority checks. A controlled regression fails on serial grounding and verifies overlap plus tracker ordering. All 905 synchronized cases remain, with this one additional case; six-thread test scheduling remains unchanged. The 300-second performance gate applies to the complete local latest-main suite; hosted elapsed time is diagnostic.
 
 The overlap/scheduling change alone passed 906 cases locally in 177.562 seconds but hosted run 43545299874 still took 330.304 seconds, with its native Planning smoke consuming 282.648 seconds. That smoke now stops after the real generated-task Implementer successfully publishes `stage:review`, retaining native Planner/Challenger approval, complete two-task publication, dependency blocking, generated-task admission and implementation. It no longer repeats Reviewer and QA turns already exercised by `DeliverySlotKeepsOneClaimAndPersistentWorktreeThroughMergeHandoff` and the pool-concurrency smoke. All 906 test cases remain; this deliberately narrows duplicate journey coverage rather than weakening the timing gate or changing scheduling parallelism.
