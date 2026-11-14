@@ -51,7 +51,10 @@ internal sealed record CatchUpDigestItem(
     [property: JsonPropertyName("commits")] IReadOnlyList<string> Commits,
     [property: JsonPropertyName("pullRequests")] IReadOnlyList<string> PullRequests,
     [property: JsonPropertyName("fromId")] string? FromId,
-    [property: JsonPropertyName("fromRelation")] string? FromRelation);
+    [property: JsonPropertyName("fromRelation")] string? FromRelation)
+{
+    [JsonPropertyName("presentation")] public BeadPresentation? Presentation { get; init; }
+}
 
 internal sealed record CatchUpCheckpointResult(
     [property: JsonPropertyName("lastCaughtUpAt")] DateTimeOffset LastCaughtUpAt);
@@ -195,8 +198,11 @@ internal static partial class CatchUpDigestProjector
         BeadsInventory inventory,
         string requestedWindow,
         DateTimeOffset? lastCaughtUpAt,
-        DateTimeOffset generatedAt)
+        DateTimeOffset generatedAt, int? maxRepairCycles = null)
     {
+        CatchUpDigestItem Present(CatchUpDigestItem item) => item with
+        { Presentation = BeadPresenter.Project(inventory.ById[item.Id], maxRepairCycles, inventory) };
+
         var normalizedNow = generatedAt.ToUniversalTime();
         var (effectiveWindow, windowStart) = ResolveWindow(requestedWindow, lastCaughtUpAt, normalizedNow);
 
@@ -255,7 +261,7 @@ internal static partial class CatchUpDigestProjector
                     ? activeRoot
                     : ("context", rootBead.ClosedAt ?? rootBead.UpdatedAt);
                 var rootParent = immediateParents.TryGetValue(rootId, out var rootEdge) ? rootEdge : ((string, string)?)null;
-                var projectedRoot = ProjectItem(rootBead, rootActivity.Item1, rootActivity.Item2, rootParent);
+                var projectedRoot = Present(ProjectItem(rootBead, rootActivity.Item1, rootActivity.Item2, rootParent));
 
                 var childItems = activeMembers
                     .Where(member => !string.Equals(member.Id, rootId, StringComparison.Ordinal))
@@ -263,7 +269,7 @@ internal static partial class CatchUpDigestProjector
                     {
                         var activity = windowActivities[member.Id];
                         var parentEdge = immediateParents.TryGetValue(member.Id, out var edge) ? edge : ((string, string)?)null;
-                        return ProjectItem(member, activity.Kind, activity.At, parentEdge);
+                        return Present(ProjectItem(member, activity.Kind, activity.At, parentEdge));
                     })
                     .OrderByDescending(item => item.ActivityAt)
                     .ThenBy(item => item.Priority)
@@ -280,7 +286,7 @@ internal static partial class CatchUpDigestProjector
                 var single = activeMembers[0];
                 var activity = windowActivities[single.Id];
                 var parentEdge = immediateParents.TryGetValue(single.Id, out var edge) ? edge : ((string, string)?)null;
-                var projected = ProjectItem(single, activity.Kind, activity.At, parentEdge);
+                var projected = Present(ProjectItem(single, activity.Kind, activity.At, parentEdge));
                 if (single.Status == "closed")
                     standaloneCompleted.Add(projected);
                 else

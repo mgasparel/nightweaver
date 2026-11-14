@@ -2588,3 +2588,17 @@ h3 {
 .message-original summary:focus-visible { outline: 2px solid #8cd9ff; outline-offset: 3px; }
 .message-attribution, .message-source { font-size: .78rem; opacity: .8; }
 .semantic-fallback { border-left: 3px solid #e8b968; padding-left: .75rem; }
+
+/* Tracked workflow stays independent of live execution telemetry. */
+.workspace-workflow { border-inline-start: 3px solid var(--accent, #7e91eb); }
+.workspace-workflow.workflow-attention { border-inline-start-color: #eabb67; }
+.workspace-workflow.workflow-attention .workflow-summary { color: #f5cf8d; }
+.workflow-summary { font-size: 1.05rem; font-weight: 600; line-height: 1.5; margin: .5rem 0 1rem; overflow-wrap: anywhere; }
+.workspace-workflow summary { cursor: pointer; width: fit-content; }
+.workspace-workflow dl { display: grid; grid-template-columns: minmax(6rem, 9rem) minmax(0, 1fr); gap: .6rem 1rem; max-height: 26rem; overflow: auto; }
+.workspace-workflow dt { color: var(--text-muted, #aab4c8); }
+.workspace-workflow dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bead-tracked-summary { margin: 0 0 .5rem; line-height: 1.4; overflow-wrap: anywhere; }
+.beads-table details .bead-labels { max-height: 10rem; overflow: auto; margin-top: .5rem; }
+.beads-table details summary { cursor: pointer; font-size: .8rem; }
+@media (max-width: 480px) { .workspace-workflow dl { grid-template-columns: minmax(0, 1fr); gap: .3rem; } .workspace-workflow dd { margin-bottom: .6rem; } }

@@ -345,10 +345,12 @@ try {
   await routeTo('qa-missing-workspace-fixture');
   await page.locator('#workspace-error').waitFor({ state: 'visible' });
   check(await page.locator('#workspace-meta').textContent() === '', 'A missing Bead route retained the previous Bead metadata.');
+  check(await page.locator('#workspace-workflow').textContent() === '', 'A missing Bead route retained the previous tracked workflow.');
   check(await page.locator('#workspace-id').textContent() === 'qa-missing-workspace-fixture', 'A missing route displayed the previous Bead ID.');
   await page.evaluate(() => { window.location.hash = '#bead/%25'; });
   await page.getByText('This Bead ID contains unsupported characters.', { exact: true }).waitFor();
   check(await page.locator('#workspace-meta').textContent() === '', 'An invalid Bead route retained previous metadata.');
+  check(await page.locator('#workspace-workflow').textContent() === '', 'An invalid Bead route retained previous tracked workflow.');
 
   // Same-Bead failed refresh is explicitly stale and disables actions until recovery.
   await routeTo(secondDecisionId);

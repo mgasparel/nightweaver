@@ -1,7 +1,7 @@
-using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Nightweaver.Configuration;
+using Nightweaver.Execution;
 using Nightweaver.Inspection;
 
 namespace Nightweaver.Web;
@@ -28,6 +28,7 @@ internal sealed record AttentionDeskItem(
     [property: JsonPropertyName("unavailableReason")] string? UnavailableReason,
     [property: JsonPropertyName("sourceAuthor")] string? SourceAuthor)
 {
+    [JsonPropertyName("presentation")] public BeadPresentation? Presentation { get; init; }
     [JsonPropertyName("message")] public CommentPresentation? Message { get; init; }
     [JsonPropertyName("sourceCommentId")] public string? SourceCommentId { get; init; }
     [JsonPropertyName("otherPauseReports")] public IReadOnlyList<CommentPresentation> OtherPauseReports { get; init; } = [];
@@ -39,12 +40,6 @@ internal static class AttentionDeskProjector
     private const string ProductDecisionLabel = "product-decision-required";
     private const string NeedsHumanLabel = "needs-human";
 
-    private static readonly HashSet<string> KnownStages = new(StringComparer.Ordinal)
-    {
-        "stage:plan", "stage:plan-challenge", "stage:plan-approved",
-        "stage:implement", "stage:review", "stage:qa", "stage:merge"
-    };
-
     internal static AttentionDeskItem Project(BeadSnapshot bead, IReadOnlyList<BeadsCommentSnapshot> comments,
         int maxRepairCycles)
         => ProjectWithSelection(bead, comments, maxRepairCycles).Item;
@@ -54,7 +49,7 @@ internal static class AttentionDeskProjector
     {
         var productDecision = bead.Labels.Contains(ProductDecisionLabel, StringComparer.Ordinal);
         var needsHuman = bead.Labels.Contains(NeedsHumanLabel, StringComparer.Ordinal);
-        var workflow = ParseWorkflow(bead, productDecision, needsHuman);
+        var workflow = ParseWorkflow(bead);
         var pauseCandidates = comments.Where(c => CommentPresenter.IsPauseCandidate(c.Text, productDecision && !needsHuman)).ToArray();
         var selectedStructured = pauseCandidates.LastOrDefault(c => !CommentPresenter.IsSupplemental(CommentPresenter.Project(c, bead)));
         var selectedQuestion = productDecision ? selectedStructured
@@ -84,6 +79,8 @@ internal static class AttentionDeskProjector
 
         var unavailableReason = workflow.InvalidReason is not null
             ? "Workflow labels or repair metadata are contradictory or malformed."
+            : bead.Labels.Contains("planned", StringComparer.Ordinal)
+                ? "This Product is already planned; historical technical attention does not authorize Retry."
             : bead.Status != "open"
                 ? "This Bead is not open and cannot be changed from the Attention Desk."
                 : bead.Assignee is not null
@@ -116,6 +113,7 @@ internal static class AttentionDeskProjector
             unavailableReason,
             selectedPauseComment?.Author)
         {
+            Presentation = BeadPresenter.Project(bead, maxRepairCycles),
             Message = selectedMessage,
             SourceCommentId = selectedPauseComment?.Id,
             ContextNotice = selectedMessage?.Stage is { } sourceStage && sourceStage != "(none)" && sourceStage != workflow.Stage
@@ -155,113 +153,20 @@ internal static class AttentionDeskProjector
 
     internal static string? InvalidWorkflowReason(BeadSnapshot bead)
     {
-        var productDecision = bead.Labels.Contains(ProductDecisionLabel, StringComparer.Ordinal);
-        var needsHuman = bead.Labels.Contains(NeedsHumanLabel, StringComparer.Ordinal);
-        return ParseWorkflow(bead, productDecision, needsHuman).InvalidReason;
+        return ParseWorkflow(bead).InvalidReason;
     }
 
-    internal static int? RepairCycles(BeadSnapshot bead) => ParseRepairCycles(bead, out _);
+    internal static int? RepairCycles(BeadSnapshot bead) => BeadWorkflowObservation.Read(bead).RepairCycles;
 
-    internal static string? Stage(BeadSnapshot bead) => ParseStage(bead, out _);
+    internal static string? Stage(BeadSnapshot bead)
+        => bead.Labels.FirstOrDefault(label => label.StartsWith("stage:", StringComparison.Ordinal));
 
-    private static AttentionWorkflow ParseWorkflow(BeadSnapshot bead, bool productDecision, bool needsHuman)
+    private static AttentionWorkflow ParseWorkflow(BeadSnapshot bead)
     {
-        var stage = ParseStage(bead, out var stageError);
-        var repairCycles = ParseRepairCycles(bead, out var repairError);
-        var planned = bead.Labels.Contains("planned", StringComparer.Ordinal);
-        string? invalid = stageError ?? repairError;
-        if (invalid is null && productDecision && needsHuman)
-            invalid = "Both product-decision-required and needs-human pause labels are present.";
-        else if (invalid is null && planned && (stage is not null || productDecision || needsHuman))
-            invalid = "The planned label conflicts with stage or pause labels.";
-        return new(stage, repairCycles, invalid);
-    }
-
-    private static string? ParseStage(BeadSnapshot bead, out string? error)
-    {
-        var stages = bead.Labels.Where(label => label.StartsWith("stage:", StringComparison.Ordinal)).ToArray();
-        if (stages.Length > 1)
-        {
-            error = "Multiple stage labels are present.";
-            return stages[0];
-        }
-        if (stages.Length == 0)
-        {
-            error = null;
-            return null;
-        }
-        if (!KnownStages.Contains(stages[0]))
-        {
-            error = "The stage label is not recognized by Nightweaver.";
-            return stages[0];
-        }
-        error = null;
-        return stages[0];
-    }
-
-    private static int? ParseRepairCycles(BeadSnapshot bead, out string? error)
-    {
-        JsonElement metadata = default;
-        var metadataCount = 0;
-        foreach (var property in bead.Payload.EnumerateObject())
-        {
-            if (property.Name != "metadata") continue;
-            metadata = property.Value;
-            metadataCount++;
-        }
-        if (metadataCount > 1)
-        {
-            error = "Bead metadata contains duplicate fields.";
-            return null;
-        }
-        if (metadataCount == 0 || metadata.ValueKind == JsonValueKind.Null)
-        {
-            error = null;
-            return 0;
-        }
-        if (metadata.ValueKind != JsonValueKind.Object)
-        {
-            error = "Bead metadata is not an object.";
-            return null;
-        }
-
-        var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        foreach (var property in metadata.EnumerateObject())
-        {
-            if (!values.TryAdd(property.Name, property.Value))
-            {
-                error = "Bead metadata contains duplicate fields.";
-                return null;
-            }
-        }
-        if (!values.TryGetValue("repair_cycles", out var value))
-        {
-            error = null;
-            return 0;
-        }
-
-        int result;
-        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out result))
-        {
-            // Numeric JSON values that are not integral are rejected by TryGetInt32.
-        }
-        else if (value.ValueKind == JsonValueKind.String
-            && int.TryParse(value.GetString(), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out result))
-        {
-            // bd accepts an integer encoded as a string for this metadata value.
-        }
-        else
-        {
-            error = "repair_cycles metadata is not a 32-bit integer.";
-            return null;
-        }
-        if (result < 0)
-        {
-            error = "repair_cycles metadata cannot be negative.";
-            return null;
-        }
-        error = null;
-        return result;
+        var observed = BeadWorkflowObservation.Read(bead);
+        var error = observed.Error;
+        if (error is null && observed.State is { } state && !AuthorityMatrix.TryInferLifecycleRole(state, out _, out var reason)) error = reason;
+        return new(Stage(bead), observed.RepairCycles, error);
     }
 
     private static bool IsLegacyDecisionContext(string text)

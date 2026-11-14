@@ -84,6 +84,9 @@ try
         if (Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "schema-messages")
             await SchemaMessageQaFixture.SeedAsync(arguments => RunAsync("bd", repository, userHome, cancellationToken, arguments));
 
+        if (Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "workflow")
+            await BeadPresentationQaFixture.SeedAsync(arguments => RunAsync("bd", repository, userHome, cancellationToken, arguments));
+
         if (Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "relations")
             await RelationsQaFixture.SeedAsync(arguments => RunAsync("bd", repository, userHome, cancellationToken, arguments));
 

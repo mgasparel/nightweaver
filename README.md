@@ -358,3 +358,14 @@ Inspection uses read-only bd commands and Git with optional locks disabled. The 
 - [Glossary](GLOSSARY.md): canonical domain vocabulary.
 - [Architecture Decision Records](docs/adr/): recorded decisions and trade-offs.
 - [Agent Guidelines](AGENTS.md): repository instructions for contributors and coding agents.
+
+
+## Tracked Bead workflow presentation
+
+The console names Product Bead (native feature/bug) and Plan Bead (native task) separately from native Type. Epic and custom types remain valid tracker types outside Nightweaver's supported lifecycle. Manual Plans may have no Product link. Discovered-from is provenance, not hierarchy or generated-plan approval.
+
+Workspace, Explorer, Attention and catch-up rows consume one read-only presentation. A tracked stage (Planning, Plan review, Plan approved, Implementation, Review, QA or Merge) never establishes a running Agent. Tracker ownership and in_progress are stored facts; Environment and execution bays retain their own live, stale and unavailable observations.
+
+Products show Awaiting Planning authorization, Authorized for Planning (explicit dispatch; continuous Planning is not scheduled), or Plan published / awaiting Delivery. Terminal planned Products show Plan published without promising Delivery or merge. The planned label alone does not verify a generated graph. Publication hold, incomplete observation and Publication needs attention use the runtime publication gate over the available inventory; manual provenance does not grant generated authority. A held partial publication without a graph snapshot remains unverified; an independently observed Product identity or revision conflict still shows Publication needs attention.
+
+Compact summaries keep raw labels in a disclosure. Workspace Workflow details contain planning, publication, pauses, tracker ownership, used/configured repair budget, uncertainty and wrapped source state. Conflicting stages/pauses and invalid repair metadata stay unavailable. A planned Product can retain historical technical attention without making Retry available. Viewing and prose edits grant no workflow authority; guarded Planning, Resume/Retry and independent Housekeeping actions retain their existing owners.
