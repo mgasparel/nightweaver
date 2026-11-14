@@ -14,6 +14,8 @@ The URL owns the current project and Bead, Workspace section (`tab=summary|histo
 
 Node >=22.12 and npm are build-time prerequisites; CI uses Node 24. `dotnet build Nightweaver.slnx -warnaserror` and `dotnet publish src/Nightweaver.Web` restore the locked npm dependencies and run TypeScript checking plus Vite compilation automatically. Incremental targets track the dependency lock and frontend sources. Generated `wwwroot/studio` assets are ignored, discovered dynamically on the first build and copied to build/publish output. Source, dependencies and Node executables are not published. The deployed host requires only .NET, with no Node server. For frontend-only iteration, run `npm ci` and `npm run build` in `src/Nightweaver.Web/Studio`.
 
+When updating the dependency lock, use the CI Node 24 toolchain and its bundled npm, run `npm install --package-lock-only --no-audit --no-fund`, then verify `npm ci --no-audit --no-fund` in a source-only copy without `node_modules`. Older npm can omit optional peer entries required by CI's clean-install validation; a passing incremental build does not verify the lockfile.
+
 The bundle uses [Vite's production build](https://vite.dev/guide/backend-integration) and [React Router browser history](https://reactrouter.com/api/declarative-routers/BrowserRouter). `AppShell` owns navigation, configured scope and bootstrap status. Feature route skeletons compose shared Panel, Status, Icon and Unavailable primitives, without embedding observation or command policy in rendering.
 
 ## Operational parity inventory
