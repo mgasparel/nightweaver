@@ -22,3 +22,7 @@ tmp/
 .beads/
 *.gate.lock*
 .manual-delivery-manifest.json
+
+# Studio dependencies and generated static bundle (built by MSBuild)
+**/node_modules/
+src/Nightweaver.Web/wwwroot/studio/

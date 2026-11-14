@@ -5,6 +5,7 @@ Nightweaver is a discovery-driven software factory for Beads (`bd`) work. It is 
 ## Local prerequisites
 
 - The .NET 10 SDK to build, test, and publish Nightweaver.
+- Node.js >=22.12 and npm to build/publish the Studio frontend; Node is not needed by the running published host. See [Studio migration shell](docs/design/studio-shell.md).
 - The .NET 10 runtime to run the framework-dependent published executable.
 - Git and `bd` on `PATH` for target repository operations. The supported tracker is bd 1.3.1 using an initialized embedded Dolt database.
 - The Target Repository must be the root of a Git working tree and contain a prepared `.beads` tracker. Complete tracker setup before running Nightweaver. A fresh `bd init` may need a normal bd write outside the dry-run to create bd's persistent gate-lock files. Nightweaver does not initialize or migrate a tracker.
