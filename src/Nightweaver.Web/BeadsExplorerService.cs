@@ -47,7 +47,10 @@ internal sealed partial class TrackerBridge(
     TimeProvider timeProvider) : IDisposable
 {
     private static readonly TimeSpan VerificationTimeout = TimeSpan.FromSeconds(4);
-    private readonly SemaphoreSlim operationGate = new(1, 1);
+    private readonly TrackerAccessGate operationGate = new();
+
+    internal event Action? ObservationRequested;
+    internal TrackerAccessGate ObservationGate => operationGate;
 
     public void Dispose() => operationGate.Dispose();
 
@@ -236,6 +239,7 @@ internal sealed partial class TrackerBridge(
         finally
         {
             operationGate.Release();
+            ObservationRequested?.Invoke();
         }
     }
 
@@ -356,6 +360,7 @@ internal sealed partial class TrackerBridge(
         finally
         {
             operationGate.Release();
+            ObservationRequested?.Invoke();
         }
     }
 

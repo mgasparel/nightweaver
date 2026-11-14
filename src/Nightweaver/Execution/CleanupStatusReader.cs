@@ -13,7 +13,7 @@ internal sealed record CleanupStatusPage(string Project, string Repository, stri
 
 /// <summary>Reads validated durable evidence, never disposal authority. Display bounds do not
 /// discard unresolved obligations. Runtime availability is independent of persisted status.</summary>
-internal sealed class CleanupStatusReader(HostPaths paths, ProjectConfig project, ValidatedTargetRepository repository)
+internal sealed class CleanupStatusReader(HostPaths paths, ProjectConfig project, ValidatedTargetRepository repository, TimeProvider? timeProvider = null)
 {
     internal const int PageSize = 8;
 
@@ -26,7 +26,7 @@ internal sealed class CleanupStatusReader(HostPaths paths, ProjectConfig project
 
     internal CleanupStatusPage Read(int page = 1, string? status = null, string? search = null)
     {
-        var owner = new FactoryTelemetryReader(paths, project).Read();
+        var owner = new FactoryTelemetryReader(paths, project, timeProvider).Read();
         var availability = owner.Availability.ToString().ToLowerInvariant();
         var reason = owner.Reason;
         var canRetry = false;
@@ -57,7 +57,7 @@ internal sealed class CleanupStatusReader(HostPaths paths, ProjectConfig project
                 .ThenBy(record => record.BeadId, StringComparer.Ordinal).ToArray();
             var pages = Math.Max(1, (matching.Length + PageSize - 1) / PageSize);
             page = Math.Clamp(page, 1, pages);
-            return new(project.Name.Value, repository.Path, availability, reason, DateTimeOffset.UtcNow,
+            return new(project.Name.Value, repository.Path, availability, reason, (timeProvider ?? TimeProvider.System).GetUtcNow(),
                 owner.Snapshot?.RuntimeId, canRetry, counts, page, pages, matching.Length,
                 matching.Skip((page - 1) * PageSize).Take(PageSize).Select(record => new CleanupStatusRow(
                     record.BeadId, StatusName(record.Status), CleanupRetryInbox.Revision(record), record,
@@ -71,7 +71,7 @@ internal sealed class CleanupStatusReader(HostPaths paths, ProjectConfig project
         }
 
         CleanupStatusPage Unavailable(string reason) => new(project.Name.Value, repository.Path,
-            "unavailable", reason, DateTimeOffset.UtcNow, owner.Snapshot?.RuntimeId, false,
+            "unavailable", reason, (timeProvider ?? TimeProvider.System).GetUtcNow(), owner.Snapshot?.RuntimeId, false,
             null, 1, 1, 0, []);
     }
 }

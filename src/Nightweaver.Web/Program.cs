@@ -79,7 +79,9 @@ public sealed class Program
         builder.Services.AddSingleton<CatchUpCheckpointStore>();
         builder.Services.AddSingleton<LocalMutationRequestPolicy>();
         builder.Services.AddSingleton(services => new FactoryTelemetryReader(
-            services.GetRequiredService<HostPaths>(), services.GetRequiredService<ProjectConfig>()));
+            services.GetRequiredService<HostPaths>(), services.GetRequiredService<ProjectConfig>(), services.GetRequiredService<TimeProvider>()));
+
+        builder.Services.AddOperationalObservations();
 
         var app = builder.Build();
         // Resolve before listening, after all host configuration providers have been applied.
@@ -99,6 +101,7 @@ public sealed class Program
         app.MapFallbackToFile("/projects/{projectId}/beads/{beadId}", "studio/index.html");
         app.MapFallbackToFile("/projects/{*path:nonfile}", "studio/index.html");
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+        app.MapOperationalObservations();
         app.MapFactoryTelemetry();
         app.MapCleanup();
         app.MapGet("/api/beads", async (HttpContext context, TrackerBridge explorer, ILogger<Program> logger) =>

@@ -37,7 +37,7 @@ internal static class CleanupEndpoints
     }
 
     private static async Task<IResult> RetryAsync(HttpContext context, string id, HostPaths paths,
-        ProjectConfig project, TargetRepositoryValidator validator, LocalMutationRequestPolicy policy, BeadsReader beads)
+        ProjectConfig project, TargetRepositoryValidator validator, LocalMutationRequestPolicy policy, BeadsReader beads, TrackerBridge tracker)
     {
         context.Response.Headers.CacheControl = "no-store";
         if (!policy.Allows(context.Request)) return Problem(403, "Request origin rejected", "Use the local Nightweaver console.");
@@ -66,6 +66,7 @@ internal static class CleanupEndpoints
         {
             return Problem(400, "Invalid cleanup Retry", "Expected exactly runtimeId, revision and requestId from the displayed record.");
         }
+        await tracker.ObservationGate.WaitAsync(context.RequestAborted);
         try
         {
             var repository = await validator.ValidateAsync(project.TargetRepository, project.ConfigFilePath, context.RequestAborted);
@@ -85,6 +86,7 @@ internal static class CleanupEndpoints
         {
             return Problem(503, "Cleanup Retry unavailable", "No cleanup was authorized by this response. Refresh and inspect local access and owner availability.");
         }
+        finally { tracker.ObservationGate.Release(); }
     }
 
     private static bool IsUnavailable(Exception exception) => exception is IOException or UnauthorizedAccessException
