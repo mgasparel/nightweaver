@@ -15,10 +15,7 @@ internal static class PlanningPoolPlanner
 
         var inventory = snapshot.Inventory;
         var postSweep = snapshot.Readiness;
-        var activeCount = inventory.ById.Values.Count(bead => bead.IssueType == "task"
-            && bead.Status is "open" or "in_progress"
-            && !bead.Labels.Contains("plan-unpublished", StringComparer.Ordinal)
-            && !HasPauseLabel(bead));
+        var activeCount = CountActiveTasks(inventory);
         var backpressure = activeCount >= maxActivePlanBeads;
         var candidates = new List<(BeadSnapshot Bead, PlanningRole Role, bool Recovered)>();
         var excluded = new List<PlanningPoolExclusion>();
@@ -63,6 +60,10 @@ internal static class PlanningPoolPlanner
         return new PlanningPoolPlan(activeCount, maxActivePlanBeads, maxConcurrentPlanning, backpressure, postSweep,
             selected, waiting, orderedExcluded);
     }
+
+    internal static int CountActiveTasks(BeadsInventory inventory) => inventory.ById.Values.Count(bead =>
+        bead.IssueType == "task" && bead.Status is not ("closed" or "tombstone")
+        && !bead.Labels.Contains("plan-unpublished", StringComparer.Ordinal) && !HasPauseLabel(bead));
 
     private static bool IsProductBead(BeadSnapshot bead) => bead.IssueType is "feature" or "bug";
 

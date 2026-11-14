@@ -120,6 +120,16 @@ internal sealed class ContinuousStopGate
         }
     }
 
+    internal bool TryFinalize<T>(Func<T> start, out T result)
+    {
+        lock (sync)
+        {
+            if (forceStopRequested) { result = default!; return false; }
+            result = start();
+            return true;
+        }
+    }
+
     internal bool TryLaunch(ContinuousAgentLaunchContext slot, AgentLaunchPurpose purpose, Action launch)
     {
         ArgumentNullException.ThrowIfNull(slot);
@@ -245,6 +255,8 @@ internal sealed class ContinuousAgentLaunchContext : IDisposable
 
     internal bool HasLaunchedAgent => Volatile.Read(ref hasLaunchedAgent) != 0;
 
+    internal static bool ForceStopRequested => CurrentSlot.Value?.gate?.IsForceStopRequested ?? false;
+
     internal static bool StopRequested => CurrentSlot.Value?.gate?.IsStopRequested ?? false;
 
     internal static bool TryBeginExternalOperation<T>(Func<T> start, out T operation)
@@ -258,6 +270,13 @@ internal sealed class ContinuousAgentLaunchContext : IDisposable
         }
 
         return slot.gate.TryStart(start, out operation);
+    }
+
+    internal static bool TryBeginFinalization<T>(Func<T> start, out T operation)
+    {
+        var slot = CurrentSlot.Value;
+        if (slot?.gate is null) { operation = start(); return true; }
+        return slot.gate.TryFinalize(start, out operation);
     }
 
     internal static IDisposable PermitOutcomeClassifier()

@@ -148,6 +148,32 @@ internal static class Program
                 Console.OpenStandardOutput().Write(Encoding.UTF8.GetBytes("root-exit\n"));
                 return exitCode;
             }
+            case "spawn-bd-lock-exit":
+            {
+                var start = new ProcessStartInfo("bd")
+                {
+                    WorkingDirectory = args[1], UseShellExecute = false, CreateNoWindow = true,
+                    RedirectStandardOutput = true, RedirectStandardError = true
+                };
+                foreach (var argument in new[] { "--readonly", "--sandbox", "sql", "SELECT SLEEP(30)" })
+                    start.ArgumentList.Add(argument);
+                using var child = Process.Start(start) ?? throw new InvalidOperationException("Could not start bd lock probe.");
+                var lockPath = Path.Combine(args[1], ".beads", "embeddeddolt", "stage", ".dolt", "noms", "LOCK");
+                var deadline = DateTime.UtcNow.AddSeconds(10);
+                while (true)
+                {
+                    if (child.HasExited)
+                        throw new InvalidOperationException($"bd lock probe exited: {child.StandardError.ReadToEnd()}");
+                    try { using var unlocked = File.Open(lockPath, FileMode.Open, FileAccess.Read, FileShare.None); }
+                    catch (IOException exception) when ((exception.HResult & 0xFFFF) == 32)
+                    {
+                        File.WriteAllText(args[2], child.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        return 0;
+                    }
+                    if (DateTime.UtcNow >= deadline) throw new TimeoutException("bd did not acquire the fixture database lock.");
+                    Thread.Sleep(10);
+                }
+            }
             case "relay":
                 if (args.Length < 3) return 65;
                 File.WriteAllText(args[1] + ".child", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -1184,13 +1210,20 @@ internal static class Program
 
         switch (action)
         {
+            case "planning-draft-gated":
             case "planning-draft":
             case "planning-approve":
             {
+                if (action == "planning-draft-gated")
+                {
+                    WriteStartedMarker(ResolveStartedMarkerPath(beadId), beadId);
+                    WaitForFile(Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_RELEASE_FILE")
+                        ?? throw new InvalidOperationException("Planning release path is missing."));
+                }
                 const string marker = "Host grounding (copy exactly into evidence):\n";
                 var grounding = JsonDocument.Parse(dispatchPrompt[(dispatchPrompt.LastIndexOf(marker, StringComparison.Ordinal) + marker.Length)..]).RootElement.Clone();
                 object evidence;
-                if (action == "planning-draft")
+                if (action is "planning-draft" or "planning-draft-gated")
                     evidence = new
                     {
                         schema = "nightweaver-plan-v1", grounding,

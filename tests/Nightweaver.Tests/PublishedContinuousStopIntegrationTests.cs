@@ -11,13 +11,16 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
     : AgentStageIntegrationTestSupport
 {
 
-    [Fact]
-    public async Task PublishedRuntimeForceStopsAnActiveOutcomeClassifier()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PublishedRuntimeForceStopsAnActiveOutcomeClassifier(bool planning)
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires Windows console control events and native CLI fixtures.");
         using var target = new AgentStageTargetFixture();
         target.RunTarget("bd", ["update", target.ControlBeadId, "--add-label", "stage:merge", "--add-label", "needs-human"]);
-        var beadId = target.CreateBead("Published force during classification", "task", "stage:implement");
+        var beadId = planning ? target.CreateBead("Published Planning force during classification", "feature", "stage:plan", "ready-for-planning")
+            : target.CreateBead("Published force during classification", "task", "stage:implement");
         var hostRoot = CreatePublishedHost(target);
         var gateDirectory = Directory.CreateDirectory(Path.Combine(target.RootPath, "published-classifier-force-gates")).FullName;
         var agentStarted = Path.Combine(gateDirectory, "agent.started");
@@ -30,7 +33,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
         var runtimeLog = Path.Combine(gateDirectory, "runtime.log");
         var environment = target.CreateRuntimeEnvironment(new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
-            ["NIGHTWEAVER_FIXTURE_ACTION"] = "pool-implement-gated",
+            ["NIGHTWEAVER_FIXTURE_ACTION"] = planning ? "planning-draft-gated" : "pool-implement-gated",
             ["NIGHTWEAVER_FIXTURE_STARTED_FILE"] = agentStarted,
             ["NIGHTWEAVER_FIXTURE_RELEASE_FILE"] = agentRelease,
             ["NIGHTWEAVER_FIXTURE_PID_FILE"] = agentPid,

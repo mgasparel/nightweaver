@@ -108,7 +108,7 @@ public sealed class AgentStageDeliveryIntegrationTests : AgentStageIntegrationTe
 public sealed class PlanningNativeTurnTests : AgentStageIntegrationTestSupport
 {
     [Fact]
-    public async Task NativeApprovedGraphPublishesAndEntersDeliveryWithoutAnotherAgentTurn()
+    public async Task NativePlannerAndChallengerReleaseApprovedIdentityForStandaloneDispatch()
     {
         using var target = new AgentStageTargetFixture();
         var product = target.CreateBead("Requested behavior", "feature", "ready-for-planning");
@@ -124,28 +124,9 @@ public sealed class PlanningNativeTurnTests : AgentStageIntegrationTestSupport
         Assert.Equal(before, target.ReadInventory().ById.Count);
         Assert.Contains("planning_approval", target.ReadComments(product), StringComparison.Ordinal);
         Assert.True(Directory.Exists(target.WorktreePath(product)));
-        var publication = await target.RunRetryAgentAsync(product, AgentRole.Planner, []);
-        Assert.True(publication.Succeeded, publication.StageResult.Failure?.Reason);
-        Assert.True(publication.StageResult.VerifiedState?.Planned);
-        Assert.Equal(0, target.LastRetryLifecycleCount);
-        var generated = target.ReadInventory().ById.Values.Where(b => PlanningPublisher.Metadata(b, "publication_product") == product).ToArray();
-        Assert.Equal(2, generated.Length);
-        var task = Assert.Single(generated, b => PlanningPublisher.Metadata(b, "publication_entry") == "slice-1");
-        var dependent = Assert.Single(generated, b => PlanningPublisher.Metadata(b, "publication_entry") == "slice-2");
-        Assert.DoesNotContain("plan-unpublished", task.Labels);
-        Assert.True(PlanningPublicationGate.Allows(task, target.ReadInventory()), target.ReadBead(product).Payload.GetRawText() + task.Payload.GetRawText());
-        var ready = BeadsReader.Parse(target.RunTarget("bd", ["ready", "--unassigned", "--limit", "0", "--json"]));
-        Assert.Contains(task.Id, ready.ById.Keys);
-        Assert.DoesNotContain(dependent.Id, ready.ById.Keys);
-        // Cross the publication-to-Delivery boundary with a real Implementer.
-        // Full Reviewer/QA claim continuity is exercised by the separate native
-        // DeliverySlotKeepsOneClaimAndPersistentWorktreeThroughMergeHandoff case.
-        var delivery = await target.RunRetryAgentAsync(task.Id, AgentRole.Implementer, ["slot-implement-unlabeled"]);
-        Assert.True(delivery.Succeeded, delivery.StageResult.Failure?.Reason);
-        Assert.Equal("stage:review", delivery.StageResult.VerifiedState?.Stage);
-        Assert.Equal(1, target.LastRetryLifecycleCount);
-        Assert.Equal($"nightweaver/{task.Id}", target.CurrentBranch(task.Id));
-        Assert.True(File.Exists(Path.Combine(target.WorktreePath(task.Id), "delivery-slot.txt")));
+        // The continuous native smoke owns the expensive graph-publication and
+        // generated Implementer assertions. Keep this traversal focused on the
+        // distinct standalone approval/claim-release boundary.
     }
 }
 

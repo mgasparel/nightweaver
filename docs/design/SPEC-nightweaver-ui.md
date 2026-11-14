@@ -18,7 +18,7 @@ This creates several severe friction points:
 A local web application and dashboard console hosted by the Nightweaver Orchestrator (`nightweaver dashboard`) that serves as the single human-friendly command deck for Beads and autonomous factory operations.
 
 The solution integrates:
-1. **Factory Execution Bays**: Observed Delivery Floor and Singleton Merger activity, with a compact disabled Planning notice. Automated Planning and its backpressure gauge are future scope.
+1. **Factory Execution Bays**: Observed Planning Pool, Delivery Floor and Singleton Merger activity with independent capacities and real invocation logs. Planning requires explicit `ready-for-planning` authorization, native readiness and `max_active_plan_beads` backpressure; intake remains backlog-only. Older two-pool snapshots show Planning unavailable.
 2. **"Since Last Caught Up" Catch-Up Digest**: A collapsible top-of-console window-delta digest designed for both daily check-ins and multi-week absences, grouping connected completed and newly-opened/progressed Beads into unified Lineage Threads (via `parent` / `parent-child` and multi-hop `discovered-from` chains) alongside standalone activity, surfacing best-effort outcome summaries (`close_reason` / commit SHAs / PR references with Bead state fallback), tracking a persistent per-project `last_caught_up_at` checkpoint under `<nightweaver-root>/telemetry/<project>/catch-up.json`, and providing a race-safe single-click "Mark Caught Up" action that collapses the digest after a successful checkpoint save.
 3. **Human Attention Desk**: A prioritized intervention queue surfacing `product-decision-required` questions and `needs-human` escalations, supporting both instant one-line resolutions and deep context escalation.
 4. **Dedicated Full Bead Workspace**: A large-surface reading and decision view featuring generous typography (15–16px body, relaxed line height), smart collapsible history (grouping older planning and review cycles under an expandable banner), spec inspection, runtime environment sidebar, and an integrated human guidance studio.
@@ -39,8 +39,8 @@ The solution integrates:
 10. As a product owner, I want an "Open Full Bead Workspace" link on every attention card, so that I can review full specification context when a decision is complex.
 11. As a repository maintainer, I want to see `needs-human` escalation cards when an agent exhausts its repair cycles, so that I know why verification failed.
 12. As a repository maintainer, I want one-click actions on `needs-human` cards to reset the repair budget and retry, copy the checkout command, or abort the bead, so that I can resolve blockers with minimal friction.
-13. As an operator, I want a compact manual Planning notice, so that I understand why automated Planning slots are absent.
-14. As an operator, I want Planning to remain visibly disabled until that runtime is explicitly implemented.
+13. As an operator, I want Planning to be labeled unavailable when the connected runtime supplies no Planning observations, so that missing or legacy telemetry never appears idle or live.
+14. As an operator, I want real Planning invocations, capacity, logs and unavailable observations to be visible alongside Delivery and Merger.
 15. As an operator, I want real-time visibility into the Delivery Floor slots, so that I can monitor isolated worktrees, active branches, diff counters, and repair cycles.
 16. As an operator, I want real-time visibility into the Singleton Merger Slot, so that I can watch serialized branch rebases, conflict resolution, and remote GitHub check polling.
 17. As an operator, I want to open the selected slot's invocation dialog, so that I can inspect real live or retained output and observed timing without switching to a terminal.
@@ -235,10 +235,10 @@ At 1440×900, the initial, unexpanded overview must expose the runtime health, a
 | `.site-header` | 60–68px | Brand, section links, `#new-bead-trigger` |
 | Collapsed `#catch-up` | 76–96px; under 6rem | Checkpoint, window/actions, single-row inline metrics |
 | Busy `#attention` | about 280px | Heading/count, two compact cards side by side, disclosure |
-| `#factory` | about 340px | Health header, Planning notice, Delivery and Merger overview |
+| `#factory` | about 340px | Health header, Planning, Delivery and Merger overview |
 | Shell top inset and section gaps | about 76px | 1rem top inset, 1.25rem section rhythm |
 
-At the upper header/digest targets this totals about 860px. Explorer begins immediately afterward; it need not fit fully into the busy initial viewport. Heights are layout budgets, not fixed clipping heights. Long content must wrap or use named disclosures and detail paths. The busy fixture uses two occupied Delivery slots, one idle Delivery slot, one occupied Merger slot, and four paused Beads (two previewed). Higher configured capacity may extend below the fold while health, occupancy, and the start of each execution bay remain visible. Idle/caught-up state should expose the Explorer heading and initial results in the first viewport.
+At the upper header/digest targets this totals about 860px. Explorer begins immediately afterward; it need not fit fully into the busy initial viewport. Heights are layout budgets, not fixed clipping heights. Long content must wrap or use named disclosures and detail paths. The busy fixture includes observed Planning slots alongside two occupied Delivery slots, one idle Delivery slot, one occupied Merger slot, and four paused Beads (two previewed). Higher configured capacity may extend below the fold while health, occupancy, and the start of each execution bay remain visible. Idle/caught-up state should expose the Explorer heading and initial results in the first viewport.
 
 The header uses `min-height: 3.75rem` and `padding-block: 0.5rem`. Its brand targets `#main-content`; preserve section jumps to `#catch-up`, `#attention`, `#factory`, and `#beads`. “Pinned” means the Attention Desk remains ahead of Factory in the page hierarchy, not a fixed overlay that covers controls. Keep the existing mobile navigation and skip link.
 
@@ -250,7 +250,7 @@ Section headings: `clamp(1.2rem, 2vw, 1.45rem)`, weight 700, tracking -0.02em. C
 
 | Viewport | Required reflow |
 | --- | --- |
-| 1440×900 at 100% | Shell width `min(100% - 2.5rem, 80rem)`; Delivery/Merger columns `minmax(0, 1.65fr) minmax(0, 1fr)`; Planning is a compact spanning notice. Two attention previews share a row. Collapsed metrics occupy one inline row. |
+| 1440×900 at 100% | Shell width `min(100% - 2.5rem, 80rem)`; Planning/Delivery/Merger columns `minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr)`. Two attention previews share a row. Collapsed metrics occupy one inline row. |
 | 200% zoom on 1440px desktop (720px CSS width) | `@media (max-width: 52rem)` stacks bays and attention previews; wraps header, metrics, filters and actions; metadata becomes one column when needed. Vertical scrolling is expected. Do not shrink text to preserve the desktop budget. |
 | 375px narrow viewport | Shell width `calc(100% - 1.5rem)`; same stacked hierarchy; mobile menu remains keyboard operable. Wrap action groups and long values, keep controls reachable and labels readable. |
 
@@ -270,7 +270,7 @@ Expansion initially shows up to `DIGEST_INITIAL_THREADS = 5` compact thread summ
 
 ### Factory Execution Bays — ns-1b1.3
 
-Keep `.bay-grid`, `#delivery-slots`, `#merger-slots`, `#delivery-pool-status` and `#merger-pool-status`. Pool headers report observed occupancy honestly, e.g. “1 of 3 slots active · 2 idle” or “0 of 1 slot active · Idle”. On stale data explicitly qualify these counts as last observed. Do not infer occupancy from the tracker’s Active filter. `.bay-card.planning-disabled` becomes a compact spanning notice: “Planning Pool · Manual planning mode (automated Planning disabled)”.
+Keep `.bay-grid`, `#delivery-slots`, `#merger-slots`, `#delivery-pool-status` and `#merger-pool-status`. Pool headers report observed occupancy honestly, e.g. “1 of 3 slots active · 2 idle” or “0 of 1 slot active · Idle”. On stale data explicitly qualify these counts as last observed. Do not infer occupancy from the tracker’s Active filter. The Planning bay uses `#planning-slots` and `#planning-pool-status` with the same observed slot/log interactions. Older two-pool snapshots show Planning unavailable, never fabricated idle or live activity.
 
 For `status !== "idle"`, a `.factory-slot` presents these visible summary rows:
 
@@ -328,7 +328,7 @@ Existing hooks must survive section reflow and remain unique. This is a compatib
 | Owner | Preserve existing DOM hooks and semantics | Required additions/changes |
 | --- | --- | --- |
 | ns-1b1.2 | `#catch-up`, `#digest-body`, `#digest-toggle`, `#digest-metrics`, `#digest-checkpoint-badge`, `#digest-threads`, `#digest-standalone`, `#digest-status`, `#digest-error`, `#digest-retry`, `#digest-refresh`, `#digest-mark-caught-up`, `#digest-caught-up-bar`, `data-digest-window`, `data-bead-workspace-link`, thread `data-root-bead-id` | Initial hidden/expanded state, optional `#catch-up[data-collapsed]`, bounded collection disclosures/constants. |
-| ns-1b1.3 | `.bay-grid`, `.bay-card.planning-disabled`, `#delivery-slots`, `#merger-slots`, both pool status IDs, `.factory-slot`, `data-status`, `data-open-telemetry-slot` | `.factory-slot-idle`, `.slot-diagnostics`, Bead workspace link, stable slot disclosure/focus state. |
+| ns-1b1.3; Planning integration ns-jbp.11 | `.bay-grid`, `.bay-card`, `#planning-slots`, `#delivery-slots`, `#merger-slots`, `#planning-pool-status`, `#delivery-pool-status`, `#merger-pool-status`, `.factory-slot`, `data-status`, `data-open-telemetry-slot` | `.factory-slot-idle`, `.slot-diagnostics`, Bead workspace link, stable slot disclosure/focus state; Planning uses the same observed interactions, with unavailable state for legacy snapshots. |
 | ns-1b1.4 | `#factory-status`, every `#invocation-*` ID described above, slot telemetry CTA identity | Header `.factory-health-bar`, coherent `data-state`, responsive dialog, sticky follow controls, safe focus restoration. |
 | ns-1b1.5 | `#beads`, `data-view`, `#beads-search`, `#beads-table-body`, `#beads-live`, `#beads-loading`, `#beads-empty`, `#beads-no-matches`, `#beads-error`, `#beads-retry`, `#beads-create-success`, `#beads-show-created`, workspace links | Ready default, page-size constant and page state, `#beads-pagination`, `#beads-prev-page`, `#beads-next-page`. |
 | ns-1b1.6 | `.site-header`, navigation/skip link, `#attention`, `#attention-status`, `#attention-empty`, `#attention-cards`, `#attention-error`, `#attention-retry`, `#attention-refresh`, `data-attention-focus`, `data-bead-id`, intake and Workspace hooks | Attention preview constant/toggle, shared spacing/typography/status/focus polish and integrated acceptance evidence. |
@@ -344,6 +344,6 @@ The console names Product Bead (native feature/bug) and Plan Bead (native task) 
 
 Workspace, Explorer, Attention and catch-up rows consume one read-only presentation. A tracked stage (Planning, Plan review, Plan approved, Implementation, Review, QA or Merge) never establishes a running Agent. Tracker ownership and in_progress are stored facts; Environment and execution bays retain their own live, stale and unavailable observations.
 
-Products show Awaiting Planning authorization, Authorized for Planning (explicit dispatch; continuous Planning is not scheduled), or Plan published / awaiting Delivery. Terminal planned Products show Plan published without promising Delivery or merge. The planned label alone does not verify a generated graph. Publication hold, incomplete observation and Publication needs attention use the runtime publication gate over the available inventory; manual provenance does not grant generated authority. A held partial publication without a graph snapshot remains unverified; an independently observed Product identity or revision conflict still shows Publication needs attention.
+Products show Awaiting Planning authorization, Authorized for Planning (subject to native readiness and capacity), or Plan published / awaiting Delivery. Terminal planned Products show Plan published without promising Delivery or merge. The planned label alone does not verify a generated graph. Publication hold, incomplete observation and Publication needs attention use the runtime publication gate over the available inventory; manual provenance does not grant generated authority. A held partial publication without a graph snapshot remains unverified; an independently observed Product identity or revision conflict still shows Publication needs attention.
 
 Compact summaries keep raw labels in a disclosure. Workspace Workflow details contain planning, publication, pauses, tracker ownership, used/configured repair budget, uncertainty and wrapped source state. Conflicting stages/pauses and invalid repair metadata stay unavailable. A planned Product can retain historical technical attention without making Retry available. Viewing and prose edits grant no workflow authority; guarded Planning, Resume/Retry and independent Housekeeping actions retain their existing owners.

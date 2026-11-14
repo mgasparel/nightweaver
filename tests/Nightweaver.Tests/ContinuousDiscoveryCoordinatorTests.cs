@@ -195,7 +195,7 @@ public sealed class ContinuousDiscoveryCoordinatorTests
     public async Task LaterConfiguredPoolRunsWhileDeliveryPreparationIsBlockedAndCompletionFansIn()
     {
         using var lifetime = new CancellationTokenSource();
-        var planningCompletions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
+        var planningCompletions = Channel.CreateUnbounded<PlanningPoolCompletion>();
         var deliveryCompletions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
         var mergerCompletions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
         var ticks = Channel.CreateUnbounded<bool>();
@@ -228,11 +228,11 @@ public sealed class ContinuousDiscoveryCoordinatorTests
                 }
                 return EmptyDiagnostics();
             }, deliveryCompletions.Reader),
-            Registration(ContinuousPoolKind.Planning, _ =>
+            new ContinuousPoolRegistration(ContinuousPoolKind.Planning, _ =>
             {
                 order.Add(ContinuousPoolKind.Planning);
-                return EmptyDiagnostics();
-            }, planningCompletions.Reader)
+                return Task.FromResult<IReadOnlyList<PlanningPoolDiagnostic>>([]);
+            }, planningCompletions.Reader, static () => { }, _ => Task.CompletedTask)
         };
         var coordinator = new ContinuousDiscoveryCoordinator(
             registrations,
@@ -250,7 +250,7 @@ public sealed class ContinuousDiscoveryCoordinatorTests
         Assert.False(preparationTask.IsCompleted);
         Assert.Equal([ContinuousPoolKind.Planning, ContinuousPoolKind.Delivery, ContinuousPoolKind.Merger], order);
 
-        planningCompletions.Writer.TryWrite(new DeliveryPoolCompletion("planning-finished", null, null, false, true));
+        planningCompletions.Writer.TryWrite(new PlanningPoolCompletion("planning-finished", new(PlanningSlotDisposition.Published, null, true, null), null, false, true));
         await secondPass.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Assert.Equal(2, Volatile.Read(ref deliveryPasses));
         Assert.False(preparationTask.IsCompleted);
