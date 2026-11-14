@@ -11,6 +11,22 @@ internal static class PlanningPublicationGate
     internal static bool HasGraphConflict(BeadSnapshot bead, BeadsInventory inventory)
         => !CheckGraph(bead, inventory, requirePublished: false);
 
+    // Read-only Product observation uses the same complete graph check as task admission.
+    // Absence of a snapshot supplies no evidence of graph validity.
+    internal static bool? HasProductGraphConflict(BeadSnapshot product, BeadsInventory inventory)
+    {
+        var graph = PlanningPublisher.Metadata(product, "publication_graph");
+        if (graph is null) return null;
+        try
+        {
+            var intended = JsonSerializer.Deserialize<PublishedPlanningTask[]>(graph, PlanningEvidence.JsonOptions);
+            if (intended is not { Length: > 0 } || intended[0] is null
+                || !inventory.ById.TryGetValue(intended[0].Id, out var task) || task.IssueType != "task") return true;
+            return HasGraphConflict(task, inventory);
+        }
+        catch (Exception error) when (error is JsonException or InvalidOperationException or ArgumentException) { return true; }
+    }
+
     private static bool CheckGraph(BeadSnapshot bead, BeadsInventory inventory, bool requirePublished)
     {
         if (bead.IssueType != "task") return true;
@@ -77,7 +93,7 @@ internal static class PlanningPublicationGate
         return products;
     }
 
-    private static bool HasPublicationMetadata(BeadSnapshot bead) =>
+    internal static bool HasPublicationMetadata(BeadSnapshot bead) =>
         bead.Payload.TryGetProperty("metadata", out var metadata) && metadata.ValueKind == JsonValueKind.Object
         && (metadata.TryGetProperty("publication_product", out _) || metadata.TryGetProperty("publication_revision", out _)
             || metadata.TryGetProperty("publication_entry", out _) || metadata.TryGetProperty("publication_graph", out _));

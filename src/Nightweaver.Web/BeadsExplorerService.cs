@@ -16,6 +16,8 @@ internal sealed record BeadExplorerItem(
     [property: JsonPropertyName("labels")] IReadOnlyList<string> Labels,
     [property: JsonPropertyName("assignee")] string? Assignee)
 {
+    [JsonPropertyName("presentation")] public BeadPresentation? Presentation { get; init; }
+
     internal static BeadExplorerItem FromSnapshot(BeadSnapshot bead)
     {
         var titles = bead.Payload.EnumerateObject().Where(property => property.NameEquals("title")).ToArray();
@@ -66,7 +68,8 @@ internal sealed partial class TrackerBridge(
 
             // Project the complete inventory first so malformed required display data cannot
             // produce a partial response whose completeness depends on the selected filter.
-            var items = inventory.ById.Values.Select(BeadExplorerItem.FromSnapshot).ToArray();
+            var items = inventory.ById.Values.Select(bead => BeadExplorerItem.FromSnapshot(bead) with
+            { Presentation = BeadPresenter.Project(bead, project.Limits.MaxRepairCycles, inventory) }).ToArray();
             return items
                 .Where(item => IsInView(item, view, readyIds, blockedIds))
                 .Where(item => query is null
@@ -96,7 +99,8 @@ internal sealed partial class TrackerBridge(
                          .Where(bead => !AttentionDeskProjector.IsTerminal(bead)))
             {
                 var comments = await beadsReader.ReadAttentionCommentsAsync(target, bead.Id, cancellationToken);
-                items.Add(AttentionDeskProjector.Project(bead, comments, project.Limits.MaxRepairCycles));
+                items.Add(AttentionDeskProjector.Project(bead, comments, project.Limits.MaxRepairCycles) with
+                { Presentation = BeadPresenter.Project(bead, project.Limits.MaxRepairCycles, inventory) });
             }
 
             return items.OrderBy(item => item.Priority)
@@ -125,7 +129,7 @@ internal sealed partial class TrackerBridge(
             // boundary second rather than checkpointing past an unseen write in that second.
             var generatedAt = DateTimeOffset.FromUnixTimeSeconds(timeProvider.GetUtcNow().ToUnixTimeSeconds());
             var inventory = await beadsReader.ReadSnapshotAsync(target, cancellationToken);
-            return CatchUpDigestProjector.Project(inventory, window, lastCaughtUpAt, generatedAt);
+            return CatchUpDigestProjector.Project(inventory, window, lastCaughtUpAt, generatedAt, project.Limits.MaxRepairCycles);
         }
         finally
         {
@@ -164,8 +168,11 @@ internal sealed partial class TrackerBridge(
                 ? AttentionDeskProjector.ProjectWithSelection(detail, comments, project.Limits.MaxRepairCycles)
                 : null;
             var environment = await environmentObserver.ObserveAsync(target, beadId, cancellationToken);
+            var presentation = BeadPresenter.Project(detail, project.Limits.MaxRepairCycles, finalInventory);
             return BeadWorkspaceProjector.Project(detail, comments, attention, environment) with
             {
+                Presentation = presentation,
+                Attention = attention is null ? null : attention.Item with { Presentation = presentation },
                 Relations = BeadWorkspaceProjector.ProjectRelations(incoming.Edges, outgoing.Edges, finalInventory.ById),
                 RelationObservation = new(incoming.State, outgoing.State)
             };
@@ -412,7 +419,7 @@ internal sealed partial class TrackerBridge(
             throw new AttentionActionException(404, "Bead not found", "No exact Bead ID matched the configured target inventory.");
         if (AttentionDeskProjector.InvalidWorkflowReason(bead) is not null)
             throw new AttentionActionException(409, "Invalid workflow", "This Bead has contradictory or malformed workflow state and cannot be changed from the Attention Desk.");
-        if (AttentionDeskProjector.IsTerminal(bead) || bead.Status != "open" || bead.Assignee is not null)
+        if (bead.Labels.Contains("planned", StringComparer.Ordinal) || AttentionDeskProjector.IsTerminal(bead) || bead.Status != "open" || bead.Assignee is not null)
             throw new AttentionActionException(409, "Bead is unavailable", "Only open, unassigned, nonterminal paused Beads can be changed from the Attention Desk.");
         if (!bead.Labels.Contains(pauseLabel, StringComparer.Ordinal))
             throw new AttentionActionException(409, "Pause is no longer active", "The requested pause label is no longer present. Refresh the Attention Desk before retrying.");

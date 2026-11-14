@@ -57,7 +57,7 @@ public sealed class WebBeadsIntegrationTests
         Assert.Contains(Nightweaver.Planning.DeliveryDiscoveryPlanner.Plan(published, 10).DeliverySelected, item => item.Bead.Id == held);
     }
 
-    private static readonly string[] ExpectedDtoFields = ["assignee", "id", "labels", "priority", "status", "title", "type"];
+    private static readonly string[] ExpectedDtoFields = ["assignee", "id", "labels", "presentation", "priority", "status", "title", "type"];
     private static readonly string[] ExpectedTaggedLabels = ["ready-for-agent", "stage:implement"];
     private static readonly string[] ExpectedDiagnosticLogs = ["C:\\not-read\\review.log"];
     private static readonly string[] InitialEscalationLogFiles = ["unavailable"];

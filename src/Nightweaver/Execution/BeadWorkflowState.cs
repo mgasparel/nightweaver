@@ -50,7 +50,7 @@ internal sealed record BeadWorkflowState(
         };
     }
 
-    private static int ReadRepairCycles(BeadSnapshot bead)
+    internal static int ReadRepairCycles(BeadSnapshot bead)
     {
         JsonElement metadata = default;
         var metadataCount = 0;

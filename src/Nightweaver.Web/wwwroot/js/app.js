@@ -181,7 +181,7 @@ function renderAttention() {
     workspaceLink.textContent = "Open Full Bead Workspace";
     card.append(workspaceLink);
 
-    card.append(makeAttentionText("p", "attention-summary", `${item.beadId} · ${item.stage || "Stage unavailable"} · Repairs ${Number.isInteger(item.repairCycles) ? item.repairCycles : "Unknown"} / ${item.maxRepairCycles}`));
+    card.append(makeAttentionText("p", "attention-summary", `${item.beadId} · ${item.presentation?.role || "Role unavailable"} · ${item.presentation?.summary || "Tracked workflow unavailable"}`));
     const context = item.message?.summary || (item.kind === "product-decision-required"
       ? item.question || "No attributable clarification comment is available."
       : item.diagnostic || "No valid diagnostic is available.");
@@ -579,17 +579,21 @@ function outcomePillClass(outcome) {
   return "digest-pill";
 }
 
+function digestTrackedOutcome(item) {
+  return item.activityKind === "closed" ? item.outcomeLabel : item.presentation?.summary || item.outcomeLabel;
+}
+
 function renderDigestItemRow(item, { isThreadRoot = false } = {}) {
   const row = digestNode("div", "digest-item-row");
   row.dataset.beadId = item.id;
 
   const meta = digestNode("div", "digest-item-meta");
-  meta.append(digestNode("span", "digest-pill", `${item.type} · P${item.priority}`));
+  meta.append(digestNode("span", "digest-pill", `${item.presentation?.role || "Role unavailable"} · Type: ${item.type} · P${item.priority}`));
 
   if (item.activityKind === "context") {
     meta.append(digestNode("span", "digest-pill digest-pill-noop", `Root context (${item.status})`));
   } else {
-    meta.append(digestNode("span", outcomePillClass(item.outcome), item.outcomeLabel));
+    meta.append(digestNode("span", outcomePillClass(item.outcome), digestTrackedOutcome(item)));
   }
 
   if (!isThreadRoot && item.fromId) {
@@ -657,12 +661,12 @@ function renderDigestThreadCard(thread) {
   const titleGroup = digestNode("div", "digest-thread-title-group");
   const meta = digestNode("div", "digest-thread-meta");
 
-  meta.append(digestNode("span", "digest-pill", `${thread.root.type} · P${thread.root.priority}`));
+  meta.append(digestNode("span", "digest-pill", `${thread.root.presentation?.role || "Role unavailable"} · Type: ${thread.root.type} · P${thread.root.priority}`));
 
   if (thread.root.activityKind === "context") {
     meta.append(digestNode("span", "digest-pill digest-pill-noop", `Origin (${thread.root.status})`));
   } else {
-    meta.append(digestNode("span", outcomePillClass(thread.root.outcome), thread.root.outcomeLabel));
+    meta.append(digestNode("span", outcomePillClass(thread.root.outcome), digestTrackedOutcome(thread.root)));
   }
   const title = digestNode("h4", "digest-thread-title");
   const titleLink = digestNode("a", "", `${thread.root.id} · ${thread.root.title}`);
@@ -677,7 +681,7 @@ function renderDigestThreadCard(thread) {
     .sort((a, b) => Date.parse(b.activityAt) - Date.parse(a.activityAt))[0];
   if (latestActivity) {
     titleGroup.append(digestNode("p", "digest-thread-context",
-      `Latest activity ${formatDigestRelativeTime(latestActivity.activityAt)} · ${latestActivity.outcomeLabel}`));
+      `Latest activity ${formatDigestRelativeTime(latestActivity.activityAt)} · ${digestTrackedOutcome(latestActivity)}`));
   }
 
   const counts = digestNode("div", "digest-thread-counts");
@@ -1098,7 +1102,7 @@ function renderBeads(beads) {
     row.append(
       beadLinkCell(bead.id, "bead-id", bead.id),
       beadLinkCell(bead.title, "bead-title", bead.id),
-      textCell(bead.type || "Unavailable"),
+      textCell(`${bead.presentation?.role || "Role unavailable"} · Type: ${bead.type || "Unavailable"}`),
       textCell(`P${bead.priority}`, "bead-priority"),
       textCell(bead.status)
     );
@@ -1113,11 +1117,21 @@ function renderBeads(beads) {
       labels.append(tag);
     }
     if (bead.labels.length === 0) labels.textContent = "—";
-    labelsCell.append(labels);
+    labelsCell.append(workspaceText("p", "bead-tracked-summary", bead.presentation?.summary || "Tracked workflow unavailable"));
+    const source = document.createElement("details");
+    const sourceTitle = document.createElement("summary");
+    sourceTitle.dataset.messageFocus = `labels:${bead.id}`;
+    source.open = messageDisclosures.get(sourceTitle.dataset.messageFocus) ?? false;
+    sourceTitle.textContent = `Source labels (${bead.labels.length})`;
+    source.append(sourceTitle, labels);
+    labelsCell.append(source);
     row.append(labelsCell, textCell(bead.assignee ?? "Unassigned"));
     rows.append(row);
   }
+  const messageFocus = captureMessageState(beadsBody);
+  for (const summary of rows.querySelectorAll("summary[data-message-focus]")) summary.parentElement.open = messageDisclosures.get(summary.dataset.messageFocus) ?? false;
   beadsBody.replaceChildren(rows);
+  restoreMessageFocus(beadsBody, messageFocus, beadsRange);
   if (focusedControl) restoreExplorerPageFocus(focusedControl);
 }
 
@@ -1564,14 +1578,46 @@ function formatWorkspaceDate(value) {
   return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString();
 }
 
-function renderWorkspaceMeta(bead) {
+function renderWorkspaceWorkflow(data) {
+  const root = document.querySelector("#workspace-workflow");
+  const expanded = root.querySelector("details")?.open ?? false;
+  const focused = root.contains(document.activeElement);
+  root.replaceChildren();
+  const facts = data.presentation;
+  root.hidden = false;
+  root.classList.toggle("workflow-attention", Boolean(facts?.diagnostic) || facts?.publication === "Publication needs attention");
+  root.append(workspaceText("p", "eyebrow", "Tracked workflow"),
+    workspaceText("p", "workflow-summary", facts?.summary || "Workflow observation unavailable"));
+  const details = document.createElement("details");
+  details.open = expanded;
+  const summary = workspaceText("summary", "", "Workflow details");
+  details.append(summary);
+  const list = document.createElement("dl");
+  for (const [name, value] of [
+    ["Tracked stage", facts?.trackedStage || (facts?.diagnostic ? "Unavailable" : "No stored stage")],
+    ["Planning", facts?.planning], ["Publication", facts?.publication], ["Pause", facts?.pause],
+    ["Planning evidence", facts?.planning?.startsWith("Plan published") ? "Tracked planned state; does not establish graph verification, completed Delivery or a successful merge." : null],
+    ["Repair budget", `${Number.isInteger(facts?.repairsUsed) ? facts.repairsUsed : "Unavailable"} used / ${Number.isInteger(facts?.repairsMax) ? facts.repairsMax : "Unavailable"} configured`],
+    ["Ownership", facts?.ownership || "Unavailable"], ["Diagnostic", facts?.diagnostic],
+    ["Source stage", data.bead.stage || "No stage label"],
+    ["Source labels", data.bead.labels?.join(" · ") || "None"],
+    ["Source metadata", data.sourceMetadata]
+  ]) {
+    if (!value) continue;
+    list.append(workspaceText("dt", "", name), workspaceText("dd", "", value));
+  }
+  details.append(list, workspaceText("p", "field-help", "Stored state does not establish live execution or scheduler eligibility. Planning authorization permits explicit dispatch; continuous Planning is not scheduled. Discovered-from records provenance, not hierarchy or generated-plan approval. Live observations appear in Environment and execution bays."));
+  root.append(details);
+  if (focused) summary.focus({ preventScroll: true });
+}
+
+function renderWorkspaceMeta(bead, presentation) {
   workspaceMeta.replaceChildren();
   const values = [
+    presentation?.role || "Role unavailable",
     `Type: ${bead.type || "Unavailable"}`,
     `P${bead.priority}`,
     bead.status,
-    bead.stage || "No stage label",
-    bead.assignee || "Unassigned",
     `Created ${formatWorkspaceDate(bead.createdAt)}`,
     `Updated ${formatWorkspaceDate(bead.updatedAt)}`
   ];
@@ -1826,7 +1872,7 @@ function renderWorkspaceRelations(relations, observation, beadId) {
         item.append(link);
       } else item.append(workspaceText("span", "workspace-relation-literal", relation.id || "Unknown ID"));
       item.append(workspaceText("span", "workspace-relation-status",
-        `Type: ${relation.issueType || "Unavailable"} · ${relation.status || "Status unavailable"}`));
+        `${relation.role || "Role unavailable"} · Type: ${relation.issueType || "Unavailable"} · ${relation.status || "Status unavailable"}`));
       if (!relation.title) item.append(workspaceText("span", "workspace-relation-type", "Related Bead details unavailable"));
       list.append(item);
     }
@@ -1914,8 +1960,9 @@ function renderWorkspaceGuidanceActions(data) {
     const terminal = data.bead.status === "closed" || data.bead.labels.includes("planned");
     const summary = document.createElement("div");
     summary.append(workspaceText("p", "eyebrow", "Planning"), workspaceText("p", "",
-      terminal ? "Planning authorization is no longer available for this Product."
-        : data.planning.ready ? "Ready for Planning. Scheduling and pause rules still apply."
+      terminal ? data.presentation?.planning || "Planning authorization is no longer available for this Product."
+        : data.presentation?.diagnostic ? "Planning state unavailable; review Workflow details."
+        : data.planning.ready ? "Authorized for Planning (Ready for Planning). Explicit dispatch only; continuous Planning is not scheduled."
           : data.planning.canAuthorize ? "Planning backlog: awaiting explicit authorization."
             : "Planning authorization requires an open, unclaimed, unpaused Product."));
     workspacePlanning.append(summary);
@@ -1978,7 +2025,8 @@ function renderWorkspace(data) {
   const messageFocus = captureMessageState(beadWorkspace);
   workspaceId.textContent = data.bead.id;
   workspaceTitle.textContent = data.bead.title;
-  renderWorkspaceMeta(data.bead);
+  renderWorkspaceMeta(data.bead, data.presentation);
+  renderWorkspaceWorkflow(data);
   renderWorkspaceHistory(data);
   renderWorkspaceSpecifications(data.bead);
   renderWorkspaceEnvironment(data.environment);
@@ -1993,6 +2041,9 @@ function showWorkspaceLoading(id, message = "Loading Bead workspace…") {
   workspaceId.textContent = id;
   workspaceTitle.textContent = "Loading workspace…";
   workspaceMeta.replaceChildren();
+  const workflow = document.querySelector("#workspace-workflow");
+  workflow.hidden = true;
+  workflow.replaceChildren();
   workspacePlanning.hidden = true;
   workspacePlanning.replaceChildren();
   workspaceStatus.textContent = message;

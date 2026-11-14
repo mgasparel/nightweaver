@@ -13,6 +13,9 @@ internal sealed record BeadWorkspaceResponse(
     [property: JsonPropertyName("attention")] AttentionDeskItem? Attention,
     [property: JsonPropertyName("environment")] BeadWorkspaceEnvironment Environment)
 {
+    [JsonPropertyName("sourceMetadata")] public string? SourceMetadata { get; init; }
+    [JsonPropertyName("presentation")] public BeadPresentation? Presentation { get; init; }
+
     [JsonPropertyName("planning")]
     public PlanningReadiness? Planning { get; init; }
 
@@ -47,6 +50,7 @@ internal sealed record BeadWorkspaceRelation(
     [property: JsonPropertyName("status")] string? Status)
 {
     [JsonPropertyName("issueType")] public string? IssueType { get; init; }
+    [JsonPropertyName("role")] public string Role { get; init; } = "Role unavailable";
 }
 
 internal sealed record BeadWorkspaceRelationObservation(
@@ -123,6 +127,8 @@ internal static class BeadWorkspaceProjector
         var history = ProjectHistory(commentRows, activeCommentId, selectionSource);
         return new(bead, [], commentRows, history, selectedAttention, environment)
         {
+            SourceMetadata = detail.Payload.TryGetProperty("metadata", out var metadata) ? metadata.GetRawText() : null,
+            Presentation = BeadPresenter.Project(detail),
             Planning = PlanningReadiness.Project(detail)
         };
     }
@@ -200,7 +206,7 @@ internal static class BeadWorkspaceProjector
                     && !string.IsNullOrWhiteSpace(titles[0].Value.GetString()) ? titles[0].Value.GetString() : null;
                 return new BeadWorkspaceRelation(row.Id, row.Edge.Type, row.Direction,
                     title, linked?.Status)
-                { IssueType = linked?.IssueType };
+                { IssueType = linked?.IssueType, Role = BeadPresenter.Role(linked?.IssueType) };
             }).ToArray();
     }
 
