@@ -52,7 +52,6 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
     private const int MaximumCommentCount = 16;
     private const int MaximumCommentBytes = 4 * 1024;
     private static readonly TimeSpan PrimaryTimeout = TimeSpan.FromSeconds(20);
-    private static readonly Uri DecisionsEndpoint = new("https://api.openai.com/v1/decisions");
 
     private const string ImplementerQuestionInstructions =
         "Based only on the supplied Implementer evidence, which outcome is justified for this completed invocation? "
@@ -131,7 +130,8 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
         string? apiKeyOverride = null,
         Func<string, string?>? getEnvironmentVariable = null)
     {
-        this.httpClient = httpClient ?? new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        this.httpClient = httpClient ?? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+            { Timeout = Timeout.InfiniteTimeSpan };
         this.preparer = preparer ?? new AgentInvocationPreparer();
         this.executeFallback = executeFallback ?? AgentInvocationExecutor.ExecuteWithStandardOutputCaptureAsync;
         this.apiKeyOverride = apiKeyOverride;
@@ -177,11 +177,14 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
         if (!HasAdequateEvidence(evidence))
             return new(null, "evidence", $"The invocation log and fresh Bead comments contain no usable {contract.RoleName} evidence.");
 
-        var environmentKey = getEnvironmentVariable("OPENAI_API_KEY");
-        var apiKey = apiKeyOverride ?? (string.IsNullOrWhiteSpace(environmentKey) ? project.OpenAiApiKey : environmentKey);
-        var primary = await TryPrimaryAsync(apiKey, evidenceJson, contract, cancellationToken).ConfigureAwait(false);
-        if (primary.Outcome is { } primaryOutcome)
-            return new(primaryOutcome, "openai-decisions", $"OpenAI Decisions returned one valid {contract.RoleName} outcome.");
+        var environmentKey = getEnvironmentVariable("DECISIONS_API_KEY");
+        if (string.IsNullOrWhiteSpace(environmentKey))
+            environmentKey = getEnvironmentVariable(project.DecisionsApiProvider == DecisionsApiProvider.OpenRouter
+                ? "OPENROUTER_API_KEY" : "OPENAI_API_KEY");
+        var apiKey = apiKeyOverride ?? (string.IsNullOrWhiteSpace(environmentKey) ? project.DecisionsApiKey : environmentKey);
+        var primary = await TryPrimaryAsync(project, apiKey, evidenceJson, contract, cancellationToken).ConfigureAwait(false);
+        if (primary.Outcome is not null)
+            return primary with { Diagnostic = $"Decisions API returned one valid {contract.RoleName} outcome." };
 
         cancellationToken.ThrowIfCancellationRequested();
         var fallback = await TryFallbackAsync(hostPaths, project, context, worktreePath, evidenceJson, contract, cancellationToken)
@@ -195,28 +198,36 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
     }
 
     private async Task<AgentOutcomeClassificationResult> TryPrimaryAsync(
+        ProjectConfig project,
         string? apiKey,
         string evidenceJson,
         OutcomeContract contract,
         CancellationToken cancellationToken)
     {
+        var openRouter = project.DecisionsApiProvider == DecisionsApiProvider.OpenRouter;
+        var provider = openRouter ? "openrouter-decisions" : "openai-decisions";
         if (string.IsNullOrWhiteSpace(apiKey))
-            return new(null, "openai-decisions", "OPENAI_API_KEY is unavailable.");
+            return new(null, provider, "Decisions API credential is unavailable.");
 
-        var requestBody = new DecisionsRequest(
-            "gpt-6-luna",
-            evidenceJson,
-            [new DecisionsChoiceQuestion(contract.QuestionName, contract.Instructions,
-                contract.Choices.Select(choice => new DecisionsChoice(choice.Value, choice.Description)).ToArray())]);
+        object requestBody = openRouter
+            ? new OpenRouterDecisionsRequest(project.DecisionsApiModel, evidenceJson,
+                new Dictionary<string, OpenRouterChoiceQuestion>(StringComparer.Ordinal)
+                {
+                    [contract.QuestionName] = new("choice", contract.Instructions,
+                        contract.Choices.ToDictionary(choice => choice.Value, choice => choice.Description, StringComparer.Ordinal))
+                })
+            : new DecisionsRequest(project.DecisionsApiModel, evidenceJson,
+                [new DecisionsChoiceQuestion(contract.QuestionName, contract.Instructions,
+                    contract.Choices.Select(choice => new DecisionsChoice(choice.Value, choice.Description)).ToArray())]);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(requestBody, JsonOptions);
         if (bytes.Length > MaximumEvidenceBytes)
-            return new(null, "openai-decisions", $"Decisions request exceeds {MaximumEvidenceBytes} UTF-8 bytes.");
+            return new(null, provider, $"Decisions request exceeds {MaximumEvidenceBytes} UTF-8 bytes.");
 
         using var timeout = new CancellationTokenSource(PrimaryTimeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Post, DecisionsEndpoint);
+            using var request = new HttpRequestMessage(HttpMethod.Post, project.DecisionsApiEndpoint);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             request.Content = new ByteArrayContent(bytes);
@@ -224,15 +235,15 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
             using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, linked.Token)
                 .ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
-                return new(null, "openai-decisions", $"Decisions API returned HTTP {(int)response.StatusCode}.");
+                return new(null, provider, $"Decisions API returned HTTP {(int)response.StatusCode}.");
 
             var responseBytes = await ReadBoundedAsync(response.Content, MaximumFallbackOutputBytes, linked.Token)
                 .ConfigureAwait(false);
             if (responseBytes is null)
-                return new(null, "openai-decisions", "Decisions API response exceeded the bounded response size.");
-            if (!TryParseDecisionResponse(responseBytes, contract, out var outcome))
-                return new(null, "openai-decisions", "Decisions API returned an invalid or ambiguous answer.");
-            return new(outcome, "openai-decisions", "Valid response.");
+                return new(null, provider, "Decisions API response exceeded the bounded response size.");
+            if (!TryParseDecisionResponse(responseBytes, contract, openRouter, out var outcome))
+                return new(null, provider, "Decisions API returned an invalid or ambiguous answer.");
+            return new(outcome, provider, "Valid response.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -240,11 +251,11 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
         }
         catch (OperationCanceledException)
         {
-            return new(null, "openai-decisions", "Decisions API request timed out.");
+            return new(null, provider, "Decisions API request timed out.");
         }
         catch (Exception exception) when (exception is HttpRequestException or IOException or JsonException)
         {
-            return new(null, "openai-decisions", $"Decisions API request failed: {exception.GetType().Name}.");
+            return new(null, provider, $"Decisions API request failed: {exception.GetType().Name}.");
         }
     }
 
@@ -413,7 +424,7 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
         + "\nReturn only one JSON object with exactly these fields: schema, question, choice. "
         + $"Use schema '{contract.Schema}', question '{contract.QuestionName}', and one exact allowed choice value. Do not include prose or markdown.";
 
-    private static bool TryParseDecisionResponse(byte[] utf8, OutcomeContract contract, out AgentOutcomeChoice outcome)
+    private static bool TryParseDecisionResponse(byte[] utf8, OutcomeContract contract, bool openRouter, out AgentOutcomeChoice outcome)
     {
         outcome = default;
         if (!TryDecode(utf8, out _)) return false;
@@ -422,12 +433,21 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
             using var document = JsonDocument.Parse(utf8, new JsonDocumentOptions { MaxDepth = 16 });
             if (document.RootElement.ValueKind != JsonValueKind.Object
                 || !HasUniquePropertyNames(document.RootElement)) return false;
-            if (!document.RootElement.TryGetProperty("answers", out var answers)
-                || answers.ValueKind != JsonValueKind.Array || answers.GetArrayLength() != 1) return false;
-            var answer = answers[0];
+            if (!document.RootElement.TryGetProperty("answers", out var answers)) return false;
+            JsonElement answer;
+            if (openRouter)
+            {
+                if (!HasUniquePropertyNames(answers) || answers.EnumerateObject().Count() != 1
+                    || !answers.TryGetProperty(contract.QuestionName, out answer)) return false;
+            }
+            else
+            {
+                if (answers.ValueKind != JsonValueKind.Array || answers.GetArrayLength() != 1) return false;
+                answer = answers[0];
+                if (!TryString(answer, "name", out var name) || name != contract.QuestionName) return false;
+            }
             if (answer.ValueKind != JsonValueKind.Object || !HasUniquePropertyNames(answer)) return false;
-            if (!TryString(answer, "name", out var name) || name != contract.QuestionName
-                || !TryString(answer, "type", out var type) || type != "choice"
+            if (!TryString(answer, "type", out var type) || type != "choice"
                 || !TryString(answer, "choice", out var choice)
                 || !TryChoice(choice, contract, out outcome)) return false;
             if (answer.TryGetProperty("confidence", out var confidence)
@@ -557,6 +577,12 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
         string Model,
         string Input,
         IReadOnlyList<DecisionsChoiceQuestion> Questions);
+
+    private sealed record OpenRouterDecisionsRequest(
+        string Model, string State, IReadOnlyDictionary<string, OpenRouterChoiceQuestion> Questions);
+
+    private sealed record OpenRouterChoiceQuestion(
+        string Type, string Instructions, IReadOnlyDictionary<string, string> Criteria);
 
     private sealed record DecisionsChoiceQuestion(
         [property: JsonPropertyName("type")] string Type,
