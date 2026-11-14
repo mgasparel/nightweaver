@@ -77,16 +77,20 @@ public sealed class ManualDeliveryPilotSecondSignalTests
 
             using var recoveryDeadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
             recoveryDeadline.CancelAfter(TimeSpan.FromMinutes(2));
+            // Recovery has been proved by the new live invocation above. Drain discovery
+            // before letting that invocation finish: its dirty-worktree escalation must
+            // not compete with journal-triggered embedded-Dolt reads during claim release.
+            var stopLogOffset = new FileInfo(fixture.RuntimeLogPath).Length;
+            await fixture.SendRuntimeConsoleBreakAsync(recoveryDeadline.Token);
+            await fixture.WaitForGracefulStopAcceptedAsync(stopLogOffset, TimeSpan.FromSeconds(30), recoveryDeadline.Token);
+            Assert.False(secondRuntime.HasExited, "Restart drain must keep the recovered native turn alive.");
+            Assert.True(IsProcessRunning(secondAgentPid), "Restart drain must preserve the recovered Agent until its gate is released.");
             fixture.ReleaseGate(fixture.ParentlessTaskId);
             var releaseMarker = $"Delivery slot '{fixture.ParentlessTaskId}' released local capacity (Escalated; claim handoff=True)";
-            // The guarded pause write precedes local capacity release. Observe that
-            // boundary before reading persisted state, avoiding competing embedded-Dolt
-            // processes every 200ms while the resumed turn is still using the tracker.
-            while (!fixture.ReadRuntimeLog().Contains(releaseMarker, StringComparison.Ordinal))
-            {
-                Assert.False(secondRuntime.HasExited, "The runtime exited before releasing the paused slot.");
-                await Task.Delay(50, recoveryDeadline.Token);
-            }
+            // Await this already-requested drain before tracker inspection/teardown.
+            // This settles the slot's guarded writes without competing tracker polls
+            // or a second teardown signal that would force-stop a draining owner.
+            await secondRuntime.WaitAsync(TimeSpan.FromMinutes(2), recoveryDeadline.Token);
             Assert.Contains(releaseMarker,
                 fixture.ReadRuntimeLog(), StringComparison.Ordinal);
             var safelyPaused = await fixture.ReadBeadAsync(fixture.ParentlessTaskId, recoveryDeadline.Token);
