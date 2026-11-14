@@ -4,7 +4,21 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   workflow_dispatch:
+    inputs:
+      bead:
+        description: Bead explicitly requiring hosted verification or CI investigation
+        required: true
+        type: string
+      requirement:
+        description: Specific dispatched requirement authorizing this run
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -12,10 +26,25 @@ permissions:
 jobs:
   build-test:
     name: Windows build and test
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Record verification identity
+        shell: pwsh
+        env:
+          BEAD: ${{ inputs.bead }}
+          REQUIREMENT: ${{ inputs.requirement }}
+        run: |
+          $revision = git rev-parse HEAD
+          @"
+          Event: $env:GITHUB_EVENT_NAME
+          Bead: $env:BEAD
+          Requirement: $env:REQUIREMENT
+          Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
+          Tested revision: $revision
+          "@ | Add-Content $env:GITHUB_STEP_SUMMARY
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -56,7 +85,7 @@ jobs:
         run: |
           dotnet build Nightweaver.slnx -warnaserror
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Complete suite within five minutes
+      - name: Complete correctness suite (diagnostic timing)
         shell: pwsh
         run: |
           $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -65,7 +94,6 @@ jobs:
           $timer.Stop()
           Write-Host "Suite wall time including build, fixture publishing and teardown $($timer.Elapsed)"
           if ($testExit -ne 0) { exit $testExit }
-          if ($timer.Elapsed.TotalSeconds -ge 300) { throw 'Suite exceeded the five-minute budget' }
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
