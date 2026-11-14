@@ -189,13 +189,12 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
 
     private async Task CheckAuthorityAsync(AgentStageSession session, PlanningApproval approval, CancellationToken token)
     {
-        var parent = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
+        var observation = await evidence.ObserveAsync(session, token);
+        var parent = observation.Product;
         if (BeadWorkflowState.Parse(parent) != session.InitialState || parent.Status != "in_progress"
             || parent.Assignee != session.InitialAssignee || string.IsNullOrWhiteSpace(parent.Assignee))
             throw Refuse("Product workflow, pause or ownership changed during publication.");
-        var grounding = await evidence.CaptureAsync(session, token);
-        if (!PlanningEvidence.ApprovalStillCurrent(approval, grounding,
-            await reader.ReadCommentsAsync(session.Repository, session.BeadId, token)))
+        if (!PlanningEvidence.ApprovalStillCurrent(approval, observation.Grounding, observation.Comments))
             throw Refuse("Approved content or grounding changed; preserve tasks for Challenger revalidation and human-guided replanning.");
     }
 

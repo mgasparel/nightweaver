@@ -1,10 +1,10 @@
 # Test suite
 
-Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection. The current retained suite discovers 903 tests.
+Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection. The current retained suite discovers 906 tests.
 
 ```powershell
 $timer = [Diagnostics.Stopwatch]::StartNew()
-dotnet test --solution Nightweaver.slnx --minimum-expected-tests 903 --report-xunit-xml --report-xunit-xml-filename timing.xml --show-slowest-tests 20
+dotnet test --solution Nightweaver.slnx --minimum-expected-tests 906 --report-xunit-xml --report-xunit-xml-filename timing.xml --show-slowest-tests 20
 $testExit = $LASTEXITCODE
 $timer.Stop()
 Write-Host "Suite wall time (build, fixture publishing, tests, teardown): $($timer.Elapsed)"
@@ -40,4 +40,6 @@ The ns-47f.2 CI repair refreshes collection weights from run 43509330048 while r
 The second-signal restart smoke proves startup recovery with a new live Agent and retained dirty worktree, then requests graceful drain before releasing that Agent. This isolates its final pause/claim handoff from background discovery against embedded Dolt. It still verifies both original console signals, native process termination, recovered runtime/Agent identity, exact branch and sentinel preservation, the guarded pause, and the untouched foreign claim. Failed slot release fails immediately rather than consuming the recovery polling deadline. CI retains failed manual Delivery fixture roots alongside console artifacts for diagnosis. No production timeout or suite parallelism changes are involved.
 Graph publication adds fast fault-injection cases at every create/link/release boundary, failed and lost write responses, conflicting or foreign content, immutable executing graphs and Resume-driven Challenger revalidation. Discovery attention preserves completed and foreign-owned tasks and does not change claims or repair counters. The existing native Planning smoke now publishes a two-task graph, verifies native dependency blocking, then drives the first task through Delivery. Six-thread scheduling and all retained cases remain unchanged.
 
-The ns-47f.3 hosted runtime repair refreshes collection weights from Windows CI run 43529751486. The expanded native Planning publication-to-Delivery smoke measured 149.822 seconds while its old weight was 31.025, leaving it late in the schedule. It now starts with the longest collections. All 867 cases, fixture isolation and the six-thread cap remain intact; CI also requires the current positive minimum of 867 tests. Weight refreshes only change collection start order and must still pass the complete timed suite; replaying historical durations is diagnostic evidence, not runtime acceptance.
+The ns-47f.3 hosted runtime repair refreshes collection weights from Windows CI run 43529751486. The expanded native Planning publication-to-Delivery smoke measured 149.822 seconds while its old weight was 31.025, leaving it late in the schedule. It now starts with the longest collections. All 867 cases, fixture isolation and the six-thread cap remain intact; CI requires the current positive minimum of 870 tests after the three follow-up authority regressions. Weight refreshes only change collection start order and must still pass the complete timed suite; replaying historical durations is diagnostic evidence, not runtime acceptance.
+
+The follow-up runtime repair shares one fresh Product/discussion/grounding observation per publication authority check, removing duplicate bd reads without caching across mutations. Tracker observations follow Git grounding reads so ownership, status and pauses changed during grounding stop the next write. Three cheap regressions cover these changes (870 total); the original 867 cases remain. The initial weight-only repair passed locally but still exceeded hosted runtime and encountered a restart-smoke timeout, so local timing and historical replays alone did not establish hosted acceptance.

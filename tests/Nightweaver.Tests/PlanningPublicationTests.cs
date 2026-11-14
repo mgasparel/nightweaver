@@ -10,6 +10,29 @@ namespace Nightweaver.Tests;
 public sealed class PlanningPublicationTests
 {
     [Theory]
+    [InlineData("owner")]
+    [InlineData("pause")]
+    [InlineData("status")]
+    public async Task AuthorityChangesDuringGroundingStopBeforeTheNextTaskWrite(string change)
+    {
+        using var fixture = new Fixture();
+        fixture.BeforeGitRead = () =>
+        {
+            if (fixture.CreateCount != 1) return;
+            fixture.BeforeGitRead = null;
+            var product = fixture.Rows["product"];
+            if (change == "owner") product["assignee"] = "human";
+            else if (change == "pause") product["labels"]!.AsArray().Add("needs-human");
+            else product["status"] = "closed";
+        };
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+        Assert.Equal(1, fixture.CreateCount);
+        Assert.Equal(1, fixture.WriteCount);
+        Assert.All(fixture.Tasks, task => Assert.Contains("plan-unpublished", task.Labels));
+        Assert.DoesNotContain("planned", fixture.Parent.Labels);
+    }
+
+    [Theory]
     [InlineData(1)]
     [InlineData(2)]
     [InlineData(3)]
@@ -314,6 +337,7 @@ public sealed class PlanningPublicationTests
 
     private sealed class Fixture : IDisposable
     {
+        internal Action? BeforeGitRead { get; set; }
         private readonly TempDirectory temp = new();
         internal Dictionary<string, JsonObject> Rows { get; } = new(StringComparer.Ordinal);
         internal List<BeadDependency> Edges { get; } = [];
@@ -394,7 +418,11 @@ public sealed class PlanningPublicationTests
                 WriteCount++;
                 return Task.FromResult(new ProcessResult(1, "", "Write failed before commit"));
             }
-            if (request.FileName == "git") output = args.Contains("status") ? "" : new string('a', 40);
+            if (request.FileName == "git")
+            {
+                BeforeGitRead?.Invoke();
+                output = args.Contains("status") ? "" : new string('a', 40);
+            }
             else if (args.Contains("comments"))
             {
                 if (args.Contains("add")) { AddComment(args[^1]); output = ""; }
