@@ -70,6 +70,6 @@ internal sealed partial class TrackerBridge
                 throw new AttentionActionException(409, "Bead changed", "Planning readiness could not be verified. Refresh the workspace.");
             return new(beadId, "ready-for-planning", true, false, true);
         }
-        finally { operationGate.Release(); }
+        finally { operationGate.Release(); ObservationRequested?.Invoke(); }
     }
 }

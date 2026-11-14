@@ -5,4 +5,7 @@ internal sealed record ProcessRequest(
     IReadOnlyList<string> Arguments,
     string WorkingDirectory,
     IReadOnlyDictionary<string, string?> Environment,
-    TimeSpan Timeout);
+    TimeSpan Timeout)
+{
+    internal int? MaximumOutputBytes { get; init; }
+}

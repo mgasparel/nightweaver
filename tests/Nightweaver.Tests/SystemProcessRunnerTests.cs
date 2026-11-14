@@ -36,6 +36,18 @@ public sealed class SystemProcessRunnerTests
     }
 
     [Fact]
+    public async Task OutputLimitKillsAndSettlesBeforeReturningAnUnusablePrefix()
+    {
+        using var temp = new TempDirectory();
+        var request = Request("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+            "[Console]::Out.Write('x' * 1100000); [Console]::Error.Write('y' * 1100000); Start-Sleep -Seconds 30"],
+            temp.Path, timeout: TimeSpan.FromSeconds(10)) with { MaximumOutputBytes = 2048 };
+        var exception = await Assert.ThrowsAsync<ToolExecutionException>(() => runner.RunAsync(request, TestContext.Current.CancellationToken));
+        Assert.Contains("exceeded read limit", exception.Message, StringComparison.Ordinal);
+        Assert.Null(exception.StandardError);
+    }
+
+    [Fact]
     public async Task ProcessTimeoutKillsTheProcessTree()
     {
         using var temp = new TempDirectory();

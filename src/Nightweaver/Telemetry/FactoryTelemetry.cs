@@ -419,7 +419,7 @@ internal sealed record FactoryTelemetryReadResult(
     string? Reason,
     FactoryTelemetrySnapshot? Snapshot);
 
-internal sealed class FactoryTelemetryReader(HostPaths paths, ProjectConfig project)
+internal sealed class FactoryTelemetryReader(HostPaths paths, ProjectConfig project, TimeProvider? timeProvider = null)
 {
     private const int MaximumSnapshotBytes = 1024 * 1024;
 
@@ -451,7 +451,7 @@ internal sealed class FactoryTelemetryReader(HostPaths paths, ProjectConfig proj
                 return new(FactoryTelemetryAvailability.Unavailable, "invalid-or-mismatched", null);
             if (snapshot.RuntimeStatus == "stopped")
                 return new(FactoryTelemetryAvailability.Stopped, null, snapshot);
-            var age = DateTimeOffset.UtcNow - snapshot.ObservedAt;
+            var age = (timeProvider ?? TimeProvider.System).GetUtcNow() - snapshot.ObservedAt;
             if (age < TimeSpan.FromMinutes(-1) || age > TimeSpan.FromSeconds(10))
                 return new(FactoryTelemetryAvailability.Stale, "heartbeat-expired", snapshot);
             return new(FactoryTelemetryAvailability.Live, null, snapshot);

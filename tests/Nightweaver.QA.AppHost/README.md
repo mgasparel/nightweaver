@@ -2,6 +2,24 @@
 
 ## Observation cost investigation
 
+For the implemented shared observer, install the Playwright tools below and start
+a fresh exact isolated AppHost. After `aspire wait web`, use `aspire describe
+--format Json --non-interactive --apphost ./Nightweaver.QA.AppHost.csproj` to set
+`NIGHTWEAVER_QA_URL` from the direct `web` HTTP endpoint and
+`NIGHTWEAVER_QA_CONFIG` from that resource's `Nightweaver__ConfigPath` environment
+value. From this directory run `node operational-observer-qa.mjs <evidence.json>`
+and stop that exact AppHost in `finally`.
+
+The probe validates disposable fixture identity before importing 50/2,000 Beads,
+then observes external comments, dependencies, readiness and catch-up checkpoint
+changes through the real versioned resources in a browser. It also measures
+native runtime completion visibility. Its recorded CLI commands are external
+fixture preparation/mutations, not observer command counts; the native
+`OperationalObservationSourceTests` smoke records collector commands and cost.
+See [observer acceptance](../../docs/acceptance/operational-observer.md) for actual
+timings and target limitations. This does not test the SSE/browser coordinator
+owned by ns-mbd.3.
+
 `observation-cost.py` is a disposable native CLI/HTTP probe for ns-mbd.8, not a
 production observer or a UI mutation script. Requires Python 3. Start a **fresh**
 isolated exact AppHost as below, wait for `web`, then from the repository root run:

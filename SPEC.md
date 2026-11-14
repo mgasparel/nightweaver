@@ -489,6 +489,14 @@ Each **Project** configuration binds one **Target Repository** to the **Orchestr
 
 ---
 
+### 7.3 Shared operational observations
+
+The Web host offers a Project-bound, versioned read model beside the legacy console APIs. One host-owned collector shares tracker inventory and runtime/file observations across subscribers. Every resource carries host epoch, decimal revision, observation/attempt times and independent source health. Cached data is display evidence; guarded commands continue to reread authoritative tracker state and expected workflow identities. External tracker changes are reconciled periodically, including comments, relations and native readiness. Failed observations retain last good data with explicit stale health; initial unavailable is distinct from an empty result. Tracker/runtime revisions do not establish a cross-command transaction.
+
+The wire schema and finite budgets are specified in [operational observations v1.1](docs/design/operational-observations-v1.md), with implementation ownership, scheduling and lifecycle documented in [shared operational observations](docs/design/operational-observer.md). Standalone and background-launched Web instances use the same registration and shutdown path. SSE transport and browser synchronization are separate consumers of the shared cache.
+
+---
+
 ## 8. Out of Scope
 
 - **Multi-Project Management UI**: A project-agnostic UI for creating/editing **Project** configurations, viewing/interacting with each **Project**'s `bd` tracker, and starting/monitoring/stopping per-**Project** **Orchestrator** processes is deferred to a separate effort.

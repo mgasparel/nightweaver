@@ -9,14 +9,14 @@ internal sealed class BeadWorkspaceEnvironmentObserver(
     ProjectConfig project,
     GitWorktreeReader worktreeReader,
     IProcessRunner processRunner,
-    IBeadWorkspaceRuntimeObserver runtimeObserver)
+    IBeadWorkspaceRuntimeObserver runtimeObserver, TimeProvider? timeProvider = null)
 {
     private const int MaxMarkerBytes = 4096;
 
     internal async Task<BeadWorkspaceEnvironment> ObserveAsync(ValidatedTargetRepository target, string beadId,
         CancellationToken cancellationToken)
     {
-        var observedAt = DateTimeOffset.UtcNow;
+        var observedAt = (timeProvider ?? TimeProvider.System).GetUtcNow();
         var runtime = ObserveRuntime(beadId);
         var root = hostPaths.WorktreesRoot(project.Name);
         var expectedPath = RuntimePaths.Normalize(Path.Combine(root, beadId));
