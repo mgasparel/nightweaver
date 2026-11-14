@@ -1,5 +1,33 @@
 # QA AppHost
 
+## Observation cost investigation
+
+`observation-cost.py` is a disposable native CLI/HTTP probe for ns-mbd.8, not a
+production observer or a UI mutation script. Requires Python 3. Start a **fresh**
+isolated exact AppHost as below, wait for `web`, then from the repository root run:
+
+```powershell
+try {
+    aspire start --isolated --non-interactive --apphost tests/Nightweaver.QA.AppHost/Nightweaver.QA.AppHost.csproj
+    aspire wait web --non-interactive --apphost tests/Nightweaver.QA.AppHost/Nightweaver.QA.AppHost.csproj
+    python tests/Nightweaver.QA.AppHost/observation-cost.py --output docs/design/observation-cost-results.json
+    if ($LASTEXITCODE -ne 0) { throw 'Observation probe failed' }
+} finally {
+    aspire stop --non-interactive --apphost tests/Nightweaver.QA.AppHost/Nightweaver.QA.AppHost.csproj
+}
+```
+
+The probe discovers this exact AppHost's direct HTTP URL and disposable tracker
+through `aspire describe`, validates their fixture identity, scrubs ambient
+tracker routing, then uses public CLI import to seed 50/2,000 Beads. It measures
+three serial collection cycles, all paused histories, selected Workspace reads,
+legacy HTTP projections, and comment/dependency/readiness change visibility
+through a real HTTP response. Output contains no configuration paths or secrets.
+The one-second phase delay and extra legacy HTTP read are deliberate conservative
+costs; this does not claim a production observer, SSE or browser-rendering result.
+No browser UI changed in this investigation. See the
+[v1 contract and measurement interpretation](../../docs/design/operational-observations-v1.md).
+
 ## Studio candidate shell
 
 On a fresh isolated default fixture, use the discovered direct `web` HTTP URL below and run `node studio-qa.mjs` and `node smoke.mjs`. Studio checks candidate routes at `/studio` and `/projects/...`; the root console remains operational. Reference and candidate screenshots at 1440, 375 and 720 CSS pixels are saved under `TestResults/studio`. Checks include direct reload, Back/Forward, URL preferences, legacy Bead translation (including dotted hierarchical IDs reloaded with and without Workspace query state), missing-asset/API 404s, keyboard/focus, unavailable project controls, no mutations and no browser errors. Review the screenshots visually and stop the same exact AppHost afterward.

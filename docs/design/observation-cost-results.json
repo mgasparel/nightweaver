@@ -1,0 +1,5696 @@
+{
+  "schema": "nightweaver-observation-cost-v1",
+  "bdVersion": "bd version 1.3.1 (c1c4b642a: HEAD@c1c4b642ac1c)\n",
+  "fixtureSizes": [
+    {
+      "size": 50,
+      "actualPaused": 8,
+      "cycles": [
+        {
+          "ms": 4692.55,
+          "commandCount": 16
+        },
+        {
+          "ms": 4452.31,
+          "commandCount": 16
+        },
+        {
+          "ms": 4454.09,
+          "commandCount": 16
+        }
+      ],
+      "legacyHttpMs": {
+        "attention": 2866.91,
+        "ready": 739.54,
+        "blocked": 689.34,
+        "workspace": 2561.7,
+        "factory": 19.86
+      },
+      "changes": [
+        {
+          "kind": "comment",
+          "inventoryChanged": true,
+          "selectedUpdatedAtChanged": false,
+          "changedSelectedFields": [
+            "comment_count"
+          ],
+          "mutationMs": 306.74,
+          "cycleMs": 4693.2,
+          "collectionEndToEndMs": 6000.3,
+          "httpMs": 2217.77,
+          "endToEndMs": 8218.12,
+          "committedToHttpMs": 7911.38
+        },
+        {
+          "kind": "dependency",
+          "inventoryChanged": true,
+          "selectedUpdatedAtChanged": false,
+          "changedSelectedFields": [
+            "dependency_count"
+          ],
+          "mutationMs": 446.51,
+          "cycleMs": 4684.84,
+          "collectionEndToEndMs": 6131.91,
+          "httpMs": 682.9,
+          "endToEndMs": 6814.88,
+          "committedToHttpMs": 6368.37
+        },
+        {
+          "kind": "readiness",
+          "inventoryChanged": true,
+          "selectedUpdatedAtChanged": false,
+          "changedSelectedFields": [],
+          "mutationMs": 623.74,
+          "cycleMs": 4614.44,
+          "collectionEndToEndMs": 6238.46,
+          "httpMs": 1121.82,
+          "endToEndMs": 7360.37,
+          "committedToHttpMs": 6736.63
+        }
+      ],
+      "seededPaused": 4
+    },
+    {
+      "size": 2000,
+      "actualPaused": 40,
+      "cycles": [
+        {
+          "ms": 15167.19,
+          "commandCount": 48
+        },
+        {
+          "ms": 14874.99,
+          "commandCount": 48
+        },
+        {
+          "ms": 16308.75,
+          "commandCount": 48
+        }
+      ],
+      "legacyHttpMs": {
+        "attention": 12711.81,
+        "ready": 1600.47,
+        "blocked": 975.8,
+        "workspace": 2795.24,
+        "factory": 3.36
+      },
+      "changes": [
+        {
+          "kind": "comment",
+          "inventoryChanged": true,
+          "selectedUpdatedAtChanged": false,
+          "changedSelectedFields": [
+            "comment_count"
+          ],
+          "mutationMs": 399.15,
+          "cycleMs": 15490.81,
+          "collectionEndToEndMs": 16890.34,
+          "httpMs": 2696.81,
+          "endToEndMs": 19587.89,
+          "committedToHttpMs": 19188.74
+        },
+        {
+          "kind": "dependency",
+          "inventoryChanged": true,
+          "selectedUpdatedAtChanged": false,
+          "changedSelectedFields": [
+            "dependency_count"
+          ],
+          "mutationMs": 483.91,
+          "cycleMs": 15575.88,
+          "collectionEndToEndMs": 17063.36,
+          "httpMs": 1248.43,
+          "endToEndMs": 18312.39,
+          "committedToHttpMs": 17828.48
+        },
+        {
+          "kind": "readiness",
+          "inventoryChanged": true,
+          "selectedUpdatedAtChanged": false,
+          "changedSelectedFields": [],
+          "mutationMs": 498.03,
+          "cycleMs": 15526.08,
+          "collectionEndToEndMs": 17027.02,
+          "httpMs": 1174.91,
+          "endToEndMs": 18203.19,
+          "committedToHttpMs": 17705.15
+        }
+      ],
+      "seededPaused": 32
+    }
+  ],
+  "commands": [
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "version"
+      ],
+      "ms": 130.73,
+      "bytes": 48
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 505.94,
+      "bytes": 4367
+    },
+    {
+      "args": [
+        "--sandbox",
+        "import",
+        "H:\\Nightweaver\\prod\\tmp\\nightshift\\ns-mbd.8\\20261114T1611586347638Z-implementer\\nightweaver-qa-519d500444dc4403a26c724f825fabd6\\observation-50.jsonl"
+      ],
+      "ms": 468.36,
+      "bytes": 0
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 355.99,
+      "bytes": 58293
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00008",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 330.1,
+      "bytes": 58
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00008",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 482.46,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00009",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 331.91,
+      "bytes": 58
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00009",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 330.52,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00010",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 508.31,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00010",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 706.44,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00011",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 336.76,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00011",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 311.53,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 323.74,
+      "bytes": 58465
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 318.41,
+      "bytes": 58465
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "ready",
+        "--limit",
+        "0",
+        "--json"
+      ],
+      "ms": 227.33,
+      "bytes": 57822
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "blocked",
+        "--json"
+      ],
+      "ms": 313.3,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-5l4",
+        "--json"
+      ],
+      "ms": 211.61,
+      "bytes": 619
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-nmd",
+        "--json"
+      ],
+      "ms": 217.53,
+      "bytes": 591
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-8nl",
+        "--json"
+      ],
+      "ms": 222.59,
+      "bytes": 217
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-l22",
+        "--json"
+      ],
+      "ms": 348.96,
+      "bytes": 462
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00008",
+        "--json"
+      ],
+      "ms": 223.97,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00009",
+        "--json"
+      ],
+      "ms": 349.86,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00010",
+        "--json"
+      ],
+      "ms": 506.98,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00011",
+        "--json"
+      ],
+      "ms": 472.63,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "show",
+        "qa-cost00049",
+        "--json"
+      ],
+      "ms": 297.63,
+      "bytes": 1327
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost00049",
+        "--direction",
+        "up",
+        "--json"
+      ],
+      "ms": 219.96,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost00049",
+        "--direction",
+        "down",
+        "--json"
+      ],
+      "ms": 228.72,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00049",
+        "--json"
+      ],
+      "ms": 208.94,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 323.15,
+      "bytes": 58465
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 325.08,
+      "bytes": 58465
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "ready",
+        "--limit",
+        "0",
+        "--json"
+      ],
+      "ms": 364.45,
+      "bytes": 57822
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "blocked",
+        "--json"
+      ],
+      "ms": 171.78,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-5l4",
+        "--json"
+      ],
+      "ms": 202.42,
+      "bytes": 619
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-nmd",
+        "--json"
+      ],
+      "ms": 211.4,
+      "bytes": 591
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-8nl",
+        "--json"
+      ],
+      "ms": 350.95,
+      "bytes": 217
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-l22",
+        "--json"
+      ],
+      "ms": 207.74,
+      "bytes": 462
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00008",
+        "--json"
+      ],
+      "ms": 356.99,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00009",
+        "--json"
+      ],
+      "ms": 360.17,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00010",
+        "--json"
+      ],
+      "ms": 400.07,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00011",
+        "--json"
+      ],
+      "ms": 202.89,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "show",
+        "qa-cost00049",
+        "--json"
+      ],
+      "ms": 299.41,
+      "bytes": 1327
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost00049",
+        "--direction",
+        "up",
+        "--json"
+      ],
+      "ms": 215.71,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost00049",
+        "--direction",
+        "down",
+        "--json"
+      ],
+      "ms": 231.76,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00049",
+        "--json"
+      ],
+      "ms": 209.99,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 340.48,
+      "bytes": 58465
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 461.97,
+      "bytes": 58465
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "ready",
+        "--limit",
+        "0",
+        "--json"
+      ],
+      "ms": 225.91,
+      "bytes": 57822
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "blocked",
+        "--json"
+      ],
+      "ms": 174.83,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-5l4",
+        "--json"
+      ],
+      "ms": 205.87,
+      "bytes": 619
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-nmd",
+        "--json"
+      ],
+      "ms": 357.29,
+      "bytes": 591
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-8nl",
+        "--json"
+      ],
+      "ms": 209.11,
+      "bytes": 217
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-l22",
+        "--json"
+      ],
+      "ms": 213.71,
+      "bytes": 462
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00008",
+        "--json"
+      ],
+      "ms": 552.74,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00009",
+        "--json"
+      ],
+      "ms": 209.41,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00010",
+        "--json"
+      ],
+      "ms": 211.77,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00011",
+        "--json"
+      ],
+      "ms": 207.57,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "show",
+        "qa-cost00049",
+        "--json"
+      ],
+      "ms": 294.38,
+      "bytes": 1327
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost00049",
+        "--direction",
+        "up",
+        "--json"
+      ],
+      "ms": 208.22,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost00049",
+        "--direction",
+        "down",
+        "--json"
+      ],
+      "ms": 237.57,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00049",
+        "--json"
+      ],
+      "ms": 214.52,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 468.18,
+      "bytes": 58465
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 322.36,
+      "bytes": 58465
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00049",
+        "comments-only size=50"
+      ],
+      "ms": 306.72,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 314.34,
+      "bytes": 58465
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "ready",
+        "--limit",
+        "0",
+        "--json"
+      ],
+      "ms": 224.79,
+      "bytes": 57822
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "blocked",
+        "--json"
+      ],
+      "ms": 170.06,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-5l4",
+        "--json"
+      ],
+      "ms": 200.79,
+      "bytes": 619
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-nmd",
+        "--json"
+      ],
+      "ms": 354.88,
+      "bytes": 591
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-8nl",
+        "--json"
+      ],
+      "ms": 224.93,
+      "bytes": 217
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-l22",
+        "--json"
+      ],
+      "ms": 357.58,
+      "bytes": 462
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00008",
+        "--json"
+      ],
+      "ms": 211.96,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00009",
+        "--json"
+      ],
+      "ms": 343.14,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00010",
+        "--json"
+      ],
+      "ms": 497.04,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00011",
+        "--json"
+      ],
+      "ms": 248.94,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "show",
+        "qa-cost00049",
+        "--json"
+      ],
+      "ms": 318.83,
+      "bytes": 1357
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost00049",
+        "--direction",
+        "up",
+        "--json"
+      ],
+      "ms": 219.63,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost00049",
+        "--direction",
+        "down",
+        "--json"
+      ],
+      "ms": 256.91,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00049",
+        "--json"
+      ],
+      "ms": 241.99,
+      "bytes": 197
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 506.5,
+      "bytes": 58465
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 820.23,
+      "bytes": 58465
+    },
+    {
+      "args": [
+        "--sandbox",
+        "dep",
+        "add",
+        "qa-cost00049",
+        "qa-cost00048"
+      ],
+      "ms": 446.49,
+      "bytes": 118
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 318.7,
+      "bytes": 58717
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "ready",
+        "--limit",
+        "0",
+        "--json"
+      ],
+      "ms": 223.29,
+      "bytes": 56538
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "blocked",
+        "--json"
+      ],
+      "ms": 180.27,
+      "bytes": 1285
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-5l4",
+        "--json"
+      ],
+      "ms": 206.93,
+      "bytes": 619
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-nmd",
+        "--json"
+      ],
+      "ms": 213.75,
+      "bytes": 591
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-8nl",
+        "--json"
+      ],
+      "ms": 355.31,
+      "bytes": 217
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-l22",
+        "--json"
+      ],
+      "ms": 212.63,
+      "bytes": 462
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00008",
+        "--json"
+      ],
+      "ms": 225.15,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00009",
+        "--json"
+      ],
+      "ms": 352.64,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00010",
+        "--json"
+      ],
+      "ms": 206.42,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00011",
+        "--json"
+      ],
+      "ms": 359.85,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "show",
+        "qa-cost00049",
+        "--json"
+      ],
+      "ms": 471.16,
+      "bytes": 2669
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost00049",
+        "--direction",
+        "up",
+        "--json"
+      ],
+      "ms": 521.29,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost00049",
+        "--direction",
+        "down",
+        "--json"
+      ],
+      "ms": 250.36,
+      "bytes": 1243
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00049",
+        "--json"
+      ],
+      "ms": 223.87,
+      "bytes": 197
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 362.12,
+      "bytes": 58717
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 386.65,
+      "bytes": 58717
+    },
+    {
+      "args": [
+        "--sandbox",
+        "close",
+        "qa-cost00048"
+      ],
+      "ms": 623.72,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 339.95,
+      "bytes": 58790
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "ready",
+        "--limit",
+        "0",
+        "--json"
+      ],
+      "ms": 367.88,
+      "bytes": 56790
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "blocked",
+        "--json"
+      ],
+      "ms": 169.26,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-5l4",
+        "--json"
+      ],
+      "ms": 352.55,
+      "bytes": 619
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-nmd",
+        "--json"
+      ],
+      "ms": 353.31,
+      "bytes": 591
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-8nl",
+        "--json"
+      ],
+      "ms": 494.21,
+      "bytes": 217
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-l22",
+        "--json"
+      ],
+      "ms": 222.87,
+      "bytes": 462
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00008",
+        "--json"
+      ],
+      "ms": 216.49,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00009",
+        "--json"
+      ],
+      "ms": 205.16,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00010",
+        "--json"
+      ],
+      "ms": 207.79,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00011",
+        "--json"
+      ],
+      "ms": 210.05,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "show",
+        "qa-cost00049",
+        "--json"
+      ],
+      "ms": 304.18,
+      "bytes": 2750
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost00049",
+        "--direction",
+        "up",
+        "--json"
+      ],
+      "ms": 213.98,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost00049",
+        "--direction",
+        "down",
+        "--json"
+      ],
+      "ms": 225.12,
+      "bytes": 1316
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00049",
+        "--json"
+      ],
+      "ms": 212.52,
+      "bytes": 197
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 518.01,
+      "bytes": 58790
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 769.65,
+      "bytes": 58790
+    },
+    {
+      "args": [
+        "--sandbox",
+        "import",
+        "H:\\Nightweaver\\prod\\tmp\\nightshift\\ns-mbd.8\\20261114T1611586347638Z-implementer\\nightweaver-qa-519d500444dc4403a26c724f825fabd6\\observation-2000.jsonl"
+      ],
+      "ms": 8602.3,
+      "bytes": 0
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 440.41,
+      "bytes": 2565490
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00050",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 494.18,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00050",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 545.47,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00051",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 668.96,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00051",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 370.21,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00052",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 366.0,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00052",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 390.92,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00053",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 504.41,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00053",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 397.35,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00054",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 392.3,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00054",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 405.88,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00055",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 548.34,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00055",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 362.92,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00056",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 349.19,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00056",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 483.12,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00057",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 342.16,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00057",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 489.48,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00058",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 422.48,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00058",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 338.83,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00059",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 339.8,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00059",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 346.79,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00060",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 359.29,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00060",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 352.43,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00061",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 338.56,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00061",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 348.9,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00062",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 373.98,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00062",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 342.67,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00063",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 357.34,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00063",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 484.21,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00064",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 367.82,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00064",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 496.59,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00065",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 787.95,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00065",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 334.74,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00066",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 353.15,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00066",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 339.26,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00067",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 344.88,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00067",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 341.05,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00068",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 368.06,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00068",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 341.91,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00069",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 498.96,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00069",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 345.22,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00070",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 355.62,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00070",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 486.32,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00071",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 349.96,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00071",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 485.18,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00072",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 603.5,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00072",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 351.97,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00073",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 348.92,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00073",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 354.24,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00074",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 343.05,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00074",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 335.28,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00075",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 371.34,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00075",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 495.83,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00076",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 356.17,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00076",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 351.07,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00077",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 354.41,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00077",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 500.42,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00078",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 500.88,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00078",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 788.46,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00079",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 348.94,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00079",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 425.98,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00080",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 346.73,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00080",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 348.5,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--sandbox",
+        "update",
+        "qa-cost00081",
+        "--add-label",
+        "needs-human"
+      ],
+      "ms": 366.64,
+      "bytes": 59
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost00081",
+        "Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. Disposable pause question. "
+      ],
+      "ms": 359.58,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 592.28,
+      "bytes": 2566866
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 442.26,
+      "bytes": 2566866
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "ready",
+        "--limit",
+        "0",
+        "--json"
+      ],
+      "ms": 304.57,
+      "bytes": 2564866
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "blocked",
+        "--json"
+      ],
+      "ms": 332.79,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-5l4",
+        "--json"
+      ],
+      "ms": 237.48,
+      "bytes": 619
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-nmd",
+        "--json"
+      ],
+      "ms": 389.43,
+      "bytes": 591
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-8nl",
+        "--json"
+      ],
+      "ms": 519.41,
+      "bytes": 217
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-l22",
+        "--json"
+      ],
+      "ms": 244.85,
+      "bytes": 462
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00008",
+        "--json"
+      ],
+      "ms": 253.26,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00009",
+        "--json"
+      ],
+      "ms": 243.86,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00010",
+        "--json"
+      ],
+      "ms": 239.05,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00011",
+        "--json"
+      ],
+      "ms": 241.48,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00050",
+        "--json"
+      ],
+      "ms": 269.72,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00051",
+        "--json"
+      ],
+      "ms": 447.65,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00052",
+        "--json"
+      ],
+      "ms": 262.66,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00053",
+        "--json"
+      ],
+      "ms": 266.48,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00054",
+        "--json"
+      ],
+      "ms": 284.88,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00055",
+        "--json"
+      ],
+      "ms": 273.63,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00056",
+        "--json"
+      ],
+      "ms": 418.35,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00057",
+        "--json"
+      ],
+      "ms": 278.82,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00058",
+        "--json"
+      ],
+      "ms": 264.05,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00059",
+        "--json"
+      ],
+      "ms": 307.22,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00060",
+        "--json"
+      ],
+      "ms": 471.5,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00061",
+        "--json"
+      ],
+      "ms": 593.44,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00062",
+        "--json"
+      ],
+      "ms": 430.83,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00063",
+        "--json"
+      ],
+      "ms": 266.7,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00064",
+        "--json"
+      ],
+      "ms": 278.94,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00065",
+        "--json"
+      ],
+      "ms": 256.96,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00066",
+        "--json"
+      ],
+      "ms": 239.68,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00067",
+        "--json"
+      ],
+      "ms": 241.57,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00068",
+        "--json"
+      ],
+      "ms": 253.88,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00069",
+        "--json"
+      ],
+      "ms": 249.89,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00070",
+        "--json"
+      ],
+      "ms": 401.56,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00071",
+        "--json"
+      ],
+      "ms": 249.76,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00072",
+        "--json"
+      ],
+      "ms": 265.77,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00073",
+        "--json"
+      ],
+      "ms": 388.85,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00074",
+        "--json"
+      ],
+      "ms": 242.86,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00075",
+        "--json"
+      ],
+      "ms": 236.75,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00076",
+        "--json"
+      ],
+      "ms": 407.7,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00077",
+        "--json"
+      ],
+      "ms": 444.09,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00078",
+        "--json"
+      ],
+      "ms": 238.97,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00079",
+        "--json"
+      ],
+      "ms": 252.31,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00080",
+        "--json"
+      ],
+      "ms": 246.23,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00081",
+        "--json"
+      ],
+      "ms": 245.22,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "show",
+        "qa-cost01999",
+        "--json"
+      ],
+      "ms": 370.28,
+      "bytes": 1328
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost01999",
+        "--direction",
+        "up",
+        "--json"
+      ],
+      "ms": 251.41,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost01999",
+        "--direction",
+        "down",
+        "--json"
+      ],
+      "ms": 422.79,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost01999",
+        "--json"
+      ],
+      "ms": 254.76,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 425.65,
+      "bytes": 2566866
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 427.78,
+      "bytes": 2566866
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "ready",
+        "--limit",
+        "0",
+        "--json"
+      ],
+      "ms": 439.8,
+      "bytes": 2564866
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "blocked",
+        "--json"
+      ],
+      "ms": 597.76,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-5l4",
+        "--json"
+      ],
+      "ms": 240.38,
+      "bytes": 619
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-nmd",
+        "--json"
+      ],
+      "ms": 233.14,
+      "bytes": 591
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-8nl",
+        "--json"
+      ],
+      "ms": 233.43,
+      "bytes": 217
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-l22",
+        "--json"
+      ],
+      "ms": 236.32,
+      "bytes": 462
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00008",
+        "--json"
+      ],
+      "ms": 247.4,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00009",
+        "--json"
+      ],
+      "ms": 249.27,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00010",
+        "--json"
+      ],
+      "ms": 259.37,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00011",
+        "--json"
+      ],
+      "ms": 249.33,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00050",
+        "--json"
+      ],
+      "ms": 393.64,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00051",
+        "--json"
+      ],
+      "ms": 239.05,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00052",
+        "--json"
+      ],
+      "ms": 246.17,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00053",
+        "--json"
+      ],
+      "ms": 243.11,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00054",
+        "--json"
+      ],
+      "ms": 244.18,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00055",
+        "--json"
+      ],
+      "ms": 474.69,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00056",
+        "--json"
+      ],
+      "ms": 391.04,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00057",
+        "--json"
+      ],
+      "ms": 528.21,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00058",
+        "--json"
+      ],
+      "ms": 238.4,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00059",
+        "--json"
+      ],
+      "ms": 242.97,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00060",
+        "--json"
+      ],
+      "ms": 251.15,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00061",
+        "--json"
+      ],
+      "ms": 237.81,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00062",
+        "--json"
+      ],
+      "ms": 237.11,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00063",
+        "--json"
+      ],
+      "ms": 242.98,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00064",
+        "--json"
+      ],
+      "ms": 241.06,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00065",
+        "--json"
+      ],
+      "ms": 237.94,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00066",
+        "--json"
+      ],
+      "ms": 383.05,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00067",
+        "--json"
+      ],
+      "ms": 237.33,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00068",
+        "--json"
+      ],
+      "ms": 246.28,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00069",
+        "--json"
+      ],
+      "ms": 376.16,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00070",
+        "--json"
+      ],
+      "ms": 244.97,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00071",
+        "--json"
+      ],
+      "ms": 536.68,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00072",
+        "--json"
+      ],
+      "ms": 408.34,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00073",
+        "--json"
+      ],
+      "ms": 254.82,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00074",
+        "--json"
+      ],
+      "ms": 311.22,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00075",
+        "--json"
+      ],
+      "ms": 243.44,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00076",
+        "--json"
+      ],
+      "ms": 246.69,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00077",
+        "--json"
+      ],
+      "ms": 245.14,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00078",
+        "--json"
+      ],
+      "ms": 245.6,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00079",
+        "--json"
+      ],
+      "ms": 231.42,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00080",
+        "--json"
+      ],
+      "ms": 242.69,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00081",
+        "--json"
+      ],
+      "ms": 391.6,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "show",
+        "qa-cost01999",
+        "--json"
+      ],
+      "ms": 360.23,
+      "bytes": 1328
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost01999",
+        "--direction",
+        "up",
+        "--json"
+      ],
+      "ms": 324.55,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost01999",
+        "--direction",
+        "down",
+        "--json"
+      ],
+      "ms": 411.79,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost01999",
+        "--json"
+      ],
+      "ms": 232.48,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 580.54,
+      "bytes": 2566866
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 529.71,
+      "bytes": 2566866
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "ready",
+        "--limit",
+        "0",
+        "--json"
+      ],
+      "ms": 308.62,
+      "bytes": 2564866
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "blocked",
+        "--json"
+      ],
+      "ms": 188.88,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-5l4",
+        "--json"
+      ],
+      "ms": 237.26,
+      "bytes": 619
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-nmd",
+        "--json"
+      ],
+      "ms": 237.71,
+      "bytes": 591
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-8nl",
+        "--json"
+      ],
+      "ms": 244.34,
+      "bytes": 217
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-l22",
+        "--json"
+      ],
+      "ms": 251.21,
+      "bytes": 462
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00008",
+        "--json"
+      ],
+      "ms": 378.73,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00009",
+        "--json"
+      ],
+      "ms": 237.01,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00010",
+        "--json"
+      ],
+      "ms": 273.57,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00011",
+        "--json"
+      ],
+      "ms": 246.11,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00050",
+        "--json"
+      ],
+      "ms": 257.37,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00051",
+        "--json"
+      ],
+      "ms": 433.09,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00052",
+        "--json"
+      ],
+      "ms": 682.05,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00053",
+        "--json"
+      ],
+      "ms": 440.95,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00054",
+        "--json"
+      ],
+      "ms": 282.97,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00055",
+        "--json"
+      ],
+      "ms": 269.11,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00056",
+        "--json"
+      ],
+      "ms": 461.99,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00057",
+        "--json"
+      ],
+      "ms": 749.98,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00058",
+        "--json"
+      ],
+      "ms": 435.27,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00059",
+        "--json"
+      ],
+      "ms": 309.62,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00060",
+        "--json"
+      ],
+      "ms": 320.83,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00061",
+        "--json"
+      ],
+      "ms": 309.46,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00062",
+        "--json"
+      ],
+      "ms": 285.78,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00063",
+        "--json"
+      ],
+      "ms": 412.39,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00064",
+        "--json"
+      ],
+      "ms": 259.07,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00065",
+        "--json"
+      ],
+      "ms": 274.05,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00066",
+        "--json"
+      ],
+      "ms": 242.17,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00067",
+        "--json"
+      ],
+      "ms": 289.12,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00068",
+        "--json"
+      ],
+      "ms": 339.09,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00069",
+        "--json"
+      ],
+      "ms": 541.03,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00070",
+        "--json"
+      ],
+      "ms": 468.13,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00071",
+        "--json"
+      ],
+      "ms": 236.39,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00072",
+        "--json"
+      ],
+      "ms": 250.17,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00073",
+        "--json"
+      ],
+      "ms": 273.95,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00074",
+        "--json"
+      ],
+      "ms": 244.12,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00075",
+        "--json"
+      ],
+      "ms": 238.93,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00076",
+        "--json"
+      ],
+      "ms": 247.52,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00077",
+        "--json"
+      ],
+      "ms": 229.56,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00078",
+        "--json"
+      ],
+      "ms": 234.5,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00079",
+        "--json"
+      ],
+      "ms": 370.38,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00080",
+        "--json"
+      ],
+      "ms": 236.12,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00081",
+        "--json"
+      ],
+      "ms": 241.33,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "show",
+        "qa-cost01999",
+        "--json"
+      ],
+      "ms": 506.73,
+      "bytes": 1328
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost01999",
+        "--direction",
+        "up",
+        "--json"
+      ],
+      "ms": 255.86,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost01999",
+        "--direction",
+        "down",
+        "--json"
+      ],
+      "ms": 565.21,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost01999",
+        "--json"
+      ],
+      "ms": 535.06,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 430.5,
+      "bytes": 2566866
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 519.81,
+      "bytes": 2566866
+    },
+    {
+      "args": [
+        "--sandbox",
+        "comments",
+        "add",
+        "qa-cost01999",
+        "comments-only size=2000"
+      ],
+      "ms": 399.13,
+      "bytes": 30
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 498.99,
+      "bytes": 2566866
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "ready",
+        "--limit",
+        "0",
+        "--json"
+      ],
+      "ms": 330.58,
+      "bytes": 2564866
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "blocked",
+        "--json"
+      ],
+      "ms": 196.64,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-5l4",
+        "--json"
+      ],
+      "ms": 259.94,
+      "bytes": 619
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-nmd",
+        "--json"
+      ],
+      "ms": 272.99,
+      "bytes": 591
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-8nl",
+        "--json"
+      ],
+      "ms": 375.97,
+      "bytes": 217
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-l22",
+        "--json"
+      ],
+      "ms": 232.85,
+      "bytes": 462
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00008",
+        "--json"
+      ],
+      "ms": 246.38,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00009",
+        "--json"
+      ],
+      "ms": 237.87,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00010",
+        "--json"
+      ],
+      "ms": 234.6,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00011",
+        "--json"
+      ],
+      "ms": 384.54,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00050",
+        "--json"
+      ],
+      "ms": 253.58,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00051",
+        "--json"
+      ],
+      "ms": 1063.72,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00052",
+        "--json"
+      ],
+      "ms": 247.74,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00053",
+        "--json"
+      ],
+      "ms": 250.76,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00054",
+        "--json"
+      ],
+      "ms": 250.5,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00055",
+        "--json"
+      ],
+      "ms": 250.94,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00056",
+        "--json"
+      ],
+      "ms": 247.94,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00057",
+        "--json"
+      ],
+      "ms": 245.35,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00058",
+        "--json"
+      ],
+      "ms": 248.65,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00059",
+        "--json"
+      ],
+      "ms": 254.08,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00060",
+        "--json"
+      ],
+      "ms": 381.83,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00061",
+        "--json"
+      ],
+      "ms": 234.8,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00062",
+        "--json"
+      ],
+      "ms": 246.51,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00063",
+        "--json"
+      ],
+      "ms": 258.73,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00064",
+        "--json"
+      ],
+      "ms": 374.58,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00065",
+        "--json"
+      ],
+      "ms": 243.55,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00066",
+        "--json"
+      ],
+      "ms": 530.26,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00067",
+        "--json"
+      ],
+      "ms": 530.47,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00068",
+        "--json"
+      ],
+      "ms": 252.47,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00069",
+        "--json"
+      ],
+      "ms": 239.99,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00070",
+        "--json"
+      ],
+      "ms": 240.71,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00071",
+        "--json"
+      ],
+      "ms": 246.47,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00072",
+        "--json"
+      ],
+      "ms": 244.19,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00073",
+        "--json"
+      ],
+      "ms": 249.34,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00074",
+        "--json"
+      ],
+      "ms": 232.78,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00075",
+        "--json"
+      ],
+      "ms": 244.2,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00076",
+        "--json"
+      ],
+      "ms": 400.51,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00077",
+        "--json"
+      ],
+      "ms": 239.12,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00078",
+        "--json"
+      ],
+      "ms": 237.21,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00079",
+        "--json"
+      ],
+      "ms": 407.27,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00080",
+        "--json"
+      ],
+      "ms": 272.55,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00081",
+        "--json"
+      ],
+      "ms": 398.65,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "show",
+        "qa-cost01999",
+        "--json"
+      ],
+      "ms": 846.75,
+      "bytes": 1358
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost01999",
+        "--direction",
+        "up",
+        "--json"
+      ],
+      "ms": 266.63,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost01999",
+        "--direction",
+        "down",
+        "--json"
+      ],
+      "ms": 299.33,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost01999",
+        "--json"
+      ],
+      "ms": 262.88,
+      "bytes": 199
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 505.17,
+      "bytes": 2566866
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 801.38,
+      "bytes": 2566866
+    },
+    {
+      "args": [
+        "--sandbox",
+        "dep",
+        "add",
+        "qa-cost01999",
+        "qa-cost01998"
+      ],
+      "ms": 483.9,
+      "bytes": 122
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 482.81,
+      "bytes": 2567118
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "ready",
+        "--limit",
+        "0",
+        "--json"
+      ],
+      "ms": 312.42,
+      "bytes": 2563580
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "blocked",
+        "--json"
+      ],
+      "ms": 204.47,
+      "bytes": 1287
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-5l4",
+        "--json"
+      ],
+      "ms": 273.97,
+      "bytes": 619
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-nmd",
+        "--json"
+      ],
+      "ms": 407.17,
+      "bytes": 591
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-8nl",
+        "--json"
+      ],
+      "ms": 265.37,
+      "bytes": 217
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-l22",
+        "--json"
+      ],
+      "ms": 257.64,
+      "bytes": 462
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00008",
+        "--json"
+      ],
+      "ms": 265.08,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00009",
+        "--json"
+      ],
+      "ms": 255.58,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00010",
+        "--json"
+      ],
+      "ms": 273.74,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00011",
+        "--json"
+      ],
+      "ms": 569.81,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00050",
+        "--json"
+      ],
+      "ms": 695.09,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00051",
+        "--json"
+      ],
+      "ms": 264.64,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00052",
+        "--json"
+      ],
+      "ms": 274.08,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00053",
+        "--json"
+      ],
+      "ms": 262.73,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00054",
+        "--json"
+      ],
+      "ms": 259.93,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00055",
+        "--json"
+      ],
+      "ms": 263.42,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00056",
+        "--json"
+      ],
+      "ms": 258.54,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00057",
+        "--json"
+      ],
+      "ms": 264.73,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00058",
+        "--json"
+      ],
+      "ms": 246.41,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00059",
+        "--json"
+      ],
+      "ms": 400.35,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00060",
+        "--json"
+      ],
+      "ms": 280.35,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00061",
+        "--json"
+      ],
+      "ms": 273.5,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00062",
+        "--json"
+      ],
+      "ms": 258.05,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00063",
+        "--json"
+      ],
+      "ms": 279.58,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00064",
+        "--json"
+      ],
+      "ms": 285.06,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00065",
+        "--json"
+      ],
+      "ms": 331.66,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00066",
+        "--json"
+      ],
+      "ms": 274.55,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00067",
+        "--json"
+      ],
+      "ms": 254.66,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00068",
+        "--json"
+      ],
+      "ms": 601.6,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00069",
+        "--json"
+      ],
+      "ms": 408.58,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00070",
+        "--json"
+      ],
+      "ms": 257.61,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00071",
+        "--json"
+      ],
+      "ms": 274.52,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00072",
+        "--json"
+      ],
+      "ms": 261.57,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00073",
+        "--json"
+      ],
+      "ms": 279.78,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00074",
+        "--json"
+      ],
+      "ms": 400.68,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00075",
+        "--json"
+      ],
+      "ms": 244.35,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00076",
+        "--json"
+      ],
+      "ms": 243.37,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00077",
+        "--json"
+      ],
+      "ms": 243.01,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00078",
+        "--json"
+      ],
+      "ms": 232.49,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00079",
+        "--json"
+      ],
+      "ms": 384.4,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00080",
+        "--json"
+      ],
+      "ms": 245.38,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00081",
+        "--json"
+      ],
+      "ms": 634.86,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "show",
+        "qa-cost01999",
+        "--json"
+      ],
+      "ms": 649.29,
+      "bytes": 2672
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost01999",
+        "--direction",
+        "up",
+        "--json"
+      ],
+      "ms": 238.31,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost01999",
+        "--direction",
+        "down",
+        "--json"
+      ],
+      "ms": 274.89,
+      "bytes": 1245
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost01999",
+        "--json"
+      ],
+      "ms": 257.44,
+      "bytes": 199
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 430.69,
+      "bytes": 2567118
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 443.62,
+      "bytes": 2567118
+    },
+    {
+      "args": [
+        "--sandbox",
+        "close",
+        "qa-cost01998"
+      ],
+      "ms": 498.02,
+      "bytes": 61
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 653.82,
+      "bytes": 2567191
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "ready",
+        "--limit",
+        "0",
+        "--json"
+      ],
+      "ms": 894.34,
+      "bytes": 2563832
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "blocked",
+        "--json"
+      ],
+      "ms": 200.98,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-5l4",
+        "--json"
+      ],
+      "ms": 257.89,
+      "bytes": 619
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-nmd",
+        "--json"
+      ],
+      "ms": 268.12,
+      "bytes": 591
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-8nl",
+        "--json"
+      ],
+      "ms": 257.61,
+      "bytes": 217
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-l22",
+        "--json"
+      ],
+      "ms": 267.34,
+      "bytes": 462
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00008",
+        "--json"
+      ],
+      "ms": 282.82,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00009",
+        "--json"
+      ],
+      "ms": 284.52,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00010",
+        "--json"
+      ],
+      "ms": 264.78,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00011",
+        "--json"
+      ],
+      "ms": 413.14,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00050",
+        "--json"
+      ],
+      "ms": 288.64,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00051",
+        "--json"
+      ],
+      "ms": 263.45,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00052",
+        "--json"
+      ],
+      "ms": 241.14,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00053",
+        "--json"
+      ],
+      "ms": 379.07,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00054",
+        "--json"
+      ],
+      "ms": 236.79,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00055",
+        "--json"
+      ],
+      "ms": 379.67,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00056",
+        "--json"
+      ],
+      "ms": 542.49,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00057",
+        "--json"
+      ],
+      "ms": 244.25,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00058",
+        "--json"
+      ],
+      "ms": 238.78,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00059",
+        "--json"
+      ],
+      "ms": 241.08,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00060",
+        "--json"
+      ],
+      "ms": 237.35,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00061",
+        "--json"
+      ],
+      "ms": 236.99,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00062",
+        "--json"
+      ],
+      "ms": 234.36,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00063",
+        "--json"
+      ],
+      "ms": 254.28,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00064",
+        "--json"
+      ],
+      "ms": 239.75,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00065",
+        "--json"
+      ],
+      "ms": 307.26,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00066",
+        "--json"
+      ],
+      "ms": 240.12,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00067",
+        "--json"
+      ],
+      "ms": 238.78,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00068",
+        "--json"
+      ],
+      "ms": 391.56,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00069",
+        "--json"
+      ],
+      "ms": 382.48,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00070",
+        "--json"
+      ],
+      "ms": 380.65,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00071",
+        "--json"
+      ],
+      "ms": 514.4,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00072",
+        "--json"
+      ],
+      "ms": 241.85,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00073",
+        "--json"
+      ],
+      "ms": 238.97,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00074",
+        "--json"
+      ],
+      "ms": 250.45,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00075",
+        "--json"
+      ],
+      "ms": 235.6,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00076",
+        "--json"
+      ],
+      "ms": 234.62,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00077",
+        "--json"
+      ],
+      "ms": 253.67,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00078",
+        "--json"
+      ],
+      "ms": 250.17,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00079",
+        "--json"
+      ],
+      "ms": 378.78,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00080",
+        "--json"
+      ],
+      "ms": 245.69,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost00081",
+        "--json"
+      ],
+      "ms": 239.8,
+      "bytes": 2336
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "show",
+        "qa-cost01999",
+        "--json"
+      ],
+      "ms": 359.13,
+      "bytes": 2753
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost01999",
+        "--direction",
+        "up",
+        "--json"
+      ],
+      "ms": 383.33,
+      "bytes": 3
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "dep",
+        "list",
+        "qa-cost01999",
+        "--direction",
+        "down",
+        "--json"
+      ],
+      "ms": 268.91,
+      "bytes": 1318
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "comments",
+        "qa-cost01999",
+        "--json"
+      ],
+      "ms": 716.65,
+      "bytes": 199
+    },
+    {
+      "args": [
+        "--readonly",
+        "--sandbox",
+        "list",
+        "--all",
+        "--limit",
+        "0",
+        "--include-ephemeral",
+        "--include-gates",
+        "--include-infra",
+        "--include-templates",
+        "--json"
+      ],
+      "ms": 451.22,
+      "bytes": 2567191
+    }
+  ],
+  "measuredAt": "2026-11-14T16:20:23Z",
+  "runtimeSamples": [
+    {
+      "atMs": 39.16,
+      "httpMs": 39.14,
+      "availability": "live",
+      "observedAt": "2026-11-14T16:23:58.9678141+00:00"
+    },
+    {
+      "atMs": 2002.78,
+      "httpMs": 2.66,
+      "availability": "live",
+      "observedAt": "2026-11-14T16:24:00.973486+00:00"
+    },
+    {
+      "atMs": 4003.41,
+      "httpMs": 3.32,
+      "availability": "live",
+      "observedAt": "2026-11-14T16:24:02.9779103+00:00"
+    },
+    {
+      "atMs": 6002.77,
+      "httpMs": 2.51,
+      "availability": "live",
+      "observedAt": "2026-11-14T16:24:04.983681+00:00"
+    }
+  ]
+}
