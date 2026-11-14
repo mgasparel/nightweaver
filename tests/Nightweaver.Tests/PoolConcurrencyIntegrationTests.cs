@@ -196,7 +196,7 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             releasePlanning.TrySetResult();
             var interrupted = await admittedPlanning.Completion.WaitAsync(TimeSpan.FromMinutes(2), lifetime.Token);
             Assert.True(interrupted.Outcome?.Disposition == PlanningSlotDisposition.Interrupted,
-                $"Expected Interrupted; completion: {JsonSerializer.Serialize(interrupted)}");
+                $"Expected Interrupted; outcome: {JsonSerializer.Serialize(interrupted.Outcome)}; exception: {interrupted.Exception}");
             Assert.True(interrupted.ClaimHandoffCompleted, interrupted.Diagnostic);
             var sentinel = Path.Combine(paths.TmpRoot(project.Name), product, "retained-sentinel");
             File.WriteAllText(sentinel, "preserve interruption and pause");

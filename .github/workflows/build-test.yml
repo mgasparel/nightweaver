@@ -57,8 +57,10 @@ jobs:
           dotnet build Nightweaver.slnx -warnaserror
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Complete suite within five minutes
+        id: suite
         shell: pwsh
         run: |
+          "fixture-temp=$([IO.Path]::GetTempPath())" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           $timer = [Diagnostics.Stopwatch]::StartNew()
           dotnet test --solution Nightweaver.slnx --minimum-expected-tests 995 --report-xunit-xml --report-xunit-xml-filename ci.xml --show-slowest-tests 20
           $testExit = $LASTEXITCODE
@@ -73,6 +75,6 @@ jobs:
           name: windows-test-results
           path: |
             **/TestResults/**
-            ${{ runner.temp }}/nightweaver-console-*/**
-            ${{ runner.temp }}/nightweaver-manual-delivery-*/**
+            ${{ steps.suite.outputs.fixture-temp }}/nightweaver-console-*/**
+            ${{ steps.suite.outputs.fixture-temp }}/nightweaver-manual-delivery-*/**
           if-no-files-found: ignore
