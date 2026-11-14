@@ -45,3 +45,36 @@ documented collection limits. The stream remains connected while the count and
 metric explicitly say stale; heartbeats never relabel those sources fresh. This
 verifies synchronization and truthful freshness, not a stronger native collection
 latency guarantee or completion of later Studio feature slices.
+
+## Review repair: stalled resource reads
+
+The Reviewer found that an unresolved resource GET could block every later read
+while healthy SSE heartbeats kept the connection alive. The new fake-clock
+regression failed before repair (the request never aborted). Each resource read
+now expires after ten seconds, clears its identity before aborting, exposes stale
+retained data and a timeout error, and schedules one replacement. Late completion
+cannot publish; lifecycle cleanup cancels deadlines.
+
+`npm test --prefix src/Nightweaver.Web/Studio` now passes **19 tests**, including
+deadline recovery through periodic polling, invalidation, Refresh and wake, plus
+late completion and settlement/unsubscribe/suspend/disposal cleanup. The solution
+build with `-warnaserror` passes with zero warnings/errors. The complete retained
+suite command above passed **1,163 tests**, zero failures/skips, in **245.447
+seconds**, including build, fixture publishing and teardown with normal committed
+parallelism. Candidate log: `H:/Nightweaver/prod/tmp/nightshift/ns-mbd.3/repair-suite.log`;
+latest-main timing still requires measurement after integration.
+
+On a fresh exact isolated AppHost, `read-timeout-qa.mjs` held complete real HTTP
+responses while the real operational stream stayed connected. It verified the
+abort and [stale/error view at 375px](operations/timeout-375.png), reachable Refresh
+with one 202 POST, focus recovery, a replacement response and rejection of the
+old response after [recovery](operations/recovered-375.png). Both captures were
+visually reviewed for readable status, retained counts and no page overflow.
+No commands were replayed and no page errors occurred.
+
+`operations-qa.mjs`, `studio-qa.mjs` and `smoke.mjs` also passed on that same host:
+4-to-5 missed-notification count convergence, maximum one concurrent stream,
+two hellos, explicit 202 Refresh, no command replay, no page errors, route/history
+and 1440/375/720px regressions. The exact AppHost stopped successfully in `finally`.
+Fresh browser outputs are retained beneath
+`H:/Nightweaver/prod/tmp/nightshift/ns-mbd.3/20261114T2248493334094Z-implementer/`.

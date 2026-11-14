@@ -49,6 +49,14 @@ during a read coalesces one follow-up, with no simultaneous reads per key. HTTP
 failures and behind-watermark responses retain stale display; the periodic
 freshness read retries without a busy retry loop.
 
+Each resource GET has a ten-second coordinator deadline, independent of SSE
+heartbeats. Expiry clears its request identity before aborting, retains the last
+observation as stale with a visible timeout error, ends the refresh indicator,
+and coalesces one replacement read. A transport that settles after cancellation
+cannot publish or clear the replacement request. Settlement, unsubscribe,
+eviction, disconnect and disposal cancel the deadline. This bounds stalled-read
+recovery without retrying reconciliation POSTs or commands.
+
 While visible, a two-second timer refetches cached authoritative envelopes even
 at equal revision. Focus/visibility restoration resynchronizes. Twenty-five
 seconds without frames disconnects immediately and invalidates requests, then
@@ -60,7 +68,8 @@ stale flag; retained display is never current while handshake/read is pending.
 
 Manual Refresh POSTs reconciliation, then reads the cache; acceptance is not
 observation success. `refreshing` remains true until a changed attempt timestamp
-is observed. The UI still allows another explicit Refresh if collection stalls.
+is observed or a resource read times out. The UI still allows another explicit
+Refresh if collection stalls.
 Concurrent equal refresh sets share a POST. After an HTTP command completes or
 has an uncertain outcome, call `invalidateAfterCommand("tracker")` for workflow,
 guidance or intake, `"checkpoint"` for catch-up, or `"cleanup"` for cleanup Retry.

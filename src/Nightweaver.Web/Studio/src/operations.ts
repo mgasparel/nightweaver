@@ -18,7 +18,8 @@ export type Transport = {
 };
 export type Scheduler = { now(): number; later(callback: () => void, ms: number): () => void; random(): number };
 type Entry = { identity: Identity; listeners: Set<() => void>; snapshot: Snapshot; watermark: bigint;
-  wanted: bigint; pending: boolean; request?: AbortController; bytes: number; touched: number; refreshAttempt?: string | null };
+  wanted: bigint; pending: boolean; request?: AbortController; cancelDeadline?: () => void;
+  bytes: number; touched: number; refreshAttempt?: string | null };
 const id = (identity: Identity) => JSON.stringify([identity.projectId, identity.key]);
 const revision = (value: string) => { if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw Error("Invalid observation revision"); return BigInt(value); };
 const empty = (): Snapshot => ({ connectionState: "disconnected", refreshing: false, stale: true });
@@ -64,7 +65,7 @@ export class QueryCoordinator {
       if (!subscribed) return;
       subscribed = false;
       entry.listeners.delete(listener); entry.touched = this.clock.now();
-      if (!entry.listeners.size) { entry.request?.abort(); entry.request = undefined; }
+      if (!entry.listeners.size) this.cancelRead(entry);
       this.schedule();
     };
   }
@@ -119,7 +120,7 @@ export class QueryCoordinator {
     for (const entry of unused) {
       const bytes = [...this.entries.values()].reduce((sum, item) => sum + item.bytes, 0);
       if (this.entries.size < 64 && bytes + requiredBytes <= 16 * 1024 * 1024 && this.clock.now() - entry.touched < 30000) break;
-      entry.request?.abort(); this.entries.delete(id(entry.identity));
+      this.cancelRead(entry); this.entries.delete(id(entry.identity));
     }
   }
   private schedule() {
@@ -135,7 +136,7 @@ export class QueryCoordinator {
     ++this.generation; this.hello = false; this.close?.(); this.close = undefined;
     this.buffered.clear();
     for (const entry of this.entries.values()) {
-      entry.request?.abort(); entry.request = undefined;
+      this.cancelRead(entry);
       this.publish(entry, { connectionState: "disconnected", stale: true });
     }
   }
@@ -199,6 +200,11 @@ export class QueryCoordinator {
   }
   private resync() { for (const entry of this.active()) this.queue(entry); }
   private queue(entry: Entry) { entry.pending = true; this.schedule(); }
+  private cancelRead(entry: Entry) {
+    entry.cancelDeadline?.(); entry.cancelDeadline = undefined;
+    const request = entry.request; entry.request = undefined;
+    request?.abort();
+  }
   private read(entry: Entry) {
     if (!this.hello || entry.request || !entry.listeners.size) return;
     entry.pending = false;
@@ -206,6 +212,13 @@ export class QueryCoordinator {
     const generation = this.generation; const epoch = this.epoch;
     const current = () => !this.disposed && generation === this.generation && entry.request === request
       && this.entries.get(id(entry.identity)) === entry && !!entry.listeners.size;
+    entry.cancelDeadline = this.clock.later(() => {
+      if (!current()) return;
+      // Release identity before abort: adapters may ignore cancellation or settle late.
+      this.cancelRead(entry);
+      this.publish(entry, { stale: true, error: "Observation read timed out; retrying", refreshing: false });
+      this.queue(entry);
+    }, 10000);
     this.transport.read(entry.identity, request.signal).then(observation => {
       if (!current()) return;
       if (observation.projectId !== entry.identity.projectId || observation.key !== entry.identity.key || observation.schema !== "nightweaver-observation-v1") throw Error("Invalid observation identity");
@@ -219,7 +232,12 @@ export class QueryCoordinator {
       const refreshing = entry.snapshot.refreshing && observation.lastAttemptAt === entry.refreshAttempt;
       this.publish(entry, { observation, stale: false, error: undefined, refreshing });
     }).catch(error => { if (current()) this.publish(entry, { error: String(error), stale: true }); })
-      .finally(() => { if (current()) { entry.request = undefined; if (entry.pending) this.schedule(); } });
+      .finally(() => {
+        if (current()) {
+          entry.cancelDeadline?.(); entry.cancelDeadline = undefined; entry.request = undefined;
+          if (entry.pending) this.schedule();
+        }
+      });
   }
   private timer() {
     this.tick = this.clock.later(() => {

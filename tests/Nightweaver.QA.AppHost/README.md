@@ -48,6 +48,13 @@ No browser UI changed in this investigation. See the
 
 ## Studio candidate shell
 
+After discovering the exact isolated direct endpoint, `node read-timeout-qa.mjs`
+holds a real resource response while the operational SSE remains live. It checks
+the ten-second abort, retained stale/error display at 375px, a successful explicit
+Refresh, wake recovery, a replacement read and rejection of the late held response.
+The probe never replays commands. Screenshots go to `NIGHTWEAVER_QA_OUTPUT` or
+`TestResults/read-timeout`. Stop the same AppHost in `finally` after all probes.
+
 On a fresh isolated default fixture, use the discovered direct `web` HTTP URL below and run `node studio-qa.mjs` and `node smoke.mjs`. Studio checks candidate routes at `/studio` and `/projects/...`; the root console remains operational. Reference and candidate screenshots at 1440, 375 and 720 CSS pixels are saved under `TestResults/studio`. Checks include direct reload, Back/Forward, URL preferences, legacy Bead translation (including dotted hierarchical IDs reloaded with and without Workspace query state), missing-asset/API 404s, keyboard/focus, unavailable project controls, no mutations and no browser errors. Review the screenshots visually and stop the same exact AppHost afterward.
 
 Requires .NET 10, Aspire CLI, Git, `bd`, Node.js and npm. From this directory, install the browser tools once:

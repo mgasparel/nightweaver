@@ -118,6 +118,47 @@ test('overflow and equal-version resync refetch freshness, transient HTTP errors
   assert.equal(f.posts.length, 0); f.coordinator.dispose();
 });
 
+test('stalled reads expire under healthy heartbeats and recovery rejects late completions', async () => {
+  for (const trigger of ['poll', 'invalidation', 'refresh', 'wake']) {
+    const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
+    f.reads[0].resolve(envelope()); await f.advance(); await f.advance(2000);
+    const stalled = f.reads[1];
+    for (let i = 0; i < 4; i++) { f.send('heartbeat'); await f.advance(2000); }
+    assert.equal(stalled.signal.aborted, false);
+    if (trigger === 'invalidation') f.send('invalidation', { versions: { attention: '2' } });
+    if (trigger === 'refresh') await f.coordinator.refresh([identity()]);
+    if (trigger === 'wake') { f.coordinator.setVisible(false); f.coordinator.setVisible(true); }
+    f.send('heartbeat'); await f.advance(2000);
+    assert.equal(stalled.signal.aborted, true, trigger);
+    assert.equal(f.snapshot().connectionState, 'connected');
+    assert.equal(f.snapshot().stale, true); assert.match(f.snapshot().error, /timed out/i);
+    assert.equal(f.snapshot().observation.revision, '1'); assert.equal(f.reads.length, 3);
+    f.reads[2].resolve(envelope('2')); await f.advance();
+    assert.equal(f.snapshot().stale, false); assert.equal(f.snapshot().error, undefined);
+    stalled.resolve(envelope('999')); await f.advance();
+    assert.equal(f.snapshot().observation.revision, '2');
+    assert.equal(f.posts.length, trigger === 'refresh' ? 1 : 0);
+    assert.equal(f.streams.length, 1); f.coordinator.dispose(); assert.equal(f.jobs.size, 0);
+  }
+});
+
+test('read deadlines are canceled on settlement, unsubscribe, suspension and disposal', async () => {
+  for (const action of ['resolve', 'reject', 'unsubscribe', 'suspend', 'dispose']) {
+    const f = fixture(); const off = f.coordinator.subscribe(identity(), () => {});
+    await f.advance(); f.hello(); await f.advance();
+    const read = f.reads[0]; assert.equal(f.jobs.size, 2, 'poll timer and read deadline');
+    if (action === 'resolve') read.resolve(envelope());
+    if (action === 'reject') read.reject(Error('temporary'));
+    if (action === 'unsubscribe') off();
+    if (action === 'suspend') f.coordinator.suspend();
+    if (action === 'dispose') f.coordinator.dispose();
+    await f.advance();
+    assert.equal(f.jobs.size, action === 'dispose' ? 0 : 1, action);
+    f.coordinator.dispose(); assert.equal(f.jobs.size, 0);
+    read.resolve(envelope('999')); await f.advance(15000); assert.equal(f.jobs.size, 0);
+  }
+});
+
 test('hidden tabs pause freshness reads; wake and heartbeat silence recover without marking sources fresh', async () => {
   const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
   f.reads[0].resolve(envelope('1', 'A', 'attention', { health: 'stale' })); await f.advance();
