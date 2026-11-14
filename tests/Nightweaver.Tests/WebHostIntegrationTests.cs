@@ -140,6 +140,9 @@ public sealed class WebHostIntegrationTests
             using var client = new HttpClient { BaseAddress = new Uri(address!) };
             await AssertDashboardPageAsync(client, "/", timeout.Token);
             await AssertDashboardPageAsync(client, "/index.html", timeout.Token);
+            using var studio = await client.GetAsync("/projects/standalone/overview", timeout.Token);
+            Assert.Equal(HttpStatusCode.OK, studio.StatusCode);
+            Assert.Contains("Nightweaver · Studio", await studio.Content.ReadAsStringAsync(timeout.Token), StringComparison.Ordinal);
             await AssertStaticAssetAsync(client, "/css/site.css", ["text/css"], timeout.Token);
             await AssertStaticAssetAsync(client, "/js/app.js", JavaScriptMediaTypes, timeout.Token);
             using var response = await client.GetAsync("/health", timeout.Token);

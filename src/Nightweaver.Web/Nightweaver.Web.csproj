@@ -2,6 +2,7 @@
   <PropertyGroup>
     <AssemblyName>Nightweaver.Web</AssemblyName>
     <RootNamespace>Nightweaver.Web</RootNamespace>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Studio/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Nightweaver/Nightweaver.csproj" />
@@ -15,4 +16,21 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Nightweaver.Tests" />
   </ItemGroup>
+  <!-- Build before static assets are discovered, including on a fresh checkout.
+       Dynamic item discovery also includes generated files on the first build. -->
+  <Target Name="RestoreStudio" Inputs="Studio/package.json;Studio/package-lock.json" Outputs="Studio/node_modules/.package-lock.json" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec WorkingDirectory="$(MSBuildProjectDirectory)/Studio" Command="npm ci --no-audit --no-fund" />
+  </Target>
+  <Target Name="CompileStudio" DependsOnTargets="RestoreStudio" Inputs="Studio/package-lock.json;Studio/index.html;Studio/tsconfig.json;Studio/vite.config.ts;@(StudioSource)" Outputs="wwwroot/studio/index.html" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec WorkingDirectory="$(MSBuildProjectDirectory)/Studio" Command="npm run build" />
+  </Target>
+  <ItemGroup>
+    <StudioSource Include="Studio/src/**" />
+  </ItemGroup>
+  <Target Name="BuildStudio" BeforeTargets="AssignTargetPaths" DependsOnTargets="CompileStudio" Condition="'$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <Content Remove="wwwroot/studio/**" />
+      <Content Include="wwwroot/studio/**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
 </Project>
