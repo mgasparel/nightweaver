@@ -48,6 +48,13 @@ No browser UI changed in this investigation. See the
 
 ## Studio candidate shell
 
+`node refresh-timeout-qa.mjs` holds real reconciliation 202 responses while the
+operational stream and resource reads continue. It verifies deadline abort,
+visible failure at 375px, a second explicit POST, replacement deduplication after
+late settlement, and no automatic replay or page errors. Screenshots go to
+`NIGHTWEAVER_QA_OUTPUT` or `TestResults/refresh-timeout`. Use the same exact-stack
+start, direct endpoint discovery and finally-stop lifecycle below.
+
 After discovering the exact isolated direct endpoint, `node read-timeout-qa.mjs`
 holds a real resource response while the operational SSE remains live. It checks
 the ten-second abort, retained stale/error display at 375px, a successful explicit

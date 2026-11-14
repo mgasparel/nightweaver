@@ -78,3 +78,43 @@ two hellos, explicit 202 Refresh, no command replay, no page errors, route/histo
 and 1440/375/720px regressions. The exact AppHost stopped successfully in `finally`.
 Fresh browser outputs are retained beneath
 `H:/Nightweaver/prod/tmp/nightshift/ns-mbd.3/20261114T2248493334094Z-implementer/`.
+
+## Review repair: stalled reconciliation POST
+
+The second Reviewer finding concerned an unresolved Refresh POST permanently
+occupying its deduplication slot. Two new fake-clock cases failed before repair:
+the caller never settled and no deadline timer existed. A ten-second deadline now
+releases that identity before aborting, rejects callers with an unknown-outcome
+error, and allows another explicit attempt. Late success or failure cannot clear
+a replacement slot or change its state. Reads and healthy SSE continue independently;
+neither timeout, reconnect nor wake automatically replays a POST. Suspension and
+disposal abort pending transports, settle callers and cancel deadline timers.
+
+All **22 coordinator tests** pass, including three new cases for pending refresh,
+late settlement, reconnect/wake, rejection and lifecycle cleanup. The complete
+retained .NET suite passed **1,163 tests**, zero failures/skips, in **244.957 seconds**
+including normal build, fixture publishing and teardown at committed parallelism.
+Candidate timing log:
+`H:/Nightweaver/prod/tmp/nightshift/ns-mbd.3/20261114T2259383295094Z-implementer/refresh-repair-suite.log`.
+Latest-main timing still belongs after integration. Final frontend refinements
+were subsequently built and exercised through the isolated AppHost.
+
+On a fresh exact isolated AppHost, `refresh-timeout-qa.mjs` held real 202 responses
+while real reads and SSE continued. It verified deadline abort, visible
+[unknown-outcome recovery at 375px](operations/refresh-timeout-375.png), exactly
+two explicit POST attempts, replacement deduplication after late completion,
+and [acceptance recovery](operations/refresh-recovered-375.png) without page errors.
+Both captures were visually reviewed: readable error, reachable Refresh,
+matching retained counts and no horizontal overflow. Acceptance clears the request
+error; the fixture's independently stale source remains truthfully labeled stale.
+The existing GET-timeout and operational convergence probes also passed: 4-to-5
+convergence after missed events, maximum one stream, two hellos, no replayed commands.
+Evidence is retained under the same invocation directory's `refresh-browser`,
+`read-browser` and `operations-browser` subdirectories.
+
+Studio route/history/keyboard and 1440/375/720px regressions plus the root smoke
+passed on a second fresh exact AppHost, with zero page errors or mutations.
+An initial Studio invocation from the repository root could not resolve its
+cwd-relative prototype reference; rerunning from the documented QA directory
+passed. Both exact AppHosts stopped successfully in `finally`. Studio rerun
+captures are in the invocation's `studio-rerun` directory.

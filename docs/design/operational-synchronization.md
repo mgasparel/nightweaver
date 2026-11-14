@@ -70,7 +70,14 @@ Manual Refresh POSTs reconciliation, then reads the cache; acceptance is not
 observation success. `refreshing` remains true until a changed attempt timestamp
 is observed or a resource read times out. The UI still allows another explicit
 Refresh if collection stalls.
-Concurrent equal refresh sets share a POST. After an HTTP command completes or
+Concurrent equal refresh sets share a POST.
+Each pending reconciliation POST has a ten-second deadline and an abort signal.
+Expiry releases its deduplication identity, rejects callers with an unknown-outcome
+error, and allows a later explicit Refresh. Background reads retain this error until
+another explicit attempt. Late settlement cannot change a newer attempt or its slot.
+Disposal and page suspension cancel timers, abort pending transports and reject callers.
+Reconnect and wake keep the original finite deadline and never replay the POST.
+After an HTTP command completes or
 has an uncertain outcome, call `invalidateAfterCommand("tracker")` for workflow,
 guidance or intake, `"checkpoint"` for catch-up, or `"cleanup"` for cleanup Retry.
 These methods reconcile the corresponding active resource families. They never

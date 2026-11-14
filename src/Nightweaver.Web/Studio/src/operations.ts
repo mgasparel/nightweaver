@@ -14,12 +14,13 @@ type Frame = { schema: string; projectId: string; epoch: string; versions?: Reco
 export type Transport = {
   connect(project: string, keys: string[], event: (name: string, data: Frame) => void, failed: () => void): () => void;
   read(identity: Identity, signal: AbortSignal): Promise<Envelope>;
-  refresh(project: string, keys: string[]): Promise<void>;
+  refresh(project: string, keys: string[], signal: AbortSignal): Promise<void>;
 };
 export type Scheduler = { now(): number; later(callback: () => void, ms: number): () => void; random(): number };
 type Entry = { identity: Identity; listeners: Set<() => void>; snapshot: Snapshot; watermark: bigint;
   wanted: bigint; pending: boolean; request?: AbortController; cancelDeadline?: () => void;
-  bytes: number; touched: number; refreshAttempt?: string | null };
+  bytes: number; touched: number; refreshAttempt?: string | null; refreshOwner?: object; refreshError?: string };
+type RefreshAttempt = { promise: Promise<void>; cancel(error: Error): void };
 const id = (identity: Identity) => JSON.stringify([identity.projectId, identity.key]);
 const revision = (value: string) => { if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw Error("Invalid observation revision"); return BigInt(value); };
 const empty = (): Snapshot => ({ connectionState: "disconnected", refreshing: false, stale: true });
@@ -41,7 +42,7 @@ export class QueryCoordinator {
   private hello = false;
   private signature = "";
   private buffered = new Map<string, { epoch: string; revision: bigint }>();
-  private refreshes = new Map<string, Promise<void>>();
+  private refreshes = new Map<string, RefreshAttempt>();
   constructor(private transport: Transport, private clock: Scheduler) { this.timer(); }
 
   subscribe(identity: Identity, listener: () => void): () => void {
@@ -73,28 +74,51 @@ export class QueryCoordinator {
   getSnapshot<T = unknown>(identity: Identity): Snapshot<T> { return (this.entries.get(id(identity))?.snapshot ?? missing) as Snapshot<T>; }
 
   async refresh(identities: Identity[]): Promise<void> {
+    if (this.disposed) throw Error("Coordinator disposed");
     const selected = [...new Map(identities.map(identity => [id(identity), identity])).values()];
     if (!selected.length) return;
     const project = selected[0].projectId;
     if (selected.length > 32 || selected.some(identity => identity.projectId !== project)) throw Error("Invalid refresh scope");
     const key = JSON.stringify([project, selected.map(identity => identity.key).sort()]);
     const existing = this.refreshes.get(key);
-    if (existing) return existing;
+    if (existing) return existing.promise;
+    const owner = {};
+    const entries: Entry[] = [];
     for (const identity of selected) {
       const entry = this.entries.get(id(identity));
       if (entry) {
+        entries.push(entry); entry.refreshOwner = owner; entry.refreshError = undefined;
         entry.refreshAttempt = entry.snapshot.observation?.lastAttemptAt ?? null;
         this.publish(entry, { refreshing: true, error: undefined });
       }
     }
-    const operation = this.transport.refresh(project, selected.map(identity => identity.key)).then(() => {
-      for (const identity of selected) { const entry = this.entries.get(id(identity)); if (entry) this.queue(entry); }
-    }).catch(error => {
-      for (const identity of selected) { const entry = this.entries.get(id(identity)); if (entry) this.publish(entry, { refreshing: false, error: String(error) }); }
-      throw error;
-    }).finally(() => this.refreshes.delete(key));
-    this.refreshes.set(key, operation);
-    return operation;
+    const request = new AbortController();
+    let resolve!: () => void; let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+    let cancelDeadline = () => {};
+    const finish = (failed: boolean, error?: unknown) => {
+      if (this.refreshes.get(key) !== attempt) return;
+      // Release identity first; abort handlers and late transport settlement may reenter.
+      this.refreshes.delete(key); cancelDeadline();
+      if (failed) request.abort();
+      for (const entry of entries) {
+        if (this.entries.get(id(entry.identity)) !== entry || entry.refreshOwner !== owner) continue;
+        entry.refreshOwner = undefined;
+        if (failed) {
+          entry.refreshError = String(error);
+          this.publish(entry, { refreshing: false, error: entry.refreshError });
+        } else this.queue(entry);
+      }
+      if (failed) reject(error); else resolve();
+    };
+    const attempt: RefreshAttempt = { promise, cancel: error => finish(true, error) };
+    this.refreshes.set(key, attempt);
+    cancelDeadline = this.clock.later(() => attempt.cancel(Error("Reconciliation request timed out; outcome unknown. Refresh again to retry.")), 10000);
+    try {
+      this.transport.refresh(project, selected.map(identity => identity.key), request.signal)
+        .then(() => finish(false), error => finish(true, error));
+    } catch (error) { finish(true, error); }
+    return promise;
   }
 
   invalidateAfterCommand(kind: "tracker" | "checkpoint" | "cleanup"): Promise<void> {
@@ -104,13 +128,20 @@ export class QueryCoordinator {
   }
 
   setVisible(visible: boolean) { this.visible = visible; if (visible) this.wake(); }
-  suspend() { this.retry?.(); this.retry = undefined; this.disconnect(); }
+  suspend() {
+    this.retry?.(); this.retry = undefined; this.disconnect();
+    this.cancelRefreshes("Page suspended; reconciliation outcome unknown");
+  }
   wake() { if (this.disposed) return; if (!this.hello) this.restart(); else this.resync(); }
   dispose() {
     this.disposed = true; this.scheduled?.(); this.retry?.(); this.tick?.(); this.disconnect();
+    this.cancelRefreshes("Coordinator disposed; reconciliation outcome unknown");
     this.entries.clear();
   }
   private active() { return [...this.entries.values()].filter(entry => entry.listeners.size); }
+  private cancelRefreshes(message: string) {
+    for (const attempt of this.refreshes.values()) attempt.cancel(Error(message));
+  }
   private publish(entry: Entry, patch: Partial<Snapshot>) {
     entry.snapshot = { ...entry.snapshot, ...patch };
     for (const listener of entry.listeners) listener();
@@ -230,7 +261,7 @@ export class QueryCoordinator {
       if ([...this.entries.values()].reduce((sum, item) => sum + item.bytes, 0) - entry.bytes + bytes > 16 * 1024 * 1024) throw Error("Observation storage limit reached");
       entry.bytes = bytes; entry.watermark = version; entry.wanted = max(entry.wanted, version);
       const refreshing = entry.snapshot.refreshing && observation.lastAttemptAt === entry.refreshAttempt;
-      this.publish(entry, { observation, stale: false, error: undefined, refreshing });
+      this.publish(entry, { observation, stale: false, error: entry.refreshError, refreshing });
     }).catch(error => { if (current()) this.publish(entry, { error: String(error), stale: true }); })
       .finally(() => {
         if (current()) {

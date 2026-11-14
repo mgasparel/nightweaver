@@ -184,6 +184,71 @@ test('manual recovery coalesces refresh POST, clears only after later attempt, c
   f.coordinator.dispose();
 });
 
+test('stalled refresh settles with uncertain outcome and only explicit attempts retry it', async () => {
+  const f = fixture(); const attempts = [];
+  f.transport.refresh = (project, keys, signal) => new Promise((resolve, reject) => attempts.push({ resolve, reject, signal }));
+  f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
+  f.reads[0].resolve(envelope()); await f.advance();
+  let failure;
+  const first = f.coordinator.refresh([identity()]).catch(error => { failure = error; });
+  for (let i = 0; i < 5; i++) {
+    f.send('heartbeat'); await f.advance(2000);
+    f.reads.at(-1).resolve(envelope()); await f.advance();
+  }
+  assert.match(String(failure), /timed out.*unknown/i);
+  await first;
+  assert.equal(attempts[0].signal.aborted, true);
+  assert.equal(f.snapshot().refreshing, false);
+  assert.match(f.snapshot().error, /timed out.*unknown/i);
+  f.coordinator.wake(); await f.advance(); assert.equal(attempts.length, 1, 'no automatic POST replay');
+  const second = f.coordinator.refresh([identity()]);
+  attempts[0].resolve(); await f.advance();
+  assert.equal(f.snapshot().refreshing, true); assert.equal(f.snapshot().error, undefined);
+  const duplicate = f.coordinator.refresh([identity()]);
+  assert.equal(attempts.length, 2, 'late settlement cannot remove replacement deduplication');
+  attempts[1].resolve(); await Promise.all([second, duplicate]);
+  f.coordinator.dispose(); assert.equal(f.jobs.size, 0);
+});
+
+test('refresh deadlines and transport resources are canceled on settlement, suspension and disposal', async () => {
+  for (const action of ['resolve', 'reject', 'suspend', 'dispose']) {
+    const f = fixture(); let attempt;
+    f.transport.refresh = (project, keys, signal) => new Promise((resolve, reject) => { attempt = { resolve, reject, signal }; });
+    const operation = f.coordinator.refresh([identity()]);
+    const result = operation.catch(error => error);
+    assert.equal(f.jobs.size, 2);
+    if (action === 'resolve') attempt.resolve();
+    if (action === 'reject') attempt.reject(Error('rejected'));
+    if (action === 'dispose') f.coordinator.dispose();
+    if (action === 'suspend') f.coordinator.suspend();
+    await f.advance();
+    assert.equal(f.jobs.size, action === 'dispose' ? 0 : 1, action);
+    if (action === 'dispose' || action === 'suspend') {
+      assert.equal(attempt.signal.aborted, true);
+      assert.match(String(await result), /(?:disposed|suspended).*unknown/i);
+      if (action === 'dispose') await assert.rejects(f.coordinator.refresh([identity()]), /disposed/i);
+    } else await result;
+    f.coordinator.dispose(); attempt.reject(Error('late')); await f.advance(15000);
+    assert.equal(f.jobs.size, 0);
+  }
+});
+
+test('reconnect and wake do not replay refresh and late rejection cannot fail its replacement', async () => {
+  const f = fixture(); const attempts = [];
+  f.transport.refresh = (project, keys, signal) => new Promise((resolve, reject) => attempts.push({ resolve, reject, signal }));
+  f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
+  const expired = f.coordinator.refresh([identity()]).catch(error => error);
+  f.streams[0].failed(); await f.advance(1000); f.hello(); f.coordinator.wake();
+  await f.advance(9000); assert.match(String(await expired), /timed out/);
+  assert.equal(attempts.length, 1);
+  const replacement = f.coordinator.refresh([identity()]);
+  attempts[0].reject(Error('late failure')); await f.advance();
+  assert.equal(f.snapshot().error, undefined); assert.equal(f.snapshot().refreshing, true);
+  const duplicate = f.coordinator.refresh([identity()]); assert.equal(attempts.length, 2);
+  attempts[1].resolve(); await Promise.all([replacement, duplicate]);
+  f.coordinator.dispose(); assert.equal(f.jobs.size, 0);
+});
+
 test('same-epoch server eviction readmission accepts higher unavailable revision before changed or unchanged data', async () => {
   for (const changed of [false, true]) {
     const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();

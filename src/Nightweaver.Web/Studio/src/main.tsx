@@ -244,15 +244,17 @@ function AttentionCount({ projectId }: { projectId: string }) {
 
 function SynchronizationStatus({ projectId }: { projectId: string }) {
   const snapshot = useObservation(projectId, "attention");
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string>();
   const health = snapshot.stale ? "Awaiting current data" : `Tracker ${snapshot.observation?.health ?? "unavailable"}`;
   return <div className="synchronization">
     <span role="status">{snapshot.connectionState === "connected" ? "Live connection" : snapshot.connectionState === "connecting" ? "Connecting" : "Disconnected"} · {health}</span>
     <button className="text-link" onClick={() => {
-      setError(false);
-      operations.refresh([{ projectId, key: "attention" }]).catch(() => setError(true));
+      setError(undefined);
+      operations.refresh([{ projectId, key: "attention" }]).catch(reason => setError(
+        String(reason).includes("outcome unknown") ? "Refresh outcome unknown. Try Refresh again." : "Refresh failed. Try Refresh again."));
     }}>{snapshot.refreshing ? "Refresh again" : "Refresh"}</button>
-    {(error || snapshot.error) && <span role="alert">Observation unavailable. Try Refresh.</span>}
+    {(error || snapshot.error) && <span role="alert">{error ?? (snapshot.error?.includes("outcome unknown")
+      ? "Refresh outcome unknown. Try Refresh again." : "Observation unavailable. Try Refresh.")}</span>}
   </div>;
 }
 

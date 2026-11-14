@@ -15,10 +15,10 @@ const transport: Transport = {
     if (!response.ok) throw Error(`Observation read failed (${response.status})`);
     return response.json();
   },
-  async refresh(project, keys) {
+  async refresh(project, keys, signal) {
     const response = await fetch(`${base(project)}/refresh`, { method: "POST", headers: {
       "Content-Type": "application/json", "X-Nightweaver-Request": "console-v1",
-    }, body: JSON.stringify({ keys }) });
+    }, body: JSON.stringify({ keys }), signal });
     if (response.status !== 202) throw Error(`Reconciliation request failed (${response.status})`);
   },
 };
