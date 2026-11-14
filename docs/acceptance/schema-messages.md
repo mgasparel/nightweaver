@@ -44,3 +44,36 @@ dotnet test --solution Nightweaver.slnx --minimum-expected-tests 848 --report-xu
 ```
 
 Report: `TestResults/repair-timing.xml`. Invocation evidence: `H:/Nightweaver/prod/tmp/nightshift/ns-psu/20261113T2330158591141Z-implementer/build.log`, `full-suite.log` and `suite-time.txt`. Earlier invocation evidence and original timing XML remain preserved.
+
+## Delivery, Planning and audit presentation — ns-rgl
+
+Implemented on retained `origin/main` base `cdd32815061bb895ee206130797c41f1c297a3bc` without fetching or resetting. Delivery/Merger/Planning outcome publications now explain role, reported outcome and classification reason, with provider/invocation/log references in details. Human note, Resume, Retry and Abort entries separately name actor and requested action; recorded intent never asserts that its state update succeeded.
+
+Agent-reported merge, host-recorded verified merge and post-merge finalization diagnostics remain distinct. Reported checks retain source attribution. Verified merge source comments resolve to keyboard-accessible history links, including collapsed history; absent references are explicitly unresolved. The overloaded Merger classifier shape and other classifier-only contracts take deliberate unsupported fallbacks.
+
+Planning candidate defaults remain compact with tasks, context, approach, acceptance criteria, verification, dependencies, sourced constraints and coverage behind a labelled disclosure. Review assessment, findings, questions, recommendations, tradeoffs and revalidation retain separate labels. Host-recorded approval carries exact candidate/review IDs, hashes and grounding without claiming current freshness or authorizing publication. Valid null/omitted review findings/questions remain supported; malformed values fail conservatively. All original payloads, including additional metadata, remain exact.
+
+The extended real-tracker schema scenario passed at desktop, 375 and 720 CSS pixels. It includes a 40-task/40-coverage candidate, mixed historical outcomes/rejections/escalation/operator correction/audit requests/merge/finalization records, malformed and unsupported records, resolved and unresolved references, source-link keyboard navigation, disclosure state/focus across refresh, safe deliberate HTTPS navigation and exact original comparisons. Page errors, automatic external requests and message-driven workflow mutations were all zero. The initial harness assumed every ordinary prose comment had a non-null semantic projection; correcting that assertion produced successful fresh-fixture runs. Every stack, including that failed harness run, stopped successfully through exact-target Aspire teardown in `finally`.
+
+Visual inspection confirmed readable attribution, clear action intent, compact candidate content, labelled findings and evidence, wrapped references, reachable disclosures and responsive reflow. Representative screenshots:
+
+- Candidate: [desktop](schema-messages/planning-candidate-1440.png), [375px](schema-messages/planning-candidate-375.png), [720px](schema-messages/planning-candidate-720.png)
+- Review details: [desktop](schema-messages/planning-review-1440.png), [375px](schema-messages/planning-review-375.png), [720px](schema-messages/planning-review-720.png)
+- Host-recorded merge: [desktop](schema-messages/verified-merge-1440.png), [375px](schema-messages/verified-merge-375.png), [720px](schema-messages/verified-merge-720.png)
+- [Human Resume request at 375px](schema-messages/human-resume-375.png)
+
+Complete browser artifacts and machine-readable results are retained under `TestResults/ns-rgl/schema-final`; earlier attempts remain alongside them. The additional 36 fast adapter cases reuse existing fixtures and preserve the six-thread suite scheduling.
+
+The retained Workspace action regression caught an integration issue: its existing history consumer expected `human-guidance`, while the earlier classifier labelled all newly supported messages `diagnostic`. A focused four-action regression reproduced that mismatch (four failures). The projection now carries the existing human-guidance/action kind, consumed directly by classification; the obsolete duplicate parser was removed. All 71 focused adapter tests then passed, including null review forms, supplied candidate questions, invalid publication roles/types/identity/outcomes and incompatible approval/outcome combinations. Report: `TestResults/ns-rgl-focused.xml`.
+
+The original `workspace-qa.mjs` then passed on a fresh disposable fixture, including real Save Note, Resume, Retry, confirmed Abort, legacy questions, stale/race guards, Markdown safety and responsive layout. Log: `TestResults/ns-rgl/workspace-final.log`.
+
+Additional console comparison identified a pre-existing limitation outside this message slice: `console-qa.mjs:207` asserts that the first idle Explorer row fits within 900px, but the existing Housekeeping panel places it below that boundary. Both the candidate and the exact retained-main `cdd3281` HTML/CSS/JavaScript fail the same assertion on a fresh stack. The comparison runs the candidate assertion path with all three main assets substituted from Git; it does not use the script's assertion-skipping baseline mode. Evidence: `TestResults/ns-rgl/console-main-comparison.mjs`, `console-main.log`, `console-main/idle-1440-viewport.png`, `console-fresh.log` and `TestResults/console/candidate/idle-1440-viewport.png`. This check is not reported as passing. Housekeeping and idle shell layout remain outside the scoped adapter change; no production or root-checkout edits were made. Both comparison runs' exact AppHost stopped successfully in `finally`.
+
+Final gates passed: `dotnet build Nightweaver.slnx -warnaserror` (zero warnings/errors), both JavaScript syntax checks, the 71 focused presentation cases, and the complete retained **884-test suite, zero failures/skips, in 149.974 seconds wall time**, including normal build, fixture publishing, tests and teardown. The committed six-thread scheduling is unchanged. Full-suite command:
+
+```powershell
+dotnet test --solution Nightweaver.slnx --minimum-expected-tests 884 --report-xunit-xml --report-xunit-xml-filename ns-rgl-final.xml --show-slowest-tests 20
+```
+
+Final artifacts: `TestResults/ns-rgl-final.xml`, `TestResults/ns-rgl/build-final.log`, `suite-final.log` and `suite-final-time.txt`. The earlier 884-test run also passed in 231.232 seconds; the final run includes the audit-kind correction and all retained candidate/review edge cases. Browser QA uses the read-only schema scenario plus the original real-action Workspace scenario; the separate baseline console limitation above remains disclosed.

@@ -120,6 +120,8 @@ Start a fresh isolated stack with `NIGHTWEAVER_QA_SCENARIO=schema-messages`, dis
 
 The script checks the shared projection on all three message surfaces, exact original/source identity, independent corrective prose, keyboard disclosure state/focus across refresh, explicit uncertainty, keyboard-accessible HTTP(S) evidence navigation (destination intercepted locally), unsafe-scheme rejection, no automatic payload requests or mutations, and desktop/375px/720 CSS px reflow. Screenshots and result data go to `TestResults/schema-messages`; set `NIGHTWEAVER_QA_OUTPUT` to preserve another run. Review those screenshots visually. Run `workspace-qa.mjs` separately against a fresh default stack for real guarded actions and legacy questions.
 
+The same scenario also seeds mixed delivery publications, all four human audit actions, failed-request corrective prose, agent/host merge records with an in-history source link, finalization diagnostics, and classifier-only/malformed fallbacks. Planning fixtures include a 40-task/40-coverage candidate, a review with findings/questions/revalidation, and a snake_case host approval with resolved candidate and unresolved review references. Checks cover bounded default content, complete nested details, exact originals, source-link keyboard focus and preserved disclosure state across refresh. Additional screenshots use `verified-merge-*`, `human-resume-*`, `planning-candidate-*` and `planning-review-*` names.
+
 ## Cleanup
 
 Always stop the same AppHost in a cleanup/finally step, including after a failed browser check:

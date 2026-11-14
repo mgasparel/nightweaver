@@ -139,6 +139,69 @@ try {
     assert.match(await history.innerText(), /Later ordinary note/);
   }
 
+  // Mixed delivery/audit/merge history remains attributable without changing the pause.
+  await workspace(primary);
+  await page.locator('.workspace-older-history').evaluateAll(nodes => nodes.forEach(node => { node.open = true; }));
+  const mixed = await page.evaluate(async id => (await fetch(`/api/beads/${id}`)).json(), primary.beadId);
+  for (const comment of mixed.comments) if (comment.message) assert.equal(comment.message.original, comment.body, 'Exact original survives projection');
+  assert.equal(mixed.comments.find(c => c.body.includes('"question":"merger_outcome"')).message.state, 'fallback');
+  for (const title of ['Host-recorded delivery outcome', 'Human note', 'Human resume request', 'Human retry request', 'Human abort request',
+    'Agent-reported merge', 'Host-recorded verified merge', 'Post-merge finalization diagnostic'])
+    assert(await history.getByRole('heading', { name: title, exact: true }).count(), title);
+  assert.match(await history.innerText(), /did not clear this pause/);
+  assert.equal(mixed.attention.canRetry, true);
+  assert.equal(mixed.history.activeCommentId, primary.sourceCommentId);
+  const verified = history.locator('.semantic-message').filter({ has: page.getByRole('heading', { name: 'Host-recorded verified merge', exact: true }) });
+  await verified.getByText('Inspect evidence references', { exact: true }).click();
+  const sourceLink = verified.locator('a[href^="#workspace-comment-"]');
+  assert.equal(await sourceLink.count(), 1, 'Source merge comment resolves within current history');
+  await sourceLink.focus();
+  await page.keyboard.press('Enter');
+  assert(await page.evaluate(() => document.activeElement?.matches('.workspace-comment') && document.activeElement.textContent.includes('Agent-reported merge')));
+  for (const width of [1440, 375, 720]) {
+    await page.setViewportSize({ width, height: 1000 });
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    await verified.screenshot({ path: `${output}/verified-merge-${width}.png` });
+    await history.locator('.semantic-message').filter({ has: page.getByRole('heading', { name: 'Human resume request', exact: true }) })
+      .screenshot({ path: `${output}/human-resume-${width}.png` });
+  }
+  await workspace(question);
+  await page.locator('.workspace-older-history').evaluateAll(nodes => nodes.forEach(node => { node.open = true; }));
+  const candidate = history.locator('.semantic-message').filter({ has: page.getByRole('heading', { name: 'Planning candidate', exact: true }) });
+  assert.match(await candidate.innerText(), /40 tasks/);
+  assert.doesNotMatch(await candidate.innerText(), /Advisory implementation approach/);
+  const planningData = await page.evaluate(async id => (await fetch(`/api/beads/${id}`)).json(), question.beadId);
+  for (const comment of planningData.comments) if (comment.message) assert.equal(comment.message.original, comment.body);
+  for (const schema of ['nightweaver-plan-v2', 'nightweaver-planner-outcome-v1', 'nightweaver-plan-challenger-outcome-v1'])
+    assert.equal(planningData.comments.find(c => c.body.includes(`"schema":"${schema}"`)).message.state, 'fallback');
+  const review = history.locator('.semantic-message').filter({ has: page.getByRole('heading', { name: 'Planning review assessment', exact: true }) });
+  assert.match(await review.innerText(), /Changes required/);
+  await review.getByText('Inspect findings, questions & evidence', { exact: true }).click();
+  assert.match(await review.innerText(), /Coverage gap/);
+  assert.match(await review.innerText(), /Recommended answer/);
+  assert.match(await review.innerText(), /Storage cost/);
+  const host = history.locator('.semantic-message').filter({ has: page.getByRole('heading', { name: 'Host-recorded Planning outcome', exact: true }) });
+  assert.match(await host.innerText(), /does not validate freshness/);
+  await host.getByText('Inspect evidence references', { exact: true }).click();
+  assert.match(await host.innerText(), /Source reference is not resolved/);
+  assert.equal(await host.locator('a[href^="#workspace-comment-"]').count(), 1);
+  for (const width of [1440, 375, 720]) {
+    await page.setViewportSize({ width, height: 1000 });
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    await candidate.screenshot({ path: `${output}/planning-candidate-${width}.png` });
+    await review.screenshot({ path: `${output}/planning-review-${width}.png` });
+  }
+  await candidate.getByText('Inspect tasks, constraints & coverage', { exact: true }).click();
+  assert.match(await candidate.innerText(), /Readable task 40/);
+  assert.match(await candidate.innerText(), /Advisory implementation approach/);
+  assert.match(await candidate.innerText(), /Product requirement/);
+  const candidateDisclosure = candidate.locator(':scope > details').first();
+  await candidateDisclosure.locator(':scope > summary').focus();
+  await page.evaluate(() => loadWorkspace(workspaceCurrentId, { manual: true }));
+  await page.waitForFunction(() => document.activeElement?.matches('[data-message-focus]'));
+  assert.equal(await candidateDisclosure.getAttribute('open'), '');
+  assert.equal(planningData.history.activeCommentId, question.sourceCommentId);
+
   // Desk uses the exact same selected source and renderer; inventory remains bounded.
   await page.goto(url, { waitUntil: 'networkidle' });
   const showAll = page.locator('#attention-show-all:not([hidden])');

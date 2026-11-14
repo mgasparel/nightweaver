@@ -2,6 +2,7 @@ using System.Text.Json;
 
 internal static class SchemaMessageQaFixture
 {
+    private static readonly string[] TaskAcceptance = ["Readable task details", "Exact original retained"];
     internal static async Task SeedAsync(Func<string[], Task<string>> run)
     {
         async Task<string> Create(string title, bool question = false)
@@ -61,5 +62,40 @@ internal static class SchemaMessageQaFixture
             await run(["comments", "add", duplicate, $"{{\"schema\":\"{schema}\",\"schema\":false}}"]);
             await run(["comments", "add", duplicate, "Later ordinary note"]);
         }
+        foreach (var role in new[] { "implementer", "reviewer", "qa", "merger" })
+            await Add(primary, new { schema = role == "merger" ? "nightweaver-merger-outcome-v1" : "nightweaver-delivery-outcome-v1",
+                bead_id = primary, role, outcome = role == "implementer" ? "ReadyForReview" : "ChangesRequired", provider = "openai-decisions",
+                invocation_id = "mixed-" + role, classification_diagnostic = "Prior reported outcome; subsequent rejection and pause are separate.", invocation_log = "H:/logs/mixed.log", extra = new { preserved = true } });
+        foreach (var action in new[] { "note_only", "resume" })
+            await Add(primary, new { schema = "nightweaver-human-guidance-v1", action, actor = "local-console", instruction = "Operator correction: retain evidence and inspect the actual state." });
+        foreach (var action in new[] { "retry", "abort" })
+            await Add(primary, new { schema = "nightweaver-human-action-v1", action, actor = "local-console" });
+        await run(["comments", "add", primary, "Corrective prose: the recorded Resume request did not clear this pause."]);
+        var hash = new string('a',40);
+        await run(["comments", "add", primary, $"nightweaver-merge-v1 pull_request=https://example.invalid/pr/42 checked_head={hash} required_checks=passed merge_method=squash merge_commit={hash}"]);
+        using var mergeComments = JsonDocument.Parse(await run(["comments", primary, "--json"]));
+        var mergeSource = mergeComments.RootElement.EnumerateArray().Last().GetProperty("id").ToString();
+        await run(["comments", "add", primary, $"nightweaver-verified-merge-v1 pull_request=https://example.invalid/pr/42 checked_head={hash} merge_commit={hash} required_checks=passed source_comment={mergeSource}"]);
+        await run(["comments", "add", primary, "nightweaver-finalization-v1 Verified merge closure completed; cleanup=failed: retained locked report; Product completion=safely ineligible."]);
+        await Add(primary, new { schema = "nightweaver-merger-outcome-v1", question = "merger_outcome", choice = "approved" });
+        await run(["comments", "add", primary, "nightweaver-merge-v1 malformed prefix record"]);
+        var grounding = new { checkoutRevision = hash, defaultRevision = hash, productInputs = new string('c',64) };
+        await Add(question, new { schema = "nightweaver-plan-v1", grounding,
+            tasks = Enumerable.Range(1,40).Select(i => new { id = "task-" + i, title = "Readable task " + i, outcome = "Observable task outcome", context = "Existing console context", approach = "Advisory implementation approach",
+                acceptanceCriteria = TaskAcceptance, verification = "Run focused verification", dependsOn = i == 1 ? Array.Empty<string>() : ["task-1"] }),
+            constraints = new[] { new { requirement = "Read-only presentation", source = "Product requirement" } },
+            coverage = Enumerable.Range(1,40).Select(i => new { requirement = "Requirement " + i, taskIds = new[] { "task-" + i }, satisfiedEvidence = (string?)null, authorizedExclusion = (string?)null }) });
+        using var planComments = JsonDocument.Parse(await run(["comments", question, "--json"]));
+        var planSource = planComments.RootElement.EnumerateArray().Last().GetProperty("id").ToString();
+        await Add(question, new { schema = "nightweaver-plan-review-v1", grounding, planCommentId = planSource, planRevision = new string('d',64), assessment = "Changes required: requirement coverage needs evidence.",
+            revalidation = "Preserve unaffected tasks", findings = new[] { new { violation = "Coverage gap", evidence = "Requirement 4", direction = "Add evidence" } },
+            questions = new[] { new { question = "Which policy?", recommendedAnswer = "Keep policy", tradeoffs = "Storage cost" } } });
+        await Add(question, new { schema = "nightweaver-planning-outcome-v1", bead_id = question, role = "plan_challenger", outcome = "Approved", provider = "standard-agent-cli", invocation_id = "planning-turn",
+            classification_diagnostic = "Host-recorded exact candidate assessment", invocation_log = "https://example.invalid/planning-log",
+            planning_approval = new { plan_comment_id = planSource, plan_revision = new string('d',64), review_comment_id = "unresolved-review", review_revision = new string('e',64),
+                grounding = new { checkout_revision = hash, default_revision = hash, product_inputs = new string('c',64), observed_remote_revision = (string?)null } } });
+        foreach (var schema in new[] { "nightweaver-plan-v2", "nightweaver-planner-outcome-v1", "nightweaver-plan-challenger-outcome-v1" })
+            await Add(question, new { schema, choice = "approved" });
+        await Add(question, new { schema = "nightweaver-plan-v1", tasks = false });
     }
 }

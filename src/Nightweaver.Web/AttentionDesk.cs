@@ -138,27 +138,7 @@ internal static class AttentionDeskProjector
     {
         var presentation = CommentPresenter.Project(comment, bead);
         if (presentation.State != "ordinary")
-            return new(presentation.State == "fallback" ? "unsupported-message" : "diagnostic", presentation.Role, presentation.Stage);
-
-        try
-        {
-            using var document = JsonDocument.Parse(comment.Text);
-            if (document.RootElement.ValueKind != JsonValueKind.Object) return new("ordinary", null, null);
-            var fields = ReadUniqueProperties(document.RootElement);
-            if (!ReadString(fields, "schema", out var schema) || !ReadString(fields, "actor", out var actor)
-                || actor != "local-console" || !ReadString(fields, "action", out var action))
-                return new("ordinary", null, null);
-            if (schema == "nightweaver-human-guidance-v1"
-                && (action is "resume" or "note_only")
-                && ReadString(fields, "instruction", out _))
-                return new("human-guidance", null, null);
-            if (schema == "nightweaver-human-action-v1" && (action is "retry" or "abort"))
-                return new("human-action", null, null);
-        }
-        catch (JsonException)
-        {
-            // Unknown or malformed comments remain available as exact plain text.
-        }
+            return new(presentation.State == "fallback" ? "unsupported-message" : presentation.Kind ?? "diagnostic", presentation.Role, presentation.Stage);
         return new("ordinary", null, null);
     }
 
@@ -282,47 +262,6 @@ internal static class AttentionDeskProjector
         }
         error = null;
         return result;
-    }
-
-    private static Dictionary<string, JsonElement> ReadUniqueProperties(JsonElement value)
-    {
-        var fields = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        foreach (var property in value.EnumerateObject())
-        {
-            string name;
-            try
-            {
-                name = property.Name;
-            }
-            catch (InvalidOperationException exception)
-            {
-                throw new JsonException("Comment property name contains invalid Unicode.", exception);
-            }
-
-            if (!fields.TryAdd(name, property.Value)) throw new JsonException("duplicate property");
-        }
-        return fields;
-    }
-
-    private static bool ReadString(Dictionary<string, JsonElement> fields, string name, out string value,
-        bool allowEmpty = false)
-    {
-        value = string.Empty;
-        if (!fields.TryGetValue(name, out var element) || element.ValueKind != JsonValueKind.String) return false;
-        value = ReadJsonString(element);
-        return allowEmpty || !string.IsNullOrWhiteSpace(value);
-    }
-
-    private static string ReadJsonString(JsonElement element)
-    {
-        try
-        {
-            return element.GetString() ?? string.Empty;
-        }
-        catch (InvalidOperationException exception)
-        {
-            throw new JsonException("Comment string contains invalid Unicode.", exception);
-        }
     }
 
     private static bool IsLegacyDecisionContext(string text)

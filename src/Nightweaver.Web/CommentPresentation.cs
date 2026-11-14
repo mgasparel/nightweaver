@@ -3,9 +3,12 @@ using Nightweaver.Inspection;
 
 namespace Nightweaver.Web;
 
-internal sealed record MessageSection(string Label, string Text);
+internal sealed record MessageSection(string Label, string Text, bool Details = false, string? CommentId = null);
 internal sealed record CommentPresentation(string State, string Title, string Summary, string? Role,
-    string? Stage, IReadOnlyList<MessageSection> Sections, string Original, string SourceId);
+    string? Stage, IReadOnlyList<MessageSection> Sections, string Original, string SourceId)
+{
+    public string? Kind { get; init; }
+}
 
 /// <summary>Read-only display adapters. Successful presentation does not verify workflow evidence.</summary>
 internal static class CommentPresenter
@@ -17,9 +20,10 @@ internal static class CommentPresenter
         CommentPresentation Fallback(string reason) => new("fallback", "Inspect message", reason,
             null, null, [], text, comment.Id);
         if (!text.TrimStart().StartsWith('{'))
-            return text.Contains("nightweaver-", StringComparison.Ordinal) && text.Contains("\"schema\"", StringComparison.Ordinal)
+            return AuditMessagePresenter.Text(comment, bead) ?? (text.TrimStart().StartsWith("nightweaver-", StringComparison.Ordinal)
+                || text.Contains("nightweaver-", StringComparison.Ordinal) && text.Contains("\"schema\"", StringComparison.Ordinal)
                 ? Fallback("Mixed or malformed Nightweaver payload. Current explanation is uncertain; inspect the original and history.")
-                : new("ordinary", "Comment", text, null, null, [], text, comment.Id);
+                : new("ordinary", "Comment", text, null, null, [], text, comment.Id));
         try
         {
             if (text.Length > 262144) throw new JsonException("Message exceeds display parsing limit.");
@@ -36,6 +40,7 @@ internal static class CommentPresenter
                 return new("ordinary", "Comment", text, null, null, [], text, comment.Id);
             if (string.IsNullOrWhiteSpace(comment.Id) || comment.IssueId != bead.Id)
                 throw new JsonException("Missing or mismatched source identity.");
+            if (AuditMessagePresenter.Json(root, comment, bead) is { } audit) return audit;
             string Read(JsonElement value, string name)
             {
                 if (!value.TryGetProperty(name, out var field) || field.ValueKind != JsonValueKind.String
@@ -119,9 +124,6 @@ internal static class CommentPresenter
                     Identity(); title = schema.Contains("cleanup", StringComparison.Ordinal) ? "Historical cleanup warning" : "Supplemental pause failure";
                     summary = Required("failure");
                     break;
-                case "nightweaver-human-guidance-v1":
-                case "nightweaver-human-action-v1":
-                    return new("ordinary", "Comment", text, null, null, [], text, comment.Id);
                 case "nightweaver-plan-question-v1":
                     if (comment.IssueId != bead.Id) throw new JsonException("Comment identity mismatch.");
                     if (!root.TryGetProperty("grounding", out var grounding) || grounding.ValueKind != JsonValueKind.Object)
@@ -141,7 +143,7 @@ internal static class CommentPresenter
             }
             return new("supported", title, summary, role, stage, sections, text, comment.Id);
         }
-        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or KeyNotFoundException)
         {
             return claimedContract || text.Contains("nightweaver-", StringComparison.Ordinal)
                 ? Fallback("Malformed Nightweaver message. Current explanation is uncertain; inspect the original and history.")
