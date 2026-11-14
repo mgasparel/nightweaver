@@ -74,7 +74,10 @@ internal static class ProjectConfigLoader
             }
 
             ProjectSlug? name = null;
-            string? openAiApiKey = null;
+            string? decisionsApiKey = null;
+            var decisionsApiProvider = DecisionsApiProvider.OpenAi;
+            Uri? decisionsApiEndpoint = null;
+            string? decisionsApiModel = null;
             TargetRepositoryConfig? targetRepository = null;
             var concurrency = new ConcurrencyConfig(
                 ProjectConfigDefaults.MaxConcurrentPlanning,
@@ -98,7 +101,22 @@ internal static class ProjectConfigLoader
                 switch (property.Name)
                 {
                     case "openai_api_key":
-                        openAiApiKey = ReadOpenAiApiKey(property.Value, path);
+                    case "decisions_api_key":
+                        decisionsApiKey = ReadDecisionsText(property.Value, path);
+                        break;
+                    case "decisions_api_provider":
+                        if (property.Value.ValueKind == JsonValueKind.String
+                            && property.Value.GetString() is "openai" or "openrouter")
+                            decisionsApiProvider = property.Value.GetString() == "openrouter"
+                                ? DecisionsApiProvider.OpenRouter : DecisionsApiProvider.OpenAi;
+                        else
+                            AddError("must be exactly 'openai' or 'openrouter'", path);
+                        break;
+                    case "decisions_api_endpoint":
+                        decisionsApiEndpoint = ReadDecisionsEndpoint(property.Value, path);
+                        break;
+                    case "decisions_api_model":
+                        decisionsApiModel = ReadDecisionsText(property.Value, path);
                         break;
                     case "name":
                         sawName = true;
@@ -136,6 +154,9 @@ internal static class ProjectConfigLoader
                 AddError("is required", "$.target_repository");
             }
 
+            if (rootNames.Contains("openai_api_key") && rootNames.Contains("decisions_api_key"))
+                AddError("cannot be combined with legacy openai_api_key; use only decisions_api_key", "$.decisions_api_key");
+
             var resolvedSettings = AgentSettingsResolver.Resolve(agentDefaultsOverride, roleOverrides);
             ThrowIfInvalid();
 
@@ -146,10 +167,32 @@ internal static class ProjectConfigLoader
                 concurrency,
                 limits,
                 resolvedSettings.AgentDefaults,
-                resolvedSettings.Roles) { OpenAiApiKey = openAiApiKey };
+                resolvedSettings.Roles)
+            {
+                DecisionsApiKey = decisionsApiKey,
+                DecisionsApiProvider = decisionsApiProvider,
+                DecisionsApiEndpoint = decisionsApiEndpoint ?? new Uri(decisionsApiProvider == DecisionsApiProvider.OpenRouter
+                    ? "https://openrouter.ai/api/alpha/decisions" : "https://api.openai.com/v1/decisions"),
+                DecisionsApiModel = decisionsApiModel ?? (decisionsApiProvider == DecisionsApiProvider.OpenRouter
+                    ? "typesafe/jev-1.14" : "gpt-6-luna")
+            };
         }
 
-        private string? ReadOpenAiApiKey(JsonElement element, string path)
+        private Uri? ReadDecisionsEndpoint(JsonElement element, string path)
+        {
+            var value = ReadDecisionsText(element, path);
+            if (value is null) return null;
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps
+                || string.IsNullOrEmpty(uri.Host) || uri.UserInfo.Length != 0 || uri.Query.Length != 0
+                || uri.Fragment.Length != 0 || value.Contains('\\') || value.Any(char.IsWhiteSpace))
+            {
+                AddError("must be an absolute HTTPS endpoint without credentials, query or fragment", path);
+                return null;
+            }
+            return uri;
+        }
+
+        private string? ReadDecisionsText(JsonElement element, string path)
         {
             if (element.ValueKind != JsonValueKind.String)
             {

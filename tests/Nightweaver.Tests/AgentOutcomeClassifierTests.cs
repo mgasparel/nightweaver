@@ -10,6 +10,134 @@ namespace Nightweaver.Tests;
 public sealed class AgentOutcomeClassifierTests
 {
     [Theory]
+    [InlineData("Planner", "stage:plan", "planner_outcome", "ready_for_review")]
+    [InlineData("PlanChallenger", "stage:plan-challenge", "plan_challenger_outcome", "approved")]
+    [InlineData("Implementer", "stage:implement", "implementer_outcome", "ready_for_review")]
+    [InlineData("Reviewer", "stage:review", "reviewer_outcome", "approved")]
+    [InlineData("Qa", "stage:qa", "qa_outcome", "approved")]
+    [InlineData("Merger", "stage:merge", "merger_outcome", "approved")]
+    public async Task OpenRouterUsesConfiguredEndpointModelAndNamedQuestionsForEveryRole(
+        string roleName, string stage, string questionName, string choice)
+    {
+        var role = Enum.Parse<AgentRole>(roleName);
+        using var fixture = new OutcomeFixture();
+        var project = fixture.LoadProjectWithKey("json-fixture-secret") with
+        {
+            DecisionsApiProvider = DecisionsApiProvider.OpenRouter,
+            DecisionsApiEndpoint = new Uri("https://gateway.example.test/decisions"),
+            DecisionsApiModel = "custom/decision-model"
+        };
+        var calls = 0;
+        using var client = new HttpClient(new DelegateHttpMessageHandler(async request =>
+        {
+            calls++;
+            Assert.Equal(project.DecisionsApiEndpoint, request.RequestUri);
+            Assert.Equal("json-fixture-secret", request.Headers.Authorization?.Parameter);
+            var text = await request.Content!.ReadAsStringAsync();
+            Assert.DoesNotContain("fixture-secret", text, StringComparison.Ordinal);
+            using var body = JsonDocument.Parse(text);
+            var root = body.RootElement;
+            Assert.Equal("custom/decision-model", root.GetProperty("model").GetString());
+            Assert.Contains("invocation-log:", root.GetProperty("state").GetString(), StringComparison.Ordinal);
+            Assert.False(root.TryGetProperty("input", out _));
+            var questions = root.GetProperty("questions");
+            Assert.Single(questions.EnumerateObject());
+            var question = questions.GetProperty(questionName);
+            Assert.Equal("choice", question.GetProperty("type").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(question.GetProperty("instructions").GetString()));
+            Assert.True(question.GetProperty("criteria").TryGetProperty(choice, out _));
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new
+                {
+                    answers = new Dictionary<string, object>
+                    {
+                        [questionName] = new { type = "choice", choice, confidence = 0.95 }
+                    }
+                }))
+            };
+        }));
+        var classifier = new AgentOutcomeClassifier(client,
+            executeFallback: (_, _, _, _, _) => throw new InvalidOperationException("Unexpected fallback."),
+            getEnvironmentVariable: _ => null);
+
+        var invocation = fixture.InvocationFor(role, stage) with
+        {
+            PlanningContext = role is AgentRole.Planner or AgentRole.PlanChallenger ? "Complete candidate and Product context" : null
+        };
+        var result = await classifier.ClassifyAsync(fixture.Paths, project,
+            fixture.Context with { StageLabel = stage }, fixture.Worktree, invocation, [],
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result.Outcome);
+        Assert.Equal("openrouter-decisions", result.Provider);
+        Assert.Equal(1, calls);
+        Assert.DoesNotContain("fixture-secret", result.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("{\"answers\":{\"implementer_outcome\":{\"type\":\"refusal\"}}}")]
+    [InlineData("{\"answers\":{\"other\":{\"type\":\"choice\",\"choice\":\"ready_for_review\"}}}")]
+    [InlineData("{\"answers\":{\"implementer_outcome\":{\"type\":\"choice\",\"choice\":\"approved\"}}}")]
+    [InlineData("{\"answers\":{\"implementer_outcome\":{\"type\":\"choice\",\"choice\":\"ready_for_review\",\"confidence\":1.1}}}")]
+    [InlineData("{\"answers\":{\"implementer_outcome\":{\"type\":\"choice\",\"choice\":\"ready_for_review\",\"choice\":\"technical_blocker\"}}}")]
+    [InlineData("{\"answers\":{\"implementer_outcome\":{\"type\":\"choice\",\"choice\":\"ready_for_review\"},\"implementer_outcome\":{\"type\":\"refusal\"}}}")]
+    [InlineData("{\"answers\":{\"implementer_outcome\":{\"type\":\"choice\",\"choice\":\"ready_for_review\"},\"extra\":{\"type\":\"refusal\"}}}")]
+    [InlineData("{\"answers\":[]}")]
+    [InlineData("{\"answers\":null}")]
+    public async Task OpenRouterInvalidOrRefusedAnswersUseExactlyOneFallback(string response)
+    {
+        using var fixture = new OutcomeFixture();
+        var project = fixture.Project with { DecisionsApiProvider = DecisionsApiProvider.OpenRouter };
+        using var client = new HttpClient(new DelegateHttpMessageHandler(_ => Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(response) })));
+        var fallbackCalls = 0;
+        var classifier = new AgentOutcomeClassifier(client, executeFallback: (_, _, invocation, _, _) =>
+        {
+            fallbackCalls++;
+            return Task.FromResult(ValidFallbackResult(invocation));
+        }, apiKeyOverride: "fixture-key");
+
+        var result = await classifier.ClassifyAsync(fixture.Paths, project, fixture.Context, fixture.Worktree,
+            fixture.Invocation, [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(AgentOutcomeChoice.ReadyForReview, result.Outcome);
+        Assert.Equal("standard-agent-cli", result.Provider);
+        Assert.Equal(1, fallbackCalls);
+    }
+
+    [Theory]
+    [InlineData("OpenAi", null, "provider-secret", "provider-secret")]
+    [InlineData("OpenRouter", null, "provider-secret", "provider-secret")]
+    [InlineData("OpenRouter", "decisions-secret", "provider-secret", "decisions-secret")]
+    [InlineData("OpenRouter", " ", " ", "json-fixture-secret")]
+    public async Task DecisionsAndProviderEnvironmentCredentialsHaveExplicitPrecedence(
+        string providerName, string? decisionsKey, string? providerKey, string expectedKey)
+    {
+        var provider = Enum.Parse<DecisionsApiProvider>(providerName);
+        using var fixture = new OutcomeFixture();
+        var project = fixture.LoadProjectWithKey("json-fixture-secret") with { DecisionsApiProvider = provider };
+        using var client = new HttpClient(new DelegateHttpMessageHandler(request =>
+        {
+            Assert.Equal(expectedKey, request.Headers.Authorization?.Parameter);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadGateway));
+        }));
+        var classifier = new AgentOutcomeClassifier(client,
+            executeFallback: (_, _, invocation, _, _) => Task.FromResult(ValidFallbackResult(invocation)),
+            getEnvironmentVariable: name => name switch
+            {
+                "DECISIONS_API_KEY" => decisionsKey,
+                "OPENAI_API_KEY" when provider == DecisionsApiProvider.OpenAi => providerKey,
+                "OPENROUTER_API_KEY" when provider == DecisionsApiProvider.OpenRouter => providerKey,
+                _ => throw new InvalidOperationException("Must not read the other provider's credential.")
+            });
+
+        var result = await classifier.ClassifyAsync(fixture.Paths, project, fixture.Context, fixture.Worktree,
+            fixture.Invocation, [], TestContext.Current.CancellationToken);
+        Assert.Equal(AgentOutcomeChoice.ReadyForReview, result.Outcome);
+    }
+
+    [Theory]
     [InlineData(null, null, "json-fixture-secret")]
     [InlineData(null, "", "json-fixture-secret")]
     [InlineData(null, " \t", "json-fixture-secret")]
@@ -36,8 +164,8 @@ public sealed class AgentOutcomeClassifierTests
             apiKeyOverride: overrideKey,
             getEnvironmentVariable: name =>
             {
-                Assert.Equal("OPENAI_API_KEY", name);
-                return environmentKey;
+                Assert.True(name is "DECISIONS_API_KEY" or "OPENAI_API_KEY");
+                return name == "OPENAI_API_KEY" ? environmentKey : null;
             });
 
         var result = await classifier.ClassifyAsync(fixture.Paths, project, fixture.Context, fixture.Worktree,
@@ -588,7 +716,7 @@ public sealed class AgentOutcomeClassifierTests
             {
                 name = Project.Name.Value,
                 target_repository = new { path = "target" },
-                openai_api_key = key
+                decisions_api_key = key
             }));
             return ProjectConfigLoader.Load(configPath, Project.Name, Paths);
         }
