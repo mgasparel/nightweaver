@@ -19,6 +19,9 @@ public sealed class MergerOutcomeVerifierTests
         startInfo.ArgumentList.Add("pr");
         startInfo.ArgumentList.Add("view");
         startInfo.ArgumentList.Add("--help");
+        // This is an offline CLI-contract check. Do not let a first-use update
+        // notification add a network round trip to the complete-suite budget.
+        startInfo.Environment["GH_NO_UPDATE_NOTIFIER"] = "1";
         using var process = Process.Start(startInfo);
         Assert.NotNull(process);
         var output = process!.StandardOutput.ReadToEnd();

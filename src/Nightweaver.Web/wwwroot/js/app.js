@@ -1597,25 +1597,44 @@ function renderSemanticMessage(message, surface) {
   const box = document.createElement("section");
   box.className = `semantic-message semantic-${message.state}`;
   box.append(workspaceText("h4", "message-title", message.title));
-  if (message.role || message.stage) box.append(workspaceText("p", "message-attribution", [message.role, message.stage].filter(Boolean).join(" · ")));
-  box.append(workspaceText("p", "message-summary", message.summary));
+  const roleName = { planner: "Planner", plan_challenger: "Plan Challenger", implementer: "Implementer", reviewer: "Reviewer", qa: "QA", merger: "Merger" }[message.role] || message.role;
+  if (roleName || message.stage) box.append(workspaceText("p", "message-attribution", [roleName, message.stage].filter(Boolean).join(" · ")));
+  box.append(workspaceText("p", "message-summary", message.summary.length > 900 ? `${message.summary.slice(0, 280)}…` : message.summary));
+  if (message.summary.length > 900) box.append(messageDisclosure(`${surface}:${message.sourceId}:summary`, "Read full summary", workspaceText("pre", "", message.summary)));
   const evidence = document.createElement("div");
   for (const [index, section] of (message.sections || []).entries()) {
     const field = document.createElement("div");
     field.className = "message-field";
     field.append(workspaceText("h5", "", section.label));
-    const evidenceLink = ["Pull request", "Log directory", "Log references"].includes(section.label)
+    const evidenceLink = ["Pull request", "Log directory", "Log references", "Invocation log"].includes(section.label)
       ? messageEvidenceLink(section.text, `${surface}:${message.sourceId}:field:${index}:link`) : null;
-    if (evidenceLink) field.append(evidenceLink);
+    const source = surface.startsWith("history:") && section.commentId && workspaceCommentElements.get(section.commentId);
+    if (source) {
+      const link = workspaceText("a", "message-evidence-link", section.text);
+      link.href = `#${source.id}`;
+      link.dataset.messageFocus = `${surface}:${message.sourceId}:field:${index}:source`;
+      link.addEventListener("click", event => {
+        event.preventDefault();
+        const target = document.getElementById(source.id);
+        if (!target) return;
+        for (let parent = target.parentElement; parent; parent = parent.parentElement) if (parent.tagName === "DETAILS") parent.open = true;
+        target.scrollIntoView({ block: "center" });
+        target.focus({ preventScroll: true });
+      });
+      field.append(link);
+    } else if (evidenceLink) field.append(evidenceLink);
     else if (section.text.length > 900) {
       field.append(workspaceText("p", "message-excerpt", `${section.text.slice(0, 280)}…`),
         messageDisclosure(`${surface}:${message.sourceId}:field:${index}`, `Read full ${section.label.toLowerCase()}`,
           workspaceText("pre", "", section.text)));
     } else field.append(workspaceText("p", "", section.text));
-    if (["Invocation", "Log directory", "Log references", "Pull request", "Checked head"].includes(section.label)) evidence.append(field);
+    if (section.commentId && !source) field.append(workspaceText("p", "message-source", "Source reference is not resolved in the current history."));
+    if (section.details || ["Invocation", "Log directory", "Log references", "Pull request", "Checked head"].includes(section.label)) evidence.append(field);
     else box.append(field);
   }
-  if (evidence.childElementCount) box.append(messageDisclosure(`${surface}:${message.sourceId}:evidence`, "Inspect evidence references", evidence));
+  const evidenceLabel = message.title === "Planning candidate" ? "Inspect tasks, constraints & coverage"
+    : message.title === "Planning review assessment" ? "Inspect findings, questions & evidence" : "Inspect evidence references";
+  if (evidence.childElementCount) box.append(messageDisclosure(`${surface}:${message.sourceId}:evidence`, evidenceLabel, evidence));
   box.append(workspaceText("p", "message-source", `Source comment: ${message.sourceId}`));
   box.append(messageDisclosure(`${surface}:${message.sourceId}`, "View exact stored comment & technical details", workspaceText("pre", "", message.original)));
   return box;
@@ -1660,17 +1679,6 @@ function appendOtherPauseReports(container, attention, surface) {
   container.append(messageDisclosure(`${surface}:other-reports`, "Inspect other pause reports", reports));
 }
 
-function extractHumanInstruction(comment) {
-  if (comment.kind !== "human-guidance") return null;
-  try {
-    const value = JSON.parse(comment.body);
-    return value?.schema === "nightweaver-human-guidance-v1" && typeof value.instruction === "string"
-      ? value.instruction : null;
-  } catch {
-    return null;
-  }
-}
-
 function renderWorkspaceComment(comment, index, activeCommentId) {
   const article = document.createElement("article");
   article.className = `workspace-comment${comment.id === activeCommentId ? " workspace-comment-active" : ""}`;
@@ -1694,29 +1702,16 @@ function renderWorkspaceComment(comment, index, activeCommentId) {
     article.append(heading, renderSemanticMessage(comment.message, `history:${comment.id}`));
     return article;
   }
-  const instruction = extractHumanInstruction(comment);
-  if (instruction !== null) article.append(workspaceText("p", "workspace-comment-guidance", instruction));
-  if (instruction !== null) {
-    const raw = document.createElement("details");
-    raw.className = "workspace-comment-raw";
-    const summary = document.createElement("summary");
-    summary.textContent = "View exact stored comment";
-    const body = document.createElement("pre");
-    body.textContent = comment.body;
-    raw.append(summary, body);
-    article.append(heading, raw);
-  } else {
-    const body = document.createElement("pre");
-    body.className = "workspace-comment-body";
-    body.textContent = comment.body;
-    article.append(heading, body);
-  }
+  const body = document.createElement("pre");
+  body.className = "workspace-comment-body";
+  body.textContent = comment.body;
+  article.append(heading, body);
   return article;
 }
 
 function renderWorkspaceHistory(data) {
   workspaceHistory.replaceChildren();
-  workspaceCommentElements = new Map();
+  workspaceCommentElements = new Map(data.comments.map((comment, index) => [comment.id, { id: `workspace-comment-${index}` }]));
   const commentsById = new Map(data.comments.map((comment, index) => [comment.id, { comment, index }]));
   const older = data.history.olderCommentIds.map(id => commentsById.get(id)).filter(Boolean);
   const recent = data.history.recentCommentIds.map(id => commentsById.get(id)).filter(Boolean);
