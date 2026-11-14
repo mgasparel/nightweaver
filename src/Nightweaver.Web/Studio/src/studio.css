@@ -796,6 +796,10 @@ dialog::backdrop {
     padding: 0 5px;
   }
 }
+.synchronization { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; font-size: 11px; color: var(--muted); }
+.synchronization button { font: inherit; cursor: pointer; }
+.synchronization [role="alert"] { flex-basis: 100%; }
+@media (max-width: 600px) { .synchronization { max-width: 170px; gap: 4px; } }
 @media (prefers-reduced-motion: reduce) {
   * {
     scroll-behavior: auto !important;

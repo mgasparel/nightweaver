@@ -174,6 +174,18 @@ The same scenario also seeds mixed delivery publications, all four human audit a
 
 ## Operational protocol ordering
 
+For the implemented SSE/coordinator browser smoke, start a fresh exact isolated
+AppHost as above. Set `NIGHTWEAVER_QA_URL` from the direct `web` HTTP endpoint and
+`NIGHTWEAVER_QA_CONFIG` from that resource's `Nightweaver__ConfigPath` environment.
+From this directory run `node operations-qa.mjs`, then `node studio-qa.mjs` and
+`node smoke.mjs`. The operations probe validates disposable fixture identity,
+creates one external paused Bead, deliberately misses invalidations, verifies
+count convergence, forces real stream replacement, and checks manual refresh,
+one connection per tab and no replayed commands. It records screenshots/results
+under `TestResults/operations`. Review desktop/375/720 screenshots and stop the
+same exact AppHost in `finally`. Frontend deterministic tests: `npm test` in
+`src/Nightweaver.Web/Studio`; see [synchronization](../../docs/design/operational-synchronization.md).
+
 For the proposed operational protocol's eviction/reconnect ordering rules, run
 `python tests/Nightweaver.QA.AppHost/observation-ordering.py` from the repository
 root. This disposable model uses no AppHost, tracker or network. It covers TTL

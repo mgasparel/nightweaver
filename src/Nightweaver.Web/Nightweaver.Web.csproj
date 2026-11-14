@@ -27,9 +27,10 @@
   <ItemGroup>
     <StudioSource Include="Studio/src/**" />
   </ItemGroup>
-  <Target Name="BuildStudio" BeforeTargets="AssignTargetPaths" DependsOnTargets="CompileStudio" Condition="'$(DesignTimeBuild)' != 'true'">
+  <Target Name="BuildStudio" BeforeTargets="ResolveProjectStaticWebAssets;AssignTargetPaths" DependsOnTargets="CompileStudio" Condition="'$(DesignTimeBuild)' != 'true'">
     <ItemGroup>
-      <Content Remove="wwwroot/studio/**" />
+      <!-- Match evaluated items, including hashed files Vite has just removed. -->
+      <Content Remove="@(Content)" Condition="$([System.String]::Copy('%(Content.Identity)').Replace('\', '/').StartsWith('wwwroot/studio/'))" />
       <Content Include="wwwroot/studio/**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     </ItemGroup>
   </Target>

@@ -8,6 +8,7 @@ internal static class OperationObservationEndpoints
     internal static void AddOperationalObservations(this IServiceCollection services)
     {
         services.AddSingleton<ObservationMemoryBudget>();
+        services.AddSingleton<OperationalEventStream>();
         services.AddSingleton<IOperationalObservationSource, OperationalObservationSource>();
         services.AddSingleton(services => new OperationalObservationService(
             services.GetRequiredService<ProjectConfig>().Name.Value,
@@ -20,6 +21,8 @@ internal static class OperationObservationEndpoints
     {
         var observer = app.Services.GetRequiredService<OperationalObservationService>();
         var tracker = app.Services.GetRequiredService<TrackerBridge>();
+        app.MapGet("/api/operations/v1/projects/{projectId}/events",
+            (HttpContext context, string projectId, OperationalEventStream stream) => stream.RunAsync(context, projectId));
         tracker.ObservationRequested += observer.RequestReconciliation;
         // File mutations and uncertain cleanup outcomes also wake the collector. The
         // handler has completed (and released its gates) before the wake is published.

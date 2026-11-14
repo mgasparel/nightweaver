@@ -15,6 +15,8 @@ import {
 import { readContext, type StudioContext } from "./context";
 import { Icon, Panel, Status, Unavailable } from "./primitives";
 import "./studio.css";
+import { useObservation } from "./use-observation";
+import { operations } from "./operations-browser";
 
 const sections = [
   ["overview", "Overview"],
@@ -118,9 +120,11 @@ function AppShell({ context }: { context: StudioContext }) {
         </Link>
         <nav aria-label="Project navigation">
           {sections.map(([id, label]) => (
-            <NavLink className="nav-link" key={id} to={`${base}/${id}`}>
+            <NavLink className="nav-link" key={id} to={`${base}/${id}`} aria-label={label}
+              aria-describedby={id === "attention" ? "attention-navigation-count" : undefined}>
               <Icon name={id} />
               <span>{label}</span>
+              {id === "attention" && location.pathname.startsWith(`${base}/`) && <AttentionCount projectId={context.projectId} />}
             </NavLink>
           ))}
         </nav>
@@ -168,7 +172,7 @@ function AppShell({ context }: { context: StudioContext }) {
           <div className="crumb">
             Workspace <span>/</span> <strong>{context.projectId}</strong>
           </div>
-          <Status>Live status not connected</Status>
+          {location.pathname.startsWith(`${base}/`) && <SynchronizationStatus projectId={context.projectId} />}
           <a className="console-link" href="/">
             Existing console <Icon name="arrow" />
           </a>
@@ -227,6 +231,40 @@ function AppShell({ context }: { context: StudioContext }) {
       </dialog>
     </div>
   );
+}
+
+function AttentionCount({ projectId }: { projectId: string }) {
+  const snapshot = useObservation(projectId, "attention");
+  const data = snapshot.observation?.data;
+  const stale = snapshot.stale || snapshot.observation?.health !== "fresh";
+  return <small id="attention-navigation-count" aria-label={Array.isArray(data) ? `${data.length} paused Beads${stale ? ", retained observation" : ""}` : "Attention count unavailable"}>
+    {Array.isArray(data) ? `${data.length}${stale ? " · stale" : ""}` : "—"}
+  </small>;
+}
+
+function SynchronizationStatus({ projectId }: { projectId: string }) {
+  const snapshot = useObservation(projectId, "attention");
+  const [error, setError] = useState(false);
+  const health = snapshot.stale ? "Awaiting current data" : `Tracker ${snapshot.observation?.health ?? "unavailable"}`;
+  return <div className="synchronization">
+    <span role="status">{snapshot.connectionState === "connected" ? "Live connection" : snapshot.connectionState === "connecting" ? "Connecting" : "Disconnected"} · {health}</span>
+    <button className="text-link" onClick={() => {
+      setError(false);
+      operations.refresh([{ projectId, key: "attention" }]).catch(() => setError(true));
+    }}>{snapshot.refreshing ? "Refresh again" : "Refresh"}</button>
+    {(error || snapshot.error) && <span role="alert">Observation unavailable. Try Refresh.</span>}
+  </div>;
+}
+
+function AttentionMetric({ projectId }: { projectId: string }) {
+  const snapshot = useObservation(projectId, "attention");
+  const data = snapshot.observation?.data;
+  const health = snapshot.stale ? "retained" : snapshot.observation?.health ?? "unavailable";
+  return <div className="metric">
+    <span className="eyebrow">Attention</span>
+    <strong aria-label={Array.isArray(data) ? `${data.length} paused Beads` : "Unavailable"}>{Array.isArray(data) ? data.length : "—"}</strong>
+    <small>Paused Beads · {health}</small>
+  </div>;
 }
 
 function ProjectRoutes({
@@ -317,7 +355,7 @@ function Overview({
           ["Attention", "Tracker not connected"],
           ["Merged", "Digest not connected"],
           ["Ready", "Tracker not connected"],
-        ].map(([label, detail]) => (
+        ].map(([label, detail]) => label === "Attention" ? <AttentionMetric key={label} projectId={context.projectId} /> : (
           <div className="metric" key={label}>
             <span className="eyebrow">{label}</span>
             <strong aria-label="Unavailable">—</strong>
