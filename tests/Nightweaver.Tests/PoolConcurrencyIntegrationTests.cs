@@ -27,15 +27,20 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
         fixture.MergerDiagnosticsBeadId = heldBead;
         var environment = fixture.CreateEnvironment();
         var system = new SystemProcessRunner();
-        var runner = new RecordingProcessRunner((request, token) =>
+        var processFailures = new ConcurrentQueue<string>();
+        var roleOutcomes = new ConcurrentQueue<string>();
+        var runner = new RecordingProcessRunner(async (request, token) =>
         {
             var merged = new Dictionary<string, string?>(request.Environment, StringComparer.OrdinalIgnoreCase);
             foreach (var pair in environment) merged[pair.Key] = pair.Value;
-            return system.RunAsync(request with
+            var result = await system.RunAsync(request with
             {
                 FileName = request.FileName == "gh" ? Path.Combine(fixture.FakeCliRoot, "gh.exe") : request.FileName,
                 Environment = merged
             }, token);
+            if (result.ExitCode != 0)
+                processFailures.Enqueue($"{request.FileName} {string.Join(' ', request.Arguments)}: {result.ExitCode}: {result.StandardError}");
+            return result;
         });
         var productCreate = await runner.RunAsync(BeadsCommand.CreateWrite(repository.Path,
             ["create", "--title", "Requested behavior", "--type", "feature", "--labels", "ready-for-planning", "--json"]),
@@ -107,6 +112,7 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
         DeliveryRoleRunner deliveryRole = async (host, config, target, bead, role, actor, state, token, progress) =>
         {
             var outcome = await retries.RunAsync(host, config, target, bead, role, actor, token, progress, state);
+            roleOutcomes.Enqueue($"{bead} {role}: {JsonSerializer.Serialize(outcome)}");
             if (bead.StartsWith(product + "-p", StringComparison.Ordinal)) deliveryStop.RequestStop();
             if (bead == product && role == AgentRole.PlanChallenger) planningStop.RequestStop();
             return outcome;
@@ -189,7 +195,8 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             Assert.False(admittedPlanning.Completion.IsCompleted);
             releasePlanning.TrySetResult();
             var interrupted = await admittedPlanning.Completion.WaitAsync(TimeSpan.FromMinutes(2), lifetime.Token);
-            Assert.Equal(PlanningSlotDisposition.Interrupted, interrupted.Outcome?.Disposition);
+            Assert.True(interrupted.Outcome?.Disposition == PlanningSlotDisposition.Interrupted,
+                $"Expected Interrupted; completion: {JsonSerializer.Serialize(interrupted)}");
             Assert.True(interrupted.ClaimHandoffCompleted, interrupted.Diagnostic);
             var sentinel = Path.Combine(paths.TmpRoot(project.Name), product, "retained-sentinel");
             File.WriteAllText(sentinel, "preserve interruption and pause");
@@ -230,6 +237,8 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             primary = exception;
             fixture.PreserveForFailure();
             TestContext.Current.TestOutputHelper?.WriteLine($"Pool concurrency fixture preserved at {fixture.Root}");
+            TestContext.Current.TestOutputHelper?.WriteLine(string.Join('\n', roleOutcomes));
+            TestContext.Current.TestOutputHelper?.WriteLine(string.Join('\n', processFailures));
             throw;
         }
         finally
