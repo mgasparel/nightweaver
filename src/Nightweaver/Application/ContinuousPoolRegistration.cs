@@ -38,6 +38,21 @@ internal sealed record ContinuousPoolRegistration
 
     internal ContinuousPoolRegistration(
         ContinuousPoolKind kind,
+        Func<CancellationToken, Task<IReadOnlyList<PlanningPoolDiagnostic>>> evaluateAsync,
+        ChannelReader<PlanningPoolCompletion> completions,
+        Action cancel,
+        Func<CancellationToken, Task> drain,
+        Func<CancellationToken, Task>? waitForCompletionAccountingAsync = null)
+        : this(kind,
+            async token => (await evaluateAsync(token).ConfigureAwait(false))
+                .Select(item => new ContinuousPoolDiagnostic(item.BeadId, item.Code.ToString(), item.Message)).ToArray(),
+            token => ReadPlanningCompletionsAsync(completions, token),
+            cancel, drain, waitForCompletionAccountingAsync)
+    {
+    }
+
+    internal ContinuousPoolRegistration(
+        ContinuousPoolKind kind,
         Func<CancellationToken, Task<IReadOnlyList<DeliveryPoolDiagnostic>>> evaluateAsync,
         ChannelReader<DeliveryPoolCompletion> completions,
         Action cancel,
@@ -84,6 +99,28 @@ internal sealed record ContinuousPoolRegistration
         Cancel = cancel;
         Drain = drain;
         WaitForCompletionAccountingAsync = waitForCompletionAccountingAsync;
+    }
+
+    private static async IAsyncEnumerable<ContinuousPoolCompletion> ReadPlanningCompletionsAsync(
+        ChannelReader<PlanningPoolCompletion> reader,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var completion in reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var disposition = completion.Outcome?.Disposition;
+            var failed = completion.Exception is not null || completion.IsCanceled
+                || disposition == PlanningSlotDisposition.Failed;
+            yield return new ContinuousPoolCompletion(
+                completion.BeadId,
+                disposition?.ToString() ?? (completion.IsAccountingBarrier ? null : "ended without an outcome"),
+                completion.Diagnostic,
+                completion.Exception,
+                completion.IsCanceled,
+                completion.LocalCapacityReleased,
+                completion.ClaimHandoffCompleted,
+                failed,
+                completion.AccountingBarrier);
+        }
     }
 
     private static async IAsyncEnumerable<ContinuousPoolCompletion> ReadDeliveryCompletionsAsync(

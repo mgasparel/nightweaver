@@ -77,6 +77,14 @@ internal sealed class CompletedEnvironmentWorker(HostPaths paths, ProjectConfig 
         return Task.CompletedTask;
     }
 
+    private readonly ConcurrentDictionary<string, byte> planningCompletions = new(StringComparer.Ordinal);
+
+    internal void PlanningCompleted(string beadId)
+    {
+        planningCompletions.TryAdd(beadId, 0);
+        Wake();
+    }
+
     // Called after pool drain as well: graceful stop persists completed work without starting removal.
     internal async Task FlushCompletionsAsync(CancellationToken token)
     {
@@ -87,6 +95,12 @@ internal sealed class CompletedEnvironmentWorker(HostPaths paths, ProjectConfig 
 
     private async Task PersistCompletionsAsync(CancellationToken token)
     {
+        foreach (var id in planningCompletions.Keys)
+        {
+            await cleanup.ReconcileAsync(paths, project.Name, repository, project.RecoveryActor, token,
+                id, discoverOnly: true).ConfigureAwait(false);
+            planningCompletions.TryRemove(id, out _);
+        }
         foreach (var item in completions.ToArray())
         {
             await cleanup.ReconcileAsync(paths, project.Name, repository, project.RecoveryActor, token,

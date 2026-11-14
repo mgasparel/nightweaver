@@ -164,7 +164,11 @@ internal sealed class OperationalRetryCoordinator
         {
             try
             {
-                var published = await planningPublisher.PublishAsync(session, cancellationToken, releaseRevalidationClaim: expectedState is null);
+                if (!ContinuousAgentLaunchContext.TryBeginExternalOperation(
+                        () => planningPublisher.PublishAsync(session, cancellationToken, releaseRevalidationClaim: expectedState is null),
+                        out var publication))
+                    return StoppedForDrain(new AgentStageResult(role, beadId, "planning-publication", "", null, []), 0);
+                var published = await publication.ConfigureAwait(false);
                 return new(OperationalRetryStatus.Succeeded, published, 0, null, null, null);
             }
             catch (Exception exception) when (exception is AgentStageInputException or ToolExecutionException or IOException)
@@ -586,7 +590,7 @@ internal sealed class OperationalRetryCoordinator
                 budgetExhausted = true;
                 throw new AgentStageInputException("Planning repair budget exhausted; preserve the plan and findings for guarded Retry.");
             }
-            var published = await outcomePublisher.PublishAsync(session, invocation, classification, releaseClaim || classification.Outcome == AgentOutcomeChoice.Approved, token);
+            var published = await outcomePublisher.PublishAsync(session, invocation, classification, releaseClaim, token);
             return Success(published, attempts);
         }
         catch (OperationCanceledException) { throw; }

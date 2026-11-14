@@ -40,7 +40,7 @@ The solution integrates:
 11. As a repository maintainer, I want to see `needs-human` escalation cards when an agent exhausts its repair cycles, so that I know why verification failed.
 12. As a repository maintainer, I want one-click actions on `needs-human` cards to reset the repair budget and retry, copy the checkout command, or abort the bead, so that I can resolve blockers with minimal friction.
 13. As an operator, I want a compact manual Planning notice, so that I understand why automated Planning slots are absent.
-14. As an operator, I want Planning to remain visibly disabled until that runtime is explicitly implemented.
+14. As an operator, I want real Planning invocations, capacity, logs and unavailable observations to be visible alongside Delivery and Merger.
 15. As an operator, I want real-time visibility into the Delivery Floor slots, so that I can monitor isolated worktrees, active branches, diff counters, and repair cycles.
 16. As an operator, I want real-time visibility into the Singleton Merger Slot, so that I can watch serialized branch rebases, conflict resolution, and remote GitHub check polling.
 17. As an operator, I want to open the selected slot's invocation dialog, so that I can inspect real live or retained output and observed timing without switching to a terminal.
@@ -270,7 +270,7 @@ Expansion initially shows up to `DIGEST_INITIAL_THREADS = 5` compact thread summ
 
 ### Factory Execution Bays — ns-1b1.3
 
-Keep `.bay-grid`, `#delivery-slots`, `#merger-slots`, `#delivery-pool-status` and `#merger-pool-status`. Pool headers report observed occupancy honestly, e.g. “1 of 3 slots active · 2 idle” or “0 of 1 slot active · Idle”. On stale data explicitly qualify these counts as last observed. Do not infer occupancy from the tracker’s Active filter. `.bay-card.planning-disabled` becomes a compact spanning notice: “Planning Pool · Manual planning mode (automated Planning disabled)”.
+Keep `.bay-grid`, `#delivery-slots`, `#merger-slots`, `#delivery-pool-status` and `#merger-pool-status`. Pool headers report observed occupancy honestly, e.g. “1 of 3 slots active · 2 idle” or “0 of 1 slot active · Idle”. On stale data explicitly qualify these counts as last observed. Do not infer occupancy from the tracker’s Active filter. The Planning bay uses `#planning-slots` and `#planning-pool-status` with the same observed slot/log interactions. Older two-pool snapshots show Planning unavailable, never fabricated idle or live activity.
 
 For `status !== "idle"`, a `.factory-slot` presents these visible summary rows:
 
@@ -344,6 +344,6 @@ The console names Product Bead (native feature/bug) and Plan Bead (native task) 
 
 Workspace, Explorer, Attention and catch-up rows consume one read-only presentation. A tracked stage (Planning, Plan review, Plan approved, Implementation, Review, QA or Merge) never establishes a running Agent. Tracker ownership and in_progress are stored facts; Environment and execution bays retain their own live, stale and unavailable observations.
 
-Products show Awaiting Planning authorization, Authorized for Planning (explicit dispatch; continuous Planning is not scheduled), or Plan published / awaiting Delivery. Terminal planned Products show Plan published without promising Delivery or merge. The planned label alone does not verify a generated graph. Publication hold, incomplete observation and Publication needs attention use the runtime publication gate over the available inventory; manual provenance does not grant generated authority. A held partial publication without a graph snapshot remains unverified; an independently observed Product identity or revision conflict still shows Publication needs attention.
+Products show Awaiting Planning authorization, Authorized for Planning (subject to native readiness and capacity), or Plan published / awaiting Delivery. Terminal planned Products show Plan published without promising Delivery or merge. The planned label alone does not verify a generated graph. Publication hold, incomplete observation and Publication needs attention use the runtime publication gate over the available inventory; manual provenance does not grant generated authority. A held partial publication without a graph snapshot remains unverified; an independently observed Product identity or revision conflict still shows Publication needs attention.
 
 Compact summaries keep raw labels in a disclosure. Workspace Workflow details contain planning, publication, pauses, tracker ownership, used/configured repair budget, uncertainty and wrapped source state. Conflicting stages/pauses and invalid repair metadata stay unavailable. A planned Product can retain historical technical attention without making Retry available. Viewing and prose edits grant no workflow authority; guarded Planning, Resume/Retry and independent Housekeeping actions retain their existing owners.

@@ -12,8 +12,8 @@ Relevant domain vocabulary is defined in [`GLOSSARY.md`](./GLOSSARY.md). Archite
 
 1. **Two-Tier Bead Lifecycle (`Product Bead` -> `Plan Bead`)**:
    - **Product Beads** (`--type feature` or `--type bug`) are human-authored Beads describing user-level product requirements or bug reports that enter **Planning**.
-   - **Plan Beads** (`--type task`) are maintainer-authored Beads containing a self-contained technical implementation specification ready for **Delivery**, optionally linked to their parent **Product Bead** via `--deps discovered-from:<product-bead-id>`. Automated Planning is outside the current runtime.
-   - Every **Plan Bead** slice must be **independently deployable** to `default_branch`. When multiple **Plan Beads** require sequencing, the **Planner Agent** wires native `blocks` dependencies (`bd dep add <later-slice> <earlier-slice>`) between them so `bd ready` enforces ordering automatically.
+   - **Plan Beads** (`--type task`) are maintainer-authored Beads containing a self-contained technical implementation specification ready for **Delivery**, optionally linked to their parent **Product Bead** via `--deps discovered-from:<product-bead-id>`. The opted-in Planning workflow can also publish verified Plan Beads automatically.
+   - Every **Plan Bead** slice must be **independently deployable** to `default_branch`. When multiple **Plan Beads** require sequencing, the **Planner Agent** proposes ordering and the **Orchestrator** publishes native `blocks` dependencies (`bd dep add <later-slice> <earlier-slice>`) between them so `bd ready` enforces ordering automatically.
 
 2. **Beads-Native Workflow State**:
    - All workflow state, stage transitions (`stage:*` labels), human escalation states (`product-decision-required`, `needs-human`), repair cycle counters (`repair_cycles` metadata), and inter-agent findings live directly on the **Product Bead** and **Plan Bead** in `bd`.
@@ -22,10 +22,10 @@ Relevant domain vocabulary is defined in [`GLOSSARY.md`](./GLOSSARY.md). Archite
 3. **Crash-Stateless Orchestrator with Verifiable Agent Evidence**:
    - **Orchestrator responsibilities**:
      - Use a best-effort `bd events tail --follow` on the configured **Target Repository** as a discovery wake-up hint; periodic discovery remains active when the journal is unavailable.
-     - Claim eligible manually authored tasks (`bd update <id> --claim`) and schedule them through the active bounded pools in order: **Delivery**, then singleton **Merger**. Planning remains manually authored and can compose later.
+     - Claim eligible opted-in Products and manual or verified generated tasks under native status/assignee guards, scheduling **Planning**, **Delivery**, then singleton **Merger** with independent capacity.
      - Provision, reset, and clean up isolated Git worktrees, per-invocation temporary directories, and **Win32 Job Objects**.
      - Map each Bead's `(type, stage:* label)` to its corresponding **Agent** role and launch the configured **Agent CLI**.
-     - Verify process, worktree, Git, and tracker invariants independently of model answers; classify Delivery and Merger evidence; publish guarded outcomes; manage operational retries and semantic repair budgets; and auto-close eligible `planned` **Product Beads** after their discovered tasks close.
+     - Verify process, worktree, Git, and tracker invariants independently of model answers; classify Planning, Delivery and Merger evidence; publish guarded outcomes; manage operational retries and semantic repair budgets; and auto-close eligible `planned` **Product Beads** after their discovered tasks close.
    - **Agent responsibilities**:
      - Each **Agent** executes directly inside the Bead's isolated worktree with full CLI/tool autonomy within its role mandate (`bd`, `git`, `gh`, and the **Target Repository**'s build/test toolchain).
      - Each **Agent** reads its assigned Bead via `bd show <id>` and `bd comments <id>`, performs its single lifecycle responsibility, and records natural-language findings or evidence via `bd comments add`. The Orchestrator owns verified stage, pause, status, claim, type, and repair-counter transitions.
@@ -65,7 +65,7 @@ stateDiagram-v2
    - Unblocked, unassigned **Product Beads** (`bd ready --type feature,bug --unassigned`) that carry `ready-for-planning` and do not carry `planned`, `product-decision-required`, or `needs-human` are eligible for **Planning** (subject to `max_active_plan_beads` backpressure; see Section 5.2).
    - Product intake and prose edits leave the Product in backlog. The workspace's explicit **Ready for Planning** action adds `ready-for-planning` after comparing the displayed workflow identity with fresh state. It accepts only open, unassigned, unpaused Products with a valid Planning stage (or no stage), using a native open/unassigned guarded update and a confirming read. Readiness persists through Planning and human pauses; Resume/Retry still govern the pause independently. Neither action starts an Agent or bypasses native readiness and capacity. Explicit stage dispatch requires the same readiness label.
 2. **Grounded execution (`stage:plan` and `stage:plan-challenge`)**:
-   - Explicit opted-in Product dispatch runs one reusable Planning turn through the existing operational retry, role-specific bounded classification and deterministic verification pipeline. Continuous Planning pool registration remains separate.
+   - Explicit opted-in Product dispatch runs one reusable Planning turn through the existing operational retry, role-specific bounded classification and deterministic verification pipeline. Continuous Planning composes these bounded turns under one guarded claim, including verified publication.
    - Planner and Challenger leave workflow state and claims unchanged. The Orchestrator alone publishes stages, approval, pause, repair accounting and claim release under fresh owner/status guards. Comments are evidence, never transition or Resume authority.
    - Planner records a recoverable candidate with executable tasks, observable acceptance criteria, advisory implementation approaches, separately sourced hard constraints, dependencies, verification and complete Product requirement coverage. Existing code alone creates no binding requirement. Every Product requirement maps to work, satisfaction evidence or a Product-authorized exclusion.
    - Challenger assesses the exact candidate comment ID and content hash, checking boundedness, dependencies, verification, collective coverage and design assumptions leaking into acceptance criteria. Findings identify outcome/contract violations with evidence and direction. Disproven assumptions revise affected plans rather than repeating them unchanged.
@@ -216,9 +216,9 @@ stateDiagram-v2
 
 ## 5. Orchestrator Concurrency, Continuous Discovery, and Worktree Isolation
 
-### 5.1 Continuous Discovery and the Current Delivery and Merger Runtime
+### 5.1 Continuous Discovery and the Planning, Delivery and Merger Runtime
 
-The selector-only CLI is a live continuous runtime; `--dry-run` remains a separate one-shot inspection. After startup recovery and cleanup, the supported runtime evaluates Delivery and then the singleton Merger pool. Both pools have independent bounded capacity and queued preparation, and both feed completion-triggered discovery after releasing local capacity. Planning remains manually authored and is not scheduled by this runtime.
+The selector-only CLI is a live continuous runtime; `--dry-run` remains a separate one-shot inspection. After startup recovery and cleanup, the runtime evaluates Planning, Delivery and then the singleton Merger pool. Each pool has independent bounded capacity and queues preparation without blocking other pools. Completions trigger discovery after local capacity and environment reservations are released. Only explicitly authorized, natively ready Products enter Planning; intake stays in backlog.
 
 **Repository Exclusion and Startup Recovery for Live Dispatch**:
 Before any Beads inventory/readiness query, recovery, dispatch write, Project runtime-directory creation, worktree operation, or Agent launch, a live Orchestrator performs read-only configuration and Git validation, then acquires an OS-managed mutex keyed to the physical Git common-directory identity. The mutex is shared by every Project name and Nightweaver host root that targets the same local repository, is outside the Target Repository, and remains owned for the process lifetime. A competing process exits with a diagnostic before tracker or runtime mutations. Process exit or death releases ownership; no lease database, heartbeat, or PID proof is used.
@@ -243,7 +243,7 @@ flowchart TD
     Reconcile --> Cleanup[Serialized bounded cleanup outside admission]
     Cleanup --> Remove[Fresh eligibility and identity checks under per-Bead reservation]
     Remove --> Tmp[Delete owned tmp only after checking actual survivors]
-    Actual --> Discover[Fresh Delivery then Merger discovery]
+    Actual --> Discover[Fresh Planning then Delivery then Merger discovery]
     Discover --> Reserve[Reserve pool-local capacity and queue slot]
     Reserve --> Slot[Prepare and run slot independently]
     Slot --> Complete[Release local capacity and publish completion]
@@ -279,7 +279,7 @@ flowchart TD
 1. **Planning Pool (`max_concurrent_planning`, default `2`)**:
    - Claims eligible Product Beads and holds the claim across the Planning stages. On planned, completed-environment cleanup may remove the detached worktree; on either pause label, the worktree and temporary files are retained and the still-owned claim is released.
 2. **Planning Backpressure (`max_active_plan_beads`, default `5`)**:
-   - To prevent **Planning** from building a large queue of pre-planned **Plan Beads** that go stale as `<default_branch>` evolves, the **Orchestrator** counts all active published (non-closed, non-paused) **Plan Beads** (`--type task` with status `open` or `in_progress` that do not carry `plan-unpublished`, `product-decision-required`, or `needs-human`).
+   - To prevent **Planning** from building a large queue of pre-planned **Plan Beads** that go stale as `<default_branch>` evolves, the **Orchestrator** counts all active published (non-closed, non-paused) **Plan Beads** (`--type task` with any nonclosed status, including `blocked` and `deferred`, that do not carry `plan-unpublished`, `product-decision-required`, or `needs-human`).
    - When `active_plan_beads >= max_active_plan_beads`, the **Orchestrator** pauses claiming *new* **Product Beads** for **Planning** until `active_plan_beads < max_active_plan_beads`. Any **Product Bead** already mid-Planning in an active slot finishes its current Planning loop cleanly.
 3. **Delivery Pool (`max_concurrent_delivery`, default `3`)**:
    - The current continuous runtime claims eligible **Plan Beads** (`bd update <id> --claim`) that are unlabeled or in `stage:implement`, `stage:review`, or `stage:qa`.
@@ -290,7 +290,7 @@ flowchart TD
    - Dedicated to `stage:merge` **Plan Beads** (`bd ready --type task --label stage:merge --unassigned`).
    - Claims and processes one eligible `stage:merge` task at a time in priority, creation-time, then ordinal-ID order. It queues preparation without holding shared discovery, so rebases, checks, and remote CI waits never block Delivery admissions.
    - The Orchestrator publishes a verified repair handoff once, returning the task open and unassigned at `stage:implement`; the next fresh Delivery evaluation claims the retained worktree and branch.
-   - Verified merge evidence is finalized by the Orchestrator, which records closure and attempts owned cleanup. Parentless tasks complete normally. Automated Planning and Planning backpressure remain outside the current runtime.
+   - Verified merge evidence is finalized by the Orchestrator, which records closure and attempts owned cleanup. Parentless tasks complete normally. Planning admission independently enforces its configured capacity and active-task backpressure.
 
 ### 5.3 Worktree & Runtime Environment Isolation
 
@@ -345,7 +345,7 @@ flowchart TD
    - Only the **Orchestrator** removes completed managed environments during startup. It matches Product/Plan role, current completion state, canonical Bead-ID child path, and the checkout's actual Target Repository identity before targeted removal. Agents and branch names do not establish cleanup ownership.
    - Startup retains every paused, unfinished, locked, missing/prunable, unregistered, unsafe-link, deleted-Bead, or ambiguous environment and its associated tmp. It does not use broad `git worktree prune` or delete local/remote branches. Ordinary Delivery completion branch cleanup remains a separate lifecycle responsibility.
 
-Completed-environment disposal has one shared implementation for immediate verified completion and startup reconciliation. Before local removal it atomically commits a version-1 obligation at `<nightweaver-root>/run/<project-slug>/cleanup/<bead-id>.json`. Each record binds the canonical deployment root, Project, Target Repository and Git common directory, Bead, Planning/Delivery purpose, exact worktree/tmp paths, original registration, and verified merge evidence when available. Records survive runtime replacement. They are evidence hints; every attempt still requires fresh tracker, Git and filesystem observations under repository exclusion after owned processes settle. Startup reconciliation performs no removal. The worker shares a nonblocking per-Bead lifetime reservation with both pools, excludes active environments, and performs bounded batches outside the serial admission pass and pool capacity. Completion enqueues evidence without waiting for removal; the worker persists it before attempting disposal, with startup recovering closure-before-enqueue. If the completed task is now missing, paused, reopened or assigned, persistence records independent cleanup attention and consumes the hint without blocking unrelated obligations or graceful drain. Required persistence failures retain the hint and remain explicit. Graceful stop cancels/settles cleanup, retains interrupted attempts for inspection and flushes completion evidence after draining pools. Force stop starts no compensating cleanup.
+Completed-environment disposal has one shared implementation for immediate verified completion and startup reconciliation. Before local removal it atomically commits a version-1 obligation at `<nightweaver-root>/run/<project-slug>/cleanup/<bead-id>.json`. Each record binds the canonical deployment root, Project, Target Repository and Git common directory, Bead, Planning/Delivery purpose, exact worktree/tmp paths, original registration, and verified merge evidence when available. Records survive runtime replacement. They are evidence hints; every attempt still requires fresh tracker, Git and filesystem observations under repository exclusion after owned processes settle. Startup reconciliation performs no removal. The worker shares a nonblocking per-Bead lifetime reservation with all three pools, excludes active environments, and performs bounded batches outside the serial admission pass and pool capacity. Completion enqueues evidence without waiting for removal; the worker persists it before attempting disposal, with startup recovering closure-before-enqueue. If the completed task is now missing, paused, reopened or assigned, persistence records independent cleanup attention and consumes the hint without blocking unrelated obligations or graceful drain. Required persistence failures retain the hint and remain explicit. Graceful stop cancels/settles cleanup, retains interrupted attempts for inspection and flushes completion evidence after draining pools. Force stop starts no compensating cleanup.
 
 Per-resource confirmed absence, attempt count/time, last bounded diagnostic and resolution time survive partial removal and lost responses. Worktree resolution requires both directory and Git registration absence; tmp is removed only after fresh worktree absence and eligible completion are confirmed. Changed source or nonignored files, changed HEAD/common directory, pauses, active/foreign ownership, locked/prunable/unregistered checkouts, reparse links, overlapping registrations and ambiguous identities retain resources. Confirmed-absent resources that reappear are retained for attention rather than acquiring new disposal authority. Logs and external evidence survive. Startup independently revalidates canonical completed environments to recover closure-before-enqueue and legacy leftovers without interpreting comment prose as authorization. Unknown/unsafe leftovers become explicit diagnostics or needs-attention obligations.
 
@@ -370,7 +370,7 @@ Cleanup Retry also requires the runtime-specific Windows acceptance signal, scop
 
 ### Interrupted Planning materialization
 
-Planning candidate and review comments, host outcome evidence, worktree and tmp survive interruption. A host outcome comment alone never proves that the guarded stage transition completed. For a retained `stage:plan-challenge` turn, reread the latest candidate and current grounding and obtain a new current-invocation review. A retained `stage:plan-approved` Product is not dispatched to the legacy materializing Planner: the separate publication owner must validate exact approval identity and current grounding before creating or reusing any tasks. Startup conservatively retains `in_progress` Products at `stage:plan-approved` or `planned`, including their worktree and tmp, for explicit recovery. Publication claims and partial writes are never replayed or finalized solely from labels or comments. Shared worktree refresh remains separate from this slice's grounding checks.
+Planning candidate and review comments, host outcome evidence, worktree and tmp survive interruption. A host outcome comment alone never proves that the guarded stage transition completed. For a retained `stage:plan-challenge` turn, reread the latest candidate and current grounding and obtain a new current-invocation review. A retained `stage:plan-approved` Product is not dispatched to the legacy materializing Planner: the separate publication owner must validate exact approval identity and current grounding before creating or reusing any tasks. Startup releases only exact current-Project owned approved-stage claims for ordinary publisher reconciliation, preserving their worktree and tmp; claimed `planned` legacy Products remain ambiguous and retained. Publication claims and partial writes are never replayed or finalized solely from labels or comments. Shared worktree refresh remains separate from this slice's grounding checks.
 
 ---
 
@@ -477,7 +477,7 @@ Each **Project** configuration binds one **Target Repository** to the **Orchestr
 ### 7.2 CLI Entrypoints & Shutdown
 
 1. **CLI Invocation**:
-   - `nightweaver --project <project-slug>` (loads `<nightweaver-root>/projects/<project-slug>.json`) starts the continuous Delivery and singleton Merger runtime.
+   - `nightweaver --project <project-slug>` (loads `<nightweaver-root>/projects/<project-slug>.json`) starts the continuous Planning, Delivery and singleton Merger runtime.
    - `nightweaver --config <path-to-project-json>` starts the same runtime from an explicit config path.
    - `--dry-run`: Runs read-only startup recovery inspection and initial discovery projection without acquiring recovery authority, mutating `bd`, creating/removing worktrees, or launching **Agents**, then exits.
    - `dispatch <bead-id>` continues to run exactly one explicitly selected lifecycle stage.

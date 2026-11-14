@@ -1606,7 +1606,7 @@ function renderWorkspaceWorkflow(data) {
     if (!value) continue;
     list.append(workspaceText("dt", "", name), workspaceText("dd", "", value));
   }
-  details.append(list, workspaceText("p", "field-help", "Stored state does not establish live execution or scheduler eligibility. Planning authorization permits explicit dispatch; continuous Planning is not scheduled. Discovered-from records provenance, not hierarchy or generated-plan approval. Live observations appear in Environment and execution bays."));
+  details.append(list, workspaceText("p", "field-help", "Stored state does not establish live execution or scheduler eligibility. Planning authorization permits continuous scheduling subject to native readiness and configured capacity. Discovered-from records provenance, not hierarchy or generated-plan approval. Live observations appear in Environment and execution bays."));
   root.append(details);
   if (focused) summary.focus({ preventScroll: true });
 }
@@ -1962,7 +1962,7 @@ function renderWorkspaceGuidanceActions(data) {
     summary.append(workspaceText("p", "eyebrow", "Planning"), workspaceText("p", "",
       terminal ? data.presentation?.planning || "Planning authorization is no longer available for this Product."
         : data.presentation?.diagnostic ? "Planning state unavailable; review Workflow details."
-        : data.planning.ready ? "Authorized for Planning (Ready for Planning). Explicit dispatch only; continuous Planning is not scheduled."
+        : data.planning.ready ? "Authorized for Planning (Ready for Planning). Normal scheduling and capacity rules apply."
           : data.planning.canAuthorize ? "Planning backlog: awaiting explicit authorization."
             : "Planning authorization requires an open, unclaimed, unpaused Product."));
     workspacePlanning.append(summary);
@@ -2281,6 +2281,8 @@ window.addEventListener("popstate", () => routeToWorkspace(true));
 routeToWorkspace(false);
 
 const factoryStatus = document.querySelector("#factory-status");
+const planningSlots = document.querySelector("#planning-slots");
+const planningPoolStatus = document.querySelector("#planning-pool-status");
 const deliverySlots = document.querySelector("#delivery-slots");
 const mergerSlots = document.querySelector("#merger-slots");
 const deliveryPoolStatus = document.querySelector("#delivery-pool-status");
@@ -2406,9 +2408,15 @@ function renderFactory(snapshot, availability) {
   const focusKind = active?.matches("summary") ? "summary" : active?.matches("a") ? "a" : "button";
   const focusIdentity = active?.dataset.invocationId ?? active?.getAttribute("href");
   for (const [pool, container, status, name] of [
+    [snapshot.planning, planningSlots, planningPoolStatus, "Planning"],
     [snapshot.delivery, deliverySlots, deliveryPoolStatus, "Delivery"],
     [snapshot.merger, mergerSlots, mergerPoolStatus, "Merger"]
   ]) {
+    if (!pool) {
+      status.textContent = "Planning observations unavailable in this runtime version.";
+      container.replaceChildren();
+      continue;
+    }
     const occupied = pool.slots.filter(slot => slot.status !== "idle").length;
     const idle = pool.slots.filter(slot => slot.status === "idle").length;
     status.textContent = (availability !== "live" ? "Last observed: " : "") + occupied + " of " + pool.capacity
@@ -2431,14 +2439,14 @@ function renderFactory(snapshot, availability) {
   renderedFactoryRuntime = snapshot.runtime_id;
   lastFactoryAvailability = availability;
   if (invocationDialog.open && !telemetrySourceEnded) {
-    const selected = [...snapshot.delivery.slots, ...snapshot.merger.slots].find(slot => slot.slot_id === telemetryFocusSlot);
+    const selected = [...(snapshot.planning?.slots ?? []), ...snapshot.delivery.slots, ...snapshot.merger.slots].find(slot => slot.slot_id === telemetryFocusSlot);
     if (snapshot.runtime_id !== telemetryFocusRuntime || selected?.invocation?.invocation_id !== telemetryFocusInvocation)
       invocationStatus.textContent = "— Selected invocation is no longer current. Showing retained output; following only the selected stream.";
   }
 }
 
 function renderFactoryHealth(snapshot, availability, reason) {
-  const idle = snapshot && [...snapshot.delivery.slots, ...snapshot.merger.slots].every(slot => slot.status === "idle");
+  const idle = snapshot && [...(snapshot.planning?.slots ?? []), ...snapshot.delivery.slots, ...snapshot.merger.slots].every(slot => slot.status === "idle");
   const state = availability === "live" ? (idle ? "idle" : "live") : availability;
   const labels = { live: "● Live", idle: "◌ Idle · Fresh runtime", stale: "⚠ Stale",
     disconnected: "✕ Disconnected", unavailable: "— Unavailable" };
@@ -2472,6 +2480,8 @@ async function refreshFactory() {
     // Malformed observations must not replace the last validated snapshot.
     const valid = snapshot && typeof snapshot.runtime_id === "string" && snapshot.runtime_id.length > 0
       && Number.isFinite(Date.parse(snapshot.observed_at)) && Number.isSafeInteger(snapshot.revision)
+      && (snapshot.planning == null || (snapshot.schema_version === 2 && Number.isInteger(snapshot.planning.capacity)
+        && Array.isArray(snapshot.planning.slots)))
       && [snapshot.delivery, snapshot.merger].every(pool => pool && Number.isInteger(pool.capacity)
         && Array.isArray(pool.slots) && pool.slots.every(slot => typeof slot.slot_id === "string" && typeof slot.status === "string"));
     const availability = valid && ["live", "stale"].includes(result.availability) ? result.availability : "unavailable";

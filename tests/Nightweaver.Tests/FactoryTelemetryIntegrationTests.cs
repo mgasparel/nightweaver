@@ -35,6 +35,9 @@ public sealed class FactoryTelemetryIntegrationTests
 
         var reader = new FactoryTelemetryReader(host, project);
         var initial = Assert.IsType<FactoryTelemetrySnapshot>(reader.Read().Snapshot);
+        Assert.Equal(2, initial.SchemaVersion);
+        Assert.Equal(project.Concurrency.MaxConcurrentPlanning, initial.Planning?.Capacity);
+        Assert.All(initial.Planning!.Slots, slot => Assert.Equal("idle", slot.Status));
         Assert.Equal(2, initial.Delivery.Capacity);
         Assert.Equal(["delivery-1", "delivery-2"], initial.Delivery.Slots.Select(slot => slot.SlotId));
         Assert.Equal("live", initial.RuntimeStatus);
@@ -66,6 +69,29 @@ public sealed class FactoryTelemetryIntegrationTests
         var stale = reader.Read();
         Assert.Equal(FactoryTelemetryAvailability.Stale, stale.Availability);
         Assert.Equal("heartbeat-expired", stale.Reason);
+    }
+
+    [Fact]
+    public async Task LegacySnapshotsKeepPlanningUnavailableAndVersionTwoRequiresIt()
+    {
+        using var factory = new NightweaverWebApplicationFactory();
+        var host = factory.Services.GetRequiredService<HostPaths>();
+        var project = factory.Services.GetRequiredService<ProjectConfig>();
+        var publisher = new FactoryTelemetryPublisher(host, project,
+            new(project.TargetRepository.Path, "main"), project.Concurrency.MaxConcurrentDelivery, 1);
+        await publisher.StartAsync(TestContext.Current.CancellationToken);
+        var reader = factory.Services.GetRequiredService<FactoryTelemetryReader>();
+        var current = reader.Read().Snapshot!;
+        await publisher.DisposeAsync();
+        foreach (var version in new[] { 1, 2 })
+        {
+            await File.WriteAllBytesAsync(host.FactoryTelemetryPath(project.Name),
+                JsonSerializer.SerializeToUtf8Bytes(current with { SchemaVersion = version, Planning = null }, JsonOptions),
+                TestContext.Current.CancellationToken);
+            var result = reader.Read();
+            Assert.Equal(version == 1 ? FactoryTelemetryAvailability.Live : FactoryTelemetryAvailability.Unavailable, result.Availability);
+            Assert.Null(result.Snapshot?.Planning);
+        }
     }
 
     [Fact]
@@ -335,6 +361,16 @@ public sealed class FactoryTelemetryIntegrationTests
         Assert.True(sawEnd, captured.ToString());
         Assert.Contains("event: log", captured.ToString(), StringComparison.Ordinal);
         Assert.Contains("marker-before-exit", captured.ToString(), StringComparison.Ordinal);
+
+        publisher.Reserve("planning", "planning-1", beadId);
+        publisher.SetInvocation("planning", "planning-1", new FactoryInvocationObservation(beadId, invocationId,
+            "planner", "codex", null, "high", "completed", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(5), 5678, 0));
+        await WaitForSnapshotAsync(factory.Services.GetRequiredService<FactoryTelemetryReader>(),
+            value => value.Planning?.Slots[0].Invocation?.ProcessId == 5678, TestContext.Current.CancellationToken);
+        using var planningResponse = await client.GetAsync(StreamUrl(runtimeId, "planning-1", invocationId),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, planningResponse.StatusCode);
+        Assert.Contains("marker-before-exit", await planningResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.Ordinal);
 
         var invalid = await client.GetAsync("/api/telemetry/stream?runtime_id=bad&slot_id=delivery-1&invocation_id=bad",
             TestContext.Current.CancellationToken);

@@ -2166,18 +2166,8 @@ h3 {
   }
 }
 
-.planning-disabled {
-  grid-column: 1 / -1;
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem 1rem;
-  border-style: dashed;
-  color: var(--color-muted);
-}
-
 .bay-grid {
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr);
 }
 
 .bay-card {
@@ -2189,10 +2179,6 @@ h3 {
 .bay-card h3 {
   margin: 0;
   font-size: 1.05rem;
-}
-
-.planning-disabled p {
-  margin: 0;
 }
 
 .bay-pool-status {

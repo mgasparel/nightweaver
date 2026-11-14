@@ -8,6 +8,47 @@ namespace Nightweaver.Tests;
 
 public sealed class CompletedEnvironmentWorkerTests
 {
+    [Fact]
+    public async Task PlanningCompletionHintsPersistAfterDrainAndWaitForEnvironmentRelease()
+    {
+        using var fixture = new Fixture();
+        var token = TestContext.Current.CancellationToken;
+        fixture.Runner.Status = "open";
+        var runner = new RecordingProcessRunner(async (request, cancellation) =>
+        {
+            var result = await fixture.Runner.RunAsync(request, cancellation);
+            if (request.FileName == "bd")
+            {
+                var rows = System.Text.Json.Nodes.JsonNode.Parse(result.StandardOutput)!.AsArray();
+                rows[0]!["issue_type"] = "feature";
+                rows[0]!["labels"] = new System.Text.Json.Nodes.JsonArray("planned");
+                return result with { StandardOutput = rows.ToJsonString() };
+            }
+            if (request.Arguments.Contains("--abbrev-ref")) return result with { StandardOutput = "HEAD" };
+            return result with { StandardOutput = result.StandardOutput.Replace("branch refs/heads/nightweaver/done", "detached", StringComparison.Ordinal) };
+        });
+        var reservations = new EnvironmentReservations();
+        using var lease = reservations.TryAcquire("done");
+        var gate = new ContinuousStopGate();
+        using var worker = Worker(fixture, new Clock(), reservations, gate, runner: runner);
+        worker.PlanningCompleted("done");
+        worker.PlanningCompleted("done");
+        await worker.RunBatchAsync(token);
+        Assert.Equal(0, fixture.Runner.Removals);
+        var obligation = Assert.Single(fixture.Store.Read().Obligations);
+        Assert.Equal(WorktreePurpose.Planning, obligation.Purpose);
+        Assert.True(Directory.Exists(fixture.Worktree));
+        gate.RequestStop();
+        await worker.FlushCompletionsAsync(token);
+        lease!.Dispose();
+        using var restarted = Worker(fixture, new Clock(), runner: runner);
+        await restarted.RunBatchAsync(token);
+        Assert.Equal(1, fixture.Runner.Removals);
+        Assert.Equal(CleanupStatus.Resolved, fixture.Read().Status);
+        Assert.False(Directory.Exists(fixture.Tmp));
+        Assert.True(File.Exists(fixture.Log));
+    }
+
     [Theory]
     [InlineData("paused")]
     [InlineData("reopened")]

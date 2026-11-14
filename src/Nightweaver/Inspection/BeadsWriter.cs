@@ -93,6 +93,27 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
                 result.StandardError);
     }
 
+    internal Task AcquirePlanningDispatchClaimAsync(ValidatedTargetRepository repository, string beadId,
+        string actor, CancellationToken token) => AcquireDeliveryDispatchClaimAsync(repository, beadId, actor, token);
+
+    internal async Task<BeadSnapshot?> ReleasePlanningClaimAsync(ValidatedTargetRepository repository,
+        string beadId, string actor, CancellationToken token)
+    {
+        BeadsReader.EnsureMutationFreeBackend(repository);
+        ProcessResult result;
+        try
+        {
+            result = await processRunner.RunAsync(BeadsCommand.CreateWrite(repository.Path,
+                ["update", beadId, "--status", "open", "--assignee", "", "--if-status", "in_progress",
+                    "--if-assignee", actor, "--json"], actor), token).ConfigureAwait(false);
+        }
+        catch (Exception) when (!token.IsCancellationRequested) { return null; }
+        if (result.ExitCode == 13) throw new BeadsGuardConflictException("Planning claim release guard no longer matched.");
+        if (result.ExitCode != 0) return null;
+        try { return BeadsReader.ParsePublicationResult(result.StandardOutput, beadId); }
+        catch (Exception exception) when (exception is FormatException or System.Text.Json.JsonException) { return null; }
+    }
+
     internal Task ReleaseDispatchClaimAsync(ValidatedTargetRepository repository, string beadId, string actor,
         string expectedStatus, CancellationToken cancellationToken)
     {

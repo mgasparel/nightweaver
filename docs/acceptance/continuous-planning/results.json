@@ -1,0 +1,15 @@
+{
+  "nativePid": 29952,
+  "runtimeId": "99e4f86f506d4c46964527cb06e6e8ee",
+  "invocation": "20261114T1209191996387Z-planner",
+  "checks": [
+    "live native identity",
+    "Planning stream isolation",
+    "keyboard/focus",
+    "1440/720/375 no overflow",
+    "actual completion and idle",
+    "stale qualification",
+    "legacy unavailable"
+  ],
+  "errors": []
+}

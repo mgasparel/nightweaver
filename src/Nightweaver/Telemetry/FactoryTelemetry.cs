@@ -16,7 +16,8 @@ internal sealed record FactoryTelemetrySnapshot(
     DateTimeOffset ObservedAt,
     string RuntimeStatus,
     FactoryPoolObservation Delivery,
-    FactoryPoolObservation Merger);
+    FactoryPoolObservation Merger,
+    FactoryPoolObservation? Planning = null);
 
 internal sealed record FactoryPoolObservation(int Capacity, IReadOnlyList<FactorySlotObservation> Slots);
 
@@ -61,6 +62,8 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
     private readonly object sync = new();
     private readonly HostPaths paths;
     private readonly ProjectSlug project;
+    private readonly int planningCapacity;
+    private readonly Dictionary<string, FactorySlotObservation> planning = new(StringComparer.Ordinal);
     private readonly int deliveryCapacity;
     private readonly int mergerCapacity;
     private readonly Dictionary<string, FactorySlotObservation> delivery = new(StringComparer.Ordinal);
@@ -84,6 +87,12 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
     {
         this.paths = paths;
         this.project = project.Name;
+        planningCapacity = project.Concurrency.MaxConcurrentPlanning;
+        for (var index = 1; index <= planningCapacity; index++)
+        {
+            var slotId = $"planning-{index}";
+            planning.Add(slotId, EmptySlot(slotId));
+        }
         this.deliveryCapacity = deliveryCapacity;
         this.mergerCapacity = mergerCapacity;
         this.reportFailure = reportFailure;
@@ -222,6 +231,7 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
 
     private Dictionary<string, FactorySlotObservation> GetPool(string pool) => pool switch
     {
+        "planning" => planning,
         "delivery" => delivery,
         "merger" => merger,
         _ => throw new ArgumentOutOfRangeException(nameof(pool), pool, "Unknown telemetry pool.")
@@ -359,10 +369,11 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
         FactoryTelemetrySnapshot snapshot;
         lock (sync)
         {
-            snapshot = new FactoryTelemetrySnapshot(1, project.Value, targetRepository, runtimeId,
+            snapshot = new FactoryTelemetrySnapshot(2, project.Value, targetRepository, runtimeId,
                 revision, DateTimeOffset.UtcNow, runtimeStatus,
                 new FactoryPoolObservation(deliveryCapacity, delivery.Values.OrderBy(slot => slot.SlotId, StringComparer.Ordinal).ToArray()),
-                new FactoryPoolObservation(mergerCapacity, merger.Values.OrderBy(slot => slot.SlotId, StringComparer.Ordinal).ToArray()));
+                new FactoryPoolObservation(mergerCapacity, merger.Values.OrderBy(slot => slot.SlotId, StringComparer.Ordinal).ToArray()),
+                new FactoryPoolObservation(planningCapacity, planning.Values.OrderBy(slot => slot.SlotId, StringComparer.Ordinal).ToArray()));
         }
 
         var bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonOptions);
@@ -430,7 +441,7 @@ internal sealed class FactoryTelemetryReader(HostPaths paths, ProjectConfig proj
             if (bytes is null)
                 return new(FactoryTelemetryAvailability.Unavailable, "invalid-size", null);
             var snapshot = JsonSerializer.Deserialize<FactoryTelemetrySnapshot>(bytes, JsonOptions);
-            if (snapshot is null || snapshot.SchemaVersion != 1
+            if (snapshot is null || snapshot.SchemaVersion is not (1 or 2)
                 || snapshot.Project is null || snapshot.TargetRepository is null
                 || snapshot.RuntimeId is null || snapshot.RuntimeStatus is null
                 || snapshot.Delivery is null || snapshot.Merger is null
@@ -476,6 +487,9 @@ internal sealed class FactoryTelemetryReader(HostPaths paths, ProjectConfig proj
             || snapshot.Merger.Capacity != 1
             || !PathEquals(snapshot.TargetRepository, project.TargetRepository.Path))
             return false;
+        if (snapshot.SchemaVersion == 2 && (snapshot.Planning?.Capacity != project.Concurrency.MaxConcurrentPlanning
+            || !ValidPool(snapshot.Planning, "planning"))) return false;
+        if (snapshot.SchemaVersion == 1 && snapshot.Planning is not null) return false;
         if (!ValidPool(snapshot.Delivery, "delivery") || !ValidPool(snapshot.Merger, "merger")) return false;
         return snapshot.RuntimeStatus is "live" or "stopped";
     }

@@ -262,8 +262,9 @@ internal static partial class FactoryTelemetryEndpoints
     private static (FactorySlotObservation Slot, FactoryInvocationObservation Invocation)? FindSelection(
         FactoryTelemetrySnapshot snapshot, string slotId, string invocationId)
     {
-        var pool = slotId.StartsWith("delivery-", StringComparison.Ordinal) ? snapshot.Delivery : snapshot.Merger;
-        var slot = pool.Slots.SingleOrDefault(candidate => candidate.SlotId == slotId);
+        var pool = slotId.StartsWith("planning-", StringComparison.Ordinal) ? snapshot.Planning
+            : slotId.StartsWith("delivery-", StringComparison.Ordinal) ? snapshot.Delivery : snapshot.Merger;
+        var slot = pool?.Slots.SingleOrDefault(candidate => candidate.SlotId == slotId);
         var invocation = slot?.Invocation;
         return invocation?.InvocationId == invocationId ? (slot!, invocation) : null;
     }
@@ -359,7 +360,7 @@ internal static partial class FactoryTelemetryEndpoints
     [GeneratedRegex("^[a-fA-F0-9]{32}$", RegexOptions.CultureInvariant)]
     private static partial Regex RuntimeIdPattern();
 
-    [GeneratedRegex("^(delivery-[1-9][0-9]*|merger-1)$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("^(planning-[1-9][0-9]*|delivery-[1-9][0-9]*|merger-1)$", RegexOptions.CultureInvariant)]
     private static partial Regex SlotIdPattern();
 
     [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9_-]{20,63}$", RegexOptions.CultureInvariant)]

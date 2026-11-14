@@ -37,9 +37,9 @@ public sealed class PlanningPoolPlannerTests
     }
 
     [Theory]
-    [InlineData(4, false)]
-    [InlineData(3, true)]
-    [InlineData(2, true)]
+    [InlineData(6, false)]
+    [InlineData(5, true)]
+    [InlineData(4, true)]
     public void ActivePlanCountIncludesActiveTasksAndAppliesInclusiveBackpressure(int threshold, bool expectedBackpressure)
     {
         var inventory = Inventory(
@@ -55,7 +55,7 @@ public sealed class PlanningPoolPlannerTests
 
         var plan = PlanningPoolPlanner.Plan(StartupPlanner.Plan(Actor, inventory), BeadsReadiness.Create(Array.Empty<string>(), Array.Empty<string>()), 2, threshold);
 
-        Assert.Equal(3, plan.ActivePlanBeadCount);
+        Assert.Equal(5, plan.ActivePlanBeadCount);
         Assert.Equal(expectedBackpressure, plan.BackpressureActive);
     }
 

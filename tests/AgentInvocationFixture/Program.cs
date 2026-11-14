@@ -1184,13 +1184,20 @@ internal static class Program
 
         switch (action)
         {
+            case "planning-draft-gated":
             case "planning-draft":
             case "planning-approve":
             {
+                if (action == "planning-draft-gated")
+                {
+                    WriteStartedMarker(ResolveStartedMarkerPath(beadId), beadId);
+                    WaitForFile(Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_RELEASE_FILE")
+                        ?? throw new InvalidOperationException("Planning release path is missing."));
+                }
                 const string marker = "Host grounding (copy exactly into evidence):\n";
                 var grounding = JsonDocument.Parse(dispatchPrompt[(dispatchPrompt.LastIndexOf(marker, StringComparison.Ordinal) + marker.Length)..]).RootElement.Clone();
                 object evidence;
-                if (action == "planning-draft")
+                if (action is "planning-draft" or "planning-draft-gated")
                     evidence = new
                     {
                         schema = "nightweaver-plan-v1", grounding,

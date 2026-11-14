@@ -129,10 +129,13 @@ try
                 (executable, working, arguments, token) => RunAsync(executable, working, userHome, token, arguments), cancellationToken);
         }
 
+        await File.WriteAllTextAsync(Path.Combine(fixture, "prompts", "planner.md"),
+            "Disposable live Planning telemetry fixture.\n", new UTF8Encoding(false), cancellationToken);
         var slots = new[]
         {
             (Slot: "delivery-1", Bead: "qa-live-1", Label: "slot-one"),
-            (Slot: "delivery-2", Bead: "qa-live-2", Label: "slot-two")
+            (Slot: "delivery-2", Bead: "qa-live-2", Label: "slot-two"),
+            (Slot: "planning-1", Bead: "qa-live-planning", Label: "planning-native")
         };
         var readinessFiles = new string[slots.Length];
         telemetryReleaseFiles = new string[slots.Length];
@@ -145,8 +148,9 @@ try
             Directory.CreateDirectory(worktree);
             readinessFiles[index] = Path.Combine(fixture, item.Bead + ".ready");
             telemetryReleaseFiles[index] = Path.Combine(fixture, item.Bead + ".release");
-            telemetry.Reserve("delivery", item.Slot, item.Bead);
-            telemetry.UpdateSlot("delivery", item.Slot, "preparing", item.Bead, "stage:qa",
+            var pool = item.Slot.StartsWith("planning-", StringComparison.Ordinal) ? "planning" : "delivery";
+            telemetry.Reserve(pool, item.Slot, item.Bead);
+            telemetry.UpdateSlot(pool, item.Slot, "preparing", item.Bead, "stage:qa",
                 "implementer", worktree, 0, project.Limits.MaxRepairCycles);
             telemetryRuns[index] = RunTelemetryFixtureAsync(paths, project,
                 new ValidatedTargetRepository(repository, "main"), telemetry, preparer,
@@ -208,6 +212,7 @@ finally
     {
         foreach (var slot in new[] { ("delivery-1", "qa-live-1"), ("delivery-2", "qa-live-2") })
             telemetry.Release("delivery", slot.Item1, slot.Item2);
+        telemetry.Release("planning", "planning-1", "qa-live-planning");
         await telemetry.DisposeAsync();
     }
 
@@ -270,15 +275,18 @@ static async Task<AgentExecutionResult> RunTelemetryFixtureAsync(HostPaths paths
     string slot, string beadId, string label, string worktree, string readyFile, string releaseFile,
     CancellationToken cancellationToken)
 {
-    using var launch = ContinuousAgentLaunchContext.Enter(null, telemetry, "delivery", slot, beadId);
-    var dispatch = new AgentDispatchContext(beadId, "task", "stage:qa", 0);
-    var prepared = await preparer.PrepareAsync(paths, project, AgentRole.Implementer, dispatch, worktree, cancellationToken);
+    var planning = slot.StartsWith("planning-", StringComparison.Ordinal);
+    using var launch = ContinuousAgentLaunchContext.Enter(null, telemetry, planning ? "planning" : "delivery", slot, beadId);
+    var dispatch = new AgentDispatchContext(beadId, planning ? "feature" : "task", planning ? "stage:plan" : "stage:qa", 0);
+    var prepared = await preparer.PrepareAsync(paths, project, planning ? AgentRole.Planner : AgentRole.Implementer, dispatch, worktree, cancellationToken);
     var fixtureInvocation = new PreparedAgentInvocation("dotnet",
         [typeof(FixtureMarker).Assembly.Location, "live-marker", readyFile, releaseFile, label],
         prepared.WorkingDirectory, prepared.StandardInput, prepared.EnvironmentOverrides, TimeSpan.FromMinutes(30),
         prepared.InvocationId, prepared.TemporaryDirectory, prepared.LogFilePath, prepared.Purpose,
         prepared.Stage, prepared.RepairCycles, prepared.MaxRepairCycles, "QA fixture", "medium");
-    return await AgentInvocationExecutor.ExecuteAsync(paths, project.Name, fixtureInvocation, cancellationToken);
+    var result = await AgentInvocationExecutor.ExecuteAsync(paths, project.Name, fixtureInvocation, cancellationToken);
+    if (planning) telemetry.Release("planning", slot, beadId);
+    return result;
 }
 
 static async Task WaitForFilesAsync(IEnumerable<string> paths, TimeSpan timeout, CancellationToken cancellationToken)

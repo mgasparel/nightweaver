@@ -1,6 +1,6 @@
 # Nightweaver
 
-Nightweaver is a discovery-driven software factory for Beads (`bd`) work. It is under active development. The CLI supports a read-only `--dry-run`, a continuous Delivery and singleton Merger runtime, and `dispatch` for one explicitly selected lifecycle stage. Planning remains manually authored and is not scheduled by the runtime.
+Nightweaver is a discovery-driven software factory for Beads (`bd`) work. It is under active development. The CLI supports a read-only `--dry-run`, a continuous Planning, Delivery and singleton Merger runtime, and `dispatch` for one explicitly selected lifecycle stage. Planning requires explicit Product readiness; manually authored Plan Beads remain directly eligible for Delivery.
 
 ## Local prerequisites
 
@@ -44,7 +44,7 @@ Run these commands from the repository root:
 
 ```powershell
 dotnet build Nightweaver.slnx -warnaserror
-dotnet test --solution Nightweaver.slnx --minimum-expected-tests 739
+dotnet test --solution Nightweaver.slnx --minimum-expected-tests 1031
 dotnet publish src/Nightweaver/Nightweaver.csproj -c Release --self-contained false -p:UseAppHost=true -o 'C:\Tools\Nightweaver'
 ```
 
@@ -77,7 +77,7 @@ Both selectors work from an unrelated working directory. These PowerShell exampl
 $nightweaverRoot = 'C:\Tools\Nightweaver Host'
 Set-Location 'C:\Tools\Unrelated Caller Directory'
 
-# Loads C:\Tools\Nightweaver Host\projects\demo.json and starts continuous Delivery and Merger until Ctrl+C.
+# Loads C:\Tools\Nightweaver Host\projects\demo.json and starts continuous Planning, Delivery and Merger until Ctrl+C.
 & (Join-Path $nightweaverRoot 'nightweaver.exe') --project demo
 
 # Prints a one-shot read-only startup snapshot and exits.
@@ -159,11 +159,15 @@ Intake saves an open, unassigned Product in backlog without starting Planning. T
 
 ### Factory telemetry contract
 
-The continuous CLI runtime is the sole writer of `<Nightweaver:Root>/telemetry/<project>/factory.json`; the standalone Web host reads this snapshot and the selected invocation log. Snapshot schema version 1 identifies the Project, canonical target repository, runtime ID, monotonic revision, observation time, runtime state, and configured Delivery/Merger capacities with stable slot IDs. Each slot reports only observed lifecycle and invocation fields. A missing, corrupt, oversized, or mismatched snapshot is unavailable; a heartbeat older than 10 seconds is stale; a graceful shutdown is stopped. These states do not imply healthy idle slots.
+The continuous CLI runtime is the sole writer of `<Nightweaver:Root>/telemetry/<project>/factory.json`; the standalone Web host reads this snapshot and the selected invocation log. Snapshot schema version 2 identifies the Project, canonical target repository, runtime ID, monotonic revision, observation time, runtime state, and configured Planning/Delivery/Merger capacities with stable slot IDs. Each slot reports only observed lifecycle and invocation fields. A missing, corrupt, oversized, or mismatched snapshot is unavailable; a heartbeat older than 10 seconds is stale; a graceful shutdown is stopped. These states do not imply healthy idle slots.
 
 `GET /api/factory/state` returns a no-store object with `availability`, `reason`, and `snapshot`. `GET /api/telemetry/stream` selects one invocation using `runtime_id`, `slot_id`, and `invocation_id`; clients cannot supply a Project, filesystem path, or log root. It streams named UTF-8 SSE status, log, reset, and end events. The optional nonnegative `cursor` query parameter resumes by byte offset. A valid `Last-Event-ID` takes precedence over the query value. Initial replay and older resume cursors are clamped to the most recent 64 KiB, aligned to a UTF-8 boundary, and identified by a reset event. The stream drains appended bytes before reporting a terminal outcome.
 
 The snapshot's `configured_model` is the model selected by Project or role configuration. Nightweaver does not infer the model an Agent actually used from that setting or from an ambient CLI default; actual model identity is unknown unless the runtime can report it reliably. Invocation logs combine stdout and stderr into one stream, so the telemetry API cannot distinguish those channels.
+
+Planning runs before Delivery and Merger with its own `max_concurrent_planning` capacity. Intake does not authorize it: set Ready for Planning on an open, unclaimed, unpaused Product, then ordinary native readiness and `max_active_plan_beads` backpressure apply. That threshold includes blocked, deferred, assigned and merge tasks and does not interrupt admitted workflows. Challenger approval stays under the continuous slot claim for automatic verified publication; explicit standalone dispatch retains its separate handoff. Approved-stage restart reconciles stable task IDs without replaying Planner. Incomplete generated graphs remain held from Delivery.
+
+Planning bays use the same observed invocation identity and log selection as other pools. Publication without an Agent appears as preparation/settlement. Schema version 1 snapshots remain readable with Planning unavailable. A tracker claim alone never establishes running activity. Graceful stop prevents the next turn/publication from starting; permitted current-turn outcomes settle. Force stop closes native Jobs without compensating writes. Pauses and interruption preserve checkout/tmp/log evidence; only guarded Attention Desk Resume/Retry clears pauses and budget. Verified publication queues existing completed-environment housekeeping outside pool capacity.
 
 ### Catch-Up Digest
 
@@ -366,6 +370,6 @@ The console names Product Bead (native feature/bug) and Plan Bead (native task) 
 
 Workspace, Explorer, Attention and catch-up rows consume one read-only presentation. A tracked stage (Planning, Plan review, Plan approved, Implementation, Review, QA or Merge) never establishes a running Agent. Tracker ownership and in_progress are stored facts; Environment and execution bays retain their own live, stale and unavailable observations.
 
-Products show Awaiting Planning authorization, Authorized for Planning (explicit dispatch; continuous Planning is not scheduled), or Plan published / awaiting Delivery. Terminal planned Products show Plan published without promising Delivery or merge. The planned label alone does not verify a generated graph. Publication hold, incomplete observation and Publication needs attention use the runtime publication gate over the available inventory; manual provenance does not grant generated authority. A held partial publication without a graph snapshot remains unverified; an independently observed Product identity or revision conflict still shows Publication needs attention.
+Products show Awaiting Planning authorization, Authorized for Planning (subject to ordinary native readiness and capacity), or Plan published / awaiting Delivery. Terminal planned Products show Plan published without promising Delivery or merge. The planned label alone does not verify a generated graph. Publication hold, incomplete observation and Publication needs attention use the runtime publication gate over the available inventory; manual provenance does not grant generated authority. A held partial publication without a graph snapshot remains unverified; an independently observed Product identity or revision conflict still shows Publication needs attention.
 
 Compact summaries keep raw labels in a disclosure. Workspace Workflow details contain planning, publication, pauses, tracker ownership, used/configured repair budget, uncertainty and wrapped source state. Conflicting stages/pauses and invalid repair metadata stay unavailable. A planned Product can retain historical technical attention without making Retry available. Viewing and prose edits grant no workflow authority; guarded Planning, Resume/Retry and independent Housekeeping actions retain their existing owners.
