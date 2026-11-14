@@ -137,10 +137,15 @@ public sealed class PlanningNativeTurnTests : AgentStageIntegrationTestSupport
         var ready = BeadsReader.Parse(target.RunTarget("bd", ["ready", "--unassigned", "--limit", "0", "--json"]));
         Assert.Contains(task.Id, ready.ById.Keys);
         Assert.DoesNotContain(dependent.Id, ready.ById.Keys);
-        var observations = Path.Combine(target.RootPath, "publication-delivery.jsonl");
-        var delivery = await target.RunDeliverySlotAsync(task.Id,
-            [(AgentRole.Implementer, "slot-implement-unlabeled"), (AgentRole.Reviewer, "slot-review"), (AgentRole.Qa, "slot-qa")], observations);
-        Assert.True(delivery.MergeReady, delivery.Diagnostic);
+        // Cross the publication-to-Delivery boundary with a real Implementer.
+        // Full Reviewer/QA claim continuity is exercised by the separate native
+        // DeliverySlotKeepsOneClaimAndPersistentWorktreeThroughMergeHandoff case.
+        var delivery = await target.RunRetryAgentAsync(task.Id, AgentRole.Implementer, ["slot-implement-unlabeled"]);
+        Assert.True(delivery.Succeeded, delivery.StageResult.Failure?.Reason);
+        Assert.Equal("stage:review", delivery.StageResult.VerifiedState?.Stage);
+        Assert.Equal(1, target.LastRetryLifecycleCount);
+        Assert.Equal($"nightweaver/{task.Id}", target.CurrentBranch(task.Id));
+        Assert.True(File.Exists(Path.Combine(target.WorktreePath(task.Id), "delivery-slot.txt")));
     }
 }
 
