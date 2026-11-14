@@ -1,0 +1,126 @@
+{
+  "measuredAt": "2026-11-14T18:20:03.586Z",
+  "schema": "nightweaver-observation-v1",
+  "pollIntervalMs": 1000,
+  "fixtures": [
+    {
+      "inventoryRows": 50,
+      "pausedRows": 8,
+      "initialCompleteMs": 8185.1,
+      "commentsVisibilityMs": 4138.62,
+      "inventoryRowChangedByComment": true,
+      "dependencyAndMembershipVisibilityMs": 5162.37,
+      "readinessVisibilityMs": 3091.99,
+      "checkpointVisibilityMs": 6201.86,
+      "health": {
+        "factory": "fresh",
+        "attention": "stale",
+        "explorer:all:": "stale",
+        "explorer:ready:": "stale",
+        "explorer:blocked:": "stale",
+        "digest:all": "stale",
+        "workspace:qa-observe-50-41": "stale"
+      },
+      "fiveSecondTargetsMet": false
+    },
+    {
+      "inventoryRows": 2000,
+      "pausedRows": 40,
+      "initialCompleteMs": 60734.91,
+      "commentsVisibilityMs": 6792.03,
+      "inventoryRowChangedByComment": true,
+      "dependencyAndMembershipVisibilityMs": 8333.64,
+      "readinessVisibilityMs": 8254.11,
+      "checkpointVisibilityMs": 8400.31,
+      "health": {
+        "factory": "fresh",
+        "attention": "stale",
+        "explorer:all:": "stale",
+        "explorer:ready:": "stale",
+        "explorer:blocked:": "stale",
+        "digest:all": "stale",
+        "workspace:qa-observe-2000-1949": "stale"
+      },
+      "fiveSecondTargetsMet": false
+    }
+  ],
+  "runtime": [
+    {
+      "pollVisibilityMs": 2031.56,
+      "snapshotToHttpMs": 1443,
+      "revisionStableAcrossHeartbeat": true,
+      "health": "fresh"
+    },
+    {
+      "activityVisibilityMs": 2024.66,
+      "twoSecondTargetMet": false
+    }
+  ],
+  "commands": [
+    {
+      "command": "list",
+      "ms": 296.72
+    },
+    {
+      "command": "import",
+      "ms": 379.38
+    },
+    {
+      "command": "list",
+      "ms": 300.99
+    },
+    {
+      "command": "list",
+      "ms": 510.85
+    },
+    {
+      "command": "comments",
+      "ms": 299.13
+    },
+    {
+      "command": "list",
+      "ms": 354.05
+    },
+    {
+      "command": "dep",
+      "ms": 522.43
+    },
+    {
+      "command": "close",
+      "ms": 525.76
+    },
+    {
+      "command": "list",
+      "ms": 356.35
+    },
+    {
+      "command": "import",
+      "ms": 8430.31
+    },
+    {
+      "command": "list",
+      "ms": 555.29
+    },
+    {
+      "command": "list",
+      "ms": 928.73
+    },
+    {
+      "command": "comments",
+      "ms": 413.4
+    },
+    {
+      "command": "list",
+      "ms": 1245.64
+    },
+    {
+      "command": "dep",
+      "ms": 879.14
+    },
+    {
+      "command": "close",
+      "ms": 666.68
+    }
+  ],
+  "totalMs": 142269.17
+}

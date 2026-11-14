@@ -79,7 +79,7 @@ internal sealed partial class CatchUpCheckpointStore(HostPaths paths, ProjectCon
 
     public void Dispose() => writeGate.Dispose();
 
-    internal DateTimeOffset? ReadLastCaughtUpAt()
+    internal DateTimeOffset? ReadLastCaughtUpAt(bool strict = false)
     {
         var path = paths.CatchUpStatePath(project.Name);
         if (!File.Exists(path)) return null;
@@ -89,12 +89,16 @@ internal sealed partial class CatchUpCheckpointStore(HostPaths paths, ProjectCon
             var stored = JsonSerializer.Deserialize<CatchUpCheckpointFile>(bytes, JsonOptions);
             if (stored is null || stored.SchemaVersion != 1
                 || !string.Equals(stored.Project, project.Name.Value, StringComparison.Ordinal))
+            {
+                if (strict) throw new InvalidDataException("Catch-up checkpoint identity is invalid.");
                 return null;
+            }
             return stored.LastCaughtUpAt.ToUniversalTime();
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
             or InvalidDataException or JsonException or ArgumentException or NotSupportedException)
         {
+            if (strict) throw;
             return null;
         }
     }

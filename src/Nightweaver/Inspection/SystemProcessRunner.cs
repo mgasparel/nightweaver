@@ -68,10 +68,35 @@ internal sealed class SystemProcessRunner : IProcessRunner
         }
 
         process.StandardInput.Close();
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
-        var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        using var outputLimit = new CancellationTokenSource();
+        var exceeded = false;
+        async Task<string> ReadOutputAsync(StreamReader reader)
+        {
+            if (request.MaximumOutputBytes is not { } maximum)
+                return await reader.ReadToEndAsync(CancellationToken.None);
+            var text = new StringBuilder();
+            var buffer = new char[4096];
+            var bytes = 0;
+            while (true)
+            {
+                var read = await reader.ReadAsync(buffer, CancellationToken.None);
+                if (read == 0) break;
+                bytes += Encoding.UTF8.GetByteCount(buffer.AsSpan(0, read));
+                if (bytes > maximum)
+                {
+                    exceeded = true;
+                    outputLimit.Cancel();
+                    // Drain after killing, without retaining an unbounded prefix.
+                    continue;
+                }
+                if (!exceeded) text.Append(buffer, 0, read);
+            }
+            return text.ToString();
+        }
+        var stdoutTask = ReadOutputAsync(process.StandardOutput);
+        var stderrTask = ReadOutputAsync(process.StandardError);
         using var timeout = new CancellationTokenSource(request.Timeout);
-        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token, outputLimit.Token);
 
         try
         {
@@ -95,6 +120,7 @@ internal sealed class SystemProcessRunner : IProcessRunner
             var timedOut = timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested;
             var stderr = await stderrTask;
             _ = await stdoutTask;
+            if (exceeded) throw new ToolExecutionException("observer output exceeded read limit");
             if (timedOut)
             {
                 var seconds = request.Timeout.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture);
@@ -106,6 +132,7 @@ internal sealed class SystemProcessRunner : IProcessRunner
 
         var standardOutput = await stdoutTask;
         var standardError = await stderrTask;
+        if (exceeded) throw new ToolExecutionException("observer output exceeded read limit");
         return new ProcessResult(process.ExitCode, standardOutput, standardError);
     }
 }
