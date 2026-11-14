@@ -60,7 +60,7 @@ jobs:
         shell: pwsh
         run: |
           $timer = [Diagnostics.Stopwatch]::StartNew()
-          dotnet test --solution Nightweaver.slnx --minimum-expected-tests 884 --report-xunit-xml --report-xunit-xml-filename ci.xml --show-slowest-tests 20
+          dotnet test --solution Nightweaver.slnx --minimum-expected-tests 942 --report-xunit-xml --report-xunit-xml-filename ci.xml --show-slowest-tests 20
           $testExit = $LASTEXITCODE
           $timer.Stop()
           Write-Host "Suite wall time including build, fixture publishing and teardown $($timer.Elapsed)"

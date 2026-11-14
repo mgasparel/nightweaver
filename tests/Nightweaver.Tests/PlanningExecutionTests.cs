@@ -7,6 +7,44 @@ namespace Nightweaver.Tests;
 
 public sealed class PlanningExecutionTests
 {
+    [Fact]
+    public async Task GroundingOverlapsIndependentGitReadsBeforeObservingTracker()
+    {
+        using var fixture = new PlanningFixture("draft");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        var completed = 0;
+        var observedTracker = false;
+        fixture.BeforeTrackerRead = () =>
+        {
+            Assert.Equal(4, reads);
+            Assert.Equal(4, completed);
+            Assert.True(release.Task.IsCompleted);
+            observedTracker = true;
+        };
+        fixture.GitRead = async (request, token) =>
+        {
+            if (Interlocked.Increment(ref reads) == 4) started.SetResult();
+            await release.Task.WaitAsync(token);
+            Interlocked.Increment(ref completed);
+            return new ProcessResult(0, request.Arguments.Contains("status") ? "" : new string('a', 40), "");
+        };
+        var capture = fixture.CaptureAsync();
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            Assert.False(capture.IsCompleted);
+        }
+        finally
+        {
+            release.SetResult();
+            await capture;
+        }
+        Assert.Equal(4, reads);
+        Assert.True(observedTracker);
+    }
+
     [Theory]
     [InlineData("draft")]
     [InlineData("approval")]
@@ -162,12 +200,14 @@ public sealed class PlanningExecutionTests
         {
             roles.Add(role);
             var approval = roles.Count == 4;
-            state = role == AgentRole.Planner ? before with { Stage = "stage:plan-challenge" }
-                : approval ? before with { Stage = "stage:plan-approved", Status = "open" }
+            var publication = before.Stage == "stage:plan-approved";
+            state = publication ? before with { Stage = null, Planned = true, Status = "open" }
+                : role == AgentRole.Planner ? before with { Stage = "stage:plan-challenge" }
+                : approval ? before with { Stage = "stage:plan-approved" }
                 : before with { Stage = "stage:plan", RepairCycles = before.RepairCycles + 1 };
             var choice = approval ? AgentOutcomeChoice.Approved : role == AgentRole.Planner ? AgentOutcomeChoice.ReadyForReview : AgentOutcomeChoice.ChangesRequired;
             var result = new AgentStageResult(role, "product", "turn", "log", null, [], state,
-                PublicationReceipt: new(role, choice, state, approval ? null : "nightweaver:demo", approval, false));
+                PublicationReceipt: new(role, choice, state, publication ? null : "nightweaver:demo", publication, false));
             return Task.FromResult(new OperationalRetryOutcome(OperationalRetryStatus.Succeeded, result, 1, null, null, null));
         });
         if (paused)
@@ -181,9 +221,10 @@ public sealed class PlanningExecutionTests
         var result = await coordinator.RunClaimedAsync(new(temp.Path), project, new(temp.Path, "main"), "product", state,
             TestContext.Current.CancellationToken);
         Assert.True(result?.Succeeded);
-        Assert.Equal(new[] { AgentRole.Planner, AgentRole.PlanChallenger, AgentRole.Planner, AgentRole.PlanChallenger }, roles);
+        Assert.Equal(new[] { AgentRole.Planner, AgentRole.PlanChallenger, AgentRole.Planner, AgentRole.PlanChallenger, AgentRole.Planner }, roles);
         Assert.Equal(1, state.RepairCycles);
-        Assert.Equal("stage:plan-approved", state.Stage);
+        Assert.True(state.Planned);
+        Assert.Null(state.Stage);
     }
 
     internal static PlanningDocument Plan(PlanningGrounding grounding) => new(PlanningEvidence.CandidateSchema, grounding,
@@ -215,6 +256,8 @@ public sealed class PlanningExecutionTests
         internal NeedsHumanRequest? Escalation { get; private set; }
         internal int Executions { get; private set; }
         internal int PublishWrites { get; private set; }
+        internal Func<ProcessRequest, CancellationToken, Task<ProcessResult>>? GitRead { get; set; }
+        internal Action? BeforeTrackerRead { get; set; }
         internal string Sentinel { get; }
         private string DefaultSha => new(scenario == "grounding-change" && Executions > 0 ? 'b' : 'a', 40);
 
@@ -257,8 +300,10 @@ public sealed class PlanningExecutionTests
             string output;
             var args = request.Arguments.ToList();
             string Value(string option) => args[args.IndexOf(option) + 1];
+            if (request.FileName != "git") BeforeTrackerRead?.Invoke();
             if (request.FileName == "git")
             {
+                if (GitRead is not null) return GitRead(request, token);
                 if (realGit) return new SystemProcessRunner().RunAsync(request, token);
                 output = args[0] switch { "status" => "", "branch" => "", "rev-parse" => DefaultSha, _ => throw new InvalidOperationException() };
             }

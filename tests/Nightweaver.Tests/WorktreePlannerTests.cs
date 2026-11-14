@@ -20,9 +20,11 @@ public sealed class WorktreePlannerTests
         { new { id = "product", status = "in_progress", issue_type = "bug", priority = 2,
             created_at = "2026-01-01T00:00:00Z", assignee = "actor", labels = new[] { label } } }));
         var plan = StartupPlanner.Plan("actor", inventory, [], Root(temp.Path), Root(temp.Path + "-tmp", "product"));
-        Assert.Empty(plan.Releases);
+        if (label == "planned") Assert.Empty(plan.Releases);
+        else Assert.Single(plan.Releases);
         Assert.Empty(plan.OrphanTmp);
-        Assert.Contains(plan.Diagnostics, d => d.Code == StartupDiagnosticCode.PlanningMaterializationRecoveryRequired);
+        if (label == "planned") Assert.Contains(plan.Diagnostics, d => d.Code == StartupDiagnosticCode.PlanningMaterializationRecoveryRequired);
+        else Assert.DoesNotContain(plan.Diagnostics, d => d.Code == StartupDiagnosticCode.PlanningMaterializationRecoveryRequired);
     }
 
     [Fact]

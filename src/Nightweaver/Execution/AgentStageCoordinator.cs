@@ -71,7 +71,8 @@ internal sealed class AgentStageCoordinator
         AgentRole role,
         string? expectedAssignee,
         CancellationToken cancellationToken,
-        BeadWorkflowState? expectedState = null)
+        BeadWorkflowState? expectedState = null,
+        bool allowPublication = false)
     {
         ArgumentNullException.ThrowIfNull(hostPaths);
         ArgumentNullException.ThrowIfNull(project);
@@ -104,7 +105,7 @@ internal sealed class AgentStageCoordinator
         if (expectedState is not null && initial.State != expectedState)
             throw new AgentStageInputException($"Bead '{beadId}' workflow state changed before stage opening; refusing to dispatch against stale verified state.");
 
-        EnsurePlanningExecutionBoundary(role, initial.State);
+        if (!allowPublication) EnsurePlanningExecutionBoundary(role, initial.State);
 
         var purpose = role is AgentRole.Planner or AgentRole.PlanChallenger
             ? WorktreePurpose.Planning : WorktreePurpose.Delivery;
@@ -117,7 +118,7 @@ internal sealed class AgentStageCoordinator
             && !string.Equals(fresh.Bead.Assignee, initial.Bead.Assignee, StringComparison.Ordinal)))
             throw new AgentStageInputException($"Bead '{beadId}' workflow state changed during provisioning; refusing to dispatch a stale stage.");
 
-        EnsurePlanningExecutionBoundary(role, fresh.State);
+        if (!allowPublication) EnsurePlanningExecutionBoundary(role, fresh.State);
 
         _ = ParseProvisionedHead(worktree.HeadSha);
         return new AgentStageSession(hostPaths, project, sessionRepository, beadId, role, purpose, worktree,
@@ -129,7 +130,7 @@ internal sealed class AgentStageCoordinator
     private static void EnsurePlanningExecutionBoundary(AgentRole role, BeadWorkflowState state)
     {
         if (role != AgentRole.Planner || state.Stage != "stage:plan-approved") return;
-        throw new AgentStageInputException("Approved Planning evidence is retained for verified task publication; materialization is not enabled by this execution slice.");
+        throw new AgentStageInputException("Approved Planning requires the claimed Orchestrator publication path; lifecycle Agent execution is refused.");
     }
 
     internal async Task<AgentStageResult> RunAttemptAsync(
@@ -142,6 +143,7 @@ internal sealed class AgentStageCoordinator
         ArgumentNullException.ThrowIfNull(before);
         cancellationToken.ThrowIfCancellationRequested();
         EnsureValidInput(session.Role, before);
+        EnsurePlanningExecutionBoundary(session.Role, before);
         if (before.IssueType != session.InitialState.IssueType || before.Stage != session.InitialState.Stage
             || before.RepairCycles != session.InitialState.RepairCycles)
             throw new AgentStageInputException("Attempt workflow state no longer matches the original stage session.");
@@ -188,6 +190,8 @@ internal sealed class AgentStageCoordinator
         cancellationToken.ThrowIfCancellationRequested();
         if (!inventory.ById.TryGetValue(beadId, out var bead))
             throw new AgentStageInputException($"Bead '{beadId}' was not found in the Target Repository tracker.");
+        if (!PlanningPublicationGate.Allows(bead, inventory))
+            throw new AgentStageInputException($"Plan Bead '{beadId}' requires its complete published Product graph before Delivery.");
         try { return (bead, BeadWorkflowState.Parse(bead)); }
         catch (FormatException) when (allowConflictingPauseLabels
             && bead.Labels.Contains("product-decision-required", StringComparer.Ordinal)

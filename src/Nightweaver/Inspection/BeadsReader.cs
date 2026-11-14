@@ -81,7 +81,8 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         var recoverableJson = await RunQueryAsync(repository, BeadsCommand.CreateRecoverableReadiness(repository.Path, recoveryActor), recoverableContext, cancellationToken);
         var recoverable = ParseReadiness(recoverableJson, inventory, recoverableContext,
             bead => bead.Status == "in_progress" && string.Equals(bead.Assignee, recoveryActor, StringComparison.Ordinal));
-        return BeadsReadiness.Create(native, recoverable);
+        return BeadsReadiness.Create(native.Where(id => Execution.PlanningPublicationGate.Allows(inventory.ById[id], inventory)),
+            recoverable.Where(id => Execution.PlanningPublicationGate.Allows(inventory.ById[id], inventory)));
     }
 
     internal Task<FrozenSet<string>> ReadExplorerReadinessAsync(ValidatedTargetRepository repository, CancellationToken cancellationToken)
@@ -593,6 +594,13 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
                 continue;
             }
 
+            // Embedded issue dependencies may omit the containing issue's ID.
+            if (values.TryGetValue("depends_on_id", out var embeddedDependencyId)
+                && values.TryGetValue("type", out var embeddedType))
+            {
+                dependencies.Add(new Execution.BeadDependency(beadId, embeddedDependencyId, embeddedType));
+                continue;
+            }
             if (!values.TryGetValue("id", out var dependencyId) || !values.TryGetValue("dependency_type", out var dependencyType))
                 throw new JsonException($"{path}: bd dep list row must include id and dependency_type");
             dependencies.Add(new Execution.BeadDependency(beadId, dependencyId, dependencyType));

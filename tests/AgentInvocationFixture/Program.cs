@@ -1196,9 +1196,12 @@ internal static class Program
                         schema = "nightweaver-plan-v1", grounding,
                         tasks = new[] { new { id = "slice-1", title = "Deliver behavior", outcome = "Requested behavior works",
                             context = "README.md describes the base contract", approach = "Extend the documented behavior",
-                            acceptanceCriteria = new[] { "Requested behavior is observable" }, verification = "Run the behavior check", dependsOn = Array.Empty<string>() } },
+                            acceptanceCriteria = new[] { "Requested behavior is observable" }, verification = "Run the behavior check", dependsOn = Array.Empty<string>() },
+                            new { id = "slice-2", title = "Deliver dependent behavior", outcome = "Dependent behavior works",
+                                context = "README.md describes the shared contract", approach = "Extend the first behavior",
+                                acceptanceCriteria = new[] { "Dependent behavior is observable" }, verification = "Run the dependent behavior check", dependsOn = new[] { "slice-1" } } },
                         constraints = Array.Empty<object>(),
-                        coverage = new[] { new { requirement = "Requested behavior", taskIds = new[] { "slice-1" }, satisfiedEvidence = (string?)null, authorizedExclusion = (string?)null } }
+                        coverage = new[] { new { requirement = "Requested behavior", taskIds = new[] { "slice-1", "slice-2" }, satisfiedEvidence = (string?)null, authorizedExclusion = (string?)null } }
                     };
                 else
                 {

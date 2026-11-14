@@ -122,6 +122,8 @@ internal sealed class MergerPoolCoordinator
             {
                 var snapshot = await reader.ReadSnapshotWithReadinessAsync(target, actor, cancellationToken)
                     .ConfigureAwait(false);
+                if (await new PlanningGraphReconciler(processRunner).PauseChangedGraphsAsync(target, snapshot.Inventory, actor, cancellationToken))
+                    snapshot = await reader.ReadSnapshotWithReadinessAsync(target, actor, cancellationToken);
                 return new MergerPoolSnapshot(snapshot.Inventory, snapshot.Readiness);
             };
         }

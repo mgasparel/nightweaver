@@ -139,6 +139,8 @@ internal sealed class DeliveryPoolCoordinator
             this.readSnapshot = async (target, actor, cancellationToken) =>
             {
                 var snapshot = await reader.ReadSnapshotWithReadinessAsync(target, actor, cancellationToken).ConfigureAwait(false);
+                if (await new PlanningGraphReconciler(processRunner).PauseChangedGraphsAsync(target, snapshot.Inventory, actor, cancellationToken))
+                    snapshot = await reader.ReadSnapshotWithReadinessAsync(target, actor, cancellationToken);
                 return new DeliveryPoolSnapshot(snapshot.Inventory, snapshot.Readiness);
             };
         }

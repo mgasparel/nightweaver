@@ -32,8 +32,6 @@ internal sealed class PlanningCoordinator
                 || BeadWorkflowState.Parse(bead) != state || bead.Assignee != project.RecoveryActor
                 || state.Status != "in_progress" || !snapshot.Readiness.RecoverableOwnedReady.Contains(beadId))
                 throw new AgentStageInputException("Planning claim, workflow or native readiness changed; retained work was preserved.");
-            if (state.Stage == "stage:plan-approved")
-                throw new AgentStageInputException("Planning is already approved; task publication requires the separate verified publication owner.");
             if (!AuthorityMatrix.TryInferLifecycleRole(state, out var role, out var reason)
                 || role is not (AgentRole.Planner or AgentRole.PlanChallenger))
                 throw new AgentStageInputException(reason ?? "Planning requires a Product at plan or plan-challenge.");
@@ -46,7 +44,8 @@ internal sealed class PlanningCoordinator
             // Require a forward stage or budget change, never replay a no-op turn indefinitely.
             var advanced = role == AgentRole.Planner
                 ? next == (state with { Stage = "stage:plan-challenge" })
-                : state.RepairCycles < project.Limits.MaxRepairCycles
+                : next == (state with { Stage = "stage:plan-approved" })
+                    || state.RepairCycles < project.Limits.MaxRepairCycles
                     && next == (state with { Stage = "stage:plan", RepairCycles = state.RepairCycles + 1 });
             if (!advanced)
                 throw new AgentStageInputException("Planning turn made no verified bounded progress.");

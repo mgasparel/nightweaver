@@ -19,6 +19,8 @@ internal sealed record PlanningDocument(string Schema, PlanningGrounding Groundi
     string? Revalidation = null, PlanningFinding[]? Findings = null, PlanningQuestion[]? Questions = null);
 internal sealed record PlanningApproval(string PlanCommentId, string PlanRevision, string ReviewCommentId,
     string ReviewRevision, PlanningGrounding Grounding);
+internal sealed record PlanningObservation(PlanningGrounding Grounding, BeadSnapshot Product,
+    IReadOnlyList<BeadCommentSnapshot> Comments);
 
 /// <summary>Recoverable Beads-native Planning evidence and conservative grounding validation.</summary>
 internal sealed class PlanningEvidence(IProcessRunner runner)
@@ -31,10 +33,27 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
     private static readonly string[] ProductFields = ["title", "description", "design", "acceptance_criteria", "notes"];
 
     internal async Task<PlanningGrounding> CaptureAsync(AgentStageSession session, CancellationToken token)
+        => (await ObserveAsync(session, token)).Grounding;
+
+    internal async Task<PlanningObservation> ObserveAsync(AgentStageSession session, CancellationToken token)
     {
-        var status = await runner.RunAsync(GitCommand.Create(["status", "--porcelain"], session.Worktree.Path), token);
+        // Independent read-only Git processes can overlap. Settle every read before
+        // observing tracker authority; no observation is reused across mutations.
+        var statusRead = runner.RunAsync(GitCommand.Create(["status", "--porcelain"], session.Worktree.Path), token);
+        var remoteRead = runner.RunAsync(GitCommand.Create(
+            ["rev-parse", "--verify", $"refs/remotes/origin/{session.Project.TargetRepository.DefaultBranch}"], session.Repository.Path), token);
+        var checkoutRead = GitRevisionAsync(session.Worktree.Path, "HEAD", token);
+        var defaultRead = GitRevisionAsync(session.Repository.Path,
+            $"refs/heads/{session.Project.TargetRepository.DefaultBranch}", token);
+        await Task.WhenAll(statusRead, remoteRead, checkoutRead, defaultRead);
+        var status = await statusRead;
         if (status.ExitCode != 0 || status.StandardOutput.Length != 0)
             throw new AgentStageInputException("Planning grounding requires an observable clean isolated Planning checkout; preserve changes for inspection.");
+        var remote = await remoteRead;
+        var checkoutRevision = await checkoutRead;
+        var defaultRevision = await defaultRead;
+        // Keep tracker observations last and use this same fresh Product/discussion
+        // for both grounding and publication authority. Never reuse across writes.
         var inventory = await reader.ReadSnapshotAsync(session.Repository, token);
         var bead = inventory.ById[session.BeadId];
         var comments = await reader.ReadCommentsAsync(session.Repository, session.BeadId, token);
@@ -46,11 +65,8 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
             .OrderBy(c => c.CreatedAt).ThenBy(c => c.Id, StringComparer.Ordinal)
             .Select(c => c.Id + ":" + c.Text);
         var input = JsonSerializer.Serialize(fields.Concat(discussion), JsonOptions);
-        var remote = await runner.RunAsync(GitCommand.Create(
-            ["rev-parse", "--verify", $"refs/remotes/origin/{session.Project.TargetRepository.DefaultBranch}"], session.Repository.Path), token);
-        return new(await GitRevisionAsync(session.Worktree.Path, "HEAD", token),
-            await GitRevisionAsync(session.Repository.Path,
-                $"refs/heads/{session.Project.TargetRepository.DefaultBranch}", token), Hash(input), remote.ExitCode == 0 ? remote.StandardOutput.Trim() : null);
+        return new(new(checkoutRevision, defaultRevision, Hash(input),
+            remote.ExitCode == 0 ? remote.StandardOutput.Trim() : null), bead, comments);
     }
 
     internal async Task<string> ReadContextAsync(AgentStageSession session, CancellationToken token)
@@ -88,7 +104,7 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
             using var json = JsonDocument.Parse(text);
             return json.RootElement.TryGetProperty("schema", out var schema)
                 && schema.GetString() is CandidateSchema or ReviewSchema or QuestionSchema
-                    or "nightweaver-planning-outcome-v1";
+                    or "nightweaver-planning-outcome-v1" or PlanningPublisher.ReleaseSchema;
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException) { return false; }
     }
