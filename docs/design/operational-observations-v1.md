@@ -8,6 +8,11 @@ implemented by this investigation. Measurements are in
 limitations are below. Changes to this contract require an explicit versioned
 amendment on the parent Bead before consumers diverge.
 
+Contract amendment v1.1 (2026-11-14, ns-mbd.8 review repair): revision allocation
+and eviction continuity below supersede v1's per-resource zero initialization.
+Wire schema names and payload shapes remain v1; .2 and .3 must use this amendment
+together before shipping.
+
 ## Identity and endpoints
 
 `projectId` is the configured `ProjectConfig.Name.Value`, case-sensitive, resolved
@@ -117,9 +122,20 @@ validation failures mark dependent sources unavailable; runtime failure does not
 poison tracker sources. Workspace environment/relations keep their existing
 partial observation semantics inside data, plus corresponding source health.
 
-Revision starts at `"0"` with no data; increment on changed semantic data, source
-health/error, or resource removal. Changing attempt/success timestamps alone does
-not increment it. Exclude observation timestamps (`generatedAt`, environment read
+Revisions are allocated from one host-wide unsigned 64-bit counter, initially
+zero, serialized across all Projects/keys in that host epoch. Every admission
+(including readmission after TTL or LRU eviction) and every changed semantic
+data, source health/error, or resource removal takes the next counter value.
+Allocated revisions are positive decimal strings; zero is never published, even
+for an initial unavailable envelope. Gaps are normal; clients compare within a
+resource only, never infer cross-resource transactions. No per-key tombstones or
+unbounded revision map is retained. The counter survives every cache/source
+eviction and runtime restart within the Web host. It never wraps or resets in
+the same epoch: on exhaustion stop observation admission/publication with 503
+and shut down the host; its replacement starts with a new epoch.
+
+Changing attempt/success timestamps alone does not allocate a revision. Exclude
+observation timestamps (`generatedAt`, environment read
 time and other sampling clocks) from semantic equality, but include content,
 checkpoint, runtime identity/status and domain activity timestamps. Digest
 generatedAt is captured at whole-second precision **before inventory collection**,
@@ -207,10 +223,22 @@ ns-mbd.2 must remeasure its actual implementation and record achieved bounds.
 Limits per Project: one inventory <=8 MiB; 64 projected resource keys, 32 MiB
 serialized total including history, LRU only for unpinned resources, 30s idle TTL;
 two pinned Workspaces, 64 comment histories with 16 MiB combined cap. Do not evict
-subscribed resources silently: reject new admission with 429 if pinned capacity
+resources during disconnect grace; the idle TTL starts when their last pin expires.
+Do not evict subscribed resources silently: reject new admission with 429 if pinned capacity
 is exhausted. Admission includes byte accounting and fails explicitly for a
 single projection too large. Preserve last good data within those same bounds.
 Shared sources survive individual subscriber cancellation.
+
+Eviction removes a resource's data, revision and collection identity together.
+Readmission publishes a new unavailable/null-data envelope at a newly allocated
+revision, then schedules collection, even if the source has not changed. The
+first successful collection allocates another revision. Before publishing any
+asynchronous result, confirm its captured cache-entry identity is still current;
+discard results from an evicted entry, even if its key has been readmitted.
+Counter allocation and publication occur atomically with that identity check.
+This uses only one fixed-size counter plus identities on the bounded cache
+entries; eviction never needs retained server-side watermarks.
+
 If Attention requires more than 64 distinct histories, or its complete projection
 does not fit the byte budget, report source-limit rather than cycling evictions
 forever or publishing an incomplete healthy list. Inventory/Explorer still show
@@ -241,8 +269,10 @@ data: {"schema":"nightweaver-operations-v1","projectId":"qa","epoch":"opaque-hos
 
 Resync reason is `overflow|reconnect|epoch-changed`; heartbeat is every 10s. Queue
 overflow clears pending frames and enqueues resync, or closes if it cannot do so;
-never silently discard correctness. Hello includes exactly subscribed keys,
-including revision 0. Subscribe atomically **before** sampling hello versions.
+never silently discard correctness. Admit/pin all requested keys before hello
+(or reject admission with 429); hello includes exactly subscribed keys and their
+positive current revisions, including initial unavailable envelopes. Subscribe
+atomically **before** sampling hello versions.
 Changes while hello is written remain queued. Send resync reason reconnect after
 hello on every new stream (including first); no historical replay is assumed.
 
@@ -257,6 +287,11 @@ Bootstrap/reconnect/wake sequence:
    maximum hello/invalidation version known for that resource. A newer response
    is allowed (event can lag). Compare within resource only. A new epoch in HTTP
    initiates handshake replacement; never merge across epochs.
+   In the same epoch, also retain the maximum revision already accepted for each
+   retained cached resource across reconnects; hello cannot lower it. Include
+   that watermark in the acceptance threshold. On a new epoch, clear revision
+   watermarks, invalidate old requests and mark retained display stale before
+   bootstrap; old data is display-only until replaced in the new epoch.
 4. Invalidation during a read schedules exactly one further coalesced GET. An
    obsolete response cannot replace newer state; retained display stays visibly
    stale until the authoritative response catches up. No parallel reads per key.
@@ -284,6 +319,32 @@ new pin visibly at capacity. Keep interaction state separately by Project+Bead;
 up to 20 dirty drafts/1 MiB in memory, visible limit on creating another draft,
 never silent draft eviction or automatic persistence of guidance.
 
+Disconnect invalidates the connection generation immediately. A same-epoch
+readmission's higher-revision unavailable envelope replaces the old observation
+with null data; any retained old display is explicitly stale and cannot count as
+current data. A later collected envelope supersedes it. Requests issued before
+disconnect or under an old key/request generation cannot publish after reconnect,
+even if their revisions would otherwise qualify. Retain watermarks only with the
+bounded response-cache entries; evicting a client entry also invalidates its
+requests. Recreating it requires the hello/GET bootstrap, never accepting a
+response from its previous lifetime.
+
+### Eviction continuity conformance
+
+For both idle TTL (disconnect grace plus 30s idle) and unpinned capacity LRU:
+observe revision N, disconnect while retaining client state, evict on the server,
+mutate the source, and readmit in the **same** epoch. Hello must advertise M > N
+with the new entry initially unavailable. Accept its GET at M as unavailable,
+then accept the collected changed data at P > M. Deliver an old response at N
+and a late collector completion from the evicted entry: neither may replace P.
+Also exercise unchanged source readmission, reconnect without eviction (equal
+revision is accepted), new epoch bootstrap, and allocator exhaustion without
+wraparound. A bounded executable protocol model is in
+[observation-ordering.py](../../tests/Nightweaver.QA.AppHost/observation-ordering.py).
+Run `python tests/Nightweaver.QA.AppHost/observation-ordering.py` without an
+AppHost or tracker. This verifies the proposed ordering rules, not shipped
+observer/SSE code; .2/.3 must apply these cases to their actual implementations.
+
 ## Partial-source examples
 
 Factory can be fresh at revision 8 while inventory fails and Attention is stale
@@ -306,8 +367,8 @@ The telemetry reader's own 10s heartbeat-expiry health remains authoritative.
 ```
 
 Here `[]` is a previously validated empty observation. On first-load failure the
-same fields instead have revision 1, health unavailable, data null, observedAt
-null, and unavailable inventory source. A comments-only failure on an existing
+same fields instead have the next allocated revision, health unavailable, data
+null, observedAt null, and unavailable inventory source. A comments-only failure on an existing
 pause preserves last good Attention data, marks `comments:{id}` stale, and leaves
 Explorer fresh. If no complete Attention projection has ever succeeded it stays
 unavailable; its inventory-derived existence/count must not be fabricated as

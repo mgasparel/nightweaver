@@ -154,6 +154,17 @@ The script checks the shared projection on all three message surfaces, exact ori
 
 The same scenario also seeds mixed delivery publications, all four human audit actions, failed-request corrective prose, agent/host merge records with an in-history source link, finalization diagnostics, and classifier-only/malformed fallbacks. Planning fixtures include a 40-task/40-coverage candidate, a review with findings/questions/revalidation, and a snake_case host approval with resolved candidate and unresolved review references. Checks cover bounded default content, complete nested details, exact originals, source-link keyboard focus and preserved disclosure state across refresh. Additional screenshots use `verified-merge-*`, `human-resume-*`, `planning-candidate-*` and `planning-review-*` names.
 
+## Operational protocol ordering
+
+For the proposed operational protocol's eviction/reconnect ordering rules, run
+`python tests/Nightweaver.QA.AppHost/observation-ordering.py` from the repository
+root. This disposable model uses no AppHost, tracker or network. It covers TTL
+and LRU readmission with client state retained, changed/unchanged source data,
+late responses/collectors, equal-revision reconnects, epoch replacement and
+counter exhaustion. See [the v1.1 contract amendment](../../docs/design/operational-observations-v1.md#eviction-continuity-conformance).
+It is protocol analysis; backend and coordinator consumers still need to run
+these cases against their actual implementations.
+
 ## Cleanup
 
 Always stop the same AppHost in a cleanup/finally step, including after a failed browser check:
