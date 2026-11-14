@@ -13,6 +13,39 @@ namespace Nightweaver.Tests;
 
 public sealed class WebBeadWorkspaceBoundaryIntegrationTests
 {
+    [Fact]
+    public async Task WorkspaceReadsNativeChildrenAndParentWithoutTrackerMutation()
+    {
+        using var target = new BeadsFixture("workspace native relations");
+        var epic = target.Create("Native epic", type: "epic");
+        var child = target.Create("Native child", type: "feature");
+        var nested = target.Create("Nested child", type: "bug");
+        target.Run("bd", ["dep", "add", child, epic, "--type", "parent-child"]);
+        target.Run("bd", ["dep", "add", nested, child, "--type", "parent-child"]);
+        var up = target.Run("bd", ["--readonly", "--sandbox", "dep", "list", epic, "--direction", "up", "--json"]);
+        var down = target.Run("bd", ["--readonly", "--sandbox", "dep", "list", child, "--direction", "down", "--json"]);
+        using var nativeUp = JsonDocument.Parse(up);
+        using var nativeDown = JsonDocument.Parse(down);
+        Assert.Equal(child, nativeUp.RootElement[0].GetProperty("id").GetString());
+        Assert.Equal(epic, nativeDown.RootElement[0].GetProperty("id").GetString());
+        var before = target.Run("bd", ["--readonly", "--sandbox", "list", "--all", "--limit", "0", "--json"]);
+        using var factory = CreateFactory(target, out var runner);
+        using var client = factory.CreateClient();
+        using var parentWorkspace = await GetWorkspaceAsync(client, epic);
+        var children = parentWorkspace.RootElement.GetProperty("relations").EnumerateArray().ToArray();
+        Assert.Single(children);
+        Assert.Equal(child, children[0].GetProperty("id").GetString());
+        Assert.Equal("incoming", children[0].GetProperty("direction").GetString());
+        Assert.Equal("feature", children[0].GetProperty("issueType").GetString());
+        using var childWorkspace = await GetWorkspaceAsync(client, child);
+        Assert.Contains(childWorkspace.RootElement.GetProperty("relations").EnumerateArray(), row =>
+            row.GetProperty("id").GetString() == epic && row.GetProperty("direction").GetString() == "outgoing");
+        Assert.Contains(childWorkspace.RootElement.GetProperty("relations").EnumerateArray(), row =>
+            row.GetProperty("id").GetString() == nested && row.GetProperty("direction").GetString() == "incoming");
+        Assert.Equal(before, target.Run("bd", ["--readonly", "--sandbox", "list", "--all", "--limit", "0", "--json"]));
+        Assert.All(runner.Requests.Where(request => request.FileName == "bd"), request => Assert.Contains("--readonly", request.Arguments));
+    }
+
     private static readonly string[] StructuredOlderIds = ["000-older", "100-diagnostic"];
     private static readonly string[] StructuredRecentIds = ["150-diagnostic", "160-unknown-schema", "170-malformed-json", "200-guidance", "300-cleanup"];
     private static readonly string[] StructuredRecentKinds = ["diagnostic", "ordinary", "ordinary", "human-guidance", "cleanup-warning"];

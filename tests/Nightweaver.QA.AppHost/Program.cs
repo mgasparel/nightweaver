@@ -84,6 +84,9 @@ try
         if (Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "schema-messages")
             await SchemaMessageQaFixture.SeedAsync(arguments => RunAsync("bd", repository, userHome, cancellationToken, arguments));
 
+        if (Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "relations")
+            await RelationsQaFixture.SeedAsync(arguments => RunAsync("bd", repository, userHome, cancellationToken, arguments));
+
         var markdownId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA workspace markdown", "feature");
         var longCode = new string('x', 600);
         var markdown = string.Join("\n\n", "# Long workspace fixture",
