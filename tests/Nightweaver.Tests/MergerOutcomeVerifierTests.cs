@@ -570,6 +570,19 @@ public sealed class MergerOutcomeVerifierTests
     }
 
     [Fact]
+    public async Task DraftSkippedChecksCannotAuthorizeMerge()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.Runner.ApprovalMode = true;
+        fixture.Runner.CheckFailed = false;
+        fixture.Runner.CheckSkipped = true;
+        fixture.SetMergeEvidence();
+        var result = await fixture.VerifyApprovalAsync();
+        Assert.False(result.Succeeded);
+        Assert.Contains("Required pull request checks", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RejectsMergeCommitThatIsNotReachableFromConfiguredDefaultBranch()
     {
         using var fixture = new VerifierFixture();
@@ -782,6 +795,7 @@ public sealed class MergerOutcomeVerifierTests
         internal List<IReadOnlyList<string>> PublicationWrites { get; } = [];
         private readonly List<string> publishedComments = [];
         internal bool CheckFailed { get; set; } = true;
+        internal bool CheckSkipped { get; set; }
         internal string AdvertisedHead { get; set; } = head;
         internal string? HeadAfterChecks { get; set; }
         internal string BaseBranch { get; set; } = "main";
@@ -905,7 +919,7 @@ public sealed class MergerOutcomeVerifierTests
                 if (HeadAfterChecks is not null) AdvertisedHead = HeadAfterChecks;
                 return Task.FromResult(new ProcessResult(0, JsonSerializer.Serialize(new[]
                 {
-                    new { name = "fixture checks", state = CheckFailed ? "FAILURE" : "SUCCESS", bucket = CheckFailed ? "fail" : "pass" }
+                    new { name = "fixture checks", state = CheckSkipped ? "SKIPPED" : CheckFailed ? "FAILURE" : "SUCCESS", bucket = CheckSkipped ? "skipping" : CheckFailed ? "fail" : "pass" }
                 }), string.Empty));
             }
             throw new InvalidOperationException($"Unexpected verifier command: {request.FileName} {string.Join(' ', request.Arguments)}");

@@ -8,6 +8,8 @@ Exercise the dispatched Plan Bead in its isolated worktree. Start with `bd show 
 
 A retained worktree may contain tracked, staged, untracked, ignored, and temporary content from earlier attempts. Preserve inherited content. If inherited content prevents required checks, report it and preserve the environment for inspection and resume.
 
+Ordinary QA uses local checks and live local behavior; keep the PR draft and leave final readiness and hosted verification of the synchronized candidate to Merger. Hosted checks are not the ordinary feedback loop. If the dispatched Bead explicitly requires CI investigation or hosted verification, use the Target Repository's deliberate dispatch/rerun path while draft and record the authorizing requirement, workflow/run identity, tested revision and outcome. Draft CI suppression depends on that repository's workflow. For this repository, see `docs/agents/hosted-verification.md`.
+
 For Nightweaver Web Console QA, follow `tests/Nightweaver.QA.AppHost/README.md`: start the isolated Aspire stack, discover its web endpoint, and use headless Playwright to exercise the dispatched Bead. Capture browser errors and stop the stack in cleanup. Do not use desktop Computer Use (`cua_repl/js`) for browser QA. For other software, build and run it as needed. Verify each acceptance criterion against observable behavior and probe relevant edge cases. Record exact commands, results, and reproducible failures in your evidence report.
 
 ## Teardown and deferred housekeeping
