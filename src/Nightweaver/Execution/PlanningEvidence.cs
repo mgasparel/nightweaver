@@ -37,14 +37,21 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
 
     internal async Task<PlanningObservation> ObserveAsync(AgentStageSession session, CancellationToken token)
     {
-        var status = await runner.RunAsync(GitCommand.Create(["status", "--porcelain"], session.Worktree.Path), token);
+        // Independent read-only Git processes can overlap. Settle every read before
+        // observing tracker authority; no observation is reused across mutations.
+        var statusRead = runner.RunAsync(GitCommand.Create(["status", "--porcelain"], session.Worktree.Path), token);
+        var remoteRead = runner.RunAsync(GitCommand.Create(
+            ["rev-parse", "--verify", $"refs/remotes/origin/{session.Project.TargetRepository.DefaultBranch}"], session.Repository.Path), token);
+        var checkoutRead = GitRevisionAsync(session.Worktree.Path, "HEAD", token);
+        var defaultRead = GitRevisionAsync(session.Repository.Path,
+            $"refs/heads/{session.Project.TargetRepository.DefaultBranch}", token);
+        await Task.WhenAll(statusRead, remoteRead, checkoutRead, defaultRead);
+        var status = await statusRead;
         if (status.ExitCode != 0 || status.StandardOutput.Length != 0)
             throw new AgentStageInputException("Planning grounding requires an observable clean isolated Planning checkout; preserve changes for inspection.");
-        var remote = await runner.RunAsync(GitCommand.Create(
-            ["rev-parse", "--verify", $"refs/remotes/origin/{session.Project.TargetRepository.DefaultBranch}"], session.Repository.Path), token);
-        var checkoutRevision = await GitRevisionAsync(session.Worktree.Path, "HEAD", token);
-        var defaultRevision = await GitRevisionAsync(session.Repository.Path,
-            $"refs/heads/{session.Project.TargetRepository.DefaultBranch}", token);
+        var remote = await remoteRead;
+        var checkoutRevision = await checkoutRead;
+        var defaultRevision = await defaultRead;
         // Keep tracker observations last and use this same fresh Product/discussion
         // for both grounding and publication authority. Never reuse across writes.
         var inventory = await reader.ReadSnapshotAsync(session.Repository, token);

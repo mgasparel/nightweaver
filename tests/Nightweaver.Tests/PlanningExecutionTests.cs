@@ -7,6 +7,44 @@ namespace Nightweaver.Tests;
 
 public sealed class PlanningExecutionTests
 {
+    [Fact]
+    public async Task GroundingOverlapsIndependentGitReadsBeforeObservingTracker()
+    {
+        using var fixture = new PlanningFixture("draft");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        var completed = 0;
+        var observedTracker = false;
+        fixture.BeforeTrackerRead = () =>
+        {
+            Assert.Equal(4, reads);
+            Assert.Equal(4, completed);
+            Assert.True(release.Task.IsCompleted);
+            observedTracker = true;
+        };
+        fixture.GitRead = async (request, token) =>
+        {
+            if (Interlocked.Increment(ref reads) == 4) started.SetResult();
+            await release.Task.WaitAsync(token);
+            Interlocked.Increment(ref completed);
+            return new ProcessResult(0, request.Arguments.Contains("status") ? "" : new string('a', 40), "");
+        };
+        var capture = fixture.CaptureAsync();
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            Assert.False(capture.IsCompleted);
+        }
+        finally
+        {
+            release.SetResult();
+            await capture;
+        }
+        Assert.Equal(4, reads);
+        Assert.True(observedTracker);
+    }
+
     [Theory]
     [InlineData("draft")]
     [InlineData("approval")]
@@ -218,6 +256,8 @@ public sealed class PlanningExecutionTests
         internal NeedsHumanRequest? Escalation { get; private set; }
         internal int Executions { get; private set; }
         internal int PublishWrites { get; private set; }
+        internal Func<ProcessRequest, CancellationToken, Task<ProcessResult>>? GitRead { get; set; }
+        internal Action? BeforeTrackerRead { get; set; }
         internal string Sentinel { get; }
         private string DefaultSha => new(scenario == "grounding-change" && Executions > 0 ? 'b' : 'a', 40);
 
@@ -260,8 +300,10 @@ public sealed class PlanningExecutionTests
             string output;
             var args = request.Arguments.ToList();
             string Value(string option) => args[args.IndexOf(option) + 1];
+            if (request.FileName != "git") BeforeTrackerRead?.Invoke();
             if (request.FileName == "git")
             {
+                if (GitRead is not null) return GitRead(request, token);
                 if (realGit) return new SystemProcessRunner().RunAsync(request, token);
                 output = args[0] switch { "status" => "", "branch" => "", "rev-parse" => DefaultSha, _ => throw new InvalidOperationException() };
             }
