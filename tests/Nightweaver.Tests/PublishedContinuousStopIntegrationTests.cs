@@ -447,7 +447,7 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
                 throw new InvalidOperationException($"Published Nightweaver exited before fixture handshake '{path}' appeared (exit {await runtime.WaitAsync(TimeSpan.FromSeconds(1))}). Output: {ReadRuntimeLog(runtime)}");
             await Task.Delay(50, TestContext.Current.CancellationToken);
         }
-        throw new TimeoutException($"Published Nightweaver did not create fixture handshake '{path}' within {timeout}.");
+        throw new TimeoutException($"Published Nightweaver did not create fixture handshake '{path}' within {timeout}. Runtime output: {ReadRuntimeLog(runtime)}");
     }
 
     private static string ReadRuntimeLog(WindowsConsoleProcess runtime)
