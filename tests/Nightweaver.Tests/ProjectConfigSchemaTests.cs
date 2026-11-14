@@ -49,6 +49,7 @@ public sealed class ProjectConfigSchemaTests
         var config = Load(temp, """
             {
               "name": "demo",
+              "openai_api_key": "REPLACE_WITH_YOUR_KEY",
               "target_repository": { "path": "repository", "default_branch": "main" },
               "concurrency": { "max_concurrent_planning": 2, "max_concurrent_delivery": 3, "max_active_plan_beads": 5 },
               "limits": { "max_repair_cycles": 3, "max_operational_retries": 2 },
@@ -65,6 +66,7 @@ public sealed class ProjectConfigSchemaTests
             }
             """);
 
+        Assert.Equal("REPLACE_WITH_YOUR_KEY", config.OpenAiApiKey);
         Assert.Equal(new AgentSettings(AgentCli.Claude, null, "high", 30), config.AgentDefaults);
         Assert.Equal(new AgentSettings(AgentCli.Claude, "<model-id>", "high", 30), config.Roles[AgentRole.Planner]);
         Assert.Equal(new AgentSettings(AgentCli.Codex, "<model-id>", "high", 20), config.Roles[AgentRole.PlanChallenger]);

@@ -121,18 +121,21 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
     private readonly Func<HostPaths, ProjectSlug, PreparedAgentInvocation, int, CancellationToken,
         Task<AgentStandardOutputCaptureResult>> executeFallback;
     private readonly string? apiKeyOverride;
+    private readonly Func<string, string?> getEnvironmentVariable;
 
     internal AgentOutcomeClassifier(
         HttpClient? httpClient = null,
         AgentInvocationPreparer? preparer = null,
         Func<HostPaths, ProjectSlug, PreparedAgentInvocation, int, CancellationToken,
             Task<AgentStandardOutputCaptureResult>>? executeFallback = null,
-        string? apiKeyOverride = null)
+        string? apiKeyOverride = null,
+        Func<string, string?>? getEnvironmentVariable = null)
     {
         this.httpClient = httpClient ?? new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         this.preparer = preparer ?? new AgentInvocationPreparer();
         this.executeFallback = executeFallback ?? AgentInvocationExecutor.ExecuteWithStandardOutputCaptureAsync;
         this.apiKeyOverride = apiKeyOverride;
+        this.getEnvironmentVariable = getEnvironmentVariable ?? Environment.GetEnvironmentVariable;
     }
 
     public async Task<AgentOutcomeClassificationResult> ClassifyAsync(
@@ -174,7 +177,8 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
         if (!HasAdequateEvidence(evidence))
             return new(null, "evidence", $"The invocation log and fresh Bead comments contain no usable {contract.RoleName} evidence.");
 
-        var apiKey = apiKeyOverride ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        var environmentKey = getEnvironmentVariable("OPENAI_API_KEY");
+        var apiKey = apiKeyOverride ?? (string.IsNullOrWhiteSpace(environmentKey) ? project.OpenAiApiKey : environmentKey);
         var primary = await TryPrimaryAsync(apiKey, evidenceJson, contract, cancellationToken).ConfigureAwait(false);
         if (primary.Outcome is { } primaryOutcome)
             return new(primaryOutcome, "openai-decisions", $"OpenAI Decisions returned one valid {contract.RoleName} outcome.");
