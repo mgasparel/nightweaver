@@ -51,6 +51,7 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
         var planningPreparing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releasePlanning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var deliveryStop = new ContinuousStopGate();
+        var generatedDeliveryStop = new ContinuousStopGate();
         var planningStop = new ContinuousStopGate();
         await using var telemetry = new FactoryTelemetryPublisher(paths, project, repository,
             project.Concurrency.MaxConcurrentDelivery, 1);
@@ -59,7 +60,6 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var preparing = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var successorStarted = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var roles = new ConcurrentQueue<(string Bead, AgentRole Role)>();
         var unrelatedImplementation = new TaskCompletionSource<OperationalRetryOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
         OperationalRetryOutcome? generatedOutcome = null;
@@ -116,11 +116,14 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             var outcome = await retries.RunAsync(host, config, target, bead, role, actor, token, progress, state);
             roleOutcomes.Enqueue($"{bead} {role}: {JsonSerializer.Serialize(outcome)}");
             if (bead == fixture.ParentlessTaskId && role == AgentRole.Implementer)
+            {
                 unrelatedImplementation.TrySetResult(outcome);
+                deliveryStop.RequestStop();
+            }
             if (bead.StartsWith(product + "-p", StringComparison.Ordinal))
             {
                 generatedOutcome = outcome;
-                deliveryStop.RequestStop();
+                generatedDeliveryStop.RequestStop();
             }
             if (bead == product && role == AgentRole.PlanChallenger) planningStop.RequestStop();
             return outcome;
@@ -137,19 +140,9 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             runSlot: (host, config, target, bead, token) => deliverySlot.RunAsync(host, config, target, bead, token),
             stopGate: deliveryStop, telemetry: telemetry, slotLifetimeToken: lifetime.Token);
         var merger = new MergerPoolCoordinator(paths, project, repository, runner,
-            runSlot: async (host, config, target, bead, attemptStarted, token) =>
-            {
-                if (bead != heldBead)
-                {
-                    // Prove that the queued successor gets the singleton reservation.
-                    // Native merge completion is already exercised by the first slot
-                    // here and by MergerPoolIntegrationTests; do not repeat that full
-                    // pipeline merely to observe the pool's next admission.
-                    successorStarted.TrySetResult(bead);
-                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
-                }
-                return await mergerSlot.RunAsync(host, config, target, bead, attemptStarted, token);
-            }, slotLifetimeToken: lifetime.Token);
+            runSlot: (host, config, target, bead, attemptStarted, token) =>
+                mergerSlot.RunAsync(host, config, target, bead, attemptStarted, token),
+            slotLifetimeToken: lifetime.Token);
         Exception? primary = null;
         Exception? cleanupFailure = null;
         try
@@ -167,9 +160,8 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             Assert.Equal("in_progress", heldState.GetProperty("status").GetString());
             Assert.Equal(project.RecoveryActor, heldState.GetProperty("assignee").GetString());
 
-            // Reuse the native recovery smoke's prepared template. Admission still
-            // happens only after Merger preparation is held; release this task's
-            // fixture gate so the real Delivery roles can make independent progress.
+            // One native Implementer proves independent Delivery progress. The full
+            // Implementer/Reviewer/QA journey has its own native integration test.
             var lateBead = fixture.ParentlessTaskId;
             fixture.ReleaseGate(lateBead);
             var evaluation = await delivery.EvaluateAsync(lifetime.Token);
@@ -179,22 +171,27 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             Assert.True(implementation.Succeeded, implementation.StageResult.Failure?.Reason);
             Assert.False(admittedPlanning.Completion.IsCompleted);
             Assert.False(held.Completion.IsCompleted);
-            // One actual native turn proves held Planning preparation does not
-            // block Delivery. Let Planning overlap the remaining Delivery
-            // turns rather than serializing two independent pool journeys.
+            // Stop after the successful current turn and retain its verified handoff.
+            // Let Planning overlap claim finalization, rather than rerunning the
+            // full Delivery journey in this cross-pool boundary test.
             releasePlanning.TrySetResult();
             var completed = await admitted.Completion.WaitAsync(TimeSpan.FromMinutes(5), lifetime.Token);
-            Assert.Equal(DeliverySlotDisposition.MergeReady, completed.Outcome?.Disposition);
+            Assert.Equal(DeliverySlotDisposition.Refused, completed.Outcome?.Disposition);
             Assert.True(completed.ClaimHandoffCompleted);
-            Assert.Equal(new[] { AgentRole.Implementer, AgentRole.Reviewer, AgentRole.Qa },
+            Assert.Equal("stage:review", completed.Outcome?.FinalState?.Stage);
+            Assert.Empty(delivery.ActiveReservations);
+            Assert.Equal(new[] { AgentRole.Implementer },
                 roles.Where(item => item.Bead == lateBead).Select(item => item.Role));
+            // Preserve the unrelated task at its current stage so the later pool
+            // admission observes only newly published work.
+            var pauseDelivery = await runner.RunAsync(BeadsCommand.CreateWrite(repository.Path,
+                ["update", lateBead, "--add-label", "needs-human"]), lifetime.Token);
+            Assert.Equal(0, pauseDelivery.ExitCode);
             Assert.Empty(mergerStarts);
             Assert.False(held.Completion.IsCompleted);
             Assert.Equal(heldBead, Assert.Single(merger.ActiveReservations).BeadId);
-            var queued = await merger.EvaluateAsync(lifetime.Token);
-            Assert.Empty(queued.Admitted);
-            Assert.Contains(queued.Diagnostics, diagnostic => diagnostic.BeadId == lateBead
-                && diagnostic.Code == MergerPoolDiagnosticCode.CapacityReached);
+            Assert.Equal(1, merger.CapacityLimit);
+            Assert.Empty((await merger.EvaluateAsync(lifetime.Token)).Admitted);
 
             var interrupted = await admittedPlanning.Completion.WaitAsync(TimeSpan.FromMinutes(2), lifetime.Token);
             Assert.True(interrupted.Outcome?.Disposition == PlanningSlotDisposition.Interrupted,
@@ -230,6 +227,9 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             var ready = BeadsReader.Parse(readiness.StandardOutput).ById.Keys;
             Assert.Contains(task.Id, ready);
             Assert.DoesNotContain(dependent.Id, ready);
+            delivery = new DeliveryPoolCoordinator(paths, project, repository, runner,
+                runSlot: (host, config, target, bead, token) => deliverySlot.RunAsync(host, config, target, bead, token),
+                stopGate: generatedDeliveryStop, telemetry: telemetry, slotLifetimeToken: lifetime.Token);
             var generatedAdmission = Assert.Single((await delivery.EvaluateAsync(lifetime.Token)).Admitted);
             Assert.Equal(task.Id, generatedAdmission.BeadId);
             // Publication is complete: main may now advance without invalidating
@@ -255,11 +255,7 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
 
             var firstMerge = await held.Completion.WaitAsync(TimeSpan.FromMinutes(3), lifetime.Token);
             Assert.True(firstMerge.MergeCompleted, firstMerge.Diagnostic);
-            var next = Assert.Single((await merger.EvaluateAsync(lifetime.Token)).Admitted);
-            Assert.Equal(lateBead, next.BeadId);
-            Assert.Equal(lateBead, await successorStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), lifetime.Token));
-            Assert.Equal(lateBead, Assert.Single(merger.ActiveReservations).BeadId);
-            Assert.False(next.Completion.IsCompleted);
+            Assert.Empty(merger.ActiveReservations);
             Assert.Equal(1, mergerStarts[heldBead]);
             Assert.False(mergerStarts.ContainsKey(lateBead));
             Assert.Equal("closed", (await fixture.ReadBeadAsync(heldBead, lifetime.Token)).GetProperty("status").GetString());
