@@ -147,6 +147,7 @@ function restoreAttentionFocus(state) {
 
 function renderAttention() {
   if (!attentionCards || !attentionEmpty) return;
+  const messageFocus = captureMessageState(attentionCards);
   const focus = captureAttentionFocus();
   for (const card of attentionCards.children) {
     for (const details of card.querySelectorAll("details")) {
@@ -181,12 +182,14 @@ function renderAttention() {
     card.append(workspaceLink);
 
     card.append(makeAttentionText("p", "attention-summary", `${item.beadId} · ${item.stage || "Stage unavailable"} · Repairs ${Number.isInteger(item.repairCycles) ? item.repairCycles : "Unknown"} / ${item.maxRepairCycles}`));
-    const context = item.kind === "product-decision-required"
+    const context = item.message?.summary || (item.kind === "product-decision-required"
       ? item.question || "No attributable clarification comment is available."
-      : item.diagnostic || "No valid diagnostic is available.";
+      : item.diagnostic || "No valid diagnostic is available.");
     card.append(makeAttentionText("p", "attention-preview", context.length > 140 ? `${context.slice(0, 140)}…` : context));
     const detail = attentionDisclosure(item, "context", "Read full context & pause details", "attention-context");
-    detail.append(makeAttentionText("p", item.kind === "product-decision-required" ? "attention-question" : "attention-diagnostic", context));
+    if (item.contextNotice) detail.append(makeAttentionText("p", "workspace-context-warning", item.contextNotice));
+    detail.append(item.message ? renderSemanticMessage(item.message, `desk:${item.beadId}`) : makeAttentionText("p", item.kind === "product-decision-required" ? "attention-question" : "attention-diagnostic", context));
+    appendOtherPauseReports(detail, item, `desk:${item.beadId}`);
     detail.append(makeAttentionText("p", "attention-source", `Type: ${item.type || "Unknown"} · Status: ${item.status || "Unknown"} · ${formatRole(item.fromRole)} · Comment author: ${item.sourceAuthor || "Unknown"}`));
     detail.append(makeAttentionText("p", "attention-pause-time", formatPauseTime(item)));
     card.append(detail);
@@ -288,6 +291,7 @@ function renderAttention() {
     if (attentionShowAll.hidden && document.activeElement === attentionShowAll) attentionStatus?.focus();
   }
   restoreAttentionFocus(focus);
+  restoreMessageFocus(attentionCards, messageFocus, attentionStatus);
 }
 
 function cardById(beadId) {
@@ -1577,6 +1581,85 @@ function renderWorkspaceMeta(bead) {
   }
 }
 
+// Shared read-only display path. Evidence navigation requires explicit user activation.
+const messageDisclosures = new Map();
+function captureMessageState(root) {
+  for (const summary of root.querySelectorAll('summary[data-message-focus]'))
+    messageDisclosures.set(summary.dataset.messageFocus, summary.parentElement.open);
+  return root.contains(document.activeElement) ? document.activeElement?.dataset.messageFocus : null;
+}
+function restoreMessageFocus(root, key, fallback) {
+  if (!key) return;
+  const target = Array.from(root.querySelectorAll('[data-message-focus]')).find(node => node.dataset.messageFocus === key);
+  (target?.checkVisibility() ? target : fallback)?.focus({ preventScroll: true });
+}
+function renderSemanticMessage(message, surface) {
+  const box = document.createElement("section");
+  box.className = `semantic-message semantic-${message.state}`;
+  box.append(workspaceText("h4", "message-title", message.title));
+  if (message.role || message.stage) box.append(workspaceText("p", "message-attribution", [message.role, message.stage].filter(Boolean).join(" · ")));
+  box.append(workspaceText("p", "message-summary", message.summary));
+  const evidence = document.createElement("div");
+  for (const [index, section] of (message.sections || []).entries()) {
+    const field = document.createElement("div");
+    field.className = "message-field";
+    field.append(workspaceText("h5", "", section.label));
+    const evidenceLink = ["Pull request", "Log directory", "Log references"].includes(section.label)
+      ? messageEvidenceLink(section.text, `${surface}:${message.sourceId}:field:${index}:link`) : null;
+    if (evidenceLink) field.append(evidenceLink);
+    else if (section.text.length > 900) {
+      field.append(workspaceText("p", "message-excerpt", `${section.text.slice(0, 280)}…`),
+        messageDisclosure(`${surface}:${message.sourceId}:field:${index}`, `Read full ${section.label.toLowerCase()}`,
+          workspaceText("pre", "", section.text)));
+    } else field.append(workspaceText("p", "", section.text));
+    if (["Invocation", "Log directory", "Log references", "Pull request", "Checked head"].includes(section.label)) evidence.append(field);
+    else box.append(field);
+  }
+  if (evidence.childElementCount) box.append(messageDisclosure(`${surface}:${message.sourceId}:evidence`, "Inspect evidence references", evidence));
+  box.append(workspaceText("p", "message-source", `Source comment: ${message.sourceId}`));
+  box.append(messageDisclosure(`${surface}:${message.sourceId}`, "View exact stored comment & technical details", workspaceText("pre", "", message.original)));
+  return box;
+}
+
+function messageEvidenceLink(text, key) {
+  // Only absolute HTTP(S) references can navigate. Paths and unsafe schemes remain text.
+  if (!/^https?:\/\//i.test(text) || /[\s\\\u0000-\u001f\u007f]/.test(text)) return null;
+  try {
+    const url = new URL(text);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return null;
+    const link = workspaceText("a", "message-evidence-link", text);
+    link.href = url.href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.dataset.messageFocus = key;
+    return link;
+  } catch { return null; }
+}
+
+function messageDisclosure(key, label, body) {
+  const raw = document.createElement("details");
+  raw.className = "message-original";
+  raw.open = messageDisclosures.get(key) ?? false;
+  const summary = workspaceText("summary", "", label);
+  summary.dataset.messageFocus = key;
+  if (body.tagName === "PRE") {
+    body.tabIndex = 0;
+    body.dataset.messageFocus = `${key}:body`;
+    body.setAttribute("aria-label", label);
+  }
+  raw.addEventListener("toggle", () => { if (raw.isConnected) messageDisclosures.set(key, raw.open); });
+  raw.append(summary, body);
+  return raw;
+}
+
+function appendOtherPauseReports(container, attention, surface) {
+  if (!attention.otherPauseReports?.length) return;
+  const reports = document.createElement("div");
+  reports.append(workspaceText("h4", "", "Other pause reports"), workspaceText("p", "message-source", "Separate reported events; review history for source context."));
+  for (const message of attention.otherPauseReports) reports.append(renderSemanticMessage(message, `${surface}:other`));
+  container.append(messageDisclosure(`${surface}:other-reports`, "Inspect other pause reports", reports));
+}
+
 function extractHumanInstruction(comment) {
   if (comment.kind !== "human-guidance") return null;
   try {
@@ -1606,6 +1689,10 @@ function renderWorkspaceComment(comment, index, activeCommentId) {
   if (comment.role || comment.stage) {
     const context = [comment.role, comment.stage].filter(Boolean).join(" · ");
     heading.append(workspaceText("span", "workspace-comment-context", context));
+  }
+  if (comment.message && comment.message.state !== "ordinary") {
+    article.append(heading, renderSemanticMessage(comment.message, `history:${comment.id}`));
+    return article;
   }
   const instruction = extractHumanInstruction(comment);
   if (instruction !== null) article.append(workspaceText("p", "workspace-comment-guidance", instruction));
@@ -1733,13 +1820,15 @@ function renderWorkspaceActiveContext(data) {
     return;
   }
   const isDecision = attention.kind === "product-decision-required";
+  if (attention.contextNotice) workspaceGuidanceContext.append(workspaceText("p", "workspace-context-warning", attention.contextNotice));
   workspaceGuidanceContext.append(workspaceText("p", "workspace-context-label",
     isDecision ? "Current clarification context" : "Current diagnostic"));
   const text = isDecision ? attention.question : attention.diagnostic;
   const context = document.createElement("pre");
   context.className = "workspace-active-context";
   context.textContent = text || (isDecision ? "No attributable question is available." : "No valid diagnostic is available.");
-  workspaceGuidanceContext.append(context);
+  workspaceGuidanceContext.append(attention.message ? renderSemanticMessage(attention.message, `workspace:${data.bead.id}`) : context);
+  appendOtherPauseReports(workspaceGuidanceContext, attention, `workspace:${data.bead.id}`);
   const active = data.history.activeCommentId ? workspaceCommentElements.get(data.history.activeCommentId) : null;
   if (active) {
     const jump = workspaceButton(isDecision ? "See current question in history" : "See diagnostic in history",
@@ -1835,6 +1924,7 @@ function renderWorkspaceGuidanceActions(data) {
 }
 
 function renderWorkspace(data) {
+  const messageFocus = captureMessageState(beadWorkspace);
   workspaceId.textContent = data.bead.id;
   workspaceTitle.textContent = data.bead.title;
   renderWorkspaceMeta(data.bead);
@@ -1845,6 +1935,7 @@ function renderWorkspace(data) {
   workspaceGuidanceInput.value = attentionDrafts.get(data.bead.id) ?? "";
   renderWorkspaceActiveContext(data);
   renderWorkspaceGuidanceActions(data);
+  restoreMessageFocus(beadWorkspace, messageFocus, workspaceTitle);
 }
 
 function showWorkspaceLoading(id, message = "Loading Bead workspace…") {

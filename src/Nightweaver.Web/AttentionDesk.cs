@@ -26,14 +26,18 @@ internal sealed record AttentionDeskItem(
     [property: JsonPropertyName("canRetry")] bool CanRetry,
     [property: JsonPropertyName("canAbort")] bool CanAbort,
     [property: JsonPropertyName("unavailableReason")] string? UnavailableReason,
-    [property: JsonPropertyName("sourceAuthor")] string? SourceAuthor);
+    [property: JsonPropertyName("sourceAuthor")] string? SourceAuthor)
+{
+    [JsonPropertyName("message")] public CommentPresentation? Message { get; init; }
+    [JsonPropertyName("sourceCommentId")] public string? SourceCommentId { get; init; }
+    [JsonPropertyName("otherPauseReports")] public IReadOnlyList<CommentPresentation> OtherPauseReports { get; init; } = [];
+    [JsonPropertyName("contextNotice")] public string? ContextNotice { get; init; }
+}
 
 internal static class AttentionDeskProjector
 {
     private const string ProductDecisionLabel = "product-decision-required";
     private const string NeedsHumanLabel = "needs-human";
-    private const string NeedsHumanSchema = "nightweaver-needs-human-v1";
-    private const string CleanupFailureSchema = "nightweaver-needs-human-cleanup-failure-v1";
 
     private static readonly HashSet<string> KnownStages = new(StringComparer.Ordinal)
     {
@@ -51,33 +55,29 @@ internal static class AttentionDeskProjector
         var productDecision = bead.Labels.Contains(ProductDecisionLabel, StringComparer.Ordinal);
         var needsHuman = bead.Labels.Contains(NeedsHumanLabel, StringComparer.Ordinal);
         var workflow = ParseWorkflow(bead, productDecision, needsHuman);
-        var diagnostics = comments.Select(comment => (Comment: comment, Diagnostic: TryReadNeedsHumanDiagnostic(comment, bead)))
-            .Where(pair => pair.Diagnostic is not null)
-            .Select(pair => (pair.Comment, Diagnostic: pair.Diagnostic!))
-            .ToArray();
-        var latestDiagnostic = diagnostics.LastOrDefault();
-        var cleanupWarning = latestDiagnostic.Diagnostic is null ? null : comments
-            .Where(comment => IsAfter(comment, latestDiagnostic.Comment))
-            .Select(TryReadCleanupFailure)
-            .LastOrDefault(value => value is not null);
-        var selectedQuestion = productDecision ? comments.LastOrDefault(comment => IsLegacyDecisionContext(comment.Text)) : null;
+        var pauseCandidates = comments.Where(c => CommentPresenter.IsPauseCandidate(c.Text, productDecision && !needsHuman)).ToArray();
+        var selectedStructured = pauseCandidates.LastOrDefault(c => !CommentPresenter.IsSupplemental(CommentPresenter.Project(c, bead)));
+        var selectedQuestion = productDecision ? selectedStructured
+            ?? comments.LastOrDefault(comment => IsLegacyDecisionContext(comment.Text)) : null;
+        var selectedDiagnostic = needsHuman ? selectedStructured : null;
+        var selectedMessage = selectedStructured is null ? null : CommentPresenter.Project(selectedStructured, bead);
 
         var kind = workflow.InvalidReason is not null
             ? "invalid-workflow"
             : productDecision ? "product-decision-required"
             : "needs-human";
         var role = productDecision && !needsHuman
-            ? RoleForStage(workflow.Stage)
+            ? selectedStructured is null ? RoleForStage(workflow.Stage) : selectedMessage?.Role
             : needsHuman && !productDecision
-                ? latestDiagnostic.Diagnostic?.FailedRole ?? RoleForStage(workflow.Stage)
+                ? selectedMessage?.Role
                 : null;
         var selectedPauseComment = productDecision && !needsHuman
             ? selectedQuestion
             : needsHuman && !productDecision
-                ? latestDiagnostic.Comment
+                ? selectedDiagnostic
                 : null;
         var diagnosticText = needsHuman
-            ? FormatNeedsHumanDiagnostic(latestDiagnostic.Diagnostic, cleanupWarning)
+            ? selectedMessage?.Summary ?? "Needs-human is present, but no attributable diagnostic is available. Review the history before acting."
             : workflow.InvalidReason;
         if (kind == "invalid-workflow" && needsHuman && workflow.InvalidReason is not null)
             diagnosticText = $"{workflow.InvalidReason}{Environment.NewLine}{diagnosticText}";
@@ -106,7 +106,7 @@ internal static class AttentionDeskProjector
             selectedPauseComment?.CreatedAt.ToUniversalTime(),
             selectedPauseComment is not null ? "comment" : "unknown",
             role,
-            selectedQuestion?.Text,
+            selectedMessage?.Summary ?? selectedQuestion?.Text,
             diagnosticText,
             workflow.RepairCycles,
             maxRepairCycles,
@@ -114,11 +114,21 @@ internal static class AttentionDeskProjector
             canRetry,
             canAbort,
             unavailableReason,
-            selectedPauseComment?.Author);
+            selectedPauseComment?.Author)
+        {
+            Message = selectedMessage,
+            SourceCommentId = selectedPauseComment?.Id,
+            ContextNotice = selectedMessage?.Stage is { } sourceStage && sourceStage != "(none)" && sourceStage != workflow.Stage
+                ? $"This source reports {sourceStage}; the current workflow stage is {workflow.Stage ?? "unavailable"}. It may not explain the current pause. Review history before acting."
+                : null,
+            // Separate attributed reports, not a chronological claim of causality.
+            OtherPauseReports = comments.Select(c => CommentPresenter.Project(c, bead))
+                .Where(CommentPresenter.IsSupplemental).TakeLast(3).ToArray()
+        };
 
         var selectionSource = selectedPauseComment is null
             ? "none"
-            : productDecision && !needsHuman ? "legacy-context"
+            : productDecision && !needsHuman ? (selectedStructured is null ? "legacy-context" : "structured")
             : needsHuman && !productDecision ? "structured"
             : "none";
         return new AttentionDeskProjection(item, selectedPauseComment?.Id, selectionSource);
@@ -126,12 +136,9 @@ internal static class AttentionDeskProjector
 
     internal static BeadWorkspaceCommentClassification ClassifyComment(BeadsCommentSnapshot comment, BeadSnapshot bead)
     {
-        var diagnostic = TryReadNeedsHumanDiagnostic(comment, bead);
-        if (diagnostic is not null)
-            return new("diagnostic", diagnostic.FailedRole,
-                diagnostic.Stage == "(none)" ? null : diagnostic.Stage);
-        if (TryReadCleanupFailure(comment) is not null)
-            return new("cleanup-warning", null, null);
+        var presentation = CommentPresenter.Project(comment, bead);
+        if (presentation.State != "ordinary")
+            return new(presentation.State == "fallback" ? "unsupported-message" : "diagnostic", presentation.Role, presentation.Stage);
 
         try
         {
@@ -277,65 +284,6 @@ internal static class AttentionDeskProjector
         return result;
     }
 
-    private static NeedsHumanDiagnostic? TryReadNeedsHumanDiagnostic(BeadsCommentSnapshot comment, BeadSnapshot bead)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(comment.Text);
-            if (document.RootElement.ValueKind != JsonValueKind.Object) return null;
-            var fields = ReadUniqueProperties(document.RootElement);
-            if (!ReadString(fields, "schema", out var schema) || schema != NeedsHumanSchema
-                || !ReadString(fields, "bead_id", out var beadId) || beadId != bead.Id
-                || !ReadString(fields, "bead_type", out var beadType) || beadType != bead.IssueType
-                || !ReadString(fields, "cause", out var cause) || !KnownCause(cause)
-                || !ReadString(fields, "failed_role", out var failedRole) || !KnownLifecycleRole(failedRole)
-                || !ReadString(fields, "reason", out var reason) || string.IsNullOrWhiteSpace(reason)
-                || !ReadString(fields, "latest_findings", out var latestFindings, allowEmpty: true)
-                || !ReadString(fields, "cleanup_preflight", out var cleanupPreflight, allowEmpty: true)
-                || !ReadString(fields, "stage", out var stage) || (stage != "(none)" && !KnownStages.Contains(stage))
-                || !ReadString(fields, "invocation_id", out _)
-                || !ReadString(fields, "log_directory", out _)
-                || !fields.TryGetValue("log_files", out var logFilesElement) || logFilesElement.ValueKind != JsonValueKind.Array)
-                return null;
-            var logs = new List<string>();
-            foreach (var log in logFilesElement.EnumerateArray())
-            {
-                if (log.ValueKind != JsonValueKind.String) return null;
-                var logFile = ReadJsonString(log);
-                if (string.IsNullOrWhiteSpace(logFile)) return null;
-                logs.Add(logFile);
-            }
-            return new(cause, stage, failedRole, reason, latestFindings, cleanupPreflight, logs);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static string? TryReadCleanupFailure(BeadsCommentSnapshot comment)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(comment.Text);
-            if (document.RootElement.ValueKind != JsonValueKind.Object) return null;
-            var fields = ReadUniqueProperties(document.RootElement);
-            return ReadString(fields, "schema", out var schema) && schema == CleanupFailureSchema
-                && ReadString(fields, "bead_id", out var beadId) && beadId == comment.IssueId
-                && ReadString(fields, "failure", out var failure) && !string.IsNullOrWhiteSpace(failure)
-                    ? failure : null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static bool IsAfter(BeadsCommentSnapshot comment, BeadsCommentSnapshot reference)
-        => comment.CreatedAt > reference.CreatedAt
-            || (comment.CreatedAt == reference.CreatedAt
-                && string.Compare(comment.Id, reference.Id, StringComparison.Ordinal) > 0);
-
     private static Dictionary<string, JsonElement> ReadUniqueProperties(JsonElement value)
     {
         var fields = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
@@ -376,12 +324,6 @@ internal static class AttentionDeskProjector
             throw new JsonException("Comment string contains invalid Unicode.", exception);
         }
     }
-
-    private static bool KnownCause(string cause) => cause is "operational-retries-exhausted" or "duplicate-failure"
-        or "repair-budget-exhausted" or "environment-blocked";
-
-    private static bool KnownLifecycleRole(string role) => role is "planner" or "plan_challenger" or "implementer"
-        or "reviewer" or "qa" or "merger";
 
     private static bool IsLegacyDecisionContext(string text)
     {
@@ -426,30 +368,7 @@ internal static class AttentionDeskProjector
         _ => null
     };
 
-    private static string? FormatNeedsHumanDiagnostic(NeedsHumanDiagnostic? diagnostic, string? cleanupWarning)
-    {
-        if (diagnostic is null)
-            return cleanupWarning is null
-                ? "Needs-human is present, but no valid matching escalation diagnostic comment is available."
-                : $"Needs-human is present, but no valid matching escalation diagnostic comment is available.{Environment.NewLine}Cleanup warning: {cleanupWarning}";
-
-        var lines = new List<string>
-        {
-            $"Cause: {diagnostic.Cause}",
-            $"Reason: {diagnostic.Reason}",
-            $"Latest findings: {diagnostic.LatestFindings}",
-            $"Log files: {(diagnostic.LogFiles.Count == 0 ? "Unknown" : string.Join(", ", diagnostic.LogFiles))}"
-        };
-        if (cleanupWarning is not null)
-            lines.Add($"Cleanup warning: {cleanupWarning}");
-        else if (!string.Equals(diagnostic.CleanupPreflight, "passed", StringComparison.OrdinalIgnoreCase))
-            lines.Add($"Cleanup warning: {diagnostic.CleanupPreflight}");
-        return string.Join(Environment.NewLine, lines);
-    }
-
     private sealed record AttentionWorkflow(string? Stage, int? RepairCycles, string? InvalidReason);
-    private sealed record NeedsHumanDiagnostic(string Cause, string Stage, string FailedRole, string Reason, string LatestFindings,
-        string CleanupPreflight, IReadOnlyList<string> LogFiles);
 }
 
 internal sealed record AttentionDeskProjection(AttentionDeskItem Item, string? ActiveCommentId, string SelectionSource);

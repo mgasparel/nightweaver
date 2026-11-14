@@ -81,6 +81,9 @@ try
         await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", abortId,
             NeedsHumanDiagnostic(abortId, "task", "reviewer", "stage:review", "Review cannot continue without an explicit decision."));
 
+        if (Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "schema-messages")
+            await SchemaMessageQaFixture.SeedAsync(arguments => RunAsync("bd", repository, userHome, cancellationToken, arguments));
+
         var markdownId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA workspace markdown", "feature");
         var longCode = new string('x', 600);
         var markdown = string.Join("\n\n", "# Long workspace fixture",
