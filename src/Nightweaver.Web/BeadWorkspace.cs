@@ -15,6 +15,9 @@ internal sealed record BeadWorkspaceResponse(
 {
     [JsonPropertyName("planning")]
     public PlanningReadiness? Planning { get; init; }
+
+    [JsonPropertyName("relationObservation")]
+    public BeadWorkspaceRelationObservation RelationObservation { get; init; } = new("unavailable", "unavailable");
 }
 
 internal sealed record BeadWorkspaceBead(
@@ -41,7 +44,14 @@ internal sealed record BeadWorkspaceRelation(
     [property: JsonPropertyName("type")] string Type,
     [property: JsonPropertyName("direction")] string Direction,
     [property: JsonPropertyName("title")] string? Title,
-    [property: JsonPropertyName("status")] string? Status);
+    [property: JsonPropertyName("status")] string? Status)
+{
+    [JsonPropertyName("issueType")] public string? IssueType { get; init; }
+}
+
+internal sealed record BeadWorkspaceRelationObservation(
+    [property: JsonPropertyName("incoming")] string Incoming,
+    [property: JsonPropertyName("outgoing")] string Outgoing);
 
 internal sealed record BeadWorkspaceComment(
     [property: JsonPropertyName("id")] string Id,
@@ -111,7 +121,7 @@ internal static class BeadWorkspaceProjector
         var activeCommentId = selectedAttention is null ? null : attention!.ActiveCommentId;
         var selectionSource = activeCommentId is null ? "none" : attention!.SelectionSource;
         var history = ProjectHistory(commentRows, activeCommentId, selectionSource);
-        return new(bead, ProjectRelations(detail.Payload), commentRows, history, selectedAttention, environment)
+        return new(bead, [], commentRows, history, selectedAttention, environment)
         {
             Planning = PlanningReadiness.Project(detail)
         };
@@ -173,35 +183,25 @@ internal static class BeadWorkspaceProjector
         };
     }
 
-    private static BeadWorkspaceRelation[] ProjectRelations(JsonElement payload)
+    internal static BeadWorkspaceRelation[] ProjectRelations(IReadOnlyList<BeadDependency> incoming, IReadOnlyList<BeadDependency> outgoing,
+        IReadOnlyDictionary<string, BeadSnapshot> inventory)
     {
-        var fields = ReadUniqueProperties(payload, "$bead");
-        var relations = new List<BeadWorkspaceRelation>();
-        AddRelations("dependencies", "outgoing");
-        AddRelations("dependents", "incoming");
-        return relations
-            .DistinctBy(relation => (relation.Id, relation.Type, relation.Direction))
-            .OrderBy(relation => relation.Direction, StringComparer.Ordinal)
-            .ThenBy(relation => relation.Id, StringComparer.Ordinal)
-            .ThenBy(relation => relation.Type, StringComparer.Ordinal)
-            .ToArray();
-
-        void AddRelations(string name, string direction)
-        {
-            if (!fields.TryGetValue(name, out var array)) return;
-            if (array.ValueKind != JsonValueKind.Array)
-                throw new JsonException($"$bead.{name}: expected an array");
-            var row = 0;
-            foreach (var item in array.EnumerateArray())
+        return incoming.Select(edge => (Edge: edge, Direction: "incoming", Id: edge.IssueId))
+            .Concat(outgoing.Select(edge => (Edge: edge, Direction: "outgoing", Id: edge.DependsOnId)))
+            .DistinctBy(row => (row.Edge, row.Direction))
+            .OrderBy(row => row.Direction, StringComparer.Ordinal)
+            .ThenBy(row => row.Id, StringComparer.Ordinal)
+            .ThenBy(row => row.Edge.Type, StringComparer.Ordinal)
+            .Select(row =>
             {
-                var path = $"$bead.{name}[{row++}]";
-                var relationFields = ReadUniqueProperties(item, path);
-                var id = RequiredString(relationFields, "id", path);
-                var type = RequiredString(relationFields, "dependency_type", path);
-                relations.Add(new(id, type, direction, OptionalString(relationFields, "title", path),
-                    OptionalString(relationFields, "status", path)));
-            }
-        }
+                inventory.TryGetValue(row.Id, out var linked);
+                var titles = linked?.Payload.EnumerateObject().Where(property => property.NameEquals("title")).ToArray();
+                var title = titles is { Length: 1 } && titles[0].Value.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(titles[0].Value.GetString()) ? titles[0].Value.GetString() : null;
+                return new BeadWorkspaceRelation(row.Id, row.Edge.Type, row.Direction,
+                    title, linked?.Status)
+                { IssueType = linked?.IssueType };
+            }).ToArray();
     }
 
     private static Dictionary<string, JsonElement> ReadUniqueProperties(JsonElement value, string path)

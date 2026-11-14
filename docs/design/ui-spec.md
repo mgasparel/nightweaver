@@ -104,3 +104,13 @@ Runtime-changing children use [isolated Aspire and Playwright QA](../../tests/Ni
 ## Reference prototype
 
 [Repository prototype](nightweaver-ui-prototype.html) illustrates the architecture and Workspace; its simulated runtime, Planning bay and older defaults are not normative. Implement from the current contracts and actual endpoint schemas.
+
+## Native Type and tracker relations
+
+Workspace metadata explicitly labels native `Type`, distinct from Nightweaver Product/Plan roles. Explorer's Type column and linked rows retain open-ended native values, including uncommon/custom types; absent linked details are labeled unavailable.
+
+`GET /api/beads/{id}` retains the `relations` array and adds `relationObservation.incoming` / `.outgoing`. Each direction is `complete`, `unavailable` (tool/read/schema failure), or `malformed` (an edge does not belong to the requested direction). Only complete directions contribute rows. A successful empty observation means no recorded relations; failed or partial observations show coverage warnings and never claim no children. Initial loading and failed Workspace reads have separate visible messages. Required inventory/detail/identity failures keep their existing HTTP semantics, and cancellation propagates.
+
+Relations come from read-only native up (incoming dependent) and down (outgoing dependency) reads under the tracker operation gate, with exact workflow identity checks retained. Canonical edge tuples are deduplicated. Linked title/status/`issueType` join the existing complete inventory, without per-link detail commands. Missing targets retain their exact IDs. External writers do not share the gate; these sequential reads are observations, not a transactional snapshot. Viewing relations never writes tracker data or grants workflow authority.
+
+Parent-child outgoing/incoming groups are Parent/Children; blocks are Blocked by/Blocks; discovered-from is Discovered from/Discovered work. Unknown nonblank relationship kinds retain their literal kind and direction. No dotted-ID inference creates hierarchy. Each group displays at most 15 rows, a total and range, and keyboard-accessible Previous/Next controls; every row remains reachable. Pagination retains its page across refresh, clamps shrinking groups, and restores focus to an enabled control or range at boundaries. Exact hash links open the selected Workspace. All tracker text uses safe text nodes and wraps at narrow widths.

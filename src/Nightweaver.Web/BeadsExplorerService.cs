@@ -152,6 +152,8 @@ internal sealed partial class TrackerBridge(
             if (!initialIdentity.SameObservedIdentity(AttentionMutationIdentity.Capture(detail)))
                 throw new BeadWorkspaceException(409, "Bead changed", "The Bead workflow changed while its workspace was being read. Refresh and try again.");
 
+            var incoming = await ReadRelationsAsync(() => beadsReader.ReadUpDependenciesAsync(target, beadId, cancellationToken), true);
+            var outgoing = await ReadRelationsAsync(() => beadsReader.ReadDownDependenciesAsync(target, beadId, cancellationToken), false);
             var comments = await beadsReader.ReadDetailCommentsAsync(target, beadId, cancellationToken);
             var finalInventory = await beadsReader.ReadSnapshotAsync(target, cancellationToken);
             if (!finalInventory.ById.TryGetValue(beadId, out var final)
@@ -162,7 +164,29 @@ internal sealed partial class TrackerBridge(
                 ? AttentionDeskProjector.ProjectWithSelection(detail, comments, project.Limits.MaxRepairCycles)
                 : null;
             var environment = await environmentObserver.ObserveAsync(target, beadId, cancellationToken);
-            return BeadWorkspaceProjector.Project(detail, comments, attention, environment);
+            return BeadWorkspaceProjector.Project(detail, comments, attention, environment) with
+            {
+                Relations = BeadWorkspaceProjector.ProjectRelations(incoming.Edges, outgoing.Edges, finalInventory.ById),
+                RelationObservation = new(incoming.State, outgoing.State)
+            };
+
+            async Task<(IReadOnlyList<BeadDependency> Edges, string State)> ReadRelationsAsync(
+                Func<Task<IReadOnlyList<BeadDependency>>> read, bool isIncoming)
+            {
+                try
+                {
+                    var edges = await read();
+                    if (edges.Any(edge => !string.Equals(isIncoming ? edge.DependsOnId : edge.IssueId,
+                            beadId, StringComparison.Ordinal)))
+                        return ([], "malformed");
+                    return (edges, "complete");
+                }
+                catch (ToolExecutionException)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return ([], "unavailable");
+                }
+            }
         }
         finally
         {

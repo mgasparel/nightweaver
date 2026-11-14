@@ -2071,6 +2071,25 @@ h3 {
   padding-left: 1.15rem;
 }
 
+.workspace-relation-group + .workspace-relation-group {
+  border-top: 1px solid var(--color-border);
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+
+.workspace-relation-heading { margin: 0; font-size: 0.95rem; overflow-wrap: anywhere; }
+.workspace-relation-list li > a { display: block; }
+.workspace-relation-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  color: var(--color-muted);
+  font-size: 0.82rem;
+}
+.workspace-relation-range:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+
 .workspace-relation-list li {
   min-width: 0;
   padding-left: 0.1rem;

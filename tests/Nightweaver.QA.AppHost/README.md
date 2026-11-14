@@ -139,3 +139,9 @@ Run `node cleanup-qa.mjs` against the discovered direct `web` endpoint of a fres
 Deterministic read fixtures then verify all four states, expired owner acknowledgement, eight-row pagination/search over 27 obligations, disclosure/focus preservation, unavailable counts and no overflow/errors at 1440px, 375px and 720 CSS px. Screenshots are written under `TestResults/cleanup` (override `NIGHTWEAVER_QA_OUTPUT` to preserve prior evidence). Only those later reads are substituted; the Retry acceptance uses the real endpoint and atomic runtime inbox. The disposable fixture includes a protected paused tmp sentinel and never changes production data.
 
 Representative checks and reviewed screenshots are retained in [the Housekeeping acceptance report](../../docs/acceptance/cleanup.md).
+
+## Native relations and Type QA
+
+Start a fresh isolated stack with `NIGHTWEAVER_QA_SCENARIO=relations`, discover the direct `web` HTTP endpoint as above, set `NIGHTWEAVER_QA_URL`, and run `node relations-qa.mjs`. Stop the exact AppHost in `finally`. The disposable tracker includes an actual epic with 17 children, a nested child under a feature, native spike/decision/chore types, independent blocking and lineage edges, and a standalone Bead.
+
+The script verifies real incoming/outgoing HTTP projection, deduplication, exact keyboard linked navigation, native Type labels, 15-row group pagination and boundary focus, successful empty reads, unchanged inventory and no browser writes. Presentation-only response fixtures cover delayed loading, partial/failed observations, missing metadata, unknown relationship/custom issue types, and hostile text; native directional failures are tested at the HTTP boundary in `WorkspaceRelationsWebTests`. Screenshots/results go to `TestResults/relations` (override `NIGHTWEAVER_QA_OUTPUT`), at 1440px, 375px and 720 CSS px. Review screenshots visually and run Workspace, Explorer and Planning readiness scripts on fresh default mutation fixtures.

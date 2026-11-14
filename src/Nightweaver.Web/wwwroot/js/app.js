@@ -1098,7 +1098,7 @@ function renderBeads(beads) {
     row.append(
       beadLinkCell(bead.id, "bead-id", bead.id),
       beadLinkCell(bead.title, "bead-title", bead.id),
-      textCell(bead.type),
+      textCell(bead.type || "Unavailable"),
       textCell(`P${bead.priority}`, "bead-priority"),
       textCell(bead.status)
     );
@@ -1567,7 +1567,8 @@ function formatWorkspaceDate(value) {
 function renderWorkspaceMeta(bead) {
   workspaceMeta.replaceChildren();
   const values = [
-    `${bead.type} · P${bead.priority}`,
+    `Type: ${bead.type || "Unavailable"}`,
+    `P${bead.priority}`,
     bead.status,
     bead.stage || "No stage label",
     bead.assignee || "Unassigned",
@@ -1777,31 +1778,86 @@ function renderWorkspaceEnvironment(environment) {
   workspaceEnvironment.replaceChildren(fragment);
 }
 
-function renderWorkspaceRelations(relations) {
+const relationPages = new Map();
+function renderWorkspaceRelations(relations, observation, beadId) {
+  const focusKey = workspaceRelations.contains(document.activeElement) ? document.activeElement.dataset.relationFocus : null;
   workspaceRelations.replaceChildren();
+  const complete = observation?.incoming === "complete" && observation?.outgoing === "complete";
+  for (const direction of ["incoming", "outgoing"]) {
+    if (observation?.[direction] !== "complete") {
+      workspaceRelations.append(workspaceText("p", "workspace-context-warning",
+        `${direction === "incoming" ? "Incoming relations (including children)" : "Outgoing relations (including parents)"} unavailable. Coverage is incomplete; refresh to try again.`));
+    }
+  }
   if (!Array.isArray(relations) || relations.length === 0) {
-    workspaceRelations.append(workspaceText("p", "workspace-empty", "No tracker relations are recorded."));
+    workspaceRelations.append(workspaceText("p", "workspace-empty", complete
+      ? "No tracker relations are recorded." : "No verified relations are available."));
     return;
   }
-  const list = document.createElement("ul");
-  list.className = "workspace-relation-list";
+  const groups = new Map();
   for (const relation of relations) {
-    const item = document.createElement("li");
-    const description = `${relation.direction || "related"} · ${relation.type || "relation"}`;
-    item.append(workspaceText("span", "workspace-relation-type", description));
-    if (safeWorkspaceId(relation.id)) {
-      const link = document.createElement("a");
-      link.href = `#bead/${encodeURIComponent(relation.id)}`;
-      link.dataset.beadWorkspaceLink = "true";
-      link.textContent = `${relation.id}${relation.title ? ` · ${relation.title}` : ""}`;
-      item.append(link);
-    } else {
-      item.append(workspaceText("span", "workspace-relation-literal", relation.id || "Unknown ID"));
-    }
-    if (relation.status) item.append(workspaceText("span", "workspace-relation-status", relation.status));
-    list.append(item);
+    const incoming = relation.direction === "incoming";
+    const known = { "parent-child": incoming ? "Children" : "Parent", blocks: incoming ? "Blocks" : "Blocked by",
+      "discovered-from": incoming ? "Discovered work" : "Discovered from" };
+    const label = Object.hasOwn(known, relation.type) ? known[relation.type]
+      : `${relation.type || "Unknown relationship"} · ${relation.direction || "unknown direction"}`;
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(relation);
   }
-  workspaceRelations.append(list);
+  for (const [label, rows] of groups) {
+    const key = `${beadId}:${label}`;
+    const group = document.createElement("section");
+    group.className = "workspace-relation-group";
+    group.setAttribute("aria-label", label);
+    group.append(workspaceText("h3", "workspace-relation-heading", `${label} (${rows.length})`));
+    const page = Math.min(relationPages.get(key) || 0, Math.floor((rows.length - 1) / 15));
+    relationPages.set(key, page);
+    const start = page * 15;
+    const list = document.createElement("ul");
+    list.className = "workspace-relation-list";
+    for (const relation of rows.slice(start, start + 15)) {
+      const item = document.createElement("li");
+      if (safeWorkspaceId(relation.id)) {
+        const link = document.createElement("a");
+        link.href = `#bead/${encodeURIComponent(relation.id)}`;
+        link.dataset.beadWorkspaceLink = "true";
+        link.dataset.relationFocus = `${key}:${relation.id}`;
+        link.textContent = `${relation.id}${relation.title ? ` · ${relation.title}` : ""}`;
+        item.append(link);
+      } else item.append(workspaceText("span", "workspace-relation-literal", relation.id || "Unknown ID"));
+      item.append(workspaceText("span", "workspace-relation-status",
+        `Type: ${relation.issueType || "Unavailable"} · ${relation.status || "Status unavailable"}`));
+      if (!relation.title) item.append(workspaceText("span", "workspace-relation-type", "Related Bead details unavailable"));
+      list.append(item);
+    }
+    group.append(list);
+    const controls = document.createElement("div");
+    controls.className = "workspace-relation-pagination";
+    const range = workspaceText("span", "workspace-relation-range", `${start + 1}–${Math.min(start + 15, rows.length)} of ${rows.length}`);
+    range.tabIndex = -1;
+    range.dataset.relationFocus = `${key}:range`;
+    range.setAttribute("role", "status");
+    controls.append(range);
+    if (rows.length > 15) {
+      for (const [name, delta, disabled] of [["Previous", -1, page === 0], ["Next", 1, start + 15 >= rows.length]]) {
+        const button = workspaceButton(name, "secondary-action", () => {
+          relationPages.set(key, page + delta);
+          renderWorkspaceRelations(relations, observation, beadId);
+          const enabled = Array.from(workspaceRelations.querySelectorAll("button")).find(node => node.dataset.relationFocus === `${key}:${name}` && !node.disabled);
+          (enabled || Array.from(workspaceRelations.querySelectorAll("[data-relation-focus]")).find(node => node.dataset.relationFocus === `${key}:range`))?.focus();
+        }, disabled);
+        button.setAttribute("aria-label", `${name} ${label}`);
+        button.dataset.relationFocus = `${key}:${name}`;
+        controls.append(button);
+      }
+    }
+    group.append(controls);
+    workspaceRelations.append(group);
+  }
+  if (focusKey) {
+    const target = Array.from(workspaceRelations.querySelectorAll("[data-relation-focus]")).find(node => node.dataset.relationFocus === focusKey && !node.disabled);
+    (target || workspaceTitle)?.focus({ preventScroll: true });
+  }
 }
 
 function renderWorkspaceActiveContext(data) {
@@ -1926,7 +1982,7 @@ function renderWorkspace(data) {
   renderWorkspaceHistory(data);
   renderWorkspaceSpecifications(data.bead);
   renderWorkspaceEnvironment(data.environment);
-  renderWorkspaceRelations(data.relations);
+  renderWorkspaceRelations(data.relations, data.relationObservation, data.bead.id);
   workspaceGuidanceInput.value = attentionDrafts.get(data.bead.id) ?? "";
   renderWorkspaceActiveContext(data);
   renderWorkspaceGuidanceActions(data);
@@ -1945,7 +2001,7 @@ function showWorkspaceLoading(id, message = "Loading Bead workspace…") {
   workspaceSpecs.replaceChildren();
   workspaceHistory.replaceChildren();
   workspaceEnvironment.replaceChildren();
-  workspaceRelations.replaceChildren();
+  workspaceRelations.replaceChildren(workspaceText("p", "workspace-empty", "Loading tracker relations…"));
   workspaceGuidanceContext.replaceChildren();
   workspaceGuidanceActions.replaceChildren();
   workspaceActionMessage.hidden = true;
@@ -2019,6 +2075,7 @@ async function loadWorkspace(id, { manual = false } = {}) {
       workspaceGuidanceInput.disabled = true;
     } else {
       workspaceStatus.textContent = "Workspace data is unavailable.";
+      workspaceRelations.replaceChildren(workspaceText("p", "workspace-context-warning", "Tracker relations are unavailable. Refresh to try again."));
     }
     return false;
   } finally {
