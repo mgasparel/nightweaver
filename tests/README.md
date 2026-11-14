@@ -1,10 +1,10 @@
 # Test suite
 
-Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection. The current retained suite discovers 1031 tests.
+Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection. The current retained suite discovers 1033 tests.
 
 ```powershell
 $timer = [Diagnostics.Stopwatch]::StartNew()
-dotnet test --solution Nightweaver.slnx --minimum-expected-tests 1031 --report-xunit-xml --report-xunit-xml-filename timing.xml --show-slowest-tests 20
+dotnet test --solution Nightweaver.slnx --minimum-expected-tests 1033 --report-xunit-xml --report-xunit-xml-filename timing.xml --show-slowest-tests 20
 $testExit = $LASTEXITCODE
 $timer.Stop()
 Write-Host "Suite wall time (build, fixture publishing, tests, teardown): $($timer.Elapsed)"
@@ -28,6 +28,8 @@ The retained suite keeps broad, fast decision and security checks in unit/coordi
 | Stop, restart, and preservation | Fast state/worker-observation tests | One second-signal restart case and one published force-stop case |
 | Bead HTTP and workspace safety | Request/authority tests | Intake plus invalid-query HTTP cases; ambient-variable, reparse-path, and Git-admin-pointer checks |
 | Merge finalization and repository guards | Cheap finalizer and branch-ownership tests | Repeatable owned cleanup, conditional branch deletion, and expected-commit guards |
+
+`WindowsConsoleProcess` owns an outer test Job, assigned while the console root is suspended. Disposal terminates that group and waits for retained native process handles within the existing five-second budget before disposable repository deletion. Root exit and zero active Job processes alone do not prove native handle rundown. The logged/unlogged descendant regressions use a real `bd sql` query holding its Dolt `LOCK` after root exit, then require immediate lock deletion after test disposal. This test-owned teardown does not add waits or compensating writes to production force-stop.
 
 The ns-e5i reduction removed 138 costly overlapping integration scenarios: the comprehensive parentless/planned pilot variants, held-Merger and crash-recovery journeys, most repeated published stop/restart and dispatch/repair/admission cross-products, and most full Bead/Web request permutations. The resumed-admission and preparation-held Merger boundaries were subsequently restored as focused regressions. Historical incident causes and dispositions remain tracked in Beads; removing coverage does not establish a causal repair.
 

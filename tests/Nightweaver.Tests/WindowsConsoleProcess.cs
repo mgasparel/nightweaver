@@ -11,6 +11,7 @@ namespace Nightweaver.Tests;
 internal sealed class WindowsConsoleProcess : IDisposable
 {
     private const uint CreateNewConsole = 0x00000010;
+    private const uint CreateSuspended = 0x00000004;
     private const uint CreateNewProcessGroup = 0x00000200;
     private const uint CreateUnicodeEnvironment = 0x00000400;
     private const uint ExtendedStartupInfoPresent = 0x00080000;
@@ -32,12 +33,14 @@ internal sealed class WindowsConsoleProcess : IDisposable
 
     private readonly Process process;
     private readonly IntPtr nativeProcessHandle;
+    private readonly IntPtr jobHandle;
     private bool disposed;
 
-    private WindowsConsoleProcess(Process process, IntPtr nativeProcessHandle, string? outputLogPath)
+    private WindowsConsoleProcess(Process process, IntPtr nativeProcessHandle, IntPtr jobHandle, string? outputLogPath)
     {
         this.process = process;
         this.nativeProcessHandle = nativeProcessHandle;
+        this.jobHandle = jobHandle;
         OutputLogPath = outputLogPath;
     }
 
@@ -90,6 +93,7 @@ internal sealed class WindowsConsoleProcess : IDisposable
         var handleList = IntPtr.Zero;
         var processHandle = IntPtr.Zero;
         var threadHandle = IntPtr.Zero;
+        var jobHandle = IntPtr.Zero;
         var attributeListInitialized = false;
         Process? managedProcess = null;
         WindowsConsoleProcess? result = null;
@@ -99,6 +103,14 @@ internal sealed class WindowsConsoleProcess : IDisposable
         {
             environmentPointer = Marshal.StringToHGlobalUni(environmentBlock);
             commandLinePointer = Marshal.StringToHGlobalUni(commandLine.ToString());
+            jobHandle = CreateJobObjectW(IntPtr.Zero, null);
+            if (jobHandle == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not create the console fixture Job Object.");
+            var limits = new JobObjectExtendedLimitInformation
+            {
+                BasicLimitInformation = new JobObjectBasicLimitInformation { LimitFlags = 0x00002000 } // KILL_ON_JOB_CLOSE
+            };
+            if (!SetInformationJobObject(jobHandle, 9, ref limits, (uint)Marshal.SizeOf<JobObjectExtendedLimitInformation>()))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not configure the console fixture Job Object.");
 
             ProcessInformation information;
             if (outputLogPath is null)
@@ -111,7 +123,7 @@ internal sealed class WindowsConsoleProcess : IDisposable
                 };
                 if (!CreateProcessW(executable, commandLinePointer, IntPtr.Zero, IntPtr.Zero,
                         inheritHandles: false,
-                        CreateNewConsole | CreateNewProcessGroup | CreateUnicodeEnvironment,
+                        CreateSuspended | CreateNewConsole | CreateNewProcessGroup | CreateUnicodeEnvironment,
                         environmentPointer, workingDirectory, ref startup, out information))
                 {
                     var error = Marshal.GetLastWin32Error();
@@ -191,7 +203,7 @@ internal sealed class WindowsConsoleProcess : IDisposable
                 };
                 if (!CreateProcessW(executable, commandLinePointer, IntPtr.Zero, IntPtr.Zero,
                         inheritHandles: true,
-                        ExtendedStartupInfoPresent | CreateNewConsole | CreateNewProcessGroup | CreateUnicodeEnvironment,
+                        CreateSuspended | ExtendedStartupInfoPresent | CreateNewConsole | CreateNewProcessGroup | CreateUnicodeEnvironment,
                         environmentPointer, workingDirectory, ref startup, out information))
                 {
                     var error = Marshal.GetLastWin32Error();
@@ -201,10 +213,17 @@ internal sealed class WindowsConsoleProcess : IDisposable
 
             processHandle = information.Process;
             threadHandle = information.Thread;
+            // Assign before any user code can spawn children. The test owns this outer Job;
+            // runtime force-stop assertions still observe its independent inner Agent Jobs.
+            if (!AssignProcessToJobObject(jobHandle, processHandle))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not contain the console fixture process.");
+            if (ResumeThread(threadHandle) == uint.MaxValue)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not resume the console fixture process.");
             managedProcess = Process.GetProcessById(checked((int)information.ProcessId));
-            result = new WindowsConsoleProcess(managedProcess, processHandle, outputLogPath);
+            result = new WindowsConsoleProcess(managedProcess, processHandle, jobHandle, outputLogPath);
             managedProcess = null;
             processHandle = IntPtr.Zero;
+            jobHandle = IntPtr.Zero;
         }
         catch (Exception exception)
         {
@@ -218,6 +237,7 @@ internal sealed class WindowsConsoleProcess : IDisposable
                 cleanupFailure ??= TryTerminateUnwrappedProcess(processHandle);
             if (threadHandle != IntPtr.Zero) _ = CloseHandle(threadHandle);
             if (processHandle != IntPtr.Zero) _ = CloseHandle(processHandle);
+            if (jobHandle != IntPtr.Zero) _ = CloseHandle(jobHandle);
             if (inheritedInputHandle != IntPtr.Zero) _ = CloseHandle(inheritedInputHandle);
             if (outputHandle != IntPtr.Zero && outputHandle != InvalidHandleValue) _ = CloseHandle(outputHandle);
             if (attributeListInitialized) DeleteProcThreadAttributeList(attributeList);
@@ -298,25 +318,99 @@ internal sealed class WindowsConsoleProcess : IDisposable
     public void Dispose()
     {
         if (disposed) return;
-        var exited = HasExited;
         disposed = true;
+        var descendants = new List<IntPtr>();
         try
         {
-            if (!exited)
+            var timer = Stopwatch.StartNew();
+            CaptureJobProcessHandles(jobHandle, descendants);
+            // Root exit is not a descendant lifetime barrier. In particular, force-stop
+            // intentionally leaves external Git/bd operations for recovery. Settle only
+            // this test-owned group before its disposable repository can be removed.
+            if (!TerminateJobObject(jobHandle, 1))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not terminate the console fixture Job Object.");
+            while (true)
             {
-                try { process.Kill(entireProcessTree: true); }
-                catch (InvalidOperationException) { }
-                var wait = WaitForSingleObject(nativeProcessHandle, 5000);
-                if (wait == WaitFailed)
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), $"Could not settle console process {process.Id}.");
-                if (wait != WaitObject0)
-                    throw new TimeoutException($"Console process {process.Id} did not terminate within five seconds during disposal.");
+                if (!QueryInformationJobObject(jobHandle, 1, out var accounting,
+                        (uint)Marshal.SizeOf<JobObjectBasicAccountingInformation>(), IntPtr.Zero))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not inspect the console fixture Job Object.");
+                if (accounting.ActiveProcesses == 0) break;
+                if (timer.ElapsedMilliseconds >= 5000)
+                    throw new TimeoutException($"Console fixture Job still has {accounting.ActiveProcesses} active process(es) after five seconds.");
+                Thread.Sleep(10);
             }
+            // Job accounting can reach zero before the killed native process objects
+            // signal. Retain exact handles before termination and wait for rundown too.
+            foreach (var handle in descendants)
+                WaitForSettlement(handle, timer);
+            var remaining = (uint)Math.Max(0, 5000 - timer.ElapsedMilliseconds);
+            var wait = WaitForSingleObject(nativeProcessHandle, remaining);
+            if (wait == WaitFailed)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), $"Could not settle console process {process.Id}.");
+            if (wait != WaitObject0)
+                throw new TimeoutException($"Console process {process.Id} did not terminate within five seconds during disposal.");
         }
         finally
         {
+            foreach (var handle in descendants) _ = CloseHandle(handle);
             process.Dispose();
             _ = CloseHandle(nativeProcessHandle);
+            _ = CloseHandle(jobHandle);
+        }
+    }
+
+    private static void WaitForSettlement(IntPtr handle, Stopwatch timer)
+    {
+        var remaining = (uint)Math.Max(0, 5000 - timer.ElapsedMilliseconds);
+        var wait = WaitForSingleObject(handle, remaining);
+        if (wait == WaitFailed)
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not settle a console fixture descendant.");
+        if (wait != WaitObject0)
+            throw new TimeoutException("A console fixture descendant did not terminate within the five-second disposal budget.");
+    }
+
+    private static void CaptureJobProcessHandles(IntPtr job, List<IntPtr> handles)
+    {
+        var capacity = 32;
+        while (true)
+        {
+            var size = checked(8 + capacity * IntPtr.Size);
+            var buffer = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (!QueryInformationJobObject(job, 3, buffer, (uint)size, IntPtr.Zero))
+                {
+                    var error = Marshal.GetLastWin32Error();
+                    if (error != 234) throw new Win32Exception(error, "Could not enumerate the console fixture Job Object.");
+                    capacity = checked(capacity * 2);
+                    continue;
+                }
+                var count = Marshal.ReadInt32(buffer, 4);
+                for (var index = 0; index < count; index++)
+                {
+                    var pid = checked((uint)Marshal.ReadIntPtr(buffer, 8 + index * IntPtr.Size).ToInt64());
+                    var handle = OpenProcess(0x00101000, false, pid); // SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+                    if (handle != IntPtr.Zero)
+                    {
+                        if (!IsProcessInJob(handle, job, out var belongs))
+                        {
+                            var error = Marshal.GetLastWin32Error();
+                            _ = CloseHandle(handle);
+                            throw new Win32Exception(error, $"Could not verify console fixture descendant {pid}.");
+                        }
+                        if (belongs) handles.Add(handle);
+                        else _ = CloseHandle(handle); // PID reused after the Job snapshot.
+                    }
+                    else
+                    {
+                        var error = Marshal.GetLastWin32Error();
+                        if (error != 87) // Already exited before OpenProcess.
+                            throw new Win32Exception(error, $"Could not retain console fixture descendant {pid}.");
+                    }
+                }
+                return;
+            }
+            finally { Marshal.FreeHGlobal(buffer); }
         }
     }
 
@@ -415,6 +509,33 @@ internal sealed class WindowsConsoleProcess : IDisposable
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectBasicLimitInformation
+    {
+        internal long PerProcessUserTimeLimit, PerJobUserTimeLimit;
+        internal uint LimitFlags;
+        internal UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize;
+        internal uint ActiveProcessLimit;
+        internal UIntPtr Affinity;
+        internal uint PriorityClass, SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectExtendedLimitInformation
+    {
+        internal JobObjectBasicLimitInformation BasicLimitInformation;
+        internal ulong ReadOperationCount, WriteOperationCount, OtherOperationCount;
+        internal ulong ReadTransferCount, WriteTransferCount, OtherTransferCount;
+        internal UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectBasicAccountingInformation
+    {
+        internal long TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime;
+        internal uint TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct ProcessInformation
     {
         internal IntPtr Process;
@@ -496,4 +617,40 @@ internal sealed class WindowsConsoleProcess : IDisposable
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateJobObjectW(IntPtr attributes, string? name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetInformationJobObject(IntPtr job, int informationClass,
+        ref JobObjectExtendedLimitInformation information, uint informationLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint ResumeThread(IntPtr thread);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(IntPtr job, int informationClass,
+        out JobObjectBasicAccountingInformation information, uint informationLength, IntPtr returnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(IntPtr job, int informationClass,
+        IntPtr information, uint informationLength, IntPtr returnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsProcessInJob(IntPtr process, IntPtr job, [MarshalAs(UnmanagedType.Bool)] out bool belongs);
 }

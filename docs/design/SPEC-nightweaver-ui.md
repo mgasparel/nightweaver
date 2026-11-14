@@ -250,7 +250,7 @@ Section headings: `clamp(1.2rem, 2vw, 1.45rem)`, weight 700, tracking -0.02em. C
 
 | Viewport | Required reflow |
 | --- | --- |
-| 1440×900 at 100% | Shell width `min(100% - 2.5rem, 80rem)`; Delivery/Merger columns `minmax(0, 1.65fr) minmax(0, 1fr)`; Planning is a compact spanning notice. Two attention previews share a row. Collapsed metrics occupy one inline row. |
+| 1440×900 at 100% | Shell width `min(100% - 2.5rem, 80rem)`; Planning/Delivery/Merger columns `minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr)`. Two attention previews share a row. Collapsed metrics occupy one inline row. |
 | 200% zoom on 1440px desktop (720px CSS width) | `@media (max-width: 52rem)` stacks bays and attention previews; wraps header, metrics, filters and actions; metadata becomes one column when needed. Vertical scrolling is expected. Do not shrink text to preserve the desktop budget. |
 | 375px narrow viewport | Shell width `calc(100% - 1.5rem)`; same stacked hierarchy; mobile menu remains keyboard operable. Wrap action groups and long values, keep controls reachable and labels readable. |
 

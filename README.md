@@ -44,7 +44,7 @@ Run these commands from the repository root:
 
 ```powershell
 dotnet build Nightweaver.slnx -warnaserror
-dotnet test --solution Nightweaver.slnx --minimum-expected-tests 1031
+dotnet test --solution Nightweaver.slnx --minimum-expected-tests 1033
 dotnet publish src/Nightweaver/Nightweaver.csproj -c Release --self-contained false -p:UseAppHost=true -o 'C:\Tools\Nightweaver'
 ```
 
