@@ -4,7 +4,7 @@ using Nightweaver.Execution;
 
 namespace Nightweaver.Tests.ExecutionCrashHost;
 
-internal static class TerminalOwnerProbe
+public static class TerminalOwnerProbe
 {
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const uint JobObjectLimitBreakawayOk = 0x00000800;
@@ -18,8 +18,15 @@ internal static class TerminalOwnerProbe
             return 0;
         }
 
-        if (args is ["owner", var ready])
+        if (args is ["owner", var ready, var cleanupJobName])
         {
+            // The test owns the only lasting handle. If it fails before reading
+            // readiness, closing that handle still contains this detached owner.
+            using (var cleanupJob = OpenJobObjectW(1, false, cleanupJobName))
+            {
+                if (cleanupJob.IsInvalid || !AssignProcessToJobObject(cleanupJob, GetCurrentProcess()))
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
             using var ownerJob = WindowsProcessLauncher.AttachCurrentProcessToKillOnCloseJob();
             using var child = WindowsProcessLauncher.Launch(Environment.ProcessPath!,
                 ["--terminal-owner-probe", "child"], Environment.CurrentDirectory,
@@ -32,7 +39,7 @@ internal static class TerminalOwnerProbe
             return 0;
         }
 
-        if (args is not [var mode, var path] || mode is not ("terminal" or "inherited-host" or "restricted")) return 64;
+        if (args is not [var mode, var path, var cleanupName] || mode is not ("terminal" or "inherited-host" or "restricted")) return 64;
         using var terminalJob = CreateJobObjectW(IntPtr.Zero, null);
         if (terminalJob.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
         var limits = new ExtendedLimits
@@ -61,7 +68,7 @@ internal static class TerminalOwnerProbe
         try
         {
             using var owner = WindowsProcessLauncher.LaunchDetached(Environment.ProcessPath!,
-                ["--terminal-owner-probe", "owner", path], Environment.CurrentDirectory);
+                ["--terminal-owner-probe", "owner", path, cleanupName], Environment.CurrentDirectory);
             Console.WriteLine($"detached-owner={owner.ProcessId}");
             await Task.Delay(Timeout.InfiniteTimeSpan).ConfigureAwait(false);
             return 0;
@@ -72,6 +79,54 @@ internal static class TerminalOwnerProbe
             return exception.NativeErrorCode;
         }
     }
+
+    public static SafeHandle CreateCleanupJob(string name)
+    {
+        var job = CreateJobObjectW(IntPtr.Zero, name);
+        if (job.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        var limits = new ExtendedLimits { Basic = new BasicLimits { Flags = JobObjectLimitKillOnJobClose } };
+        if (SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf<ExtendedLimits>())) return job;
+        var error = Marshal.GetLastWin32Error();
+        job.Dispose();
+        throw new Win32Exception(error);
+    }
+
+    public static async Task StopCleanupJobAsync(SafeHandle job, CancellationToken cancellationToken)
+    {
+        if (!TerminateJobObject(job, 1)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        while (true)
+        {
+            if (!QueryInformationJobObject(job, 1, out var accounting,
+                    (uint)Marshal.SizeOf<Accounting>(), out _))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            if (accounting.ActiveProcesses == 0) return;
+            await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Accounting
+    {
+        internal long UserTime;
+        internal long KernelTime;
+        internal long PeriodUserTime;
+        internal long PeriodKernelTime;
+        internal uint PageFaults;
+        internal uint TotalProcesses;
+        internal uint ActiveProcesses;
+        internal uint TerminatedProcesses;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern WindowsProcessLauncher.SafeKernelHandle OpenJobObjectW(uint access,
+        [MarshalAs(UnmanagedType.Bool)] bool inherit, string name);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateJobObject(SafeHandle job, uint exitCode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(SafeHandle job, int informationClass,
+        out Accounting information, uint length, out uint returnLength);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct BasicLimits
