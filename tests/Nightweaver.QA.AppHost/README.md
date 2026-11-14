@@ -1,5 +1,33 @@
 # QA AppHost
 
+## Observation cost investigation
+
+`observation-cost.py` is a disposable native CLI/HTTP probe for ns-mbd.8, not a
+production observer or a UI mutation script. Requires Python 3. Start a **fresh**
+isolated exact AppHost as below, wait for `web`, then from the repository root run:
+
+```powershell
+try {
+    aspire start --isolated --non-interactive --apphost tests/Nightweaver.QA.AppHost/Nightweaver.QA.AppHost.csproj
+    aspire wait web --non-interactive --apphost tests/Nightweaver.QA.AppHost/Nightweaver.QA.AppHost.csproj
+    python tests/Nightweaver.QA.AppHost/observation-cost.py --output docs/design/observation-cost-results.json
+    if ($LASTEXITCODE -ne 0) { throw 'Observation probe failed' }
+} finally {
+    aspire stop --non-interactive --apphost tests/Nightweaver.QA.AppHost/Nightweaver.QA.AppHost.csproj
+}
+```
+
+The probe discovers this exact AppHost's direct HTTP URL and disposable tracker
+through `aspire describe`, validates their fixture identity, scrubs ambient
+tracker routing, then uses public CLI import to seed 50/2,000 Beads. It measures
+three serial collection cycles, all paused histories, selected Workspace reads,
+legacy HTTP projections, and comment/dependency/readiness change visibility
+through a real HTTP response. Output contains no configuration paths or secrets.
+The one-second phase delay and extra legacy HTTP read are deliberate conservative
+costs; this does not claim a production observer, SSE or browser-rendering result.
+No browser UI changed in this investigation. See the
+[v1 contract and measurement interpretation](../../docs/design/operational-observations-v1.md).
+
 ## Studio candidate shell
 
 On a fresh isolated default fixture, use the discovered direct `web` HTTP URL below and run `node studio-qa.mjs` and `node smoke.mjs`. Studio checks candidate routes at `/studio` and `/projects/...`; the root console remains operational. Reference and candidate screenshots at 1440, 375 and 720 CSS pixels are saved under `TestResults/studio`. Checks include direct reload, Back/Forward, URL preferences, legacy Bead translation (including dotted hierarchical IDs reloaded with and without Workspace query state), missing-asset/API 404s, keyboard/focus, unavailable project controls, no mutations and no browser errors. Review the screenshots visually and stop the same exact AppHost afterward.
@@ -125,6 +153,17 @@ Start a fresh isolated stack with `NIGHTWEAVER_QA_SCENARIO=schema-messages`, dis
 The script checks the shared projection on all three message surfaces, exact original/source identity, independent corrective prose, keyboard disclosure state/focus across refresh, explicit uncertainty, keyboard-accessible HTTP(S) evidence navigation (destination intercepted locally), unsafe-scheme rejection, no automatic payload requests or mutations, and desktop/375px/720 CSS px reflow. Screenshots and result data go to `TestResults/schema-messages`; set `NIGHTWEAVER_QA_OUTPUT` to preserve another run. Review those screenshots visually. Run `workspace-qa.mjs` separately against a fresh default stack for real guarded actions and legacy questions.
 
 The same scenario also seeds mixed delivery publications, all four human audit actions, failed-request corrective prose, agent/host merge records with an in-history source link, finalization diagnostics, and classifier-only/malformed fallbacks. Planning fixtures include a 40-task/40-coverage candidate, a review with findings/questions/revalidation, and a snake_case host approval with resolved candidate and unresolved review references. Checks cover bounded default content, complete nested details, exact originals, source-link keyboard focus and preserved disclosure state across refresh. Additional screenshots use `verified-merge-*`, `human-resume-*`, `planning-candidate-*` and `planning-review-*` names.
+
+## Operational protocol ordering
+
+For the proposed operational protocol's eviction/reconnect ordering rules, run
+`python tests/Nightweaver.QA.AppHost/observation-ordering.py` from the repository
+root. This disposable model uses no AppHost, tracker or network. It covers TTL
+and LRU readmission with client state retained, changed/unchanged source data,
+late responses/collectors, equal-revision reconnects, epoch replacement and
+counter exhaustion. See [the v1.1 contract amendment](../../docs/design/operational-observations-v1.md#eviction-continuity-conformance).
+It is protocol analysis; backend and coordinator consumers still need to run
+these cases against their actual implementations.
 
 ## Cleanup
 
