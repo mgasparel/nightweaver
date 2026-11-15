@@ -44,7 +44,6 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         if (grounding != approval.Grounding && PlanningEvidence.ApprovalStillCurrent(approval, approval.Grounding, comments))
             return await RevalidateAsync(session, releaseRevalidationClaim, token);
 
-        await CheckAuthorityAsync(session, approval, token);
         // Unmapped children are never adopted, overwritten, or removed.
         await CheckChildrenAsync(session, ids.Values, token);
         foreach (var task in tasks)
@@ -67,7 +66,6 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
 
         foreach (var task in tasks)
         {
-            await CheckAuthorityAsync(session, approval, token);
             var expected = Edges(session.BeadId, task, ids);
             var actual = await reader.ReadDownDependenciesAsync(session.Repository, ids[task.Id], token);
             if (actual.Except(expected).Any()) throw Refuse($"Task '{ids[task.Id]}' has conflicting dependencies.");
@@ -77,6 +75,7 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
                 // dep add has no native status/assignee compare-and-swap guards.
                 // Read the target last, immediately before each mutation, rather
                 // than relying on its earlier creation-loop snapshot.
+                await CheckAuthorityAsync(session, approval, token);
                 CheckTask(await reader.ReadDetailAsync(session.Repository, missing.IssueId, token), task, plan,
                     session.BeadId, approval.PlanRevision, allowReleased: false);
                 await WriteUncertainAsync(session, ["dep", "add", missing.IssueId, missing.DependsOnId, "--type", missing.Type], token);
@@ -87,13 +86,15 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         await VerifyGraphAsync(session, approval, plan, ids, releasing, token);
         // Persist independent membership before any hold removal. Otherwise loss of
         // child metadata during partial release could disguise generated work as manual.
+        // Check even on resume when membership is already present: the next
+        // operation may be the release receipt rather than a metadata write.
+        await CheckAuthorityAsync(session, approval, token);
         var retained = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
         if (Metadata(retained, "publication_graph") is { } existingGraph && existingGraph != graphJson
             || Metadata(retained, "publication_revision") is { } existingRevision && existingRevision != approval.PlanRevision)
             throw Refuse("Retained publication identity conflicts with the approved graph; preserve it for human reconciliation.");
         if (Metadata(retained, "publication_graph") != graphJson || Metadata(retained, "publication_revision") != approval.PlanRevision)
         {
-            await CheckAuthorityAsync(session, approval, token);
             await WriteUncertainAsync(session, ["update", session.BeadId,
                 "--set-metadata", "publication_revision=" + approval.PlanRevision,
                 "--set-metadata", "publication_graph=" + graphJson,
@@ -167,7 +168,9 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
     private async Task VerifyGraphAsync(AgentStageSession session, PlanningApproval approval, PlanningDocument plan,
         Dictionary<string, string> ids, bool allowReleased, CancellationToken token)
     {
-        await CheckAuthorityAsync(session, approval, token);
+        // This phase only reads. Each subsequent mutation obtains fresh authority;
+        // an extra grounding sweep here adds native processes without protecting
+        // a write. Never carry authority from this phase across a mutation.
         await CheckChildrenAsync(session, ids.Values, token);
         foreach (var task in plan.Tasks!)
         {

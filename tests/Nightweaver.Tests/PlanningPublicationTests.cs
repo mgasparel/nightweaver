@@ -9,6 +9,58 @@ namespace Nightweaver.Tests;
 
 public sealed class PlanningPublicationTests
 {
+    [Fact]
+    public async Task TwoTaskPublicationBoundsNativeGroundingProcessStarts()
+    {
+        using var fixture = new Fixture();
+        var before = fixture.GroundingReadCount;
+        Assert.True((await fixture.Publish()).Succeeded);
+        // One initial revalidation observation and fresh authority before each of
+        // the seven graph mutations. Read-only graph checks need no extra sweep.
+        Assert.InRange(fixture.GroundingReadCount - before, 1, 8);
+        Assert.Equal(8, fixture.WriteCount);
+        Assert.All(fixture.Tasks, task => Assert.True(PlanningPublicationGate.Allows(task, fixture.Inventory)));
+    }
+
+    [Theory]
+    [InlineData("owner")]
+    [InlineData("pause")]
+    public async Task AuthorityChangesDuringDependencyReadStopBeforeLinking(string change)
+    {
+        using var fixture = new Fixture();
+        fixture.BeforeDependencyRead = id =>
+        {
+            if (fixture.Rows[id]["metadata"]!["publication_entry"]!.GetValue<string>() != "second") return;
+            if (change == "owner") fixture.Rows["product"]["assignee"] = "human";
+            else fixture.Rows["product"]["labels"]!.AsArray().Add("needs-human");
+        };
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+        Assert.Equal(2, fixture.WriteCount);
+        Assert.DoesNotContain(fixture.Edges, e => e.Type == "blocks");
+        Assert.All(fixture.Tasks, task => Assert.Contains("plan-unpublished", task.Labels));
+    }
+
+    [Theory]
+    [InlineData(3, "owner")]
+    [InlineData(3, "pause")]
+    [InlineData(7, "owner")]
+    [InlineData(7, "pause")]
+    public async Task AuthorityChangesDuringGraphVerificationStopTheNextPublicationWrite(int writes, string change)
+    {
+        using var fixture = new Fixture();
+        fixture.BeforeDependencyRead = _ =>
+        {
+            if (fixture.WriteCount != writes) return;
+            fixture.BeforeDependencyRead = null;
+            if (change == "owner") fixture.Rows["product"]["assignee"] = "human";
+            else fixture.Rows["product"]["labels"]!.AsArray().Add("needs-human");
+        };
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+        Assert.Equal(writes, fixture.WriteCount);
+        Assert.DoesNotContain("planned", fixture.Parent.Labels);
+        Assert.All(fixture.Tasks, task => Assert.False(PlanningPublicationGate.Allows(task, fixture.Inventory)));
+    }
+
     [Theory]
     [InlineData("owner")]
     [InlineData("pause")]
@@ -347,6 +399,7 @@ public sealed class PlanningPublicationTests
         internal int? RejectWriteAt { get; set; }
         internal int WriteCount { get; private set; }
         internal int CreateCount { get; private set; }
+        internal int GroundingReadCount => runner.Requests.Count(r => r.FileName == "git" && r.Arguments.Contains("status"));
         internal Action<string>? BeforeDependencyRead { get; set; }
         private readonly AgentStageSession session;
         private readonly PlanningPublisher publisher;

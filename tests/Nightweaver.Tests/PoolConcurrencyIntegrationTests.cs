@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using Nightweaver.Planning;
 using Nightweaver.Telemetry;
@@ -29,15 +30,19 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
         var system = new SystemProcessRunner();
         var processFailures = new ConcurrentQueue<string>();
         var roleOutcomes = new ConcurrentQueue<string>();
+        var processTimings = new ConcurrentQueue<string>();
         var runner = new RecordingProcessRunner(async (request, token) =>
         {
             var merged = new Dictionary<string, string?>(request.Environment, StringComparer.OrdinalIgnoreCase);
             foreach (var pair in environment) merged[pair.Key] = pair.Value;
+            var timer = Stopwatch.StartNew();
             var result = await system.RunAsync(request with
             {
                 FileName = request.FileName == "gh" ? Path.Combine(fixture.FakeCliRoot, "gh.exe") : request.FileName,
                 Environment = merged
             }, token);
+            var operation = request.Arguments.FirstOrDefault(arg => !arg.StartsWith('-')) ?? "";
+            processTimings.Enqueue($"{request.FileName} {operation}: {timer.Elapsed.TotalMilliseconds:F0}ms");
             if (result.ExitCode != 0)
                 processFailures.Enqueue($"{request.FileName} {string.Join(' ', request.Arguments)}: {result.ExitCode}: {result.StandardError}");
             return result;
@@ -145,6 +150,7 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             slotLifetimeToken: lifetime.Token);
         Exception? primary = null;
         Exception? cleanupFailure = null;
+        PlanningPoolCoordinator? restarted = null;
         try
         {
             var admittedPlanning = Assert.Single((await planning.EvaluateAsync(lifetime.Token)).Admitted);
@@ -202,13 +208,15 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             var pause = await runner.RunAsync(BeadsCommand.CreateWrite(repository.Path,
                 ["update", product, "--add-label", "needs-human"]), lifetime.Token);
             Assert.Equal(0, pause.ExitCode);
-            var restarted = new PlanningPoolCoordinator(paths, project, repository, runner,
+            restarted = new PlanningPoolCoordinator(paths, project, repository, runner,
                 runSlot: (host, config, target, bead, token) => planningSlot.RunAsync(host, config, target, bead, token),
                 slotLifetimeToken: lifetime.Token);
             Assert.Empty((await restarted.EvaluateAsync(lifetime.Token)).Admitted);
             await new BeadsWriter(runner).RetryNeedsHumanAsync(repository, product, lifetime.Token);
             var recovered = Assert.Single((await restarted.EvaluateAsync(lifetime.Token)).Admitted);
+            var recoveryTimer = Stopwatch.StartNew();
             var planned = await recovered.Completion.WaitAsync(TimeSpan.FromMinutes(2), lifetime.Token);
+            TestContext.Current.TestOutputHelper?.WriteLine($"Recovered Planning publication: {recoveryTimer.Elapsed.TotalSeconds:F3}s");
             Assert.Equal("preserve interruption and pause", File.ReadAllText(sentinel));
             Assert.Equal(new[] { AgentRole.Planner, AgentRole.PlanChallenger }, roles.Where(item => item.Bead == product).Select(item => item.Role));
             Assert.Equal(PlanningSlotDisposition.Published, planned.Outcome?.Disposition);
@@ -268,6 +276,7 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             TestContext.Current.TestOutputHelper?.WriteLine($"Pool concurrency fixture preserved at {fixture.Root}");
             TestContext.Current.TestOutputHelper?.WriteLine(string.Join('\n', roleOutcomes));
             TestContext.Current.TestOutputHelper?.WriteLine(string.Join('\n', processFailures));
+            File.WriteAllLines(Path.Combine(fixture.Root, "pool-process-timings.txt"), processTimings);
             throw;
         }
         finally
@@ -278,7 +287,8 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
             {
                 lifetime.Cancel();
                 await Task.WhenAll(delivery.WaitForActiveSlotsAsync(CancellationToken.None),
-                    merger.WaitForActiveSlotsAsync(CancellationToken.None), planning.WaitForActiveSlotsAsync(CancellationToken.None)).WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+                    merger.WaitForActiveSlotsAsync(CancellationToken.None), planning.WaitForActiveSlotsAsync(CancellationToken.None),
+                    restarted?.WaitForActiveSlotsAsync(CancellationToken.None) ?? Task.CompletedTask).WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
             }
             catch (Exception cleanup)
             {
