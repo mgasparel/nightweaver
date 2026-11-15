@@ -15,8 +15,8 @@ public sealed class DeliveryPoolCoordinatorTests
         var stale = Row("candidate", status: "open", labels: ["stage:implement"]);
         var current = Row("candidate", status: "in_progress", assignee: actor, labels: ["stage:implement"]);
         var outputs = new Queue<ProcessResult>([
-            new(0, $"[{stale}]", ""), new(0, $"[{stale}]", ""), new(0, $"[{current}]", ""),
-            new(0, $"[{stale}]", ""), new(0, $"[{stale}]", ""), new(0, $"[{current}]", "")
+            new(0, $"[{stale}]", ""), new(0, $"[{current}]", ""),
+            new(0, $"[{stale}]", ""), new(0, $"[{current}]", "")
         ]);
         var runner = new RecordingProcessRunner((_, _) => Task.FromResult(outputs.Dequeue()));
         var repository = new ValidatedTargetRepository(
@@ -36,7 +36,7 @@ public sealed class DeliveryPoolCoordinatorTests
         await Assert.ThrowsAsync<BeadsReadinessSnapshotMismatchException>(() =>
             pool.EvaluateAsync(TestContext.Current.CancellationToken));
 
-        Assert.Equal(6, runner.Requests.Count);
+        Assert.Equal(4, runner.Requests.Count);
         Assert.Equal(0, launches);
         Assert.Empty(pool.ActiveReservations);
     }

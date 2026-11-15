@@ -121,9 +121,9 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
             if ((await reader.ReadDetailAsync(session.Repository, bead.Id, token)).Labels.Contains("plan-unpublished", StringComparer.Ordinal))
                 throw Refuse($"Publication hold for '{bead.Id}' was not released.");
         }
-        await VerifyGraphAsync(session, approval, plan, ids, allowReleased: true, token);
+        var releasedGraph = await VerifyGraphAsync(session, approval, plan, ids, allowReleased: true, token);
         foreach (var id in ids.Values)
-            if ((await reader.ReadDetailAsync(session.Repository, id, token)).Labels.Contains("plan-unpublished", StringComparer.Ordinal))
+            if (releasedGraph.ById[id].Labels.Contains("plan-unpublished", StringComparer.Ordinal))
                 throw Refuse($"Task '{id}' still has a publication hold.");
         await CheckAuthorityAsync(session, approval, token);
         // All task holds are gone, but generated-task admission still requires this
@@ -165,21 +165,31 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
             PublicationReceipt: new(AgentRole.Planner, AgentOutcomeChoice.ReadyForReview, desired, parent.Assignee, releaseClaim, false));
     }
 
-    private async Task VerifyGraphAsync(AgentStageSession session, PlanningApproval approval, PlanningDocument plan,
+    private async Task<BeadsInventory> VerifyGraphAsync(AgentStageSession session, PlanningApproval approval, PlanningDocument plan,
         Dictionary<string, string> ids, bool allowReleased, CancellationToken token)
     {
         // This phase only reads. Each subsequent mutation obtains fresh authority;
         // an extra grounding sweep here adds native processes without protecting
         // a write. Never carry authority from this phase across a mutation.
-        await CheckChildrenAsync(session, ids.Values, token);
+        // Native list includes complete dependency edges and task bodies. One fresh
+        // inventory verifies the entire graph without repeated process/database
+        // startup per node. It is never reused across a mutation.
+        var inventory = await reader.ReadSnapshotAsync(session.Repository, token);
+        var intended = ids.Values.ToHashSet(StringComparer.Ordinal);
+        var edges = inventory.ById.Values.SelectMany(bead => bead.Payload.TryGetProperty("dependencies", out var dependencies)
+            ? BeadsReader.ParseDownDependencies(dependencies, bead.Id) : Array.Empty<BeadDependency>()).ToArray();
+        if (edges.Any(e => e.Type == "discovered-from" && e.DependsOnId == session.BeadId && !intended.Contains(e.IssueId)))
+            throw Refuse("Unmapped preexisting Product tasks require human-guided reconciliation; no work was removed.");
         foreach (var task in plan.Tasks!)
         {
-            CheckTask(await reader.ReadDetailAsync(session.Repository, ids[task.Id], token), task, plan,
+            if (!inventory.ById.TryGetValue(ids[task.Id], out var bead)) throw Refuse("An intended task disappeared.");
+            CheckTask(bead, task, plan,
                 session.BeadId, approval.PlanRevision, allowReleased);
-            var actual = await reader.ReadDownDependenciesAsync(session.Repository, ids[task.Id], token);
+            var actual = edges.Where(e => e.IssueId == ids[task.Id]);
             var expected = Edges(session.BeadId, task, ids);
             if (!actual.ToHashSet().SetEquals(expected)) throw Refuse("The complete dependency graph was not verified.");
         }
+        return inventory;
     }
 
     private async Task CheckChildrenAsync(AgentStageSession session, IEnumerable<string> ids, CancellationToken token)

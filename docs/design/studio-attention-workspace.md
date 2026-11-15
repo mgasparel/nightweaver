@@ -37,8 +37,7 @@ separate. Stale source warnings do not replace server-side workflow validation.
 Cached details remain readable when stale; a missing-resource report
 disables actions even if historical details survive. Environment and runtime
 observations include their own times and sources and do not imply a running
-Agent. Output links to the existing invocation controller until ns-mbd.5 owns
-identity-bound Studio inspection; Studio fabricates no output.
+Agent. Output now consumes the shared factory observation and opens exact identity-bound Studio inspection; see [Delivery inspection](studio-delivery.md).
 
 The observation contract retains its two-Workspace interest limit and 30-second
 disconnect grace. Rapid navigation to a third identity can temporarily exhaust

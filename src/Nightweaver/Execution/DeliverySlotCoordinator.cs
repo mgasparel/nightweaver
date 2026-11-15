@@ -732,8 +732,7 @@ internal sealed class DeliverySlotCoordinator
         {
             try
             {
-                var inventory = await reader.ReadSnapshotAsync(repository, timeout.Token).ConfigureAwait(false);
-                inventory.ById.TryGetValue(beadId, out claimed);
+                claimed = await reader.ReadDetailAsync(repository, beadId, timeout.Token).ConfigureAwait(false);
             }
             catch (Exception exception) { releaseFailure = $"claim owner could not be reread: {exception.Message}"; }
         }
@@ -752,20 +751,22 @@ internal sealed class DeliverySlotCoordinator
             if (releaseFailure is null)
             {
                 Exception? releaseException = null;
+                BeadSnapshot? receipt = null;
                 try
                 {
-                    await writer.ReleaseDispatchClaimAsync(repository, beadId, project.RecoveryActor, expectedStatus, timeout.Token)
+                    receipt = await writer.ReleaseDispatchClaimAsync(repository, beadId, project.RecoveryActor, expectedStatus, timeout.Token)
                         .ConfigureAwait(false);
                 }
                 catch (Exception exception) { releaseException = exception; }
 
                 try
                 {
-                    // A fresh read is required even when bd returned an error: the guarded write
-                    // may have committed before its process result was lost. Never replay it.
-                    var released = await reader.ReadSnapshotAsync(repository, timeout.Token).ConfigureAwait(false);
-                    if (!released.ById.TryGetValue(beadId, out var finalBead))
-                        releaseFailure = "the Bead disappeared during guarded release reconciliation";
+                    // A complete guarded-update row confirms settlement without another
+                    // native process. An uncertain response gets one exact-Bead read;
+                    // the write may have committed, so never replay it.
+                    var finalBead = receipt ?? await reader.ReadDetailAsync(repository, beadId, timeout.Token).ConfigureAwait(false);
+                    if (finalBead.Id != beadId)
+                        releaseFailure = "guarded release returned a different Bead";
                     else
                     {
                         BeadWorkflowState? finalState = null;
@@ -780,7 +781,7 @@ internal sealed class DeliverySlotCoordinator
                             handoff = true;
                         else if (releaseFailure is null)
                             releaseFailure = releaseException is null
-                                ? "guarded release did not verify against the fresh Beads inventory"
+                                ? "guarded release did not verify against the settled Bead state"
                                 : $"guarded release returned an uncertain result ({releaseException.Message}); fresh state remains status '{finalBead.Status}', assignee '{finalBead.Assignee ?? "(none)"}' and was left untouched";
                     }
                 }

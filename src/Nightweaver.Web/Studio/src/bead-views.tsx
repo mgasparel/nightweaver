@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { Panel, Status } from "./primitives";
+import { DeliveryView } from "./delivery-views";
 import { operations, interactions } from "./operations-browser";
 import { useObservation } from "./use-observation";
 import type { Snapshot } from "./operations";
@@ -246,8 +247,7 @@ function WorkspaceIdentity({ project, id }: { project: string; id: string }) {
             .map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{String(value ?? "Unavailable")}</dd></div>)}</dl></details>
       </Panel></div>
       <div hidden={tab !== "history"}><History data={valid} /></div>
-      <div hidden={tab !== "output"}><Panel title="Invocation output"><p>Inspect identity-bound live or retained output in the invocation controller.</p>
-        <a className="button" href={`/#bead/${encodeURIComponent(id)}`}>Open invocation controller for {id}</a></Panel></div>
+      <div hidden={tab !== "output"}><Panel title="Invocation output">{tab === "output" && <DeliveryView project={project} compact bead={id} />}</Panel></div>
       {(valid.attention || hadAttention || interactions.get(project, id)) && <Panel title="Attention and guidance" className="workspace-guidance">
         {valid.attention && <><Evidence message={valid.attention.message} fallback={valid.attention.question || valid.attention.diagnostic || "Review history before acting."} />
           {valid.attention.contextNotice && <p>{valid.attention.contextNotice}</p>}

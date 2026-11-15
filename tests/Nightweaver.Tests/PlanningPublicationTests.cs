@@ -67,10 +67,10 @@ public sealed class PlanningPublicationTests
     public async Task AuthorityChangesDuringGraphVerificationStopTheNextPublicationWrite(int writes, string change)
     {
         using var fixture = new Fixture();
-        fixture.BeforeDependencyRead = _ =>
+        fixture.BeforeInventoryRead = () =>
         {
             if (fixture.WriteCount != writes) return;
-            fixture.BeforeDependencyRead = null;
+            fixture.BeforeInventoryRead = null;
             if (change == "owner") fixture.Rows["product"]["assignee"] = "human";
             else fixture.Rows["product"]["labels"]!.AsArray().Add("needs-human");
         };
@@ -78,6 +78,37 @@ public sealed class PlanningPublicationTests
         Assert.Equal(writes, fixture.WriteCount);
         Assert.DoesNotContain("planned", fixture.Parent.Labels);
         Assert.All(fixture.Tasks, task => Assert.False(PlanningPublicationGate.Allows(task, fixture.Inventory)));
+    }
+
+    [Theory]
+    [InlineData("content")]
+    [InlineData("edge")]
+    [InlineData("child")]
+    public async Task FinalGraphInventoryRejectsChangesAfterHoldRelease(string change)
+    {
+        using var fixture = new Fixture();
+        fixture.BeforeInventoryRead = () =>
+        {
+            if (fixture.WriteCount != 7) return;
+            fixture.BeforeInventoryRead = null;
+            var task = fixture.Rows.Values.Last();
+            var id = task["id"]!.GetValue<string>();
+            if (change == "content") task["acceptance_criteria"] = "human edit after release";
+            else if (change == "edge") task["dependencies"]!.AsArray().Add(new JsonObject
+            { ["issue_id"] = id, ["depends_on_id"] = "other", ["type"] = "blocks" });
+            else
+            {
+                var extra = task.DeepClone().AsObject();
+                extra["id"] = "unmapped";
+                extra["dependencies"] = JsonSerializer.SerializeToNode(new[]
+                { new { issue_id = "unmapped", depends_on_id = "product", type = "discovered-from" } });
+                fixture.Rows["unmapped"] = extra;
+            }
+        };
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+        Assert.Null(fixture.BeforeInventoryRead);
+        Assert.Equal(7, fixture.WriteCount);
+        Assert.DoesNotContain("planned", fixture.Parent.Labels);
     }
 
     [Theory]
@@ -409,6 +440,7 @@ public sealed class PlanningPublicationTests
     private sealed class Fixture : IDisposable
     {
         internal Action? BeforeGitRead { get; set; }
+        internal Action? BeforeInventoryRead { get; set; }
         private readonly TempDirectory temp = new();
         internal Dictionary<string, JsonObject> Rows { get; } = new(StringComparer.Ordinal);
         internal List<BeadDependency> Edges { get; } = [];
@@ -550,9 +582,14 @@ public sealed class PlanningPublicationTests
             {
                 var id = args[args.IndexOf("show") + 1];
                 BeforeDetailRead?.Invoke(id);
-                output = Rows.TryGetValue(id, out var shown) ? JsonSerializer.Serialize(new[] { shown }) : "[]";
+                output = Rows.TryGetValue(id, out var shown)
+                    ? JsonSerializer.Serialize(new[] { Detail(shown, args.Contains("--include-comments")) }) : "[]";
             }
-            else output = JsonSerializer.Serialize(Rows.Values);
+            else
+            {
+                BeforeInventoryRead?.Invoke();
+                output = JsonSerializer.Serialize(Rows.Values);
+            }
             if (write)
             {
                 foreach (var row in Rows.Values)
@@ -563,6 +600,15 @@ public sealed class PlanningPublicationTests
                 if (WriteCount == LoseResponseAt) throw new IOException("Lost response after durable write");
             }
             return Task.FromResult(new ProcessResult(0, output, ""));
+        }
+
+        private JsonObject Detail(JsonObject row, bool includeComments)
+        {
+            var detail = row.DeepClone().AsObject();
+            if (includeComments)
+                detail["comments"] = JsonSerializer.SerializeToNode(Comments.Select(c => new
+                { id = c.Id, issue_id = "product", text = c.Text, created_at = c.CreatedAt }));
+            return detail;
         }
         public void Dispose() => temp.Dispose();
     }

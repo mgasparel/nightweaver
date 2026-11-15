@@ -50,6 +50,14 @@ No browser UI changed in this investigation. See the
 
 `node studio-explorer-qa.mjs` verifies Studio Explorer and current-project header search against a fresh isolated default fixture. Set the exact discovered URL and config as below. The probe imports 81 disposable Beads, verifies native external title/dependency changes, all views, bounded pages, Back/Forward/reload, focused-row removal on a still-valid page without URL changes, surviving-row focus, page removal and focus, Workspace query context, deferred cross-project controls and stale retained results. Captures at 1440/375/720 CSS pixels and results go to `TestResults/studio-explorer` (or `NIGHTWEAVER_QA_OUTPUT`). Stop the same AppHost in `finally`.
 
+`node runtime-refresh-qa.mjs` verifies Delivery, Overview and Workspace Output
+against the same exact isolated stack. Accepted reconciliation responses and
+successful factory reads with unchanged `lastAttemptAt` reproduce a stalled
+collector. The runtime action stays enabled across polls, an explicit retry
+issues a second POST, and concurrent clicks share that pending POST. Captures
+at 1440/375/720 CSS pixels and results go to `NIGHTWEAVER_QA_OUTPUT` or
+`TestResults/runtime-refresh`. Stop the exact AppHost in `finally`.
+
 `node studio-attention-qa.mjs` verifies the live Studio Attention and dedicated
 Bead Workspace slice on a fresh isolated default fixture. Set both
 `NIGHTWEAVER_QA_URL` and `NIGHTWEAVER_QA_CONFIG` from the exact direct `web`
@@ -260,3 +268,21 @@ Run `workspace-qa.mjs`, `planning-readiness-qa.mjs` and `explorer-qa.mjs` on app
 ## Continuous Planning observations
 
 On a fresh default isolated stack, run `node planning-telemetry-qa.mjs` against the exact discovered direct HTTP endpoint. The third native invocation uses the Planner preparer/purpose and writes `planning-native` into its real retained log. The script verifies actual PID/runtime/invocation identity, exact Planning stream selection, keyboard/focus, 1440/720/375px layouts and actual completion to idle. Only stale and legacy snapshots are substituted for presentation checks. Screenshots and results go to `TestResults/planning-telemetry`. `PoolConcurrencyIntegrationTests` separately exercises actual opted-in Planning through Challenger and approved-stage restart/publication into native Delivery while unrelated Delivery/Merger progress. Stop the same AppHost in finally.
+
+## Studio Delivery and invocation QA
+
+On a fresh exact isolated default AppHost, run `node factory-qa.mjs --studio`
+and `node invocation-qa.mjs --studio`, then `node telemetry.mjs --studio` once.
+The first two adapt the existing probes to React and the shared factory resource;
+the native smoke uses the original telemetry endpoint with the Studio dialog.
+Set `NIGHTWEAVER_QA_URL` from the direct `web` endpoint. Optional
+`NIGHTWEAVER_QA_OUTPUT` selects screenshot/results output. Default evidence goes
+to `TestResults/studio-factory` and `TestResults/studio-invocation` relative to the
+working directory. The no-flag scripts retain legacy console coverage.
+
+Coverage includes operational/log interleaving, pinned replacement identity,
+failed end/disconnect, reset, bounded sanitized output, disclosure/focus/follow,
+configured versus observed model, retained idle/stale/stopped/unavailable,
+Overview summary and long metadata at 1440/375/720 CSS pixels. Native telemetry
+additionally verifies actual Last-Event-ID resume, duplicate-free output,
+completion cessation and effective 200% zoom. Stop the exact AppHost in `finally`.

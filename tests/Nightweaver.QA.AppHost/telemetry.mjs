@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 const url = process.env.NIGHTWEAVER_QA_URL;
 if (!url) throw new Error('Set NIGHTWEAVER_QA_URL to the web endpoint from aspire describe.');
 
+const studio = process.argv.includes('--studio');
 const browser = await chromium.launch({ headless: true });
 let releaseFiles = [];
 try {
@@ -38,10 +39,10 @@ try {
     if (pending) captureReconnectHeader(event.requestId, pending);
   });
   cdp.on('Network.requestWillBeSentExtraInfo', event => captureReconnectHeader(event.requestId, event.headers));
-  await page.goto(url, { waitUntil: 'networkidle' });
-  await page.getByRole('heading', { name: 'Nightweaver console' }).waitFor();
+  await page.goto(studio ? url + '/projects/qa/delivery' : url, { waitUntil: 'networkidle' });
+  await page.getByRole('heading', { name: studio ? 'Delivery floor' : 'Nightweaver console', exact: true }).waitFor();
   await page.waitForFunction(() => {
-    const cards = Array.from(document.querySelectorAll('#delivery-slots .factory-slot'));
+    const cards = Array.from(document.querySelectorAll('.delivery-bay, #delivery-slots .factory-slot'));
     return cards.some(card => card.textContent.includes('qa-live-1') && card.dataset.status === 'running')
       && cards.some(card => card.textContent.includes('qa-live-2') && card.dataset.status === 'running');
   }, null, { timeout: 15000 });
@@ -82,7 +83,7 @@ try {
     await route.continue();
   });
 
-  const firstCard = page.locator('#delivery-slots .factory-slot').filter({ hasText: 'qa-live-1' });
+  const firstCard = page.locator('.delivery-bay, #delivery-slots .factory-slot').filter({ hasText: 'qa-live-1' });
   const firstTrigger = firstCard.locator('[data-open-telemetry-slot="delivery-1"]');
   await firstTrigger.click();
   const firstDialog = page.getByRole('dialog', { name: /qa-live-1/ });
@@ -111,17 +112,17 @@ try {
   await writeFile(releaseFiles[0], 'release', 'utf8');
   await page.waitForFunction(() => document.querySelector('#invocation-output')?.textContent.includes('live-marker-after-release slot-one'),
     null, { timeout: 15000 });
-  await page.getByText('✓ Stream ended: completed', { exact: true }).waitFor({ timeout: 15000 });
+  await page.getByText(studio ? 'Stream ended: completed' : '✓ Stream ended: completed', { exact: true }).waitFor({ timeout: 15000 });
   const completedRequestCount = streamRequests;
   await page.waitForTimeout(3500);
   if (streamRequests !== completedRequestCount)
     throw new Error('The browser retried the completed EventSource after its end event.');
-  await page.getByRole('button', { name: 'Close invocation telemetry' }).click();
+  await page.getByRole('button', { name: studio ? 'Close' : 'Close invocation telemetry' }).click();
   await firstDialog.waitFor({ state: 'hidden' });
   await page.waitForFunction(() => document.querySelector('[data-open-telemetry-slot="delivery-1"]') === document.activeElement,
     null, { timeout: 5000 });
 
-  const secondCard = page.locator('#delivery-slots .factory-slot').filter({ hasText: 'qa-live-2' });
+  const secondCard = page.locator('.delivery-bay, #delivery-slots .factory-slot').filter({ hasText: 'qa-live-2' });
   const secondTrigger = secondCard.getByRole('button', { name: 'Open live invocation', exact: true });
   const secondDialog = page.getByRole('dialog', { name: /qa-live-2/ });
   for (const layout of [
@@ -156,10 +157,16 @@ try {
   staleState.availability = 'stale';
   staleState.reason = 'heartbeat-expired';
   staleState.snapshot.observed_at = new Date(Date.now() - 20000).toISOString();
-  await page.route('**/api/factory/state', route => route.fulfill({ json: staleState }));
+  if (studio) await page.route('**/api/operations/v1/projects/qa/resources?**', async route => {
+    if (new URL(route.request().url()).searchParams.get('key') !== 'factory') return route.continue();
+    const response = await route.fetch(); const value = await response.json();
+    value.data = staleState; value.health = 'stale';
+    await route.fulfill({ response, json: value });
+  });
+  else await page.route('**/api/factory/state', route => route.fulfill({ json: staleState }));
   await page.waitForFunction(() => document.querySelector('#factory-status')?.dataset.state === 'stale',
     null, { timeout: 5000 });
-  const staleCards = await page.locator('#delivery-slots .factory-slot[data-status="running"]').count();
+  const staleCards = await page.locator('.delivery-bay[data-status="running"], #delivery-slots .factory-slot[data-status="running"]').count();
   if (staleCards < 2) throw new Error('The stale snapshot did not retain its last observed occupied slots explicitly.');
   if (errors.length) throw new Error(errors.join('\n'));
   console.log('Playwright telemetry QA passed: native slot isolation, EventSource resume without duplicate output, completion/end without retry, follow controls, Escape/focus, narrow 200% layout, and stale occupancy.');

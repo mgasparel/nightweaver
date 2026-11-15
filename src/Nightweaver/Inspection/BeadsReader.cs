@@ -70,19 +70,53 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         }
     }
 
+    internal async Task<(BeadSnapshot Bead, IReadOnlyList<BeadCommentSnapshot> Comments)> ReadDetailWithCommentsAsync(
+        ValidatedTargetRepository repository, string beadId, CancellationToken cancellationToken)
+    {
+        var context = $"bd --readonly --sandbox show '{beadId}' --include-comments --json in Target Repository '{repository.Path}'";
+        var json = await RunQueryAsync(repository, BeadsCommand.CreateShowWithComments(repository.Path, beadId), context, cancellationToken);
+        try
+        {
+            var inventory = Parse(json);
+            if (inventory.ById.Count != 1 || !inventory.ById.TryGetValue(beadId, out var bead))
+                throw new JsonException("$: show must return exactly the requested Bead");
+            if (bead.Payload.TryGetProperty("comments_omitted", out var omitted) && omitted.ValueKind != JsonValueKind.False)
+                throw new JsonException("$: requested comment bodies were omitted");
+            if (!bead.Payload.TryGetProperty("comments", out var comments))
+            {
+                if (bead.Payload.TryGetProperty("comment_count", out var count) && count.ValueKind == JsonValueKind.Number
+                    && count.TryGetInt32(out var total) && total == 0)
+                    return (bead, Array.Empty<BeadCommentSnapshot>());
+                throw new JsonException("$: requested comments array is missing");
+            }
+            var parsed = ParseComments(comments, beadId);
+            if (bead.Payload.TryGetProperty("comment_count", out var reportedCount)
+                && (reportedCount.ValueKind != JsonValueKind.Number || !reportedCount.TryGetInt32(out var expectedCount)
+                    || expectedCount != parsed.Count))
+                throw new JsonException("$: comment count does not match complete bodies");
+            return (bead, parsed);
+        }
+        catch (JsonException exception)
+        {
+            throw new ToolExecutionException($"{context}: incompatible or malformed bd JSON: {exception.Message}");
+        }
+    }
+
     internal async Task<BeadsReadiness> ReadReadinessAsync(ValidatedTargetRepository repository, BeadsInventory inventory,
         string recoveryActor, CancellationToken cancellationToken)
     {
-        var nativeContext = $"bd --readonly --sandbox ready --unassigned --limit 0 --json in Target Repository '{repository.Path}'";
-        var nativeJson = await RunQueryAsync(repository, BeadsCommand.CreateUnassignedReadiness(repository.Path), nativeContext, cancellationToken);
-        var native = ParseReadiness(nativeJson, inventory, nativeContext, bead => bead.Status == "open" && bead.Assignee is null);
-
-        var recoverableContext = $"bd --readonly --sandbox list --ready --status in_progress --assignee {recoveryActor} --limit 0 --json in Target Repository '{repository.Path}'";
-        var recoverableJson = await RunQueryAsync(repository, BeadsCommand.CreateRecoverableReadiness(repository.Path, recoveryActor), recoverableContext, cancellationToken);
-        var recoverable = ParseReadiness(recoverableJson, inventory, recoverableContext,
-            bead => bead.Status == "in_progress" && string.Equals(bead.Assignee, recoveryActor, StringComparison.Ordinal));
-        return BeadsReadiness.Create(native.Where(id => Execution.PlanningPublicationGate.Allows(inventory.ById[id], inventory)),
-            recoverable.Where(id => Execution.PlanningPublicationGate.Allows(inventory.ById[id], inventory)));
+        // Let bd decide blockers/deferment once for both lifecycle memberships.
+        // Validate the entire response against the fresh inventory before selecting
+        // ownership locally; never reuse this observation across a write.
+        var context = $"bd --readonly --sandbox list --ready --status open,in_progress --limit 0 --json in Target Repository '{repository.Path}'";
+        var json = await RunQueryAsync(repository, BeadsCommand.CreateLifecycleReadiness(repository.Path), context, cancellationToken);
+        var ready = ParseReadiness(json, inventory, context, bead => bead.Status is "open" or "in_progress")
+            .Select(id => inventory.ById[id])
+            .Where(bead => Execution.PlanningPublicationGate.Allows(bead, inventory)).ToArray();
+        return BeadsReadiness.Create(
+            ready.Where(bead => bead.Status == "open" && bead.Assignee is null).Select(bead => bead.Id),
+            ready.Where(bead => bead.Status == "in_progress" && string.Equals(bead.Assignee, recoveryActor, StringComparison.Ordinal))
+                .Select(bead => bead.Id));
     }
 
     internal Task<FrozenSet<string>> ReadExplorerReadinessAsync(ValidatedTargetRepository repository, CancellationToken cancellationToken)

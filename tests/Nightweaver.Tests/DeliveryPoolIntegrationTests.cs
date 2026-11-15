@@ -387,8 +387,7 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
             request.FileName == "bd"
             && request.Arguments.Contains("list", StringComparer.Ordinal)
             && request.Arguments.Contains("--ready", StringComparer.Ordinal)
-            && ArgumentAfter(request, "--status") == "in_progress"
-            && request.Arguments.Contains("--assignee", StringComparer.Ordinal);
+            && request.Arguments.SequenceEqual(BeadsCommand.CreateLifecycleReadiness(request.WorkingDirectory).Arguments);
 
         private static string? ArgumentAfter(ProcessRequest request, string option)
         {

@@ -114,7 +114,7 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
         catch (Exception exception) when (exception is FormatException or System.Text.Json.JsonException) { return null; }
     }
 
-    internal Task ReleaseDispatchClaimAsync(ValidatedTargetRepository repository, string beadId, string actor,
+    internal async Task<BeadSnapshot?> ReleaseDispatchClaimAsync(ValidatedTargetRepository repository, string beadId, string actor,
         string expectedStatus, CancellationToken cancellationToken)
     {
         var arguments = new List<string> { "update", beadId };
@@ -130,9 +130,11 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
         arguments.Add("--if-status");
         arguments.Add(expectedStatus);
         arguments.Add("--json");
-        return RunAsync(repository, arguments,
+        var result = await RunAsync(repository, arguments,
             $"release dispatch claim for Bead '{beadId}' as '{actor}' guarded by its observed {expectedStatus} state",
-            cancellationToken, actor);
+            cancellationToken, actor).ConfigureAwait(false);
+        try { return BeadsReader.ParsePublicationResult(result.StandardOutput, beadId); }
+        catch (Exception exception) when (exception is FormatException or JsonException) { return null; }
     }
 
     internal async Task<ProcessResult> PublishDeliveryOutcomeAsync(
@@ -458,7 +460,7 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
         }
     }
 
-    private async Task RunAsync(ValidatedTargetRepository repository, IReadOnlyList<string> arguments,
+    private async Task<ProcessResult> RunAsync(ValidatedTargetRepository repository, IReadOnlyList<string> arguments,
         string operation, CancellationToken cancellationToken, string? actor = null)
     {
         try
@@ -474,6 +476,7 @@ internal sealed class BeadsWriter(IProcessRunner processRunner)
                     + (result.ExitCode == 13 ? " (the guarded state no longer matches; no retry was attempted)" : string.Empty)
                     + (detail.Length == 0 ? string.Empty : $": {detail}"), result.StandardError);
             }
+            return result;
         }
         catch (OperationCanceledException) { throw; }
         catch (ToolExecutionException exception)

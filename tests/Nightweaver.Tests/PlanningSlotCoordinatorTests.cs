@@ -177,7 +177,7 @@ public sealed class PlanningSlotCoordinatorTests
                     return Task.FromResult(new ProcessResult(0, Inventory(), ""));
                 }
                 var selected = true;
-                if (args.Contains("ready") || args.Contains("--ready")) selected = Ready && (args.Contains("--unassigned") ? Owner is null : Owner == Project.RecoveryActor);
+                if (args.Contains("ready") || args.Contains("--ready")) selected = Ready && State.Status is "open" or "in_progress";
                 return Task.FromResult(new ProcessResult(0, selected ? Inventory() : "[]", ""));
             });
         }

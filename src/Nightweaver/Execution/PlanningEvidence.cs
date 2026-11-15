@@ -54,9 +54,7 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
         var defaultRevision = await defaultRead;
         // Keep tracker observations last and use this same fresh Product/discussion
         // for both grounding and publication authority. Never reuse across writes.
-        var inventory = await reader.ReadSnapshotAsync(session.Repository, token);
-        var bead = inventory.ById[session.BeadId];
-        var comments = await reader.ReadCommentsAsync(session.Repository, session.BeadId, token);
+        var (bead, comments) = await reader.ReadDetailWithCommentsAsync(session.Repository, session.BeadId, token);
         // Workflow, timestamps and evidence comments change during normal turns. Product text
         // and all ordinary discussion remain inputs, including human guidance after Resume.
         var fields = ProductFields
@@ -71,12 +69,14 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
 
     internal async Task<string> ReadContextAsync(AgentStageSession session, CancellationToken token)
     {
-        var inventory = await reader.ReadSnapshotAsync(session.Repository, token);
-        var comments = await reader.ReadCommentsAsync(session.Repository, session.BeadId, token);
+        var (bead, comments) = await reader.ReadDetailWithCommentsAsync(session.Repository, session.BeadId, token);
         var candidate = LatestCandidate(comments);
         var context = JsonSerializer.Serialize(new
         {
-            product = inventory.ById[session.BeadId].Payload,
+            // Discussion/evidence has its own bounded context below; do not send
+            // the embedded show comments a second time inside the Product.
+            product = bead.Payload.EnumerateObject().Where(p => p.Name != "comments")
+                .ToDictionary(p => p.Name, p => p.Value),
             discussion = comments.Where(c => !IsProtocol(c.Text)).Select(c => new { c.Id, c.Text }),
             candidateCommentId = candidate?.Comment.Id,
             candidateText = candidate?.Comment.Text

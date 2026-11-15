@@ -18,6 +18,7 @@ import { useObservation } from "./use-observation";
 import { operations } from "./operations-browser";
 import { AttentionView, BeadWorkspace } from "./bead-views";
 import { Explorer } from "./explorer";
+import { DeliveryView, DeliveryMetric, RuntimeSummary } from "./delivery-views";
 
 const sections = [
   ["overview", "Overview"],
@@ -309,7 +310,7 @@ function ProjectRoutes({
         <Route
           key={id}
           path={id}
-          element={id === "attention" ? <AttentionView project={context.projectId} /> : id === "beads" ? <Explorer project={context.projectId} /> : <FeatureRoute id={id} title={title} />}
+          element={id === "delivery" ? <DeliveryView project={context.projectId} /> : id === "attention" ? <AttentionView project={context.projectId} /> : id === "beads" ? <Explorer project={context.projectId} /> : <FeatureRoute id={id} title={title} />}
         />
       ))}
       <Route path="beads/:beadId" element={<BeadWorkspace project={context.projectId} />} />
@@ -362,7 +363,7 @@ function Overview({
           ["Attention", "Tracker not connected"],
           ["Merged", "Digest not connected"],
           ["Ready", "Tracker not connected"],
-        ].map(([label, detail]) => label === "Attention" ? <AttentionMetric key={label} projectId={context.projectId} /> : (
+        ].map(([label, detail]) => label === "Delivery" ? <DeliveryMetric key={label} project={context.projectId} /> : label === "Attention" ? <AttentionMetric key={label} projectId={context.projectId} /> : (
           <div className="metric" key={label}>
             <span className="eyebrow">{label}</span>
             <strong aria-label="Unavailable">—</strong>
@@ -380,22 +381,7 @@ function Overview({
           }
           className="floor-panel"
         >
-          <div className="floor-intro">
-            <Icon name="delivery" />
-            <span>Parallel Delivery. One careful merge at a time.</span>
-          </div>
-          <Unavailable title="A place for work in motion." href="/#factory">
-            Execution bays and invocation inspection will appear here when
-            runtime observations are connected. No occupancy is inferred.
-          </Unavailable>
-          <div className="merge-note">
-            <Icon name="arrow" />
-            <div>
-              <h3>Singleton Merger</h3>
-              <p>Runtime observation unavailable</p>
-            </div>
-            <Status>Not connected</Status>
-          </div>
+          <DeliveryView project={context.projectId} compact />
         </Panel>
         <Panel
           title="Your attention"
@@ -425,7 +411,7 @@ function Overview({
             </div>
             <p>The project configured for this local host.</p>
             <div className="project-summary">
-              <span>Runtime status unavailable</span>
+              <RuntimeSummary project={context.projectId} />
               <Icon name="arrow" />
             </div>
           </Link>
