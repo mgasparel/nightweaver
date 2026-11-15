@@ -1,0 +1,61 @@
+{
+  "target": "qa-9pk",
+  "resolved": {
+    "beadId": "qa-9pk",
+    "status": "resolved",
+    "revision": "5739041BFE4F4A188F3E84AE5347FA6D5F176DA035A10293695198B3B87BA5F6",
+    "record": {
+      "version": 1,
+      "root": "H:\\Nightweaver\\prod\\tmp\\nightshift\\ns-mbd.10\\20261115T0308288074551Z-implementer\\nightweaver-qa-a6f2fcb8a5444b28b6c29a2342db1bca",
+      "project": "qa",
+      "repository": "H:\\Nightweaver\\prod\\tmp\\nightshift\\ns-mbd.10\\20261115T0308288074551Z-implementer\\nightweaver-qa-a6f2fcb8a5444b28b6c29a2342db1bca\\repo",
+      "commonDirectory": "H:\\Nightweaver\\prod\\tmp\\nightshift\\ns-mbd.10\\20261115T0308288074551Z-implementer\\nightweaver-qa-a6f2fcb8a5444b28b6c29a2342db1bca\\repo\\.git",
+      "beadId": "qa-9pk",
+      "purpose": 1,
+      "registration": null,
+      "verifiedHead": null,
+      "pullRequest": null,
+      "mergeCommit": null,
+      "worktree": {
+        "path": "H:\\Nightweaver\\prod\\tmp\\nightshift\\ns-mbd.10\\20261115T0308288074551Z-implementer\\nightweaver-qa-a6f2fcb8a5444b28b6c29a2342db1bca\\worktrees\\qa\\qa-9pk",
+        "confirmedAbsent": true
+      },
+      "tmp": {
+        "path": "H:\\Nightweaver\\prod\\tmp\\nightshift\\ns-mbd.10\\20261115T0308288074551Z-implementer\\nightweaver-qa-a6f2fcb8a5444b28b6c29a2342db1bca\\tmp\\qa\\qa-9pk",
+        "confirmedAbsent": true
+      },
+      "status": 3,
+      "attempts": 5,
+      "lastAttempt": "2026-11-15T04:10:16.9570712+00:00",
+      "nextAttempt": null,
+      "resolvedAt": "2026-11-15T04:10:16.9570712+00:00",
+      "diagnostic": null,
+      "lastRetryRequestId": "1e5399b1726144759b619a56974b777d",
+      "cycleAttempts": 1,
+      "lastFailure": "The process cannot access the file 'ignored-qa-report.xml' because it is being used by another process.",
+      "lastDenial": null
+    },
+    "retry": {
+      "version": 1,
+      "requestId": "1e5399b1726144759b619a56974b777d",
+      "runtimeId": "2f0616b58c974bfcb664cd4966090b08",
+      "beadId": "qa-9pk",
+      "revision": "3DF537BE9C4479DC57634F7B9F706941EA1F9D71E277FD8B9AF6A4B0FB1AD937",
+      "queuedAt": "2026-11-15T03:27:55.4985216+00:00",
+      "outcome": "accepted"
+    }
+  },
+  "posts": [
+    {
+      "runtimeId": "2f0616b58c974bfcb664cd4966090b08",
+      "revision": "3DF537BE9C4479DC57634F7B9F706941EA1F9D71E277FD8B9AF6A4B0FB1AD937",
+      "requestId": "1e5399b1726144759b619a56974b777d"
+    },
+    {
+      "runtimeId": "2f0616b58c974bfcb664cd4966090b08",
+      "revision": "3DF537BE9C4479DC57634F7B9F706941EA1F9D71E277FD8B9AF6A4B0FB1AD937",
+      "requestId": "1e5399b1726144759b619a56974b777d"
+    }
+  ],
+  "errors": []
+}

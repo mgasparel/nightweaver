@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile, access, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+if (process.argv.includes('--studio')) {
+  await import('./studio-cleanup-qa.mjs');
+  process.exit(0);
+}
+
 const url = process.env.NIGHTWEAVER_QA_URL;
 assert(url, 'Use the direct web endpoint discovered by aspire describe');
 const output = process.env.NIGHTWEAVER_QA_OUTPUT ?? '../../TestResults/cleanup';

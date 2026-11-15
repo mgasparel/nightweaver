@@ -7,6 +7,7 @@ import { useObservation } from "./use-observation";
 import type { Snapshot } from "./operations";
 import { beadPath, safeBeadId, type AttentionItem, type WorkspaceData, type Message } from "./bead-model";
 import { AttentionCommands } from "./attention-commands";
+import { PlanningAuthorization } from "./product-views";
 
 const commands = new AttentionCommands(window.fetch.bind(window), () => {
   // Reconciliation errors already live in coordinator snapshots and Freshness.
@@ -233,6 +234,7 @@ function WorkspaceIdentity({ project, id }: { project: string; id: string }) {
         <div className="bead-facts"><span>{valid.bead.type} · P{valid.bead.priority}</span><span>{valid.bead.stage ?? "No stage"}</span>
           <span>Repairs {valid.bead.repairCycles ?? 0}</span><span>Assignee: {valid.bead.assignee ?? "Unassigned"}</span></div>
         <p className="bead-labels">{valid.bead.labels.join(" · ") || "No labels"}</p>
+        <PlanningAuthorization project={project} data={valid} current={!missing && !snapshot.stale && snapshot.observation?.health !== "unavailable"} />
         {[["Description", valid.bead.description], ["Acceptance criteria", valid.bead.acceptanceCriteria]].map(([label, text]) => <section key={label}><h3>{label}</h3><Markdown text={text || "Not provided."} /></section>)}
         <details><summary>Design and notes</summary><Markdown text={valid.bead.design || "No design recorded."} /><Markdown text={valid.bead.notes || "No notes recorded."} /></details>
         <details><summary>Relations · {valid.relations.length}</summary>

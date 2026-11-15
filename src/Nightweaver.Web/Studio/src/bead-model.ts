@@ -9,6 +9,7 @@ export type AttentionItem = {
   message?: Message | null; otherPauseReports?: Message[];
 };
 export type WorkspaceData = {
+  planning?: { ready: boolean; canAuthorize: boolean; expected: string } | null;
   bead: { id: string; title: string; type: string; status: string; priority: number;
     stage: string | null; labels: string[]; assignee: string | null; repairCycles: number | null;
     description: string; design: string; acceptanceCriteria: string; notes: string; updatedAt: string };

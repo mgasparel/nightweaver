@@ -58,6 +58,20 @@ issues a second POST, and concurrent clicks share that pending POST. Captures
 at 1440/375/720 CSS pixels and results go to `NIGHTWEAVER_QA_OUTPUT` or
 `TestResults/runtime-refresh`. Stop the exact AppHost in `finally`.
 
+Start a fresh isolated stack with `NIGHTWEAVER_QA_SCENARIO=cleanup` for
+`node planning-readiness-qa.mjs --studio` and `node cleanup-qa.mjs --studio`.
+Use the exact direct endpoint below and stop the same AppHost in `finally`.
+The Product probe checks retained drafts during observations/navigation, server
+validation, ambiguous disconnect with no replay, real creation, stale readiness
+409 and explicit persisted authorization. The cleanup probe sends real same-origin
+stale and eligible retries to the durable owner inbox, verifies the fifth attempt,
+actual absence, unchanged Bead and protected paused evidence, then substitutes
+only reads for bounded pagination/search, stopped/unavailable owners and denials.
+Both capture 1440/375/720 CSS-pixel layouts and browser errors under
+`TestResults/studio-product` and `TestResults/studio-cleanup` (or
+`NIGHTWEAVER_QA_OUTPUT`). The probes preserve the existing legacy mode without
+`--studio`.
+
 `node studio-attention-qa.mjs` verifies the live Studio Attention and dedicated
 Bead Workspace slice on a fresh isolated default fixture. Set both
 `NIGHTWEAVER_QA_URL` and `NIGHTWEAVER_QA_CONFIG` from the exact direct `web`

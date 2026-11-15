@@ -1,0 +1,85 @@
+import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { chromium } from 'playwright';
+
+const base = process.env.NIGHTWEAVER_QA_URL;
+assert(base, 'Set the exact isolated direct endpoint from aspire describe');
+const output = process.env.NIGHTWEAVER_QA_OUTPUT ?? '../../TestResults/studio-product';
+await mkdir(output, { recursive: true });
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+const errors = [], posts = [];
+page.on('pageerror', error => errors.push(error.message));
+page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/beads') posts.push(request.postDataJSON()); });
+const capture = async name => { for (const width of [1440, 375, 720]) {
+  await page.setViewportSize({ width, height: 1000 });
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `Overflow ${name} ${width}`);
+  const control = page.locator(name.startsWith('intake') ? '.product-form input' : '.planning-authorization h3');
+  await control.focus();
+  assert(await control.evaluate(node => document.activeElement === node), `Focus ${name} ${width}`);
+  await page.screenshot({ path: `${output}/${name}-${width}.png`, fullPage: true });
+} };
+try {
+  await page.goto(base + '/projects/qa/beads');
+  const title = page.getByRole('textbox', { name: /^Title/ });
+  await title.fill('Studio Product intake');
+  await page.getByRole('textbox', { name: /^Description/ }).fill('Keep this draft while observations arrive.');
+  await page.getByRole('textbox', { name: /^Acceptance criteria/ }).fill('Explicit authorization only.');
+  await title.focus();
+  await page.waitForTimeout(2500);
+  assert(await title.evaluate(node => document.activeElement === node));
+  await capture('intake');
+  // Navigate within the SPA; draft storage is tab-owned rather than a response cache.
+  await page.getByRole('link', { name: 'Attention', exact: true }).click();
+  await page.getByRole('link', { name: 'Beads', exact: true }).click();
+  assert.equal(await title.inputValue(), 'Studio Product intake');
+  await page.route('**/api/beads', route => route.request().method() === 'POST'
+    ? route.fulfill({ status: 400, json: { title: 'Invalid Product Bead request', errors: { title: ['Fixture validation error'] } } }) : route.continue(), { times: 1 });
+  await page.getByRole('button', { name: 'Create Product Bead', exact: true }).click();
+  await page.getByText('Fixture validation error', { exact: true }).waitFor();
+  assert.equal(await title.getAttribute('aria-invalid'), 'true');
+  assert.equal(await title.inputValue(), 'Studio Product intake');
+  await page.route('**/api/beads', route => route.request().method() === 'POST' ? route.abort() : route.continue(), { times: 1 });
+  await page.getByRole('button', { name: 'Create Product Bead', exact: true }).click();
+  await page.getByText(/Outcome unknown.*input is retained/).waitFor();
+  const attempts = posts.length;
+  await page.getByRole('link', { name: 'Attention', exact: true }).click();
+  await page.getByRole('link', { name: 'Beads', exact: true }).click();
+  assert.equal(posts.length, attempts);
+  assert(await page.getByRole('button', { name: 'Create Product Bead', exact: true }).isDisabled());
+  assert.equal(await title.inputValue(), 'Studio Product intake');
+  await capture('intake-unknown');
+  await page.getByRole('button', { name: /I checked current evidence/ }).click();
+  const responsePromise = page.waitForResponse(r => r.url().endsWith('/api/beads') && r.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Create Product Bead', exact: true }).click();
+  const response = await responsePromise;
+  assert.equal(response.status(), 201, await response.text());
+  const created = await response.json();
+  await page.getByRole('link', { name: `Open ${created.id}`, exact: true }).click();
+  const action = page.getByRole('button', { name: 'Ready for Planning', exact: true });
+  await action.waitFor({ timeout: 90000 });
+  const read = () => page.evaluate(async id => (await fetch(`/api/beads/${id}`)).json(), created.id);
+  const initial = await read();
+  assert.equal(initial.planning.ready, false); assert.equal(initial.bead.assignee, null);
+  assert.equal(initial.bead.status, 'open');
+  await page.route('**/ready-for-planning', route => route.continue({ postData: JSON.stringify({ expected: '0'.repeat(64) }) }), { times: 1 });
+  const stalePromise = page.waitForResponse(r => r.url().endsWith('/ready-for-planning'));
+  await action.click(); assert.equal((await stalePromise).status(), 409);
+  await page.getByText(/Evidence changed/).waitFor();
+  assert(await action.isDisabled()); assert.equal((await read()).planning.ready, false);
+  await page.getByRole('button', { name: 'Refresh and review readiness', exact: true }).click();
+  await action.click();
+  await page.getByText('Planning readiness saved. Normal scheduling rules still apply.', { exact: true }).waitFor();
+  await page.waitForFunction(() => ![...document.querySelectorAll('button')].some(node => node.textContent === 'Ready for Planning'));
+  assert.equal((await read()).planning.ready, true);
+  await capture('readiness');
+  await page.reload();
+  await page.getByText('Ready for Planning. Normal scheduling and pause rules still apply.', { exact: true }).waitFor({ timeout: 90000 });
+  assert.deepEqual(errors, []);
+  await writeFile(`${output}/result.json`, JSON.stringify({ created: created.id, posts, stale: 409, ready: true, errors }, null, 2));
+  console.log(JSON.stringify({ created: created.id, stale: 409, ready: true, posts: posts.length, errors, output }));
+} catch (error) {
+  await page.screenshot({ path: `${output}/failure.png`, fullPage: true });
+  console.log(await page.locator('main').innerText());
+  throw error;
+} finally { await browser.close(); }
