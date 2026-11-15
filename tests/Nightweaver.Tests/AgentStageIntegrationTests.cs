@@ -435,8 +435,6 @@ public abstract class AgentStageIntegrationTestSupport
             }
             if (request.FileName != "gh") return await inner.RunAsync(request, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            var branch = Run("git", ["branch", "--show-current"], request.WorkingDirectory, BeadsEnvironment).Trim();
-            var head = Run("git", ["rev-parse", "HEAD"], request.WorkingDirectory, BeadsEnvironment).Trim();
             if (request.Arguments.Count >= 2 && request.Arguments[0] == "pr" && request.Arguments[1] == "checks")
             {
                 var failed = FixtureRequiredCheckFails;
@@ -446,7 +444,15 @@ public abstract class AgentStageIntegrationTestSupport
                 });
                 return new ProcessResult(0, checks, string.Empty);
             }
-            var remoteMainOutput = Run("git", ["ls-remote", "origin", "refs/heads/main"], request.WorkingDirectory, BeadsEnvironment);
+            // One fresh PR observation needs three independent read-only Git values.
+            // Settle all reads before returning; never cache across fixture mutations.
+            var gitValues = await Task.WhenAll(
+                Task.Run(() => Run("git", ["branch", "--show-current"], request.WorkingDirectory, BeadsEnvironment), cancellationToken),
+                Task.Run(() => Run("git", ["rev-parse", "HEAD"], request.WorkingDirectory, BeadsEnvironment), cancellationToken),
+                Task.Run(() => Run("git", ["ls-remote", "origin", "refs/heads/main"], request.WorkingDirectory, BeadsEnvironment), cancellationToken));
+            var branch = gitValues[0].Trim();
+            var head = gitValues[1].Trim();
+            var remoteMainOutput = gitValues[2];
             var remoteMain = remoteMainOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
             var merged = string.Equals(remoteMain, head, StringComparison.OrdinalIgnoreCase);
             var response = JsonSerializer.Serialize(new
