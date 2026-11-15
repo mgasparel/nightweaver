@@ -1,8 +1,65 @@
 # Studio Digest acceptance
 
+## Native budget repair verification
+
+Candidate `d24eabf555776bb74ff24ddcb029f74cc767635f` passes the complete
+documented six-thread suite: **1,241 discovered/passed, zero failed/skipped,
+exit 0, outer 260.2864187 seconds**, including build, fixture publishing,
+execution and teardown. Report: `TestResults/digest-budget-full.xml`.
+The stopwatch and full log are retained under
+`H:/Nightweaver/prod/tmp/nightshift/ns-mbd.6/20261115T2136029552093Z-implementer`
+as `final-time.json` and `final-full.log`. This establishes candidate correctness
+and timing; latest-main timing remains a separate post-integration measurement.
+
+The retained failed Merger fixture had a completed Agent log, a closed,
+unassigned task and no worktree registration, but still had its local branch.
+Its timeout therefore reached post-close finalization. Repeated whole-inventory
+task guards amplified cumulative native command cost. A read-only comparison
+under concurrent load measured inventory at 2.127s and exact-task `show` at
+0.750s. Finalization now performs three fresh exact-task reads instead of those
+three inventories; all mutation, ownership and expected-head checks remain.
+Product and shared cleanup inventory reads remain. The full native Merger test
+passes in 90.419s total, including setup outside its unchanged 90-second
+admission-completion bound (17 inventories and three exact-task reads).
+
+The observer spent its four-second sweep on unused Ready/Blocked memberships
+even for Workspace-only subscriptions. Three deterministic 1.4-second-cost
+cases reproduce that unnecessary work and lost Workspace detail turn on the
+old code; they pass after demand-scoping membership reads. The existing native
+HTTP comment/dependency smoke passes in 31.041s, with cold data in 15.960s,
+combined external changes in 8.668s and 31 commands. The unchanged source
+deadlines still expose slow reads as stale; no process-settlement or historical
+sharing-lock cause is claimed for these failures.
+
+The strict conditional-ref regression also failed on the old inventory query
+and now passes on the exact-task query. Five cheap guard cases reject missing,
+foreign-ID, reopened, paused and assigned tasks before deletion. Ten focused
+regression/boundary cases pass (`TestResults/narrowed-corrected.xml`). The first
+new guard fixture needed a valid root Git registration, and the checkpoint clock
+now crosses its second during the inventory itself rather than depending on
+unused membership work. Assertions remain intact. No expensive native case,
+timeout increase, retry, sleep, skipped test or reduced parallelism was added.
+
+Both isolated browser probes pass again on the repaired source, with real
+checkpoint/concurrent-update behavior and all focus/lineage assertions intact.
+Fresh captures in `TestResults/digest-budget-repair` and
+`TestResults/digest-threads-budget-repair` cover 1440/375/720 layouts. Desktop
+compact, mobile retained-error and focused-child captures were visually reviewed:
+readable wrapping, visible focus, reachable controls and explicit retained state.
+The exact QA AppHost stopped successfully before the complete test run.
+Solution build passes with zero warnings/errors; Studio tests pass 46/46 and
+TypeScript/Vite build passes with the existing vendor/directive notices.
+
+A temporary process-timing diagnostic run is **not validation**: its shared log
+caused one instrumentation-only sharing exception (1,232/1,233 passed,
+301.929s). `diagnostic-full.xml`, its log and measurements remain preserved.
+All diagnostic code was removed before the passing complete run. Native
+measurements support command-cost investigation; that run does not erase or
+explain every earlier timeout. PR #43 remains draft; no hosted CI was dispatched.
+
 ## Resumed verification after the shared repair
 
-**Validation remains blocked.** The fresh complete run reported the native
+**Earlier verification was blocked.** That complete run reported the native
 observer and Merger timeouts described below. The earlier passing rebase run
 does not establish reliable complete-suite acceptance.
 
