@@ -806,3 +806,53 @@ dialog::backdrop {
     transition: none !important;
   }
 }
+/* Attention and Full Bead Workspace share the Studio palette and bounded rhythm. */
+
+.bead-empty { padding: 28px 0; color: var(--muted); }
+.bead-freshness { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:20px; font-size:12px; color:var(--muted); }
+.bead-freshness > details, .bead-freshness > [role=alert] { flex-basis:100%; }
+.bead-freshness > details { font-size:11px; }
+.attention-layout { display:block; }
+.attention-inventory { display:grid; gap:12px; margin-bottom:24px; }
+.attention-row { padding:20px; background:var(--paper); border:1px solid var(--line); border-radius:10px; min-width:0; }
+.attention-row.selected { border-color:var(--accent); }
+.bead-row-meta, .bead-facts, .bead-actions { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+.bead-row-meta { justify-content:space-between; font-size:11px; color:var(--muted); margin-bottom:12px; }
+.attention-row h2 { font-size:17px; margin-bottom:6px; overflow-wrap:anywhere; }
+.attention-row p { color:var(--muted); font-size:12px; margin-bottom:12px; }
+.bead-facts { color:var(--muted); font-size:12px; margin-bottom:14px; }
+.bead-labels { margin-bottom:20px; overflow-wrap:anywhere; color:var(--accent); }
+.bead-markdown { line-height:1.7; overflow-wrap:anywhere; margin:12px 0 20px; }
+.bead-markdown p, .bead-markdown pre, .bead-markdown blockquote { margin:10px 0; }
+.bead-markdown pre { white-space:pre-wrap; padding:14px; background:var(--bg); border-radius:6px; }
+.bead-markdown table { display:block; max-width:100%; overflow:auto; }
+.bead-markdown a, .bead-environment a { color:var(--accent); text-decoration:underline; }
+.bead-markdown blockquote { padding-left:16px; border-left:2px solid var(--accent); color:var(--muted); }
+.guidance { padding-top:24px; margin-top:20px; border-top:1px solid var(--line); }
+.guidance > p { color:var(--muted); margin:10px 0; }
+.guidance label { display:grid; gap:10px; margin:18px 0 10px; }
+.guidance textarea { width:100%; resize:vertical; min-height:130px; padding:14px; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:8px; font:inherit; line-height:1.6; }
+.guidance textarea:focus-visible { outline:3px solid var(--accent); }
+.bead-actions { margin-top:18px; }
+.button:disabled { opacity:.5; cursor:not-allowed; }
+.bead-notice { border-left:2px solid var(--amber); padding:12px 16px; background:var(--amberbg); margin:16px 0; overflow-wrap:anywhere; }
+.bead-history { margin:20px 0; }
+.bead-comment { border-bottom:1px solid var(--line); padding:14px 0; }
+summary { cursor:pointer; line-height:1.6; overflow-wrap:anywhere; padding:10px 0; }
+summary:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+.bead-environment { font-size:12px; }
+.bead-environment > div { display:grid; grid-template-columns:140px minmax(0,1fr); gap:12px; margin:8px 0; }
+.bead-environment dt { color:var(--muted); }
+.bead-environment dd { margin:0; overflow-wrap:anywhere; }
+[hidden] { display:none !important; }
+@media(max-width:900px) { .attention-layout { grid-template-columns:minmax(0,1fr); } }
+@media(max-width:600px) { .bead-actions > .button { width:100%; } .bead-environment > div { grid-template-columns:minmax(0,1fr); gap:2px; } .bead-freshness { align-items:flex-start; } }
+
+.bead-original { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.65; padding:14px; background:var(--bg); border-radius:6px; }
+.attention-board { display:grid; grid-template-columns:minmax(0, .9fr) minmax(0, 1.1fr); align-items:start; gap:24px; }
+.attention-board > div { min-width:0; }
+.attention-board .attention-inventory { max-height:760px; overflow:auto; padding:4px; }
+@media(max-width:1000px) { .attention-board { grid-template-columns:minmax(0,1fr); } .attention-board .attention-inventory { max-height:400px; } }
+.attention-list-title { margin:0 4px 14px; }
+.workspace-guidance { margin-top:24px; }
+.workspace-guidance + .text-link { display:inline-block; margin-top:16px; }

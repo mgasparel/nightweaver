@@ -48,6 +48,19 @@ No browser UI changed in this investigation. See the
 
 ## Studio candidate shell
 
+`node studio-attention-qa.mjs` verifies the live Studio Attention and dedicated
+Bead Workspace slice on a fresh isolated default fixture. Set both
+`NIGHTWEAVER_QA_URL` and `NIGHTWEAVER_QA_CONFIG` from the exact direct `web`
+resource discovered below. The probe validates fixture identity, creates its own
+disposable paused Beads, observes external escalation/comment/resolution while
+typing, reconnects the real stream, and sends real same-origin Save Note,
+Resume, stale 409, Retry and two-step Abort requests. Deterministic read
+projections cover pinned active evidence, bounded history, sanitized Markdown,
+focused disclosure refresh/removal, stale, unavailable and empty states.
+Screenshots at 1440/375/720 CSS pixels and JSON evidence go to
+`NIGHTWEAVER_QA_OUTPUT` or `TestResults/studio-attention`. Review the captures and
+stop the exact AppHost in `finally`, including on failure.
+
 `node refresh-timeout-qa.mjs` holds real reconciliation 202 responses while the
 operational stream and resource reads continue. It verifies deadline abort,
 visible failure at 375px, a second explicit POST, replacement deduplication after

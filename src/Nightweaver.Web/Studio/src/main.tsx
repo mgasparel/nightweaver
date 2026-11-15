@@ -17,6 +17,7 @@ import { Icon, Panel, Status, Unavailable } from "./primitives";
 import "./studio.css";
 import { useObservation } from "./use-observation";
 import { operations } from "./operations-browser";
+import { AttentionView, BeadWorkspace } from "./bead-views";
 
 const sections = [
   ["overview", "Overview"],
@@ -304,10 +305,10 @@ function ProjectRoutes({
         <Route
           key={id}
           path={id}
-          element={<FeatureRoute id={id} title={title} />}
+          element={id === "attention" ? <AttentionView project={context.projectId} /> : <FeatureRoute id={id} title={title} />}
         />
       ))}
-      <Route path="beads/:beadId" element={<Workspace />} />
+      <Route path="beads/:beadId" element={<BeadWorkspace project={context.projectId} />} />
       <Route path="*" element={<NotFound base={base} />} />
     </Routes>
   );
@@ -397,14 +398,7 @@ function Overview({
           accessory={<Icon name="attention" />}
           className="attention-panel"
         >
-          <Unavailable
-            title="Decisions deserve a clear place."
-            href="/#attention"
-            action="Open Attention Desk"
-          >
-            Paused Beads and guarded guidance, Retry and Abort actions remain
-            available in the existing console.
-          </Unavailable>
+          <AttentionView project={context.projectId} compact />
         </Panel>
         <Panel
           title="Your projects"
@@ -528,47 +522,6 @@ function ExplorerContext() {
       </button>
       <p>View preferences only; tracker results are not connected.</p>
     </form>
-  );
-}
-
-function Workspace() {
-  const { beadId } = useParams();
-  const [params] = useSearchParams();
-  const tab = ["summary", "history", "output"].includes(params.get("tab") ?? "")
-    ? params.get("tab")!
-    : "summary";
-  return (
-    <>
-      <PageHeading
-        title={`Bead ${beadId}`}
-        description="Full Bead Workspace · current project"
-      />
-      <nav className="workspace-tabs" aria-label="Workspace sections">
-        {["summary", "history", "output"].map((value) => {
-          const next = new URLSearchParams(params);
-          next.set("tab", value);
-          return (
-            <Link
-              key={value}
-              to={`?${next}`}
-              aria-current={tab === value ? "page" : undefined}
-            >
-              {value[0].toUpperCase() + value.slice(1)}
-            </Link>
-          );
-        })}
-      </nav>
-      <Panel title={tab[0].toUpperCase() + tab.slice(1)}>
-        <Unavailable
-          title="Bead details are not connected."
-          href={`/#bead/${encodeURIComponent(beadId ?? "")}`}
-          action="Open existing Bead Workspace"
-        >
-          This route identifies the selected Bead only. It does not establish
-          that the Bead exists, authorize work, or imply a running Agent.
-        </Unavailable>
-      </Panel>
-    </>
   );
 }
 

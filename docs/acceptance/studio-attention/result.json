@@ -1,0 +1,136 @@
+{
+  "checks": [
+    "external pause/comment/resolution converges without refresh; typing and focus preserved",
+    "real EventSource disconnect/reconnect retains editor and restores current state",
+    "404 and uncertain POST keep draft, prevent submission and never replay",
+    "real Save Note and Resume; duplicate prevention and late receipt cannot target new selection",
+    "real stale-snapshot 409 and explicit fresh Retry through Workspace",
+    "two-step real Abort, Escape and focus restoration",
+    "direct reload and Back/Forward preserve Workspace tab; external comment readable",
+    "bounded history, pinned active evidence, safe Markdown, focused disclosures survive refresh and fall back on removal"
+  ],
+  "posts": [
+    {
+      "path": "/api/beads/qa-9qa/decide",
+      "body": {
+        "instruction": "Keep this exact Bead draft while live observations change.",
+        "action": "note_only"
+      }
+    },
+    {
+      "path": "/api/operations/v1/projects/qa/refresh",
+      "body": {
+        "keys": [
+          "attention"
+        ]
+      }
+    },
+    {
+      "path": "/api/beads/qa-9qa/decide",
+      "body": {
+        "instruction": "Keep this exact Bead draft while live observations change.",
+        "action": "note_only"
+      }
+    },
+    {
+      "path": "/api/operations/v1/projects/qa/refresh",
+      "body": {
+        "keys": [
+          "attention"
+        ]
+      }
+    },
+    {
+      "path": "/api/beads/qa-9qa/decide",
+      "body": {
+        "instruction": "Keep this exact Bead draft while live observations change.",
+        "action": "note_only"
+      }
+    },
+    {
+      "path": "/api/operations/v1/projects/qa/refresh",
+      "body": {
+        "keys": [
+          "attention"
+        ]
+      }
+    },
+    {
+      "path": "/api/beads/qa-9qa/decide",
+      "body": {
+        "instruction": "Keep this exact Bead draft while live observations change.",
+        "action": "resume",
+        "expected": {
+          "stage": "stage:plan",
+          "pauseLabels": [
+            "product-decision-required"
+          ],
+          "repairCycles": 0
+        }
+      }
+    },
+    {
+      "path": "/api/operations/v1/projects/qa/refresh",
+      "body": {
+        "keys": [
+          "attention"
+        ]
+      }
+    },
+    {
+      "path": "/api/beads/qa-7f4/retry",
+      "body": {
+        "expected": {
+          "stage": "stage:implement",
+          "pauseLabels": [
+            "needs-human"
+          ],
+          "repairCycles": 0
+        }
+      }
+    },
+    {
+      "path": "/api/operations/v1/projects/qa/refresh",
+      "body": {
+        "keys": [
+          "attention"
+        ]
+      }
+    },
+    {
+      "path": "/api/beads/qa-7f4/retry",
+      "body": {
+        "expected": {
+          "stage": "stage:implement",
+          "pauseLabels": [
+            "needs-human"
+          ],
+          "repairCycles": 0
+        }
+      }
+    },
+    {
+      "path": "/api/operations/v1/projects/qa/refresh",
+      "body": {
+        "keys": [
+          "attention",
+          "workspace:qa-7f4"
+        ]
+      }
+    },
+    {
+      "path": "/api/beads/qa-aze/abort",
+      "body": {}
+    },
+    {
+      "path": "/api/operations/v1/projects/qa/refresh",
+      "body": {
+        "keys": [
+          "attention",
+          "workspace:qa-aze"
+        ]
+      }
+    }
+  ],
+  "errors": []
+}
