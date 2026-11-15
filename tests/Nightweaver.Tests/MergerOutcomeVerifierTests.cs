@@ -49,6 +49,20 @@ public sealed class MergerOutcomeVerifierTests
         Assert.Equal(fixture.Head, result.Finding?.CheckedHead);
         Assert.Equal(2, fixture.Runner.PullRequestViewCount);
         Assert.Equal(1, fixture.Runner.RequiredChecksCount);
+        Assert.Equal(0, fixture.Runner.NativeGitCommandCount);
+    }
+
+    [Fact]
+    public async Task ScriptedGitFixtureNeverFallsThroughForAnUnknownCommand()
+    {
+        using var fixture = new VerifierFixture();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await fixture.Runner.RunAsync(GitCommand.Create(["status", "--ignored"], fixture.Worktree),
+                CancellationToken.None));
+
+        Assert.Contains("Unexpected scripted Git command", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, fixture.Runner.NativeGitCommandCount);
     }
 
     [Theory]
@@ -487,13 +501,58 @@ public sealed class MergerOutcomeVerifierTests
             Assert.Contains("open retained branch and current checked HEAD", result.Diagnostic, StringComparison.Ordinal);
         }
 
-        using (var fixture = new VerifierFixture())
+        using (var fixture = new VerifierFixture(nativeGit: true))
         {
             Directory.CreateDirectory(Path.Combine(fixture.Worktree, ".git", "rebase-merge"));
             var result = await fixture.VerifyAsync();
             Assert.False(result.Succeeded);
             Assert.Contains("active rebase", result.Diagnostic, StringComparison.Ordinal);
+            Assert.True(fixture.Runner.NativeGitCommandCount > 0);
         }
+    }
+
+    [Theory]
+    [InlineData("branch")]
+    [InlineData("head")]
+    public async Task RejectsChangedNativeWorktreeBranchOrHead(string change)
+    {
+        using var fixture = new VerifierFixture(nativeGit: true);
+        if (change == "branch")
+            VerifierFixture.RunGit(fixture.Worktree, "checkout", "-b", "nightweaver/other");
+        else
+        {
+            File.WriteAllText(Path.Combine(fixture.Worktree, "README.md"), "changed\n");
+            VerifierFixture.RunGit(fixture.Worktree, "add", "README.md");
+            VerifierFixture.RunGit(fixture.Worktree, "commit", "-m", "changed head");
+        }
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("retained Merger branch or HEAD changed", result.Diagnostic, StringComparison.Ordinal);
+        Assert.True(fixture.Runner.NativeGitCommandCount > 0);
+    }
+
+    [Fact]
+    public async Task RejectsNativeUnmergedIndexBeforeRejectionHandoff()
+    {
+        using var fixture = new VerifierFixture(nativeGit: true);
+        var baseBlob = VerifierFixture.RunGit(fixture.Worktree, "rev-parse", "HEAD:README.md");
+        var oursPath = Path.Combine(fixture.Worktree, "ours.txt");
+        var theirsPath = Path.Combine(fixture.Worktree, "theirs.txt");
+        File.WriteAllText(oursPath, "ours\n");
+        File.WriteAllText(theirsPath, "theirs\n");
+        var oursBlob = VerifierFixture.RunGit(fixture.Worktree, "hash-object", "-w", oursPath);
+        var theirsBlob = VerifierFixture.RunGit(fixture.Worktree, "hash-object", "-w", theirsPath);
+        var indexInfo = $"100644 {baseBlob} 1\tREADME.md\n100644 {oursBlob} 2\tREADME.md\n100644 {theirsBlob} 3\tREADME.md\n";
+        VerifierFixture.RunGitWithInput(fixture.Worktree, indexInfo, "update-index", "--index-info");
+        Assert.NotEmpty(VerifierFixture.RunGit(fixture.Worktree, "ls-files", "-u"));
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("unresolved index entries", result.Diagnostic, StringComparison.Ordinal);
+        Assert.True(fixture.Runner.NativeGitCommandCount > 0);
     }
 
     [Fact]
@@ -514,21 +573,22 @@ public sealed class MergerOutcomeVerifierTests
     [Fact]
     public async Task AcceptsApprovalOnlyAfterCurrentMergeEvidencePassingChecksAndDefaultBranchReachability()
     {
-        using var fixture = new VerifierFixture();
+        using var fixture = new VerifierFixture(nativeGit: true);
         fixture.Runner.ApprovalMode = true;
         fixture.Runner.CheckFailed = false;
-        fixture.SetMergeEvidence();
+        fixture.SetMergeEvidence(mergeCommit: fixture.ReachableMergeCommit);
 
         var result = await fixture.VerifyApprovalAsync();
 
         Assert.True(result.Succeeded, result.Diagnostic);
         Assert.Equal(fixture.PullRequest, result.Evidence?.PullRequest);
         Assert.Equal(fixture.Head, result.Evidence?.CheckedHead);
-        Assert.Equal(new string('b', 40), result.Evidence?.MergeCommit);
+        Assert.Equal(fixture.ReachableMergeCommit, result.Evidence?.MergeCommit);
         Assert.Equal("current", result.Evidence?.SourceCommentId);
         Assert.Equal(2, fixture.Runner.PullRequestViewCount);
         Assert.Equal(1, fixture.Runner.RequiredChecksCount);
         Assert.True(fixture.Runner.FetchedDefaultBranch);
+        Assert.True(fixture.Runner.NativeGitCommandCount > 0);
         Assert.Equal("github.com/example/project", fixture.Runner.PullRequestRepository);
         Assert.Equal("github.com/example/project", fixture.Runner.ChecksRepository);
     }
@@ -582,9 +642,26 @@ public sealed class MergerOutcomeVerifierTests
     }
 
     [Fact]
+    public async Task RejectsNativeDirtyWorktreeBeforeApprovingMerge()
+    {
+        using var fixture = new VerifierFixture(nativeGit: true);
+        fixture.Runner.ApprovalMode = true;
+        fixture.Runner.CheckFailed = false;
+        fixture.SetMergeEvidence(mergeCommit: fixture.ReachableMergeCommit);
+        File.AppendAllText(Path.Combine(fixture.Worktree, "README.md"), "local modification\n");
+
+        var result = await fixture.VerifyApprovalAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("branch, HEAD, index, or worktree changed", result.Diagnostic, StringComparison.Ordinal);
+        Assert.True(fixture.Runner.NativeGitCommandCount > 0);
+        Assert.False(fixture.Runner.FetchedDefaultBranch);
+    }
+
+    [Fact]
     public async Task RejectsTargetOriginChangedDuringRequiredCheckVerification()
     {
-        using var fixture = new VerifierFixture();
+        using var fixture = new VerifierFixture(nativeGit: true);
         fixture.Runner.ApprovalMode = true;
         fixture.Runner.CheckFailed = false;
         fixture.Runner.OriginUrlAfterChecks = "https://github.com/attacker/other.git";
@@ -596,6 +673,7 @@ public sealed class MergerOutcomeVerifierTests
         Assert.Contains("origin changed while PR checks", result.Diagnostic, StringComparison.Ordinal);
         Assert.Equal(1, fixture.Runner.RequiredChecksCount);
         Assert.False(fixture.Runner.FetchedDefaultBranch);
+        Assert.True(fixture.Runner.NativeGitCommandCount > 0);
     }
 
     [Fact]
@@ -680,23 +758,24 @@ public sealed class MergerOutcomeVerifierTests
     [Fact]
     public async Task RejectsMergeCommitThatIsNotReachableFromConfiguredDefaultBranch()
     {
-        using var fixture = new VerifierFixture();
+        using var fixture = new VerifierFixture(nativeGit: true);
         fixture.Runner.ApprovalMode = true;
         fixture.Runner.CheckFailed = false;
-        fixture.Runner.MergeCommitReachable = false;
-        fixture.SetMergeEvidence();
+        fixture.SetMergeEvidence(mergeCommit: fixture.UnreachableMergeCommit);
 
         var result = await fixture.VerifyApprovalAsync();
 
         Assert.False(result.Succeeded);
         Assert.Contains("not reachable", result.Diagnostic, StringComparison.Ordinal);
+        Assert.True(fixture.Runner.NativeGitCommandCount > 0);
     }
 
     private sealed class VerifierFixture : IDisposable
     {
         internal const string BeadId = "ns-ver.1";
         internal const string Owner = "nightweaver:demo";
-        private static readonly Lazy<(TempDirectory Directory, string Head)> Template = new(() =>
+        internal const string OriginUrl = "https://github.com/example/project.git";
+        private static readonly Lazy<(TempDirectory Directory, string Head, string ReachableMergeCommit, string UnreachableMergeCommit)> Template = new(() =>
         {
             var directory = new TempDirectory();
             RunGit(directory.Path, "init", "--initial-branch=main");
@@ -705,10 +784,21 @@ public sealed class MergerOutcomeVerifierTests
             File.WriteAllText(Path.Combine(directory.Path, "README.md"), "fixture\n");
             RunGit(directory.Path, "add", "README.md");
             RunGit(directory.Path, "commit", "-m", "fixture base");
-            RunGit(directory.Path, "checkout", "-b", $"nightweaver/{BeadId}");
             var head = RunGit(directory.Path, "rev-parse", "HEAD");
+            RunGit(directory.Path, "checkout", "-b", $"nightweaver/{BeadId}");
+            RunGit(directory.Path, "checkout", "main");
+            File.WriteAllText(Path.Combine(directory.Path, "README.md"), "reachable default branch\n");
+            RunGit(directory.Path, "add", "README.md");
+            RunGit(directory.Path, "commit", "-m", "reachable merged result");
+            var reachableMergeCommit = RunGit(directory.Path, "rev-parse", "HEAD");
+            RunGit(directory.Path, "checkout", "-b", "fixture/unreachable", head);
+            File.WriteAllText(Path.Combine(directory.Path, "unreachable.txt"), "not on main\n");
+            RunGit(directory.Path, "add", "unreachable.txt");
+            RunGit(directory.Path, "commit", "-m", "unreachable merge result");
+            var unreachableMergeCommit = RunGit(directory.Path, "rev-parse", "HEAD");
+            RunGit(directory.Path, "checkout", $"nightweaver/{BeadId}");
             AppDomain.CurrentDomain.ProcessExit += (_, _) => directory.Dispose();
-            return (directory, head);
+            return (directory, head, reachableMergeCommit, unreachableMergeCommit);
         });
         private readonly TempDirectory temp = new();
         private readonly ProjectConfig project;
@@ -718,27 +808,46 @@ public sealed class MergerOutcomeVerifierTests
             new(AgentOutcomeChoice.ChangesRequired, "fixture", "The current required check failed.");
         private readonly string invocationId = "20261104T1200000000000Z-merger";
 
-        internal VerifierFixture()
+        internal VerifierFixture(bool nativeGit = false)
         {
             if (!OperatingSystem.IsWindows())
                 throw new PlatformNotSupportedException("Settled Merger log verification requires Windows file handles.");
+            NativeGit = nativeGit;
             var host = new HostPaths(temp.CreateDirectory("host"));
             var worktrees = host.WorktreesRoot(ProjectSlug.Parse("demo"));
             Worktree = Directory.CreateDirectory(Path.Combine(worktrees, BeadId)).FullName;
-            // Copy fully initialized bytes, including Git objects and refs, into
-            // each case. All production Git checks still run against independent
-            // real repositories; setup no longer launches eight tools per case.
-            var template = Template.Value;
-            TestDirectoryTemplate.Copy(template.Directory.Path, Worktree);
-            Head = template.Head;
+            if (NativeGit)
+            {
+                // Native cases share only a completed immutable template. Every
+                // mutable .git database is copied into this fixture's worktree.
+                var template = Template.Value;
+                TestDirectoryTemplate.Copy(template.Directory.Path, Worktree);
+                Head = template.Head;
+                ReachableMergeCommit = template.ReachableMergeCommit;
+                UnreachableMergeCommit = template.UnreachableMergeCommit;
+            }
+            else
+            {
+                // Metadata and evidence cases use valid stable identities and do
+                // not create/copy a repository or launch a Git process.
+                Head = new string('a', 40);
+                ReachableMergeCommit = new string('b', 40);
+                UnreachableMergeCommit = new string('c', 40);
+            }
 
             project = new ProjectConfig(ProjectSlug.Parse("demo"), "fixture.json", new("target", "main"),
                 new(1, 1, 1), new(3, 1), new(AgentCli.Codex, null, "low", 1),
                 new RoleSettings(AgentRoles.All.ToDictionary(role => role,
                     _ => new AgentSettings(AgentCli.Codex, null, "low", 1))));
-            repository = new ValidatedTargetRepository(temp.CreateDirectory("target"), "main")
+            var targetRepositoryPath = temp.CreateDirectory("target");
+            if (NativeGit)
             {
-                OriginUrl = "https://github.com/example/project.git",
+                RunGit(targetRepositoryPath, "init", "--initial-branch=main");
+                RunGit(targetRepositoryPath, "remote", "add", "origin", OriginUrl);
+            }
+            repository = new ValidatedTargetRepository(targetRepositoryPath, "main")
+            {
+                OriginUrl = OriginUrl,
                 OriginRepository = new("github.com", "example", "project")
             };
             var state = new BeadWorkflowState(BeadId, "task", "in_progress", "stage:merge", false, false, false, 0);
@@ -754,7 +863,8 @@ public sealed class MergerOutcomeVerifierTests
                 0, branch, Head, string.Empty, true);
             Invocation = new AgentStageResult(AgentRole.Merger, BeadId, invocationId, logPath, null, [], state,
                 observations, classification, new HashSet<string>(["prior"], StringComparer.Ordinal));
-            Runner = new VerifierProcessRunner(Head, branch, PullRequest);
+            Runner = new VerifierProcessRunner(Head, branch, PullRequest, Worktree, targetRepositoryPath,
+                NativeGit, NativeGit ? Template.Value.Directory.Path : null);
             SetFinding("checks", "fixture checks", "The required fixture check failed.",
                 $"Required check 'fixture checks' failed for synchronized HEAD {Head}; inspect the fixture failure.", "remote",
                 transcript: $"Merger rejection evidence: fixture checks; Required check 'fixture checks' failed for synchronized HEAD {Head}; inspect the fixture failure.");
@@ -762,6 +872,9 @@ public sealed class MergerOutcomeVerifierTests
 
         internal string Worktree { get; }
         internal string Head { get; }
+        internal string ReachableMergeCommit { get; }
+        internal string UnreachableMergeCommit { get; }
+        internal bool NativeGit { get; }
         internal string PullRequest { get; }
         internal VerifierProcessRunner Runner { get; }
         internal AgentStageResult Invocation { get; set; }
@@ -847,7 +960,9 @@ public sealed class MergerOutcomeVerifierTests
         internal void SetMergeEvidence(string? pullRequest = null, string? checkedHead = null,
             string mergeMethod = "squash", string? mergeCommit = null)
         {
-            var comment = $"nightweaver-merge-v1 pull_request={pullRequest ?? PullRequest} checked_head={checkedHead ?? Head} required_checks=passed merge_method={mergeMethod} merge_commit={mergeCommit ?? new string('b', 40)}";
+            var commit = mergeCommit ?? new string('b', 40);
+            Runner.ReportedMergeCommit = commit;
+            var comment = $"nightweaver-merge-v1 pull_request={pullRequest ?? PullRequest} checked_head={checkedHead ?? Head} required_checks=passed merge_method={mergeMethod} merge_commit={commit}";
             Comments = [new("prior", comment, DateTimeOffset.UnixEpoch), new("current", comment, DateTimeOffset.UnixEpoch.AddSeconds(1))];
         }
 
@@ -863,7 +978,7 @@ public sealed class MergerOutcomeVerifierTests
 
         public void Dispose() => temp.Dispose();
 
-        private static string RunGit(string workingDirectory, params string[] arguments)
+        internal static string RunGit(string workingDirectory, params string[] arguments)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -881,12 +996,39 @@ public sealed class MergerOutcomeVerifierTests
                 throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}{output}");
             return output.Trim();
         }
+
+        internal static void RunGitWithInput(string workingDirectory, string input, params string[] arguments)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "git", WorkingDirectory = workingDirectory, UseShellExecute = false,
+                RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+            startInfo.Environment["GIT_CONFIG_GLOBAL"] = Path.Combine(workingDirectory, "missing-global-config");
+            startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start git.");
+            process.StandardInput.Write(input);
+            process.StandardInput.Close();
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            if (process.ExitCode != 0)
+                throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}{output}");
+        }
     }
 
-    private sealed class VerifierProcessRunner(string head, string branch, string pullRequest) : IProcessRunner
+    private sealed class VerifierProcessRunner(string head, string branch, string pullRequest,
+        string worktreePath, string targetRepositoryPath, bool nativeGit, string? nativeFetchSource) : IProcessRunner
     {
         private readonly SystemProcessRunner system = new();
         private readonly string originalHead = head;
+        private readonly string expectedWorktreePath = Path.GetFullPath(worktreePath);
+        private readonly string expectedTargetRepositoryPath = Path.GetFullPath(targetRepositoryPath);
+        private readonly bool useNativeGit = nativeGit;
+        private readonly string? fetchSource = nativeFetchSource;
+        internal int NativeGitCommandCount { get; private set; }
         internal string OriginUrl { get; set; } = "https://github.com/example/project.git";
         internal string? OriginUrlAfterChecks { get; set; }
         internal string ReportedPullRequestUrl { get; set; } = pullRequest;
@@ -908,13 +1050,16 @@ public sealed class MergerOutcomeVerifierTests
         internal string? HeadAfterChecks { get; set; }
         internal string BaseBranch { get; set; } = "main";
         internal bool ApprovalMode { get; set; }
-        internal bool MergeCommitReachable { get; set; } = true;
+        internal string ReportedMergeCommit { get; set; } = new('b', 40);
         internal bool FetchedDefaultBranch { get; private set; }
         internal int PullRequestViewCount { get; private set; }
         internal int RequiredChecksCount { get; private set; }
 
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.FileName == "git")
+                return RunGitAsync(request, cancellationToken);
             if (request.FileName == "gh" && request.Arguments[0] == "api")
             {
                 Assert.Equal("github.com", request.Arguments[2]);
@@ -970,25 +1115,6 @@ public sealed class MergerOutcomeVerifierTests
                 var latest = path.EndsWith("/101", StringComparison.Ordinal);
                 var rerun = path.EndsWith("/100", StringComparison.Ordinal) && HostedMutation == "rerun";
                 return Task.FromResult(Json(RunRow(latest ? 101 : 100, rerun)));
-            }
-            if (request.FileName == "git")
-            {
-                if (request.Arguments.SequenceEqual(["config", "--get", "remote.origin.url"], StringComparer.Ordinal))
-                {
-                    var origin = OriginUrlAfterChecks is not null && RequiredChecksCount > 0
-                        ? OriginUrlAfterChecks : OriginUrl;
-                    return Task.FromResult(new ProcessResult(0, origin, string.Empty));
-                }
-                if (request.Arguments.Count == 3 && request.Arguments[0] == "fetch"
-                    && request.Arguments[1] == OriginUrl && request.Arguments[2] == "main")
-                {
-                    FetchedDefaultBranch = true;
-                    return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
-                }
-                if (request.Arguments.Count == 4 && request.Arguments[0] == "merge-base"
-                    && request.Arguments[1] == "--is-ancestor")
-                    return Task.FromResult(new ProcessResult(MergeCommitReachable ? 0 : 1, string.Empty, string.Empty));
-                return system.RunAsync(request, cancellationToken);
             }
             if (request.FileName == "bd")
             {
@@ -1068,7 +1194,7 @@ public sealed class MergerOutcomeVerifierTests
                     headRefOid = AdvertisedHead,
                     url = ReportedPullRequestUrl,
                     mergedAt = ApprovalMode ? "2026-11-04T20:00:00Z" : null,
-                    mergeCommit = ApprovalMode ? new { oid = new string('b', 40) } : null
+                    mergeCommit = ApprovalMode ? new { oid = ReportedMergeCommit } : null
                 }), string.Empty));
             }
             if (request.FileName == "gh" && request.Arguments.Count >= 2
@@ -1079,6 +1205,12 @@ public sealed class MergerOutcomeVerifierTests
                     ? request.Arguments[repoIndex + 1] : null;
                 RequiredChecksCount++;
                 if (HeadAfterChecks is not null) AdvertisedHead = HeadAfterChecks;
+                if (useNativeGit && OriginUrlAfterChecks is not null)
+                {
+                    VerifierFixture.RunGit(expectedTargetRepositoryPath,
+                        "remote", "set-url", "origin", OriginUrlAfterChecks);
+                    NativeGitCommandCount++;
+                }
                 return Task.FromResult(new ProcessResult(RequiredChecksExitCode, JsonSerializer.Serialize(new[]
                 {
                     new { name = "fixture checks", state = CheckSkipped ? "SKIPPED" : CheckFailed ? "FAILURE" : "SUCCESS", bucket = CheckSkipped ? "skipping" : CheckFailed ? "fail" : "pass",
@@ -1086,6 +1218,111 @@ public sealed class MergerOutcomeVerifierTests
                 }), string.Empty));
             }
             throw new InvalidOperationException($"Unexpected verifier command: {request.FileName} {string.Join(' ', request.Arguments)}");
+        }
+
+        private Task<ProcessResult> RunGitAsync(ProcessRequest request, CancellationToken cancellationToken)
+        {
+            var args = request.Arguments;
+            var worktreeRequest = Path.GetFullPath(request.WorkingDirectory) == expectedWorktreePath;
+            var targetRequest = Path.GetFullPath(request.WorkingDirectory) == expectedTargetRepositoryPath;
+
+            if (!useNativeGit)
+                return Task.FromResult(RunScriptedGit(args, worktreeRequest, targetRequest));
+
+            if (!worktreeRequest && !targetRequest)
+                throw new InvalidOperationException($"Unexpected Git working directory: {request.WorkingDirectory}");
+
+            if (args.SequenceEqual(["fetch", OriginUrl, "main"], StringComparer.Ordinal))
+            {
+                Assert.True(worktreeRequest, "Default-branch fetch must run in the retained worktree.");
+                Assert.False(string.IsNullOrWhiteSpace(fetchSource));
+                FetchedDefaultBranch = true;
+                return RunNativeGitAsync(["fetch", fetchSource!, "main"], expectedWorktreePath, cancellationToken);
+            }
+
+            if (args.SequenceEqual(["branch", "--show-current"], StringComparer.Ordinal)
+                || args.SequenceEqual(["rev-parse", "HEAD"], StringComparer.Ordinal)
+                || args.SequenceEqual(["status", "--porcelain"], StringComparer.Ordinal)
+                || args.SequenceEqual(["ls-files", "-u"], StringComparer.Ordinal)
+                || args.SequenceEqual(["rev-parse", "--git-path", "rebase-merge"], StringComparer.Ordinal)
+                || args.SequenceEqual(["rev-parse", "--git-path", "rebase-apply"], StringComparer.Ordinal)
+                || args.SequenceEqual(["config", "--get", "remote.origin.url"], StringComparer.Ordinal)
+                || args.SequenceEqual(["check-ref-format", "refs/heads/main"], StringComparer.Ordinal)
+                || (args.Count == 4 && args[0] == "merge-base" && args[1] == "--is-ancestor"
+                    && args[2] == ReportedMergeCommit && args[3] == "FETCH_HEAD"))
+            {
+                if (args[0] == "config")
+                    Assert.True(targetRequest, "Validated origin must be read from the target repository.");
+                else
+                    Assert.True(worktreeRequest, "Worktree observations must use the retained worktree.");
+                NativeGitCommandCount++;
+                return system.RunAsync(request, cancellationToken);
+            }
+
+            throw new InvalidOperationException($"Unexpected native Git command: {string.Join(' ', args)}");
+        }
+
+        private ProcessResult RunScriptedGit(IReadOnlyList<string> args, bool worktreeRequest, bool targetRequest)
+        {
+            if (args.SequenceEqual(["branch", "--show-current"], StringComparer.Ordinal))
+            {
+                Assert.True(worktreeRequest);
+                return new(0, branch, string.Empty);
+            }
+            if (args.SequenceEqual(["rev-parse", "HEAD"], StringComparer.Ordinal))
+            {
+                Assert.True(worktreeRequest);
+                return new(0, originalHead, string.Empty);
+            }
+            if (args.SequenceEqual(["status", "--porcelain"], StringComparer.Ordinal))
+            {
+                Assert.True(worktreeRequest);
+                return new(0, string.Empty, string.Empty);
+            }
+            if (args.SequenceEqual(["ls-files", "-u"], StringComparer.Ordinal))
+            {
+                Assert.True(worktreeRequest);
+                return new(0, string.Empty, string.Empty);
+            }
+            if (args.Count == 3 && args[0] == "rev-parse" && args[1] == "--git-path"
+                && args[2] is "rebase-merge" or "rebase-apply")
+            {
+                Assert.True(worktreeRequest);
+                return new(0, Path.Combine(expectedWorktreePath, ".git", args[2]), string.Empty);
+            }
+            if (args.SequenceEqual(["config", "--get", "remote.origin.url"], StringComparer.Ordinal))
+            {
+                Assert.True(targetRequest);
+                var origin = OriginUrlAfterChecks is not null && RequiredChecksCount > 0
+                    ? OriginUrlAfterChecks : OriginUrl;
+                return new(0, origin, string.Empty);
+            }
+            if (args.SequenceEqual(["check-ref-format", "refs/heads/main"], StringComparer.Ordinal))
+            {
+                Assert.True(worktreeRequest);
+                return new(0, string.Empty, string.Empty);
+            }
+            if (args.SequenceEqual(["fetch", OriginUrl, "main"], StringComparer.Ordinal))
+            {
+                Assert.True(worktreeRequest);
+                FetchedDefaultBranch = true;
+                return new(0, string.Empty, string.Empty);
+            }
+            if (args.Count == 4 && args[0] == "merge-base" && args[1] == "--is-ancestor"
+                && args[2] == ReportedMergeCommit && args[3] == "FETCH_HEAD")
+            {
+                Assert.True(worktreeRequest);
+                return new(0, string.Empty, string.Empty);
+            }
+
+            throw new InvalidOperationException($"Unexpected scripted Git command: {string.Join(' ', args)}");
+        }
+
+        private async Task<ProcessResult> RunNativeGitAsync(IReadOnlyList<string> args,
+            string workingDirectory, CancellationToken cancellationToken)
+        {
+            NativeGitCommandCount++;
+            return await system.RunAsync(GitCommand.Create(args, workingDirectory), cancellationToken);
         }
 
         private static ProcessResult Json(object value) => new(0, JsonSerializer.Serialize(value), string.Empty);
