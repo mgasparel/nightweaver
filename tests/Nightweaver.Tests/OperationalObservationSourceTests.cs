@@ -231,18 +231,38 @@ public sealed class OperationalObservationSourceTests
         var coldSeconds = cold.Elapsed.TotalSeconds;
         var count = first.GetProperty("data").GetProperty("comments").GetArrayLength();
         var revision = first.GetProperty("revision").GetString();
-        target.Run("bd", ["comments", "add", bead, "External comments-only observation marker"]);
-        var changed = Stopwatch.StartNew();
-        var comment = await UntilAsync(client, path, root => root.GetProperty("data").ValueKind == JsonValueKind.Object
-            && root.GetProperty("data").GetProperty("comments").GetArrayLength() == count + 1, token);
-        var commentSeconds = changed.Elapsed.TotalSeconds;
-        Assert.NotEqual(revision, comment.GetProperty("revision").GetString());
+        target.Run("bd", ["comments", "add", bead, "External combined observer comment marker"]);
         target.Run("bd", ["dep", "add", bead, blocker]);
-        changed.Restart();
-        await UntilAsync(client, path, root => root.GetProperty("data").ValueKind == JsonValueKind.Object
-            && root.GetProperty("data").GetProperty("relations").GetArrayLength() > 0, token);
+        var changed = Stopwatch.StartNew();
+        const string commentMarker = "External combined observer comment marker";
+        var combined = await UntilAsync(client, path, root =>
+        {
+            if (root.GetProperty("data").ValueKind != JsonValueKind.Object
+                || root.GetProperty("revision").GetString() == revision)
+                return false;
+
+            var data = root.GetProperty("data");
+            var comments = data.GetProperty("comments");
+            var relations = data.GetProperty("relations");
+            return comments.GetArrayLength() == count + 1
+                && comments.EnumerateArray().Any(comment => comment.GetProperty("body").GetString() == commentMarker)
+                && relations.EnumerateArray().Any(relation =>
+                    relation.GetProperty("id").GetString() == blocker
+                    && relation.GetProperty("type").GetString() == "blocks"
+                    && relation.GetProperty("direction").GetString() == "outgoing");
+        }, token);
+        var combinedSeconds = changed.Elapsed.TotalSeconds;
+        Assert.NotEqual(revision, combined.GetProperty("revision").GetString());
+        var combinedData = combined.GetProperty("data");
+        Assert.Equal(count + 1, combinedData.GetProperty("comments").GetArrayLength());
+        Assert.Contains(combinedData.GetProperty("comments").EnumerateArray(),
+            comment => comment.GetProperty("body").GetString() == commentMarker);
+        Assert.Contains(combinedData.GetProperty("relations").EnumerateArray(), relation =>
+            relation.GetProperty("id").GetString() == blocker
+            && relation.GetProperty("type").GetString() == "blocks"
+            && relation.GetProperty("direction").GetString() == "outgoing");
         var source = Assert.IsType<OperationalObservationSource>(factory.Services.GetRequiredService<IOperationalObservationSource>());
-        TestContext.Current.TestOutputHelper?.WriteLine($"Native observer: cold Workspace {coldSeconds:F3}s; comments visibility {commentSeconds:F3}s; dependency visibility {changed.Elapsed.TotalSeconds:F3}s; commands {source.CommandCount}; native ms {source.NativeMilliseconds:F1}");
+        TestContext.Current.TestOutputHelper?.WriteLine($"Native observer: cold Workspace {coldSeconds:F3}s; combined comments+dependency visibility {combinedSeconds:F3}s; commands {source.CommandCount}; native ms {source.NativeMilliseconds:F1}");
         // Performance targets are measured evidence; parallel-suite load can exceed them.
         // UntilAsync still enforces the functional observation bound.
     }
