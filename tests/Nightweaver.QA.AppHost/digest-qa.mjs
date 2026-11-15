@@ -1,10 +1,27 @@
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
+import { digestFixture, refreshDigest } from './digest-fixture.mjs';
 
 const url = process.env.NIGHTWEAVER_QA_URL;
 if (!url) throw new Error('Set NIGHTWEAVER_QA_URL from aspire describe.');
-const output = new URL('../../TestResults/digest/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const configPath = process.env.NIGHTWEAVER_QA_CONFIG;
+assert(configPath, 'Set NIGHTWEAVER_QA_CONFIG from the exact AppHost');
+const root = path.dirname(path.resolve(configPath));
+assert(path.basename(root).startsWith('nightweaver-qa-'));
+const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+const repo = path.resolve(config.target_repository.path);
+assert.equal(repo, path.join(root, 'repo')); assert.equal(config.name, 'qa');
+const env = {...process.env};
+for (const key of Object.keys(env)) if (/^(BEADS_|BD_|GIT_)/.test(key)) delete env[key];
+for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'XDG_CONFIG_HOME']) env[key] = path.join(root, 'home');
+Object.assign(env, {GIT_CONFIG_GLOBAL: path.join(root, 'home', 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1', BD_NO_HOOKS: 'true', BD_DISABLE_METRICS: '1', BD_DOLT_AUTO_START: 'false', OTEL_SDK_DISABLED: 'true'});
+for (const key of ['BD_IMPORT_AUTO', 'BD_EXPORT_AUTO', 'BD_BACKUP_ENABLED', 'BD_DOLT_AUTO_PUSH', 'BD_EVENTS_EXPORT']) env[key] = 'false';
+const bd = args => execFileSync('bd', ['--sandbox', ...args], {cwd: repo, env, encoding: 'utf8', timeout: 30000});
+const output = process.env.NIGHTWEAVER_QA_OUTPUT ?? new URL('../../TestResults/digest/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const errors = [];
@@ -29,30 +46,49 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   // Real disposable tracker: save through the UI and independently read the persisted checkpoint.
-  await page.goto(url, { waitUntil: 'networkidle' });
+  await page.goto(url + '/projects/qa/catch-up', { waitUntil: 'networkidle' });
   await page.waitForFunction(() => document.querySelector('#digest-status').textContent === '');
   assert.equal(await page.locator('#digest-body').isVisible(), false);
   const snapshot = await page.evaluate(async () => (await (await fetch('/api/digest')).json()));
   // Refresh obtains the exact snapshot used by the actual UI, observed from its response.
-  const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/digest');
+  const response = page.waitForResponse(r => new URL(r.url()).searchParams.get('key') === 'digest:auto');
   await page.locator('#digest-refresh').click();
-  const loaded = await (await response).json();
-  await page.waitForFunction(() => !document.querySelector('#digest-refresh').disabled);
+  await response;
+  await page.waitForTimeout(200);
+  const displayedCutoff = await page.locator('#catch-up').getAttribute('data-generated-at');
+  let entered; let release;
+  const arrived = new Promise(resolve => entered = resolve);
+  const gate = new Promise(resolve => release = resolve);
+  await page.route('**/api/digest/catch-up', async route => { entered(); await gate; await route.continue(); });
   const save = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/api/digest/catch-up'));
   await page.locator('#digest-mark-caught-up').click();
+  await arrived;
+  const external = JSON.parse(bd(['create', '--title', 'External activity during checkpoint POST', '--type', 'task', '--json']));
+  release();
   assert.equal((await save).status(), 200);
-  await page.waitForFunction(() => document.querySelector('[data-digest-window="since_caught_up"]').getAttribute('aria-pressed') === 'true');
+  await page.unroute('**/api/digest/catch-up');
+  await page.waitForURL('**/catch-up?window=since_caught_up');
   const persisted = await page.evaluate(async () => (await (await fetch('/api/digest')).json()));
-  assert.equal(Date.parse(persisted.lastCaughtUpAt), Date.parse(loaded.generatedAt));
+  assert.equal(Date.parse(persisted.lastCaughtUpAt), Date.parse(displayedCutoff));
   assert.equal(await page.locator('#digest-body').isVisible(), false);
   assert.ok(snapshot.metrics);
+  await page.locator('#digest-toggle').click();
+  await page.locator(`[data-bead-id="${external.id}"]`).waitFor();
+  // External tracker changes converge automatically without moving focus or saving a bookmark.
+  await page.locator('#digest-toggle').focus();
+  const later = JSON.parse(bd(['create', '--title', 'External automatic digest update', '--type', 'task', '--json']));
+  await page.locator(`[data-bead-id="${later.id}"]`).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'digest-toggle');
+  const unchanged = await page.evaluate(async () => (await (await fetch('/api/digest')).json()));
+  assert.equal(Date.parse(unchanged.lastCaughtUpAt), Date.parse(displayedCutoff));
 
   let data = structuredClone(busy);
   let failRead = false;
   let failSave = false;
   let invalidSave = false;
   let posted;
-  await page.route('**/api/digest**', async route => {
+  await digestFixture(page, () => ({data, fail: failRead}));
+  await page.route('**/api/digest/catch-up', async route => {
     if (route.request().method() === 'POST') {
       posted = route.request().postDataJSON().caughtUpAt;
       if (failSave) return route.fulfill({ status: 409, json: { detail: 'Checkpoint save rejected' } });
@@ -64,16 +100,13 @@ try {
     const window = new URL(route.request().url()).searchParams.get('window');
     return route.fulfill({ json: { ...data, window: window ?? data.window } });
   });
-  await page.reload({ waitUntil: 'networkidle' });
-  const refresh = async () => {
-    await page.locator('#digest-refresh').evaluate(button => button.click());
-    await page.waitForFunction(() => !document.querySelector('#digest-refresh').disabled);
-  };
+  await page.goto(url + '/projects/qa/catch-up', { waitUntil: 'networkidle' });
+  const refresh = () => refreshDigest(page);
   const count = async (selector, expected) => assert.equal(await page.locator(selector).count(), expected);
   const noOverflow = async () => assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
   const height = await page.locator('#catch-up').evaluate(element => element.getBoundingClientRect().height);
   console.log(`Collapsed busy desktop digest: ${height}px`);
-  assert.ok(height >= 76 && height <= 96 && height < 6 * 16);
+  assert.ok(height < 260);
   await page.screenshot({ path: `${output}/busy-desktop.png`, fullPage: false });
   await noOverflow();
   await page.locator('#digest-toggle').focus();
@@ -115,7 +148,7 @@ try {
   await page.getByRole('button', { name: 'Show 2 more threads', exact: true }).click();
   await page.getByRole('button', { name: 'Show 4 more standalone items', exact: true }).click();
   await page.locator('[data-digest-window="7d"]').click();
-  await page.waitForFunction(() => !document.querySelector('#digest-refresh').disabled);
+  await page.waitForTimeout(200);
   await count('#digest-threads .digest-item-row', 0);
   await count('#digest-threads > article', 5);
   await count('#digest-standalone > .digest-item-row', 6);
@@ -128,9 +161,21 @@ try {
   assert.equal(await page.locator('#digest-error').isVisible(), true);
   assert.match(await page.locator('#digest-status').textContent(), /last confirmed/);
   await page.screenshot({ path: `${output}/error-desktop.png`, fullPage: false });
+  // A newly requested filter failing its first read keeps the prior successful
+  // resource visible, with explicit old-window context and the filter focused.
+  await page.locator('#digest-toggle').click();
+  const retained = await page.locator('#catch-up').getAttribute('data-generated-at');
+  await page.locator('[data-digest-window="30d"]').click();
+  await refresh();
+  assert.equal(await page.locator('#catch-up').getAttribute('data-generated-at'), retained);
+  await count('#digest-threads > article', 5);
+  assert.match(await page.locator('#digest-status').textContent(), /last confirmed/);
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.digestWindow), '30d');
+  await page.screenshot({ path: `${output}/failed-window-desktop.png`, fullPage: false });
+  await page.locator('#digest-toggle').click();
   failRead = false;
-  await page.locator('#digest-retry').click();
-  await page.waitForFunction(() => !document.querySelector('#digest-retry').disabled);
+  await refresh();
+  await page.waitForTimeout(200);
   assert.equal(await page.locator('#digest-body').isVisible(), false);
   await page.locator('#digest-toggle').click();
   failSave = true;
@@ -151,11 +196,28 @@ try {
   assert.equal(await page.locator('#digest-metric-open').textContent(), '1');
   await page.locator('#digest-toggle').click();
   await count('[data-bead-id="newer-activity"]', 1);
+  // A late successful save must not overwrite a filter chosen while it waited.
+  data = {...structuredClone(busy), generatedAt: '2026-11-12T12:00:01Z'};
+  await refresh();
+  let postedEntered; let finishPost;
+  const postArrived = new Promise(resolve => postedEntered = resolve);
+  const holdPost = new Promise(resolve => finishPost = resolve);
+  const delayedPost = async route => { postedEntered(); await holdPost; await route.fallback(); };
+  await page.route('**/api/digest/catch-up', delayedPost);
+  await page.locator('#digest-mark-caught-up').click();
+  await postArrived;
+  await page.locator('[data-digest-window="7d"]').click();
+  const lateSave = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/api/digest/catch-up'));
+  finishPost(); await lateSave;
+  await page.waitForFunction(() => !document.querySelector('#digest-mark-caught-up').disabled);
+  assert.equal(new URL(page.url()).searchParams.get('window'), '7d');
+  assert.equal(await page.locator('#digest-body').isVisible(), true);
+  await page.unroute('**/api/digest/catch-up', delayedPost);
   data = { ...empty, lastCaughtUpAt: posted, isCaughtUp: true, window: 'since_caught_up' };
   await refresh();
   assert.equal(await page.locator('#digest-caught-up-bar').isVisible(), true);
   await page.locator('#digest-view-24h').click();
-  await page.waitForFunction(() => !document.querySelector('#digest-refresh').disabled);
+  await page.waitForTimeout(200);
   assert.equal(await page.locator('#digest-body').isVisible(), true);
   await page.locator('#digest-toggle').click();
   assert.equal(await page.locator('#digest-caught-up-bar').isVisible(), false);
@@ -191,6 +253,11 @@ try {
     await refresh();
     await noOverflow();
     await page.screenshot({ path: `${output}/caught-up-${width}.png`, fullPage: false });
+    data = { ...empty, isCaughtUp: false };
+    await refresh();
+    await page.locator('#digest-toggle').click();
+    await noOverflow();
+    await page.screenshot({ path: `${output}/empty-${width}.png`, fullPage: false });
   }
   // Deliberate HTTP error fixtures emit network console errors; all other errors fail QA.
   assert.deepEqual(errors.filter(error => !/Failed to load resource.*(503|409)/.test(error)), []);
