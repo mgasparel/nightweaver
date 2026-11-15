@@ -56,7 +56,9 @@ public sealed class OperationalObservationSourceTests
         var clock = new CostClock();
         clock.Advance(TimeSpan.FromMilliseconds(400));
         var cutoff = DateTimeOffset.FromUnixTimeSeconds(clock.GetUtcNow().ToUnixTimeSeconds());
-        var runner = new Runner { Advance = () => clock.Advance(TimeSpan.FromMilliseconds(300)) };
+        // The inventory itself crosses the boundary; unrelated membership reads
+        // must not be needed to advance the test clock.
+        var runner = new Runner { Advance = () => clock.Advance(TimeSpan.FromMilliseconds(900)) };
         using var factory = Factory(target.Path, runner, clock);
         var source = Adapter(factory);
         var token = TestContext.Current.CancellationToken;
@@ -364,6 +366,24 @@ public sealed class OperationalObservationSourceTests
         Assert.Equal("unavailable", workspace.RelationObservation.Outgoing);
         Assert.Contains("comments", runner.Commands);
         Assert.Contains("show", runner.Commands);
+    }
+
+    [Theory]
+    [InlineData("workspace:task-1")]
+    [InlineData("digest:all")]
+    [InlineData("explorer:all:")]
+    public async Task UnselectedMembershipsDoNotConsumeTheObservationBudget(string key)
+    {
+        using var target = new BeadsApplicationFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Advance = () => clock.Advance(TimeSpan.FromSeconds(1.4)) };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        await source.ReadTrackerAsync(Keys(key), TestContext.Current.CancellationToken);
+        Assert.DoesNotContain("ready", runner.Commands);
+        Assert.DoesNotContain("blocked", runner.Commands);
+        if (key.StartsWith("workspace:", StringComparison.Ordinal))
+            Assert.Contains("show", runner.Commands);
     }
 
     private static OperationalObservationSource Adapter(NightweaverWebApplicationFactory factory, ObservationMemoryBudget? memory = null)

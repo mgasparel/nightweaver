@@ -272,10 +272,9 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner, IC
     private async Task<BeadSnapshot> ReadTaskAsync(ValidatedTargetRepository repository, string beadId,
         CancellationToken cancellationToken)
     {
-        var inventory = await reader.ReadSnapshotAsync(repository, cancellationToken).ConfigureAwait(false);
-        if (!inventory.ById.TryGetValue(beadId, out var bead))
-            throw new AgentStageInputException($"Merger task '{beadId}' disappeared during completion finalization.");
-        return bead;
+        // Each guard still reads current authority. A task-only guard needs no
+        // full inventory; show also rejects missing, duplicate or foreign IDs.
+        return await reader.ReadDetailAsync(repository, beadId, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task EnsureClosedUnpausedTaskAsync(ValidatedTargetRepository repository, string beadId,

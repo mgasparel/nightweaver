@@ -20,6 +20,17 @@ Use `--report-xunit-xml --report-xunit-xml-filename timing.xml` to collect per-t
 
 ## Coverage pyramid
 
+The ns-mbd.6 native timeout investigation found unused Ready/Blocked reads
+consuming the observer's four-second sweep and repeated full inventories in
+task-only Merger finalization guards. Observer component cases inject 1.4-second
+command costs and require Workspace progress without unused membership reads.
+Merger task guards now use fresh exact-ID `show` reads; strict component cases
+reject missing/foreign, reopened, paused and assigned responses before branch
+deletion. Product eligibility and shared environment cleanup still use their
+required inventories. The native observer, Merger pool, lost-close/locked-tmp
+recovery and conditional Git ref deletion boundaries remain. No deadline,
+six-thread limit or assertion is relaxed.
+
 The retained suite keeps broad, fast decision and security checks in unit/coordinator tests and one representative set of expensive process boundaries:
 
 | Concern | Detailed fast coverage | Retained real-tool boundary |
