@@ -19,7 +19,7 @@ internal static class MergerLocalCheckReader
     internal static string End(string invocationId) => "END_" + Marker(invocationId);
 
     internal static async Task<FailureLogTail> ReadAsync(HostPaths paths, ProjectSlug project,
-        AgentStageResult invocation, CancellationToken cancellationToken)
+        AgentStageResult invocation, string command, CancellationToken cancellationToken)
     {
         using var pinned = InvocationRuntimeFiles.OpenExistingSettledLogForRead(
             paths, project, invocation.BeadId, invocation.InvocationId, invocation.LogFilePath);
@@ -37,6 +37,7 @@ internal static class MergerLocalCheckReader
         var positions = new List<long>(2);
         var matched = 0;
         var passingMatched = new int[PassingMarkers.Length];
+        var prefixResults = new PrefixTerminalResults();
         long lastPassingPosition = -1;
         long position = 0;
         while (position < length)
@@ -47,6 +48,7 @@ internal static class MergerLocalCheckReader
             for (var index = 0; index < count; index++)
             {
                 var value = buffer[index];
+                if (positions.Count == 0) prefixResults.Observe(value);
                 var folded = value is >= (byte)'A' and <= (byte)'Z' ? (byte)(value + 32) : value;
                 for (var pass = 0; pass < PassingMarkers.Length; pass++)
                 {
@@ -74,6 +76,11 @@ internal static class MergerLocalCheckReader
 
         var start = positions[0];
         var end = positions[1] + marker.Length;
+        // The frame repeats the final result, so its failure must not overwrite a passing
+        // rerun already observed in tool output. Compare command types: a successful build
+        // (including dotnet test's build phase) does not supersede a failed test run.
+        if (prefixResults.HasUnclosedFrame || prefixResults.LastResultPassed(command))
+            throw new InvalidDataException("A preceding passing result or incomplete result frame contradicts the local check failure summary.");
         // A passing tool result after the reported final frame contradicts the rejection.
         // Scan the suffix too, including matches split across read buffers; do not decode or retain it.
         if (lastPassingPosition >= end)
@@ -95,5 +102,61 @@ internal static class MergerLocalCheckReader
         // no truncated UTF-8 character from unrelated prefix can enter the frame.
         var text = new UTF8Encoding(false, true).GetString(bytes, first, last - first);
         return new FailureLogTail(text, length, false, false);
+    }
+
+    private sealed class PrefixTerminalResults
+    {
+        // Terminal summaries and invocation marker identities are short ASCII lines. Retain
+        // only a bounded prefix of each line, never arbitrary tool output or decoded log text.
+        private readonly char[] line = new char[256];
+        private int length;
+        private bool overflow;
+        private bool? buildPassed;
+        private bool? testPassed;
+        private string? foreignFrameEnd;
+
+        internal bool HasUnclosedFrame => foreignFrameEnd is not null;
+
+        internal bool LastResultPassed(string command) => command switch
+        {
+            "dotnet build" => buildPassed == true,
+            "dotnet test" => testPassed == true,
+            _ => false
+        };
+
+        internal void Observe(byte value)
+        {
+            if (value != (byte)'\n')
+            {
+                if (length == 0 && value is (byte)' ' or (byte)'\t' or (byte)'\r') return;
+                if (length < line.Length) line[length++] = (char)value;
+                else if (value is not ((byte)' ' or (byte)'\t' or (byte)'\r')) overflow = true;
+                return;
+            }
+
+            var text = line.AsSpan(0, length).Trim();
+            // Historical/example V2 frames are not current check observations, even when
+            // they contain full terminal lines. The main scanner still counts every current
+            // marker; an unterminated foreign frame cannot hide a contradictory rerun.
+            const string framePrefix = "NIGHTWEAVER_LOCAL_CHECK_V2 ";
+            if (foreignFrameEnd is not null)
+            {
+                if (!overflow && text.Equals(foreignFrameEnd, StringComparison.Ordinal)) foreignFrameEnd = null;
+            }
+            else if (text.StartsWith(framePrefix, StringComparison.Ordinal))
+            {
+                var separator = text[framePrefix.Length..].IndexOf(' ');
+                if (separator > 0) foreignFrameEnd = "END_" + text[..(framePrefix.Length + separator)].ToString();
+            }
+            else if (!overflow)
+            {
+                if (text.Equals("Build succeeded.", StringComparison.OrdinalIgnoreCase)) buildPassed = true;
+                else if (text.Equals("Build FAILED.", StringComparison.OrdinalIgnoreCase)) buildPassed = false;
+                else if (text.Equals("Test run summary: Passed!", StringComparison.OrdinalIgnoreCase)) testPassed = true;
+                else if (text.Equals("Test run summary: Failed!", StringComparison.OrdinalIgnoreCase)) testPassed = false;
+            }
+            length = 0;
+            overflow = false;
+        }
     }
 }

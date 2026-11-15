@@ -362,6 +362,87 @@ public sealed class MergerOutcomeVerifierTests
     }
 
     [Theory]
+    [InlineData("dotnet test", "Test run summary: Failed!\ntotal: 1\nfailed: 1", "Test run summary: Passed!\ntotal: 1\nfailed: 0")]
+    [InlineData("dotnet build", "Build FAILED.\n1 Error(s)", "Build succeeded.\n0 Error(s)")]
+    [InlineData("dotnet test", "Test run summary: Failed!\ntotal: 1\nfailed: 1", "  test RUN summary: PASSED!\r\ntotal: 1\nfailed: 0\nNIGHTWEAVER_LOCAL_CHECK_V2 20000101T0000000000000Z-merger {}\nTest run summary: Failed!\nEND_NIGHTWEAVER_LOCAL_CHECK_V2 20000101T0000000000000Z-merger")]
+    public async Task PassingRerunBeforeStaleFrameCannotAuthorizeRejection(string command, string failed, string passed)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetLocalCheckFinding(command, 2);
+        var frame = File.ReadAllText(fixture.Invocation.LogFilePath);
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Nightweaver.slnx"))) root = root.Parent;
+        Assert.NotNull(root);
+        File.WriteAllText(fixture.Invocation.LogFilePath,
+            "OpenAI Codex\nuser\n" + File.ReadAllText(Path.Combine(root.FullName, "prompts", "merger.md")) +
+            "\nexec\npwsh -Command Get-Content SPEC.md\nsucceeded in 10ms:\n" +
+            File.ReadAllText(Path.Combine(root.FullName, "SPEC.md")) +
+            $"\nexec\npwsh -Command git rev-parse HEAD; {command}\nexited 2 in 10ms:\n{fixture.Head}\n{failed}\n" +
+            $"exec\npwsh -Command git rev-parse HEAD; {command}\nsucceeded in 10ms:\n{fixture.Head}\n{passed}\n" +
+            "exec\npwsh -Command Write-Output $frame\nsucceeded in 10ms:\n" + frame);
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("passing result", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("stage:merge", fixture.Runner.Stage);
+        Assert.Equal(0, fixture.Runner.RepairCycles);
+        Assert.Equal(VerifierFixture.Owner, fixture.Runner.Assignee);
+        Assert.Empty(fixture.Runner.PublicationWrites);
+    }
+
+    [Theory]
+    [InlineData("dotnet test", "Build succeeded.\n0 Error(s)\n")]
+    [InlineData("dotnet test", "Test run summary: Passed!\ntotal: 1\nfailed: 0\nTest run summary: Failed!\ntotal: 1\nfailed: 1\n")]
+    [InlineData("dotnet build", "Build succeeded.\n0 Error(s)\nBuild FAILED.\n1 Error(s)\n")]
+    [InlineData("dotnet test", "Documentation: a Test run summary: Passed! supersedes failure.\n")]
+    [InlineData("dotnet test", "NIGHTWEAVER_LOCAL_CHECK_V2 20000101T0000000000000Z-merger {}\nTest run summary: Passed!\nEND_NIGHTWEAVER_LOCAL_CHECK_V2 20000101T0000000000000Z-merger\n")]
+    public async Task PrefixWithoutSupersedingSameCommandPassStillAcceptsFailure(string command, string prefix)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetLocalCheckFinding(command, 2);
+        File.WriteAllText(fixture.Invocation.LogFilePath, prefix + File.ReadAllText(fixture.Invocation.LogFilePath));
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Theory]
+    [InlineData(3780)]
+    [InlineData(4095)]
+    public async Task PaddedPassingPrefixAcrossScanChunksCannotAuthorizeRejection(int padding)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetLocalCheckFinding("dotnet test", 2);
+        File.WriteAllText(fixture.Invocation.LogFilePath,
+            new string('x', padding) + "\n" + new string(' ', 300) + "Test run summary: Passed!" +
+            new string(' ', 300) + "\r\n" + File.ReadAllText(fixture.Invocation.LogFilePath));
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Empty(fixture.Runner.PublicationWrites);
+        Assert.Equal(0, fixture.Runner.RepairCycles);
+    }
+
+    [Fact]
+    public async Task UnclosedHistoricalFrameCannotHidePassingRerun()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetLocalCheckFinding("dotnet test", 2);
+        File.WriteAllText(fixture.Invocation.LogFilePath,
+            "NIGHTWEAVER_LOCAL_CHECK_V2 20000101T0000000000000Z-merger {}\nTest run summary: Passed!\n" +
+            File.ReadAllText(fixture.Invocation.LogFilePath));
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Empty(fixture.Runner.PublicationWrites);
+        Assert.Equal(0, fixture.Runner.RepairCycles);
+    }
+
+    [Theory]
     [InlineData("Build succeeded.")]
     [InlineData("Test run summary: Passed!")]
     [InlineData("  build SUCCEEDED.\r\n")]
