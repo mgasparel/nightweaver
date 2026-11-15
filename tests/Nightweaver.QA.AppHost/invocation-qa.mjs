@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { studioDeliveryQA } from './studio-delivery-qa.mjs';
+if (process.argv.includes('--studio')) { await studioDeliveryQA('invocation'); process.exit(0); }
 
 const url = process.env.NIGHTWEAVER_QA_URL;
 if (!url) throw new Error('Set NIGHTWEAVER_QA_URL from aspire describe.');

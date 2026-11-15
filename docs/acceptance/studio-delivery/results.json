@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "mode": "invocation",
+  "checks": [
+    "shared operational interleaving",
+    "exact retained identity",
+    "runtime replacement",
+    "line/UTF-8 bounds",
+    "reset",
+    "failed terminal cessation",
+    "disconnect",
+    "follow/focus",
+    "live/idle/stale/stopped/unavailable",
+    "1440/375/720 geometry"
+  ]
+}

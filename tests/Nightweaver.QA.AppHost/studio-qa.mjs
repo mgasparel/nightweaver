@@ -22,7 +22,7 @@ try {
   await page.getByRole('heading', { name: `${projectId}, at a glance.` }).waitFor();
   await page.reload();
   await page.getByRole('heading', { name: `${projectId}, at a glance.` }).waitFor();
-  assert.equal(await page.getByText('Runtime status unavailable', { exact: true }).count(), 1);
+  assert.match(await page.locator('.project-summary').innerText(), /Runtime · (live|idle|stale|stopped|unavailable)/);
 
   const nav = page.getByRole('navigation', { name: 'Project navigation' });
   for (const [route, label] of [['delivery', 'Delivery floor'], ['attention', 'Attention'], ['catch-up', 'Catch up'], ['beads', 'Beads']]) {

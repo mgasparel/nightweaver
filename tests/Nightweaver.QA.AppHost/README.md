@@ -260,3 +260,21 @@ Run `workspace-qa.mjs`, `planning-readiness-qa.mjs` and `explorer-qa.mjs` on app
 ## Continuous Planning observations
 
 On a fresh default isolated stack, run `node planning-telemetry-qa.mjs` against the exact discovered direct HTTP endpoint. The third native invocation uses the Planner preparer/purpose and writes `planning-native` into its real retained log. The script verifies actual PID/runtime/invocation identity, exact Planning stream selection, keyboard/focus, 1440/720/375px layouts and actual completion to idle. Only stale and legacy snapshots are substituted for presentation checks. Screenshots and results go to `TestResults/planning-telemetry`. `PoolConcurrencyIntegrationTests` separately exercises actual opted-in Planning through Challenger and approved-stage restart/publication into native Delivery while unrelated Delivery/Merger progress. Stop the same AppHost in finally.
+
+## Studio Delivery and invocation QA
+
+On a fresh exact isolated default AppHost, run `node factory-qa.mjs --studio`
+and `node invocation-qa.mjs --studio`, then `node telemetry.mjs --studio` once.
+The first two adapt the existing probes to React and the shared factory resource;
+the native smoke uses the original telemetry endpoint with the Studio dialog.
+Set `NIGHTWEAVER_QA_URL` from the direct `web` endpoint. Optional
+`NIGHTWEAVER_QA_OUTPUT` selects screenshot/results output. Default evidence goes
+to `TestResults/studio-factory` and `TestResults/studio-invocation` relative to the
+working directory. The no-flag scripts retain legacy console coverage.
+
+Coverage includes operational/log interleaving, pinned replacement identity,
+failed end/disconnect, reset, bounded sanitized output, disclosure/focus/follow,
+configured versus observed model, retained idle/stale/stopped/unavailable,
+Overview summary and long metadata at 1440/375/720 CSS pixels. Native telemetry
+additionally verifies actual Last-Event-ID resume, duplicate-free output,
+completion cessation and effective 200% zoom. Stop the exact AppHost in `finally`.
