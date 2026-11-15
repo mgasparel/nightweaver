@@ -158,16 +158,32 @@ internal static class Program
                 foreach (var argument in new[] { "--readonly", "--sandbox", "sql", "SELECT SLEEP(30)" })
                     start.ArgumentList.Add(argument);
                 using var child = Process.Start(start) ?? throw new InvalidOperationException("Could not start bd lock probe.");
+                WriteAtomicText(args[2], $"{child.Id}|{child.StartTime.ToUniversalTime().Ticks}");
                 var lockPath = Path.Combine(args[1], ".beads", "embeddeddolt", "stage", ".dolt", "noms", "LOCK");
                 var deadline = DateTime.UtcNow.AddSeconds(10);
                 while (true)
                 {
                     if (child.HasExited)
-                        throw new InvalidOperationException($"bd lock probe exited: {child.StandardError.ReadToEnd()}");
+                    {
+                        var exitCode = child.ExitCode;
+                        var childStart = child.StartTime.ToUniversalTime().Ticks;
+                        var standardOutput = child.StandardOutput.ReadToEnd();
+                        var standardError = child.StandardError.ReadToEnd();
+                        WriteAtomicText(args[2] + ".failure.json", JsonSerializer.Serialize(new
+                        {
+                            pid = child.Id,
+                            start_ticks = childStart,
+                            exit_code = exitCode,
+                            standard_output = standardOutput,
+                            standard_error = standardError
+                        }));
+                        throw new InvalidOperationException(
+                            $"bd lock probe exited before lock readiness: pid={child.Id}, startTicks={childStart}, exitCode={exitCode}, "
+                            + $"stdout={JsonSerializer.Serialize(standardOutput)}, stderr={JsonSerializer.Serialize(standardError)}");
+                    }
                     try { using var unlocked = File.Open(lockPath, FileMode.Open, FileAccess.Read, FileShare.None); }
                     catch (IOException exception) when ((exception.HResult & 0xFFFF) == 32)
                     {
-                        File.WriteAllText(args[2], child.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
                         return 0;
                     }
                     if (DateTime.UtcNow >= deadline) throw new TimeoutException("bd did not acquire the fixture database lock.");
