@@ -17,6 +17,7 @@
   <ItemGroup>
     <Compile Include="../ManualDeliveryPilotFixture/ManualDeliveryPilotFixture.cs" Link="ManualDeliveryPilotFixture/ManualDeliveryPilotFixture.cs" />
     <Compile Include="../Nightweaver.Tests/WindowsConsoleProcess.cs" Link="ManualDeliveryPilotFixture/WindowsConsoleProcess.cs" />
+    <Compile Include="../Nightweaver.Tests/FixtureProcess.cs" Link="ManualDeliveryPilotFixture/FixtureProcess.cs" />
   </ItemGroup>
 </Project>
 

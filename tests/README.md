@@ -20,6 +20,18 @@ Use `--report-xunit-xml --report-xunit-xml-filename timing.xml` to collect per-t
 
 ## Coverage pyramid
 
+Test-owned managed launches use `FixtureProcess.Start`, including shared manual
+Delivery and QA helpers. It holds `WindowsProcessLauncher.ProcessCreationGate`
+only during `Process.Start`, matching the production process runners. A native
+launcher's HANDLE_LIST limits its own child; it cannot stop an unrelated managed
+CreateProcess from inheriting temporary pipe writers. Bypassing the gate can
+leave coordinator drains pending even after the coordinator exits and its Job
+is proven empty. The two small `FixtureProcessTests` contention cases retain
+both managed Start overloads; the existing native blocked-drain and launch-burst
+smokes retain actual pipe/Job/foreign-child coverage. Do not add raw managed
+starts to the shared test process. Console helpers restrict inheritance with
+their own HANDLE_LIST and do not need to join this gate.
+
 The ns-mbd.6 native timeout investigation found unused Ready/Blocked reads
 consuming the observer's four-second sweep and repeated full inventories in
 task-only Merger finalization guards. Observer component cases inject 1.4-second

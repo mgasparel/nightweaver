@@ -336,7 +336,7 @@ public sealed class AgentInvocationExecutorTests
         start.ArgumentList.Add(invocationId);
         start.ArgumentList.Add(typeof(FixtureMarker).Assembly.Location);
         start.ArgumentList.Add(ready);
-        using var orchestrator = Process.Start(start) ?? throw new InvalidOperationException("Could not start crash-host fixture.");
+        using var orchestrator = FixtureProcess.Start(start) ?? throw new InvalidOperationException("Could not start crash-host fixture.");
         var stdout = orchestrator.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
         var stderr = orchestrator.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         Process? agent = null;

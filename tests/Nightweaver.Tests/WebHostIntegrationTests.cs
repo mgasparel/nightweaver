@@ -120,7 +120,7 @@ public sealed class WebHostIntegrationTests
         }
 
         using var process = new Process { StartInfo = startInfo };
-        Assert.True(process.Start());
+        Assert.True(FixtureProcess.Start(process));
         var stderr = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
@@ -194,7 +194,7 @@ public sealed class WebHostIntegrationTests
         startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
 
         using var process = new Process { StartInfo = startInfo };
-        Assert.True(process.Start());
+        Assert.True(FixtureProcess.Start(process));
         var stderr = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(45));

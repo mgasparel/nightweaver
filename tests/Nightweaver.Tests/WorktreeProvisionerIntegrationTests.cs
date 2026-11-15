@@ -372,7 +372,7 @@ internal sealed class ProvisioningGitFixture : IDisposable
         start.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
         start.Environment["GIT_OPTIONAL_LOCKS"] = "0";
         start.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start Git fixture process");
+        using var process = FixtureProcess.Start(start) ?? throw new InvalidOperationException("Could not start Git fixture process");
         var stdout = process.StandardOutput.ReadToEnd();
         var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();

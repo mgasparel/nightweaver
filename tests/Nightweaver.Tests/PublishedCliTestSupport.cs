@@ -172,7 +172,7 @@ internal static class ProcessTool
         if (environment is not null)
             foreach (var (key, value) in environment) startInfo.Environment[key] = value;
 
-        var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {fileName}");
+        var process = FixtureProcess.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {fileName}");
         return new RunningProcess(process);
     }
 
@@ -192,7 +192,7 @@ internal static class ProcessTool
         if (environment is not null)
             foreach (var (key, value) in environment) startInfo.Environment[key] = value;
 
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {fileName}");
+        using var process = FixtureProcess.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {fileName}");
         using var standardOutput = new MemoryStream();
         using var standardError = new MemoryStream();
         var stdoutTask = process.StandardOutput.BaseStream.CopyToAsync(standardOutput);

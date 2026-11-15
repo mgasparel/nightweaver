@@ -282,7 +282,7 @@ public sealed class BeadsJournalClientIntegrationTests
         }
 
         var process = new Process { StartInfo = startInfo };
-        if (!process.Start())
+        if (!FixtureProcess.Start(process))
         {
             process.Dispose();
             throw new InvalidOperationException("Could not start native journal tail fixture.");

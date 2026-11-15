@@ -108,7 +108,7 @@ public sealed class TemporaryTreeDeleterTests
         {
             startInfo.ArgumentList.Add(argument);
         }
-        using var process = System.Diagnostics.Process.Start(startInfo)!;
+        using var process = FixtureProcess.Start(startInfo)!;
         process.WaitForExit();
         if (process.ExitCode != 0)
         {

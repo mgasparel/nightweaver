@@ -22,7 +22,7 @@ public sealed class MergerOutcomeVerifierTests
         // This is an offline CLI-contract check. Do not let a first-use update
         // notification add a network round trip to the complete-suite budget.
         startInfo.Environment["GH_NO_UPDATE_NOTIFIER"] = "1";
-        using var process = Process.Start(startInfo);
+        using var process = FixtureProcess.Start(startInfo);
         Assert.NotNull(process);
         var output = process!.StandardOutput.ReadToEnd();
         var error = process.StandardError.ReadToEnd();
@@ -988,7 +988,7 @@ public sealed class MergerOutcomeVerifierTests
             foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
             startInfo.Environment["GIT_CONFIG_GLOBAL"] = Path.Combine(workingDirectory, "missing-global-config");
             startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
-            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start git.");
+            using var process = FixtureProcess.Start(startInfo) ?? throw new InvalidOperationException("Could not start git.");
             var output = process.StandardOutput.ReadToEnd();
             var error = process.StandardError.ReadToEnd();
             process.WaitForExit();
@@ -1008,7 +1008,7 @@ public sealed class MergerOutcomeVerifierTests
             foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
             startInfo.Environment["GIT_CONFIG_GLOBAL"] = Path.Combine(workingDirectory, "missing-global-config");
             startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
-            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start git.");
+            using var process = FixtureProcess.Start(startInfo) ?? throw new InvalidOperationException("Could not start git.");
             process.StandardInput.Write(input);
             process.StandardInput.Close();
             var output = process.StandardOutput.ReadToEnd();

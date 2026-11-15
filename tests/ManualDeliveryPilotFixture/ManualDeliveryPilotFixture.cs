@@ -760,7 +760,7 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
             if (value is null) start.Environment.Remove(key);
             else start.Environment[key] = value;
         }
-        using var process = Process.Start(start) ?? throw new InvalidOperationException($"Could not start '{executable}'.");
+        using var process = FixtureProcess.Start(start) ?? throw new InvalidOperationException($"Could not start '{executable}'.");
         var stdout = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

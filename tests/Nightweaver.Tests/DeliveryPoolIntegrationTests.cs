@@ -498,7 +498,7 @@ public sealed class DeliveryPoolIntegrationTests : AgentStageIntegrationTestSupp
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
         startInfo.Environment["GIT_CONFIG_GLOBAL"] = Path.Combine(workingDirectory, "missing-global-config");
         startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start git.");
+        using var process = FixtureProcess.Start(startInfo) ?? throw new InvalidOperationException("Could not start git.");
         var stdout = process.StandardOutput.ReadToEnd();
         var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();
