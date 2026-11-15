@@ -88,11 +88,11 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         // child metadata during partial release could disguise generated work as manual.
         // Check even on resume when membership is already present: the next
         // operation may be the release receipt rather than a metadata write.
-        await CheckAuthorityAsync(session, approval, token);
         var retained = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
         if (Metadata(retained, "publication_graph") is { } existingGraph && existingGraph != graphJson
             || Metadata(retained, "publication_revision") is { } existingRevision && existingRevision != approval.PlanRevision)
             throw Refuse("Retained publication identity conflicts with the approved graph; preserve it for human reconciliation.");
+        await CheckAuthorityAsync(session, approval, token);
         if (Metadata(retained, "publication_graph") != graphJson || Metadata(retained, "publication_revision") != approval.PlanRevision)
         {
             await WriteUncertainAsync(session, ["update", session.BeadId,

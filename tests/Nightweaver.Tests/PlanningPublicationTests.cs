@@ -9,6 +9,25 @@ namespace Nightweaver.Tests;
 
 public sealed class PlanningPublicationTests
 {
+    [Theory]
+    [InlineData("pause")]
+    [InlineData("notes")]
+    public async Task AuthorityChangesDuringRetainedParentReadStopMembershipWrites(string change)
+    {
+        using var fixture = new Fixture();
+        fixture.BeforeDetailRead = id =>
+        {
+            if (id != "product" || fixture.WriteCount != 3) return;
+            fixture.BeforeDetailRead = null;
+            if (change == "pause") fixture.Rows["product"]["labels"]!.AsArray().Add("needs-human");
+            else fixture.Rows["product"]["notes"] = "Updated requirement";
+        };
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+        Assert.Equal(3, fixture.WriteCount);
+        Assert.DoesNotContain("planned", fixture.Parent.Labels);
+        Assert.All(fixture.Tasks, task => Assert.Contains("plan-unpublished", task.Labels));
+    }
+
     [Fact]
     public async Task TwoTaskPublicationBoundsNativeGroundingProcessStarts()
     {
@@ -401,6 +420,7 @@ public sealed class PlanningPublicationTests
         internal int CreateCount { get; private set; }
         internal int GroundingReadCount => runner.Requests.Count(r => r.FileName == "git" && r.Arguments.Contains("status"));
         internal Action<string>? BeforeDependencyRead { get; set; }
+        internal Action<string>? BeforeDetailRead { get; set; }
         private readonly AgentStageSession session;
         private readonly PlanningPublisher publisher;
         private readonly RecordingProcessRunner runner;
@@ -526,8 +546,12 @@ public sealed class PlanningPublicationTests
                     }
                 row["status"] = Value("--status"); row["assignee"] = Value("--assignee") is "" ? null : Value("--assignee"); output = "";
             }
-            else if (args.Contains("show")) output = Rows.TryGetValue(args[args.IndexOf("show") + 1], out var shown)
-                ? JsonSerializer.Serialize(new[] { shown }) : "[]";
+            else if (args.Contains("show"))
+            {
+                var id = args[args.IndexOf("show") + 1];
+                BeforeDetailRead?.Invoke(id);
+                output = Rows.TryGetValue(id, out var shown) ? JsonSerializer.Serialize(new[] { shown }) : "[]";
+            }
             else output = JsonSerializer.Serialize(Rows.Values);
             if (write)
             {
