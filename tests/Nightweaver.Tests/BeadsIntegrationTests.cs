@@ -23,6 +23,8 @@ public sealed class BeadsIntegrationTests
         target.Run("bd", ["comments", "add", owned, "Retain this comment"]);
         target.Create("Closed control", "nightweaver:demo", "closed");
         target.Create("Hidden gate", "nightweaver:demo", "in_progress", "gate");
+        var deferred = target.Create("Deferred control");
+        target.Run("bd", ["defer", deferred, "--until", "+1h"]);
         var controlTitles = Enumerable.Range(0, 51).Select(index => $"Control {index}").ToArray();
         var controlsFile = temp.WriteFile("inventory-controls.jsonl", string.Join('\n', controlTitles.Select(title => JsonSerializer.Serialize(new
         {
@@ -52,6 +54,18 @@ public sealed class BeadsIntegrationTests
             Assert.Equal("open", bead.Status);
             Assert.Equal("task", bead.IssueType);
         });
+        // Compare native semantics on blocked, paused, foreign/owned, closed,
+        // gate and >50-row controls before measuring mutation-free inspection.
+        var inventory = BeadsReader.Parse(logicalBefore);
+        var readyJson = target.Run("bd", BeadsCommand.CreateLifecycleReadiness(target.Path).Arguments);
+        var nativeReady = BeadsReader.Parse(target.Run("bd", BeadsCommand.CreateUnassignedReadiness(target.Path).Arguments));
+        var recoveryReady = BeadsReader.Parse(target.Run("bd", BeadsCommand.CreateRecoverableReadiness(target.Path, "nightweaver:demo").Arguments));
+        var compareRunner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(0, readyJson, "")));
+        var combined = await new BeadsReader(compareRunner).ReadReadinessAsync(new(target.Path, "main"), inventory,
+            "nightweaver:demo", TestContext.Current.CancellationToken);
+        Assert.Equal(nativeReady.ById.Keys.Order(), combined.NativeUnassignedReady.Order());
+        Assert.Equal(recoveryReady.ById.Keys.Order(), combined.RecoverableOwnedReady.Order());
+        Assert.Single(compareRunner.Requests);
         var commentsBefore = target.Run("bd", ["--readonly", "--sandbox", "comments", owned, "--json"]);
         var treeBefore = Snapshot.FileTree(target.Path);
         var otherBefore = Snapshot.FileTree(other.Path);
@@ -61,8 +75,7 @@ public sealed class BeadsIntegrationTests
             Assert.True(request.FileName == "git" || request.FileName == "bd");
             if (request.FileName == "bd")
                 Assert.True(request.Arguments.SequenceEqual(inventoryArgs)
-                    || request.Arguments.SequenceEqual(BeadsCommand.CreateUnassignedReadiness(target.Path).Arguments)
-                    || request.Arguments.SequenceEqual(BeadsCommand.CreateRecoverableReadiness(target.Path, "nightweaver:demo").Arguments));
+                    || request.Arguments.SequenceEqual(BeadsCommand.CreateLifecycleReadiness(target.Path).Arguments));
             var environment = new Dictionary<string, string?>(target.Environment)
             {
                 ["BEADS_DIR"] = Path.Combine(other.Path, ".beads"), ["BEADS_DB"] = Path.Combine(other.Path, ".beads", "beads.db"),
@@ -93,7 +106,7 @@ public sealed class BeadsIntegrationTests
         Assert.Contains($"\"{unassigned}\": unassigned_in_progress_claim", first, StringComparison.Ordinal);
         Assert.Contains($"\"{otherProject}\": foreign_in_progress_claim", first, StringComparison.Ordinal);
         Assert.DoesNotContain($"\"{decoy}\":", first, StringComparison.Ordinal);
-        Assert.Equal(12, runner.Requests.Count);
+        Assert.Equal(10, runner.Requests.Count);
         Assert.Equal(treeBefore, Snapshot.FileTree(target.Path));
         Assert.Equal(otherBefore, Snapshot.FileTree(other.Path));
         Assert.Equal(hostBefore, Snapshot.FileTree(host));

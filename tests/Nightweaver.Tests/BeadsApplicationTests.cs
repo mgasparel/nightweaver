@@ -49,12 +49,11 @@ public sealed class BeadsApplicationTests
         using var temp = new TempDirectory();
         var config = temp.WriteFile("project.json", JsonSerializer.Serialize(new { name = "demo", target_repository = new { path = repository.Path } }));
         var inventoryArgs = BeadsCommand.Create(repository.Path).Arguments;
-        var nativeArgs = BeadsCommand.CreateUnassignedReadiness(repository.Path).Arguments;
-        var recoveryArgs = BeadsCommand.CreateRecoverableReadiness(repository.Path, "nightweaver:demo").Arguments;
+        var recoveryArgs = BeadsCommand.CreateLifecycleReadiness(repository.Path).Arguments;
         var runner = new RecordingProcessRunner((request, token) =>
         {
             if (request.FileName == "git") return new SystemProcessRunner().RunAsync(request, token);
-            var response = request.Arguments.SequenceEqual(inventoryArgs) || request.Arguments.SequenceEqual(nativeArgs)
+            var response = request.Arguments.SequenceEqual(inventoryArgs)
                 ? new ProcessResult(0, "[]", "")
                 : new ProcessResult(2, "", "recovery readiness unavailable");
             return Task.FromResult(response);
@@ -68,7 +67,7 @@ public sealed class BeadsApplicationTests
         Assert.Equal(1, code);
         Assert.Equal("", output.ToString());
         Assert.Contains(runner.Requests, request => request.Arguments.SequenceEqual(recoveryArgs));
-        Assert.Contains("bd --readonly --sandbox list --ready --status in_progress --assignee nightweaver:demo", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("bd --readonly --sandbox list --ready --status open,in_progress", error.ToString(), StringComparison.Ordinal);
         Assert.Contains("recovery readiness unavailable", error.ToString(), StringComparison.Ordinal);
         Assert.Equal(before, Snapshot.FileTree(repository.Path));
     }

@@ -236,8 +236,8 @@ public sealed class NightweaverAppTests
         Assert.Equal(expected, secondOutput.ToString());
         Assert.Equal(string.Empty, firstError.ToString());
         Assert.Equal(string.Empty, secondError.ToString());
-        Assert.Equal(12, runner.Requests.Count);
-        Assert.Equal(6, runner.Requests.Count(request => request.FileName == "bd"));
+        Assert.Equal(10, runner.Requests.Count);
+        Assert.Equal(4, runner.Requests.Count(request => request.FileName == "bd"));
         Assert.Equal(2, runner.Requests.Count(request => request.Arguments.Contains("check-ref-format")));
         Assert.Equal(2, runner.Requests.Count(request => request.Arguments.Contains("rev-parse")));
         Assert.All(runner.Requests, request => Assert.Equal("0", request.Environment["GIT_OPTIONAL_LOCKS"]));

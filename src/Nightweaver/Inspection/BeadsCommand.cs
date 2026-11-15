@@ -14,6 +14,9 @@ internal static class BeadsCommand
     internal static ProcessRequest CreateUnassignedReadiness(string workingDirectory)
         => Create(workingDirectory, ["--readonly", "--sandbox", "ready", "--unassigned", "--limit", "0", "--json"]);
 
+    internal static ProcessRequest CreateLifecycleReadiness(string workingDirectory)
+        => Create(workingDirectory, ["--readonly", "--sandbox", "list", "--ready", "--status", "open,in_progress", "--limit", "0", "--json"]);
+
     internal static ProcessRequest CreateExplorerReadiness(string workingDirectory)
         => Create(workingDirectory, ["--readonly", "--sandbox", "ready", "--limit", "0", "--json"]);
 

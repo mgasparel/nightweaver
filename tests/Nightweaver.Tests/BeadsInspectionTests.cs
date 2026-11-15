@@ -6,6 +6,29 @@ namespace Nightweaver.Tests;
 
 public sealed class BeadsInspectionTests
 {
+    [Fact]
+    public async Task LifecycleReadinessUsesOneFreshNativeQueryForBothMemberships()
+    {
+        var rows = new[] { Row("open", "open", null), Row("owned"), Row("foreign", actor: "human"),
+            Row("assigned-open", "open", "human"), Row("unassigned-progress", actor: null) };
+        var inventory = BeadsReader.Parse("[" + string.Join(',', rows) + "]");
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            var response = request.Arguments.SequenceEqual(BeadsCommand.CreateUnassignedReadiness("target").Arguments)
+                ? new[] { rows[0] }
+                : request.Arguments.SequenceEqual(BeadsCommand.CreateRecoverableReadiness("target", "nightweaver:demo").Arguments)
+                    ? new[] { rows[1] } : rows;
+            return Task.FromResult(new ProcessResult(0, "[" + string.Join(',', response) + "]", ""));
+        });
+        var readiness = await new BeadsReader(runner).ReadReadinessAsync(new("target", "main"), inventory,
+            "nightweaver:demo", TestContext.Current.CancellationToken);
+        Assert.Equal(["open"], readiness.NativeUnassignedReady.Order());
+        Assert.Equal(["owned"], readiness.RecoverableOwnedReady.Order());
+        Assert.Single(runner.Requests);
+        Assert.Equal(["--readonly", "--sandbox", "list", "--ready", "--status", "open,in_progress", "--limit", "0", "--json"],
+            runner.Requests[0].Arguments);
+    }
+
     [Theory]
     [InlineData("\"comment_count\":0", true)]
     [InlineData("\"comments\":[]", true)]

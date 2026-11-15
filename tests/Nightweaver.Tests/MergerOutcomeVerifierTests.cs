@@ -1038,9 +1038,7 @@ public sealed class MergerOutcomeVerifierTests
                 }
                 if (args.Contains("ready", StringComparer.Ordinal) || args.Contains("--ready", StringComparer.Ordinal))
                 {
-                    var ready = args.Contains("list", StringComparer.Ordinal)
-                        ? Status == "in_progress" && Assignee == VerifierFixture.Owner
-                        : Status == "open" && Assignee is null;
+                    var ready = Status is "open" or "in_progress";
                     return Task.FromResult(Json(ready ? new[] { Row() } : Array.Empty<object>()));
                 }
                 return Task.FromResult(Json(new[] { Row() }));

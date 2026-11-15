@@ -92,3 +92,77 @@ probe attempt rejected the legitimate initial unavailable envelope; the probe
 now allows initial collection before freezing the completed attempt. Both exact
 AppHost runs were stopped in `finally`; final `aspire describe` reports no running
 AppHost for this worktree. No QA/Merger repair findings or human questions remain.
+
+## Native verification repair — human recovery
+
+The subsequent Merger run found readiness-file sharing failures, a Planning
+completion timeout and excessive complete-suite runtime. Human recovery assigned
+these repairs to this Bead; Merger evidence framing is separately owned by
+`ns-3i4`. The Studio implementation, invocation protocol and reviewed browser
+captures above are unchanged by this repair.
+
+Readiness producers already close a temporary JSON file before atomic rename.
+`WaitForJsonAsync` now retries only Windows sharing/lock violations (32/33), in
+addition to incomplete JSON, within its original deadline. Other IO failures
+propagate. Three cheap regressions hold exclusive/read-sharing writers open and
+verify recovery after closure or deadline expiry. Both original native
+stream-cleanup cases remain.
+
+Native process timings identified repeated tracker startup/read costs in the
+Planning publication path. Product and complete comments now share one fresh
+`show --include-comments` read, while complete graph verification shares one fresh
+inventory with embedded dependency edges. No observation is cached across a
+mutation. Fault-injection regressions retain exact authority, content, edge and
+unmapped-child checks. See [Planning evidence](../agents/planning-evidence.md).
+
+Lifecycle readiness similarly obtains native blocker/deferment decisions once
+with `list --ready --status open,in_progress --limit 0`. Inventory validation,
+exact ownership selection, publication gates and the single stale-pair retry
+remain. The real Beads fixture compares memberships with both former commands,
+including blocked, deferred, foreign, assigned, closed, gate and over-50-row
+controls. The call-count regression failed against the original reader with two
+processes instead of one. Existing claim-race and interstage-mutation fixtures
+now intercept the combined query; all cases remain enabled.
+
+Retained evidence is under
+`H:/Nightweaver/prod/tmp/nightshift/ns-mbd.5/20261115T0500549381301Z-implementer`:
+
+| Complete run | Result | Wall time including build/publish/teardown |
+| --- | --- | --- |
+| `full-1.log` | 1,165/1,207 passed; 42 old query-fixture assertions subsequently repaired | 323.880s |
+| `full-final.log` | 1,205/1,207 passed; Merger and native observer deadlines | 502.077s |
+| `full-isolated.log` | 1,207/1,207 passed, zero skipped | 300.875s; exceeds the strict budget |
+| `full-weighted.log` | 1,207/1,207 passed, zero skipped | 325.512s; overlaps a separate native Planning test |
+| `full-verified.log` | 1,204/1,207 passed; Planning, Merger and native observer deadlines | 427.492s; another complete suite started during this run |
+
+The 502-second run overlapped a second complete suite from `ns-3i4`, starting
+four seconds later; process identities and command lines are retained in
+`concurrent-full-suites.json`. The isolated run began after that process exited;
+its sampled process inventory contained only this worktree's test executable.
+Planning and Merger passed in 252.738s and 71.098s respectively. This does not
+establish that every historical timeout had the same cause as contention.
+
+The isolated measurement found an 80.333-second operational-observation
+collection still weighted at 31.001 seconds. Collection weights now use that
+complete 1,207-test measurement. All native deadlines and the six-thread cap
+remain unchanged. Candidate timing must be distinguished from latest-main
+timing after integration and Merger-owned hosted verification.
+
+The weighted run's sampled process inventory also records a separate filtered
+`PoolConcurrencyIntegrationTests.PlanningPublishesWhileDeliveryAndMergerProgressIndependently`
+run in `ns-mbd.9` (`weighted-during-*.json`). Its 325.512-second result exceeds the
+budget; passing correctness alone does not establish timing acceptance.
+
+The last attempt began with no other test executable present, but `ns-mbd.9`
+started a complete suite during execution (`final-before.json` and
+`final-during-*.json`). Planning, Merger and the native observer timed out. These
+failures remain unresolved evidence, rather than being discarded in favor of
+passing runs. No further broad reruns were used to seek a passing sample.
+
+**Validation blocker:** final-candidate normal-suite acceptance and the strict
+five-minute gate are not established. The best isolated measurement before the
+last weight refresh was still 300.875s. The Orchestrator needs to coordinate a
+host-exclusive complete-suite measurement for this candidate; if deadlines or
+timing still fail there, further diagnosis is required. This repair makes no
+claim that all historical failures share one cause or that Studio caused them.
+No native deadlines, retained coverage or parallelism were reduced.

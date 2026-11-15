@@ -2,8 +2,8 @@ using Xunit.Sdk;
 using Xunit.v3;
 
 // Start the longest collections first so their serial tail overlaps smaller tests.
-// Weights refreshed from Windows CI run 43596043005, including continuous Planning
-// and both native outcome-classifier force-stop cases.
+// Weights refreshed from repair-recovery-isolated.xml (1,207 passing tests),
+// including measured operational observation and native worktree costs.
 // Keep the six-thread cap and isolated fixtures intact.
 [assembly: Parallelization(MaxThreads = 6)]
 [assembly: AssemblyFixture(typeof(Nightweaver.Tests.PublishedCliArtifactFixture))]
@@ -15,32 +15,42 @@ public sealed class IntegrationFirstCollectionOrderer : ITestCollectionOrderer
 {
     private static readonly (string Name, double Seconds)[] MeasuredCollectionWeights =
     [
-        (nameof(PoolConcurrencyIntegrationTests), 227.976),
-        (nameof(PlanningNativeTurnTests), 156.307),
-        (nameof(MergerCompletionFinalizerTests), 144.371),
-        (nameof(PublishedContinuousStopIntegrationTests), 142.808),
-        (nameof(ManualDeliveryPilotSecondSignalTests), 104.864),
-        (nameof(WebBeadWorkspaceBoundaryIntegrationTests), 86.089),
-        (nameof(AgentStageDeliveryIntegrationTests), 85.610),
-        (nameof(StartupEnvironmentCleanerIntegrationTests), 67.918),
-        (nameof(MergerOutcomeVerifierTests), 66.087),
-        (nameof(BeadsIntegrationTests), 62.487),
-        (nameof(WebBeadsIntegrationTests), 56.931),
-        (nameof(MergerPoolIntegrationTests), 54.682),
-        (nameof(ManualPilotMergerRecoveryIntegrationTests), 53.005),
-        (nameof(DeliveryPoolIntegrationTests), 52.288),
-        (nameof(DeliverySlotCoordinatorTests), 49.010),
-        (nameof(FactoryTelemetryIntegrationTests), 44.347),
-        (nameof(BeadsJournalClientIntegrationTests), 33.149),
-        (nameof(NightweaverAppTests), 27.690),
-        (nameof(WorktreeProvisionerIntegrationTests), 27.029),
-        (nameof(AgentStreamCleanupIntegrationTests), 22.484),
-        (nameof(CompletedEnvironmentCleanupTests), 15.668),
-        (nameof(ManualPilotMergerRetryTests), 13.448),
-        (nameof(WebHostIntegrationTests), 12.414),
-        (nameof(CompletedEnvironmentWorkerTests), 12.024),
-        (nameof(DispatchClaimTests), 10.712),
-        (nameof(ManualDeliveryPilotFixtureTemplateTests), 10.383),
+        (nameof(PoolConcurrencyIntegrationTests), 252.738),
+        (nameof(MergerCompletionFinalizerTests), 182.802),
+        (nameof(MergerOutcomeVerifierTests), 105.957),
+        (nameof(ManualDeliveryPilotSecondSignalTests), 101.137),
+        (nameof(WebBeadWorkspaceBoundaryIntegrationTests), 98.097),
+        (nameof(AgentStageDeliveryIntegrationTests), 87.934),
+        (nameof(PublishedContinuousStopIntegrationTests), 86.508),
+        (nameof(OperationalObservationSourceTests), 80.333),
+        (nameof(MergerPoolIntegrationTests), 71.098),
+        (nameof(PlanningNativeTurnTests), 59.032),
+        (nameof(WorktreeProvisionerIntegrationTests), 55.457),
+        (nameof(ManualPilotMergerRecoveryIntegrationTests), 55.194),
+        (nameof(WebBeadsIntegrationTests), 53.405),
+        (nameof(DeliveryPoolIntegrationTests), 42.157),
+        (nameof(BeadsIntegrationTests), 39.806),
+        (nameof(FactoryTelemetryIntegrationTests), 32.764),
+        (nameof(StartupEnvironmentCleanerIntegrationTests), 31.251),
+        (nameof(BeadsJournalClientIntegrationTests), 30.074),
+        (nameof(DeliverySlotCoordinatorTests), 24.505),
+        (nameof(ManualPilotMergerRetryTests), 22.420),
+        (nameof(NightweaverAppTests), 21.344),
+        (nameof(AgentStreamCleanupIntegrationTests), 16.399),
+        (nameof(WebHostIntegrationTests), 13.546),
+        (nameof(ManualDeliveryPilotFixtureTemplateTests), 12.731),
+        (nameof(WindowsConsoleExitSettlementTests), 11.118),
+        (nameof(DispatchFixtureTemplateTests), 8.667),
+        (nameof(TargetRepositoryValidatorTests), 8.560),
+        (nameof(PlanningExecutionTests), 8.432),
+        (nameof(FixtureTemplateTests), 7.651),
+        (nameof(BeadsApplicationTests), 7.474),
+        (nameof(WorkspaceRelationsWebTests), 7.067),
+        (nameof(PlanningReadinessWebTests), 6.348),
+        (nameof(WindowsConsoleProcessTests), 5.995),
+        (nameof(DispatchClaimTests), 5.375),
+        (nameof(CompletedEnvironmentCleanupTests), 5.338),
+        (nameof(AgentOutcomeClassifierTests), 5.016),
     ];
 
     public IReadOnlyCollection<TTestCollection> OrderTestCollections<TTestCollection>(

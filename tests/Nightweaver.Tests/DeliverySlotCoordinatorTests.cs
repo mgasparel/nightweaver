@@ -399,8 +399,7 @@ public sealed class DeliverySlotCoordinatorTests
         var siblingMutated = false;
         var runner = new MutatingProcessRunner(fixture.Runner,
             request => mutateAfterImplementer && request.FileName == "bd"
-                && request.Arguments.Contains("ready", StringComparer.Ordinal)
-                && request.Arguments.Contains("--unassigned", StringComparer.Ordinal),
+                && request.Arguments.SequenceEqual(BeadsCommand.CreateLifecycleReadiness(request.WorkingDirectory).Arguments),
             () =>
             {
                 fixture.SetStage(sibling, "stage:review");
@@ -437,8 +436,7 @@ public sealed class DeliverySlotCoordinatorTests
         var siblingMutations = 0;
         var runner = new MutatingProcessRunner(fixture.Runner,
             request => mutateAfterImplementer && request.FileName == "bd"
-                && request.Arguments.Contains("ready", StringComparer.Ordinal)
-                && request.Arguments.Contains("--unassigned", StringComparer.Ordinal),
+                && request.Arguments.SequenceEqual(BeadsCommand.CreateLifecycleReadiness(request.WorkingDirectory).Arguments),
             () =>
             {
                 siblingStage = !siblingStage;
@@ -484,8 +482,7 @@ public sealed class DeliverySlotCoordinatorTests
         var mutateAfterImplementer = false;
         var runner = new MutatingProcessRunner(fixture.Runner,
             request => mutateAfterImplementer && request.FileName == "bd"
-                && request.Arguments.Contains("ready", StringComparer.Ordinal)
-                && request.Arguments.Contains("--unassigned", StringComparer.Ordinal),
+                && request.Arguments.SequenceEqual(BeadsCommand.CreateLifecycleReadiness(request.WorkingDirectory).Arguments),
             () =>
             {
                 fixture.SetStage(sibling, "stage:review");
@@ -1305,9 +1302,7 @@ public sealed class DeliverySlotCoordinatorTests
         internal static bool IsAcquire(string bead, ProcessRequest request) => IsClaimWrite(bead, request, "open");
         internal static bool IsRelease(string bead, ProcessRequest request) => IsClaimWrite(bead, request, "in_progress");
         internal static bool IsRecoverableReadiness(ProcessRequest request) => request.FileName == "bd"
-            && request.Arguments.Contains("--ready", StringComparer.Ordinal)
-            && request.Arguments.Contains("--assignee", StringComparer.Ordinal)
-            && request.Arguments.Contains("in_progress", StringComparer.Ordinal);
+            && request.Arguments.SequenceEqual(BeadsCommand.CreateLifecycleReadiness(request.WorkingDirectory).Arguments);
 
         internal static bool IsInventoryRead(ProcessRequest request) => request.FileName == "bd"
             && request.Arguments.Contains("--all", StringComparer.Ordinal)
@@ -1585,10 +1580,8 @@ public sealed class DeliverySlotCoordinatorTests
 
             if (request.Arguments.SequenceEqual(BeadsCommand.Create(repositoryPath).Arguments))
                 return Task.FromResult(Json(beads.Select(ToRow)));
-            if (request.Arguments.SequenceEqual(BeadsCommand.CreateUnassignedReadiness(repositoryPath).Arguments))
-                return Task.FromResult(Json(beads.Where(bead => bead.Status == "open" && bead.Assignee is null).Select(ToRow)));
-            if (request.Arguments.SequenceEqual(BeadsCommand.CreateRecoverableReadiness(repositoryPath, recoveryActor).Arguments))
-                return Task.FromResult(Json(beads.Where(bead => bead.Status == "in_progress" && bead.Assignee == recoveryActor).Select(ToRow)));
+            if (request.Arguments.SequenceEqual(BeadsCommand.CreateLifecycleReadiness(repositoryPath).Arguments))
+                return Task.FromResult(Json(beads.Where(bead => bead.Status is "open" or "in_progress").Select(ToRow)));
 
             if (request.Arguments.Contains("comments", StringComparer.Ordinal) && request.Arguments.Contains("--readonly", StringComparer.Ordinal))
             {

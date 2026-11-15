@@ -650,10 +650,7 @@ public sealed class MergerSlotCoordinatorTests
         {
             var beforeNextReadiness = BeforeNextReadiness;
             BeforeNextReadiness = null;
-            var isRecoveryRead = arguments.Contains("--ready", StringComparer.Ordinal);
-            var ready = Bead.Ready && (isRecoveryRead
-                ? Bead.Status == "in_progress" && Bead.Assignee == "nightweaver:merger-slot-tests"
-                : Bead.Status == "open" && Bead.Assignee is null);
+            var ready = Bead.Ready && Bead.Status is "open" or "in_progress";
             var result = TaskResult(ready);
             beforeNextReadiness?.Invoke();
             return result;

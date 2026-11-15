@@ -10,13 +10,13 @@ public sealed class ReadinessInspectionTests
     private static readonly string[] RecoveredId = ["recovered"];
 
     [Fact]
-    public async Task ReadinessRunsBothExactReadOnlyUnlimitedQueriesAndSeparatesMembership()
+    public async Task ReadinessRunsOneExactReadOnlyUnlimitedQueryAndSeparatesMembership()
     {
         using var cancellation = new CancellationTokenSource();
         var native = Row("native", "open", "feature", null, ["stage:plan"]);
         var recovered = Row("recovered", "in_progress", "bug", Actor, ["stage:plan-challenge"]);
         var inventory = BeadsReader.Parse($"[{native},{recovered}]");
-        var outputs = new Queue<string>([$"[{native}]", $"[{recovered}]"]);
+        var outputs = new Queue<string>([$"[{native},{recovered}]"]);
         var runner = new RecordingProcessRunner((request, token) =>
         {
             Assert.Equal(cancellation.Token, token);
@@ -33,9 +33,8 @@ public sealed class ReadinessInspectionTests
 
         var readiness = await new BeadsReader(runner).ReadReadinessAsync(new("target repo with spaces", "main"), inventory, Actor, cancellation.Token);
 
-        Assert.Equal(["--readonly", "--sandbox", "ready", "--unassigned", "--limit", "0", "--json"], runner.Requests[0].Arguments);
-        Assert.Equal(["--readonly", "--sandbox", "list", "--ready", "--status", "in_progress", "--assignee", Actor, "--limit", "0", "--json"], runner.Requests[1].Arguments);
-        Assert.Equal(Actor, runner.Requests[1].Arguments[7]);
+        Assert.Single(runner.Requests);
+        Assert.Equal(["--readonly", "--sandbox", "list", "--ready", "--status", "open,in_progress", "--limit", "0", "--json"], runner.Requests[0].Arguments);
         Assert.Equal(NativeId, readiness.NativeUnassignedReady);
         Assert.Equal(RecoveredId, readiness.RecoverableOwnedReady);
         Assert.DoesNotContain("recovered", readiness.NativeUnassignedReady);
@@ -47,7 +46,7 @@ public sealed class ReadinessInspectionTests
     {
         var stale = Row("candidate", "open", "task", null, ["stage:implement"]);
         var current = Row("candidate", "in_progress", "task", Actor, ["stage:implement"]);
-        var outputs = new Queue<string>([$"[{stale}]", $"[{stale}]", $"[{current}]", $"[{current}]", "[]", $"[{current}]"]);
+        var outputs = new Queue<string>([$"[{stale}]", $"[{current}]", $"[{current}]", $"[{current}]"]);
         var runner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(0, outputs.Dequeue(), "")));
 
         var snapshot = await new BeadsReader(runner).ReadSnapshotWithReadinessAsync(
@@ -57,7 +56,7 @@ public sealed class ReadinessInspectionTests
         Assert.Equal(Actor, snapshot.Inventory.ById["candidate"].Assignee);
         Assert.Empty(snapshot.Readiness.NativeUnassignedReady);
         Assert.Equal(["candidate"], snapshot.Readiness.RecoverableOwnedReady);
-        Assert.Equal(6, runner.Requests.Count);
+        Assert.Equal(4, runner.Requests.Count);
         Assert.Equal(2, runner.Requests.Count(request => request.Arguments.Contains("--all")));
     }
 
@@ -93,26 +92,25 @@ public sealed class ReadinessInspectionTests
     }
 
     [Fact]
-    public async Task FailureOfSecondReadinessQueryDoesNotReturnPartialReadiness()
+    public async Task FailureOfCombinedReadinessQueryDoesNotReturnPartialReadiness()
     {
         var row = Row("native", "open", "feature", null, []);
         var inventory = BeadsReader.Parse($"[{row}]");
-        var runner = new RecordingProcessRunner((request, _) => Task.FromResult(request.Arguments.Contains("ready") && request.Arguments.Contains("--unassigned")
-            ? new ProcessResult(0, $"[{row}]", "") : new ProcessResult(2, "", "query failed")));
+        var runner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(2, $"[{row}]", "query failed")));
 
         var exception = await Assert.ThrowsAsync<ToolExecutionException>(() =>
             new BeadsReader(runner).ReadReadinessAsync(new("target", "main"), inventory, Actor, CancellationToken.None));
 
-        Assert.Contains("--assignee nightweaver:demo", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("--status open,in_progress", exception.Message, StringComparison.Ordinal);
         Assert.Contains("query failed", exception.StandardError, StringComparison.Ordinal);
-        Assert.Equal(2, runner.Requests.Count);
+        Assert.Single(runner.Requests);
     }
 
     [Theory]
     [InlineData("inventory-tool", 1)]
     [InlineData("inventory-json", 1)]
     [InlineData("native-json", 2)]
-    [InlineData("recoverable-tool", 3)]
+    [InlineData("recoverable-tool", 2)]
     public async Task SnapshotRefreshDoesNotRetryMalformedOrUnavailableTrackerReads(string failure, int expectedCalls)
     {
         var row = Row("candidate", "open", "task", null, ["stage:implement"]);
@@ -128,13 +126,12 @@ public sealed class ReadinessInspectionTests
                     _ => new ProcessResult(0, $"[{row}]", "")
                 });
             }
-            if (request.Arguments.Contains("--unassigned"))
-                return Task.FromResult(failure == "native-json"
-                    ? new ProcessResult(0, "not-json", "")
-                    : new ProcessResult(0, $"[{row}]", ""));
-            return Task.FromResult(failure == "recoverable-tool"
-                ? new ProcessResult(2, "", "readiness unavailable")
-                : new ProcessResult(0, $"[{current}]", ""));
+            return Task.FromResult(failure switch
+            {
+                "native-json" => new ProcessResult(0, "not-json", ""),
+                "recoverable-tool" => new ProcessResult(2, "", "readiness unavailable"),
+                _ => new ProcessResult(0, $"[{current}]", "")
+            });
         });
 
         var exception = await Assert.ThrowsAnyAsync<ToolExecutionException>(() =>
