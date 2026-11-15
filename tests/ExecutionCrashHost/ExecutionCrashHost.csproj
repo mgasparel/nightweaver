@@ -5,6 +5,7 @@
     <RootNamespace>Nightweaver.Tests.ExecutionCrashHost</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Nightweaver.Tests" />
     <ProjectReference Include="../../src/Nightweaver/Nightweaver.csproj" />
   </ItemGroup>
 </Project>

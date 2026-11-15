@@ -25,8 +25,17 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             GitCommonDirectory = target.RunTarget("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"]).Trim()
         };
         var systemRunner = new SystemProcessRunner();
-        var processRunner = new RecordingProcessRunner((request, cancellationToken) =>
-            target.RunWithFixturePullRequestAsync(systemRunner, request, cancellationToken));
+        var processTimings = new ConcurrentQueue<(string Tool, double Seconds)>();
+        var processRunner = new RecordingProcessRunner(async (request, cancellationToken) =>
+        {
+            var started = Stopwatch.GetTimestamp();
+            try { return await target.RunWithFixturePullRequestAsync(systemRunner, request, cancellationToken); }
+            finally
+            {
+                processTimings.Enqueue(($"{request.FileName} {string.Join(' ', request.Arguments.Take(4))}",
+                    Stopwatch.GetElapsedTime(started).TotalSeconds));
+            }
+        });
         var provisioner = new WorktreeProvisioner(processRunner);
         var worktree = await provisioner.ProvisionAsync(target.Host, project.Name, repository, beadId,
             WorktreePurpose.Delivery, TestContext.Current.CancellationToken);
@@ -149,7 +158,13 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
         finally
         {
             if (!testSucceeded)
+            {
                 target.PreserveForFailure();
+                TestContext.Current.TestOutputHelper?.WriteLine($"Native Merger fixture preserved at {target.RootPath}");
+            }
+
+            foreach (var group in processTimings.GroupBy(t => t.Tool).OrderByDescending(g => g.Sum(t => t.Seconds)))
+                TestContext.Current.TestOutputHelper?.WriteLine($"{group.Key}: count={group.Count()}, seconds={group.Sum(t => t.Seconds):F3}");
 
             try
             {

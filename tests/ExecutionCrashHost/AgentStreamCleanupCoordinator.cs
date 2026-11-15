@@ -507,7 +507,7 @@ internal static class AgentStreamCleanupCoordinator
         return new RunnerStart(index, calledAt, readyPath, releasePath, runner.RunAsync(request, cancellationToken));
     }
 
-    private static async Task<T> WaitForJsonAsync<T>(string path, TimeSpan timeout,
+    internal static async Task<T> WaitForJsonAsync<T>(string path, TimeSpan timeout,
         Task<AgentExecutionResult>? executorTask = null, string? logFilePath = null)
     {
         var timer = Stopwatch.StartNew();
@@ -522,6 +522,10 @@ internal static class AgentStreamCleanupCoordinator
                     if (value is not null) return value;
                 }
                 catch (JsonException) { }
+                // Atomic rename publishes closed JSON, but an observer (including
+                // filesystem scanners) can still hold an incompatible Windows
+                // handle. Retry only sharing/lock violations within GateTimeout.
+                catch (IOException exception) when ((exception.HResult & 0xffff) is 32 or 33) { }
             }
 
             if (executorTask?.IsCompleted == true)

@@ -16,8 +16,10 @@ public sealed class PlanningExecutionTests
         var reads = 0;
         var completed = 0;
         var observedTracker = false;
+        var trackerReads = 0;
         fixture.BeforeTrackerRead = () =>
         {
+            trackerReads++;
             Assert.Equal(4, reads);
             Assert.Equal(4, completed);
             Assert.True(release.Task.IsCompleted);
@@ -43,6 +45,7 @@ public sealed class PlanningExecutionTests
         }
         Assert.Equal(4, reads);
         Assert.True(observedTracker);
+        Assert.Equal(1, trackerReads);
     }
 
     [Theory]
@@ -291,7 +294,8 @@ public sealed class PlanningExecutionTests
         {
             id = State.Id, issue_type = State.IssueType, status = State.Status, assignee = Owner, priority = 2,
             created_at = "2026-11-13T00:00:00Z", title = "Persistence", description = "Persist outcomes",
-            labels = new[] { State.Stage, "ready-for-planning" }.Concat(State.ProductDecisionRequired ? ["product-decision-required"] : Array.Empty<string>()), metadata = new { repair_cycles = State.RepairCycles }
+            labels = new[] { State.Stage, "ready-for-planning" }.Concat(State.ProductDecisionRequired ? ["product-decision-required"] : Array.Empty<string>()), metadata = new { repair_cycles = State.RepairCycles },
+            comments = Comments.Select(c => new { id = c.Id, issue_id = "product", text = c.Text, created_at = c.CreatedAt })
         } });
 
         private Task<ProcessResult> RespondAsync(ProcessRequest request, CancellationToken token)

@@ -70,6 +70,38 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         }
     }
 
+    internal async Task<(BeadSnapshot Bead, IReadOnlyList<BeadCommentSnapshot> Comments)> ReadDetailWithCommentsAsync(
+        ValidatedTargetRepository repository, string beadId, CancellationToken cancellationToken)
+    {
+        var context = $"bd --readonly --sandbox show '{beadId}' --include-comments --json in Target Repository '{repository.Path}'";
+        var json = await RunQueryAsync(repository, BeadsCommand.CreateShowWithComments(repository.Path, beadId), context, cancellationToken);
+        try
+        {
+            var inventory = Parse(json);
+            if (inventory.ById.Count != 1 || !inventory.ById.TryGetValue(beadId, out var bead))
+                throw new JsonException("$: show must return exactly the requested Bead");
+            if (bead.Payload.TryGetProperty("comments_omitted", out var omitted) && omitted.ValueKind != JsonValueKind.False)
+                throw new JsonException("$: requested comment bodies were omitted");
+            if (!bead.Payload.TryGetProperty("comments", out var comments))
+            {
+                if (bead.Payload.TryGetProperty("comment_count", out var count) && count.ValueKind == JsonValueKind.Number
+                    && count.TryGetInt32(out var total) && total == 0)
+                    return (bead, Array.Empty<BeadCommentSnapshot>());
+                throw new JsonException("$: requested comments array is missing");
+            }
+            var parsed = ParseComments(comments, beadId);
+            if (bead.Payload.TryGetProperty("comment_count", out var reportedCount)
+                && (reportedCount.ValueKind != JsonValueKind.Number || !reportedCount.TryGetInt32(out var expectedCount)
+                    || expectedCount != parsed.Count))
+                throw new JsonException("$: comment count does not match complete bodies");
+            return (bead, parsed);
+        }
+        catch (JsonException exception)
+        {
+            throw new ToolExecutionException($"{context}: incompatible or malformed bd JSON: {exception.Message}");
+        }
+    }
+
     internal async Task<BeadsReadiness> ReadReadinessAsync(ValidatedTargetRepository repository, BeadsInventory inventory,
         string recoveryActor, CancellationToken cancellationToken)
     {

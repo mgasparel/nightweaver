@@ -35,6 +35,9 @@ internal static class BeadsCommand
     internal static ProcessRequest CreateShow(string workingDirectory, string beadId)
         => Create(workingDirectory, ["--readonly", "--sandbox", "show", beadId, "--json"]);
 
+    internal static ProcessRequest CreateShowWithComments(string workingDirectory, string beadId)
+        => Create(workingDirectory, ["--readonly", "--sandbox", "show", beadId, "--include-comments", "--json"]);
+
     internal static ProcessRequest CreateJournalSetup(string workingDirectory)
         => CreateWrite(workingDirectory, ["config", "set", "events-journal", "true"]);
 

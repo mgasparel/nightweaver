@@ -6,6 +6,38 @@ namespace Nightweaver.Tests;
 
 public sealed class BeadsInspectionTests
 {
+    [Theory]
+    [InlineData("\"comment_count\":0", true)]
+    [InlineData("\"comments\":[]", true)]
+    [InlineData("\"comment_count\":1,\"comments\":[]", false)]
+    [InlineData("\"comment_count\":1", false)]
+    [InlineData("\"comments_omitted\":true,\"comments\":[]", false)]
+    [InlineData("\"comments\":[{\"id\":\"1\",\"issue_id\":\"foreign\",\"text\":\"x\",\"created_at\":\"2026-11-13T00:00:00Z\"}]", false)]
+    public async Task CombinedProductReadRequiresCompleteIdentityBoundComments(string fields, bool valid)
+    {
+        var row = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(Row("product"))!;
+        using var additions = JsonDocument.Parse("{" + fields + "}");
+        foreach (var property in additions.RootElement.EnumerateObject()) row[property.Name] = property.Value.Clone();
+        var calls = 0;
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            calls++;
+            Assert.Equal(["--readonly", "--sandbox", "show", "product", "--include-comments", "--json"], request.Arguments);
+            return Task.FromResult(new ProcessResult(0, JsonSerializer.Serialize(new[] { row }), ""));
+        });
+        var reader = new BeadsReader(runner);
+        var repository = new ValidatedTargetRepository("target", "main");
+        if (valid)
+        {
+            var result = await reader.ReadDetailWithCommentsAsync(repository, "product", TestContext.Current.CancellationToken);
+            Assert.Equal("product", result.Bead.Id);
+            Assert.Empty(result.Comments);
+        }
+        else await Assert.ThrowsAsync<ToolExecutionException>(() =>
+            reader.ReadDetailWithCommentsAsync(repository, "product", TestContext.Current.CancellationToken));
+        Assert.Equal(1, calls);
+    }
+
     private static string Row(string id, string status = "in_progress", string? actor = "nightweaver:demo") => JsonSerializer.Serialize(new
     {
         id, status, issue_type = "custom", priority = 2, created_at = "2026-10-23T00:00:00Z", assignee = actor,
