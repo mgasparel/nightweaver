@@ -159,10 +159,50 @@ started a complete suite during execution (`final-before.json` and
 failures remain unresolved evidence, rather than being discarded in favor of
 passing runs. No further broad reruns were used to seek a passing sample.
 
-**Validation blocker:** final-candidate normal-suite acceptance and the strict
+**Historical validation blocker (resolved by the manual verification below):** final-candidate normal-suite acceptance and the strict
 five-minute gate are not established. The best isolated measurement before the
 last weight refresh was still 300.875s. The Orchestrator needs to coordinate a
 host-exclusive complete-suite measurement for this candidate; if deadlines or
 timing still fail there, further diagnosis is required. This repair makes no
 claim that all historical failures share one cause or that Studio caused them.
 No native deadlines, retained coverage or parallelism were reduced.
+
+
+## Manual integration verification — 2026-11-15
+
+Nightweaver and its Web Console were gracefully stopped before manual takeover,
+leaving the host exclusive for verification. The retained repair was rebased onto
+main 985a68af08f6e066ce536caf5392565035d57a02. Explorer routes/styles and its
+fresh publication-authority guards remain alongside Delivery and the batched
+graph/readiness reads. Both independent Standards and Spec reviews of candidate
+96fdb317687c9a104d7d305c623e276062e52858 found no blocking static findings.
+
+- Solution build with -warnaserror: zero warnings/errors.
+- Focused Planning publication and stream readiness checks: 72 passed.
+- Studio frontend tests: 40 passed.
+- Complete normal suite: 1,223 passed, zero failed/skipped, **273.3928583 seconds**
+  wall time including build, fixture publishing and teardown. Six-thread
+  parallelism, all deadlines and retained coverage are unchanged.
+- Exact isolated Aspire/Playwright: factory-qa.mjs --studio,
+  invocation-qa.mjs --studio, telemetry.mjs --studio, and
+  runtime-refresh-qa.mjs passed. Native cursor resume, duplicate-free bounded
+  output, terminal cessation, retained identity, keyboard/follow controls and
+  stalled-refresh retry were exercised. Fresh studio-qa.mjs passed direct
+  reload/history/query/legacy-ID and dialog-focus checks with no errors/mutations.
+  Captures at 1440/375/720 CSS pixels include long metadata/output; narrow modal
+  controls and overview retry remained readable and reachable on visual review.
+
+The first shell probe ran immediately after all other probes on the same stack
+and recorded two HTTP 429 console errors. The observer admits at most two
+interested Workspaces and retains interest for 30 seconds; the prior Output
+probe left another Workspace interested. The documented fresh-stack shell run
+passed unchanged. Both exact AppHosts stopped successfully; final describe
+reported no running AppHost. No observer limit or test assertion was weakened.
+
+Evidence: H:/Nightweaver/prod/tmp/nightshift/ns-mbd.5/manual-20261115,
+including candidate-suite.log, candidate-time.json and browser captures/results;
+the complete report is TestResults/manual-candidate.xml in the retained
+worktree. These results resolve the candidate validation blocker without
+attributing every historical timeout to contention. Exact-head hosted
+verification and a complete latest-main measurement after integration remain
+separate final gates.
