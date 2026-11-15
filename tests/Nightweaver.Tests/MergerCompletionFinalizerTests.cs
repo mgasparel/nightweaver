@@ -7,10 +7,10 @@ namespace Nightweaver.Tests;
 
 public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSupport
 {
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task QaRetainedArtifactsRecoverAfterLostClosureAndRemovalResponsesAcrossRestart(bool tmpOnlyFailure)
+    private static readonly string[] ClosedMergeLabels = ["stage:merge"];
+
+    [Fact]
+    public async Task QaRetainedArtifactsRecoverAfterLostClosureAndLockedTmpRetryAcrossRestart()
     {
         Assert.True(OperatingSystem.IsWindows(), "This integration suite requires native Windows CLI fixtures.");
         using var target = new AgentStageTargetFixture();
@@ -54,19 +54,17 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         var invocation = new AgentStageResult(AgentRole.Merger, beadId, "fixture-invocation", logPath, null, [],
             Observations: observations);
         target.LoseVerifiedTaskCloseResponseAfterCommitOnce = true;
-        var lostRemoval = false;
         var removalCalls = 0;
-        using var lockedTmp = tmpOnlyFailure
-            ? new FileStream(Path.Combine(qaTmp, "evidence.txt"), FileMode.Open, FileAccess.Read, FileShare.Read)
-            : null;
-        var remotePresent = tmpOnlyFailure;
+        using var lockedTmp = new FileStream(Path.Combine(qaTmp, "evidence.txt"), FileMode.Open,
+            FileAccess.Read, FileShare.Read);
+        var remotePresent = true;
         var remoteDeleted = false;
         var runner = new RecordingProcessRunner(async (request, token) =>
         {
             // Inject an exact origin ref without adding a second native remote fixture.
-            if (tmpOnlyFailure && request.FileName == "git" && request.Arguments[0] == "ls-remote")
+            if (request.FileName == "git" && request.Arguments[0] == "ls-remote")
                 return new ProcessResult(0, remotePresent ? $"{worktree.HeadSha}\trefs/heads/nightweaver/{beadId}\n" : "", "");
-            if (tmpOnlyFailure && request.FileName == "git" && request.Arguments[0] == "push")
+            if (request.FileName == "git" && request.Arguments[0] == "push")
             {
                 Assert.Equal(new[] { "push", $"--force-with-lease=refs/heads/nightweaver/{beadId}:{worktree.HeadSha}",
                     "origin", $":refs/heads/nightweaver/{beadId}" }, request.Arguments);
@@ -76,14 +74,7 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
             }
             var result = await target.RunWithFixturePullRequestAsync(systemRunner, request, token);
             if (request.FileName == "git" && request.Arguments.Take(2).SequenceEqual(["worktree", "remove"]))
-            {
                 removalCalls++;
-                if (!tmpOnlyFailure && !lostRemoval && result.ExitCode == 0)
-                {
-                    lostRemoval = true;
-                    return new ProcessResult(73, string.Empty, "fixture lost removal response after commit");
-                }
-            }
             return result;
         });
         var finalizer = new MergerCompletionFinalizer(runner);
@@ -92,16 +83,11 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
             TestContext.Current.CancellationToken);
         Assert.True(completion.Succeeded, completion.Diagnostic);
         Assert.False(completion.Receipt!.CleanupSucceeded);
-        if (tmpOnlyFailure)
-        {
-            Assert.False(lostRemoval);
-            Assert.True(remoteDeleted);
-            Assert.False(target.RunTarget("git", ["branch", "--list", $"nightweaver/{beadId}"]).Length > 0);
-        }
-        else Assert.Contains("lost removal response", completion.Receipt.CleanupDiagnostic, StringComparison.Ordinal);
+        Assert.True(remoteDeleted);
+        Assert.False(target.RunTarget("git", ["branch", "--list", $"nightweaver/{beadId}"]).Length > 0);
         var store = new CompletedEnvironmentStore(target.Host, project.Name, repository);
         var pending = Assert.Single(store.Read().Obligations);
-        Assert.Equal(tmpOnlyFailure ? CleanupStatus.RetryScheduled : CleanupStatus.NeedsAttention, pending.Status);
+        Assert.Equal(CleanupStatus.RetryScheduled, pending.Status);
         Assert.True(pending.Worktree.ConfirmedAbsent);
         Assert.True(Directory.Exists(qaTmp));
         Assert.True(completion.Receipt.ProductCompletionSucceeded, completion.Diagnostic);
@@ -111,10 +97,8 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         Assert.Equal("closed", target.ReadBead(productId).Status);
         var branchCommandsBeforeRestart = runner.Requests.Count(request => request.FileName == "git"
             && request.Arguments[0] is "update-ref" or "push");
-        lockedTmp?.Dispose();
-        // Restart retains automatic timing; an unknown result requires explicit inspection.
-        if (!tmpOnlyFailure)
-            await store.WriteAsync(pending with { Status = CleanupStatus.Pending, CycleAttempts = 0 }, TestContext.Current.CancellationToken);
+        lockedTmp.Dispose();
+        // Restart honors the persisted retry time without replaying branch or worktree removal.
         var clock = new CompletedEnvironmentWorkerTests.Clock
         { Now = pending.NextAttempt ?? DateTimeOffset.UtcNow };
         using var restarted = new CompletedEnvironmentWorker(target.Host, project, repository, runner,
@@ -143,39 +127,107 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
     [Fact]
     public async Task LocalBranchMovedAfterValidationSurvivesConditionalDeletion()
     {
-        Assert.True(OperatingSystem.IsWindows(), "This integration suite requires native Windows CLI fixtures.");
-        using var target = new AgentStageTargetFixture();
-        var beadId = target.CreateBead("Conditional local branch deletion", "task", "stage:merge");
-        target.RunTarget("bd", ["update", beadId, "--status", "closed", "--assignee", ""]);
-        var project = target.CreateProject(AgentCli.Codex);
-        var repository = Repository(target);
+        using var target = new GitFixture();
+        target.CommitEmpty();
+        // GitFixture normally carries only a metadata marker for Beads. This
+        // boundary is Git-only, so leave no local Beads backend for inspection.
+        Directory.Delete(Path.Combine(target.Path, ".beads"), recursive: true);
+        GitFixture.RunGit(target.Path, ["config", "user.name", "Nightweaver Git Fixture"]);
+        GitFixture.RunGit(target.Path, ["config", "user.email", "fixture@example.invalid"]);
+        var beadId = "ns-np6-conditional-delete";
+        var branchName = $"nightweaver/{beadId}";
+        var branchRef = $"refs/heads/{branchName}";
         var systemRunner = new SystemProcessRunner();
-        var worktree = await new WorktreeProvisioner(systemRunner).ProvisionAsync(target.Host, project.Name,
-            repository, beadId, WorktreePurpose.Delivery, TestContext.Current.CancellationToken);
-        var branchRef = $"refs/heads/nightweaver/{beadId}";
-        var movedHead = target.RunTarget("git", ["commit-tree", $"{worktree.HeadSha}^{{tree}}", "-p", worktree.HeadSha,
-            "-m", "concurrent local branch update"]).Trim();
+        async Task<string> GitValueAsync(params string[] arguments)
+        {
+            var result = await systemRunner.RunAsync(GitCommand.Create(arguments, target.Path),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(0, result.ExitCode);
+            return result.StandardOutput.Trim();
+        }
+
+        var checkedHead = await GitValueAsync("rev-parse", "HEAD");
+        GitFixture.RunGit(target.Path, ["branch", branchName, checkedHead]);
+        var movedCommit = await systemRunner.RunAsync(GitCommand.Create(
+            ["commit-tree", $"{checkedHead}^{{tree}}", "-p", checkedHead, "-m", "concurrent local branch update"], target.Path),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(0, movedCommit.ExitCode);
+        var movedHead = movedCommit.StandardOutput.Trim();
+
+        using var hostTemp = new TempDirectory();
+        var host = new HostPaths(hostTemp.CreateDirectory("host"));
+        var slug = ProjectSlug.Parse("demo");
+        var defaults = new AgentSettings(AgentCli.Codex, null, "low", 1);
+        var project = new ProjectConfig(slug, "fixture.json", new("target", "main"),
+            new(1, 1, 1), new(3, 1), defaults,
+            new RoleSettings(AgentRoles.All.ToDictionary(role => role, _ => defaults)));
+        var repository = new ValidatedTargetRepository(target.Path, "main")
+        {
+            GitCommonDirectory = await GitValueAsync("rev-parse", "--path-format=absolute", "--git-common-dir")
+        };
+        var worktreePath = Path.Combine(host.WorktreesRoot(slug), beadId);
+        Assert.False(Directory.Exists(worktreePath));
+        var closedState = new BeadWorkflowState(beadId, "task", "closed", "stage:merge", false, false, false, 0);
+        var session = new AgentStageSession(host, project, repository, beadId, AgentRole.Merger,
+            WorktreePurpose.Delivery, new(worktreePath, checkedHead), closedState, null,
+            new AgentDispatchContext(beadId, "task", "stage:merge", 0), PreserveInheritedChanges: true);
+        var beadReads = 0;
+        IReadOnlyList<string>? compareDelete = null;
         var moved = false;
         var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
         {
-            if (!moved && request.FileName == "git" && request.Arguments.SequenceEqual(["update-ref", "-d", branchRef, worktree.HeadSha]))
+            if (request.FileName == "bd")
             {
-                moved = true;
-                target.RunTarget("git", ["update-ref", branchRef, movedHead]);
+                Assert.Contains("list", request.Arguments);
+                Assert.DoesNotContain("update", request.Arguments);
+                Assert.Equal(target.Path, request.WorkingDirectory);
+                beadReads++;
+                var closedTask = new[]
+                {
+                    new
+                    {
+                        id = beadId,
+                        status = "closed",
+                        issue_type = "task",
+                        priority = 2,
+                        created_at = "2026-11-15T00:00:00Z",
+                        assignee = (string?)null,
+                        labels = ClosedMergeLabels,
+                        metadata = new { repair_cycles = 0 }
+                    }
+                };
+                return new ProcessResult(0, System.Text.Json.JsonSerializer.Serialize(closedTask), string.Empty);
             }
+
+            if (request.FileName == "git" && request.Arguments[0] == "update-ref" && request.Arguments[1] == "-d")
+            {
+                compareDelete = request.Arguments.ToArray();
+                Assert.Equal(new[] { "update-ref", "-d", branchRef, checkedHead }, compareDelete);
+                Assert.False(moved);
+                var move = await systemRunner.RunAsync(
+                    GitCommand.Create(["update-ref", branchRef, movedHead], target.Path), cancellationToken);
+                Assert.Equal(0, move.ExitCode);
+                moved = true;
+                var deletion = await systemRunner.RunAsync(request, cancellationToken);
+                Assert.NotEqual(0, deletion.ExitCode);
+                return deletion;
+            }
+
             return await systemRunner.RunAsync(request, cancellationToken);
         });
-        var session = Session(target, project, repository, beadId, worktree);
         var finalizer = new MergerCompletionFinalizer(runner);
 
-        var result = await finalizer.FinalizeHousekeepingAsync(session, Evidence(worktree.HeadSha),
-            BeadWorkflowState.Parse(target.ReadBead(beadId)), TestContext.Current.CancellationToken);
+        var error = await Assert.ThrowsAsync<ToolExecutionException>(() => finalizer.CleanupBranchesAsync(
+            session, Evidence(checkedHead), TestContext.Current.CancellationToken));
 
-        Assert.True(moved, result.Diagnostic);
-        Assert.False(result.Receipt!.CleanupSucceeded);
-        Assert.Contains("local branch changed since validation", result.Receipt.CleanupDiagnostic, StringComparison.Ordinal);
-        Assert.False(Directory.Exists(worktree.Path));
-        Assert.Equal(movedHead, target.RunTarget("git", ["rev-parse", branchRef]).Trim());
+        Assert.True(moved, error.Message);
+        Assert.Equal(new[] { "update-ref", "-d", branchRef, checkedHead }, compareDelete);
+        Assert.Contains("local branch changed since validation", error.Message, StringComparison.Ordinal);
+        Assert.Equal(1, beadReads);
+        Assert.All(runner.Requests.Where(request => request.FileName == "bd"),
+            request => Assert.Contains("list", request.Arguments));
+        Assert.False(Directory.Exists(worktreePath));
+        Assert.Equal(movedHead, await GitValueAsync("rev-parse", branchRef));
     }
 
     private static ValidatedTargetRepository Repository(AgentStageTargetFixture target) =>
