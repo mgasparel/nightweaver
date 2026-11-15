@@ -480,6 +480,52 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
             if (!ReadString(currentJob.RootElement, "conclusion", out var currentConclusion) || currentConclusion != "skipped")
                 return "A newer executed required check superseded the pinned failure.";
         }
+
+        // The rollup may hide an executed run behind a still newer skipped run.
+        // Bound the entire same-head history and fail closed rather than accepting
+        // an arbitrary historical failure or silently ignoring pagination.
+        using var history = await ReadApi($"workflows/{workflowId}/runs?head_sha={head}&branch={Uri.EscapeDataString(branch)}&event=pull_request&per_page=10").ConfigureAwait(false);
+        var historyRoot = history.RootElement;
+        if (!historyRoot.TryGetProperty("total_count", out var count) || !count.TryGetInt32(out var total)
+            || total is < 1 or > 10 || !historyRoot.TryGetProperty("workflow_runs", out var runs)
+            || runs.ValueKind != JsonValueKind.Array || runs.GetArrayLength() != total)
+            return "The same-head workflow history is incomplete or exceeds the verification bound.";
+        var foundPinned = false;
+        foreach (var candidate in runs.EnumerateArray())
+        {
+            if (!candidate.TryGetProperty("id", out var idElement) || !idElement.TryGetInt64(out var id)
+                || !MatchesRun(candidate, id) || !HasNumber(candidate, "workflow_id", workflowId)
+                || !ReadString(candidate, "run_started_at", out var candidateStartedText)
+                || !DateTimeOffset.TryParse(candidateStartedText, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var candidateStarted))
+                return "The same-head workflow history has invalid run identity.";
+            if (id == evidence.RunId)
+            {
+                if (!HasNumber(candidate, "run_attempt", evidence.Attempt))
+                    return "The pinned workflow attempt has been superseded by a rerun.";
+                foundPinned = true;
+            }
+            else if (candidateStarted >= runStarted)
+            {
+                if (!ReadString(candidate, "status", out var candidateStatus) || candidateStatus != "completed"
+                    || !candidate.TryGetProperty("run_attempt", out var attemptValue)
+                    || !attemptValue.TryGetInt64(out var attempt) || attempt <= 0)
+                    return "A newer workflow run is not settled.";
+                using var jobs = await ReadApi($"runs/{id}/attempts/{attempt}/jobs?per_page=100").ConfigureAwait(false);
+                if (!jobs.RootElement.TryGetProperty("total_count", out var jobsCount) || !jobsCount.TryGetInt32(out var jobTotal)
+                    || jobTotal is < 1 or > 100 || !jobs.RootElement.TryGetProperty("jobs", out var jobRows)
+                    || jobRows.ValueKind != JsonValueKind.Array || jobRows.GetArrayLength() != jobTotal)
+                    return "The newer workflow job history is incomplete or exceeds the verification bound.";
+                var matching = jobRows.EnumerateArray().Where(item =>
+                    ReadString(item, "name", out var jobName) && jobName == subject).ToArray();
+                if (matching.Length != 1 || !HasNumber(matching[0], "run_id", id)
+                    || !HasNumber(matching[0], "run_attempt", attempt)
+                    || !ReadString(matching[0], "status", out var newerStatus) || newerStatus != "completed"
+                    || !ReadString(matching[0], "conclusion", out var newerConclusion) || newerConclusion != "skipped")
+                    return "A newer executed required check superseded the pinned failure.";
+            }
+        }
+        if (!foundPinned) return "The pinned failure is absent from the same-head workflow history.";
         return null;
 
         bool MatchesRun(JsonElement candidate, long id) =>

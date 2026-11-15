@@ -105,6 +105,9 @@ public sealed class MergerOutcomeVerifierTests
     [InlineData("old-run")]
     [InlineData("rerun")]
     [InlineData("newer-passed")]
+    [InlineData("hidden-passed")]
+    [InlineData("history-overflow")]
+    [InlineData("jobs-overflow")]
     public async Task RejectsUnrelatedOrNonFailingPinnedHostedEvidence(string mutation)
     {
         using var fixture = new VerifierFixture();
@@ -934,22 +937,39 @@ public sealed class MergerOutcomeVerifierTests
                         }
                     }));
                 }
-                var latest = path.EndsWith("/101", StringComparison.Ordinal);
-                var rerun = path.EndsWith("/100", StringComparison.Ordinal) && HostedMutation == "rerun";
-                return Task.FromResult(Json(new
+                object RunRow(long runId, bool rerun = false) => new
                 {
-                    id = latest ? 101L : 100L,
+                    id = runId,
                     run_attempt = HostedMutation == "attempt" || rerun ? 2 : 1,
                     run_started_at = HostedMutation == "old-run" ? "2026-11-03T12:00:00Z" : "2026-11-04T12:01:00Z",
-                    workflow_id = latest && HostedMutation == "workflow" ? 888 : 300,
+                    workflow_id = runId == 101 && HostedMutation == "workflow" ? 888 : 300,
                     head_sha = HostedMutation == "head" ? new string('e', 40) : originalHead,
                     head_branch = HostedMutation == "branch" ? "unrelated" : branch,
                     @event = HostedMutation == "event" ? "workflow_dispatch" : "pull_request",
                     repository = new { full_name = HostedMutation == "repository" ? "unrelated/repo" : "example/project" },
                     head_repository = new { full_name = HostedMutation == "head-repository" ? "fork/project" : "example/project" },
                     pull_requests = new[] { new { number = HostedMutation == "pr" ? 999 : 123 } },
-                    status = "completed", conclusion = latest ? "skipped" : "failure"
-                }));
+                    status = "completed", conclusion = runId == 100 ? "failure" : "success"
+                };
+                if (path.Contains("/workflows/", StringComparison.Ordinal))
+                {
+                    var rows = new List<object> { RunRow(100), RunRow(101) };
+                    if (HostedMutation == "hidden-passed") rows.Add(RunRow(102));
+                    return Task.FromResult(Json(new { total_count = HostedMutation == "history-overflow" ? 11 : rows.Count, workflow_runs = rows }));
+                }
+                if (path.Contains("/jobs?", StringComparison.Ordinal))
+                {
+                    var hidden = path.Contains("/runs/102/", StringComparison.Ordinal);
+                    return Task.FromResult(Json(new
+                    {
+                        total_count = HostedMutation == "jobs-overflow" ? 101 : 1,
+                        jobs = new[] { new { id = hidden ? 202 : 201, run_id = hidden ? 102 : 101, run_attempt = 1,
+                            name = "fixture checks", status = "completed", conclusion = hidden ? "success" : "skipped" } }
+                    }));
+                }
+                var latest = path.EndsWith("/101", StringComparison.Ordinal);
+                var rerun = path.EndsWith("/100", StringComparison.Ordinal) && HostedMutation == "rerun";
+                return Task.FromResult(Json(RunRow(latest ? 101 : 100, rerun)));
             }
             if (request.FileName == "git")
             {
