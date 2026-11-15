@@ -180,9 +180,14 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         OpenPinnedReadOnlyFile(RuntimePaths.Normalize(path), FileShareRead | FileShareWrite | 0x00000004, "cleanup record");
 
     /// <summary>Publishes a factory snapshot while pinning its directory chain and creating a fresh sibling file.</summary>
-    internal static async Task WriteFactorySnapshotAtomicallyAsync(
+    internal static Task WriteFactorySnapshotAtomicallyAsync(
         HostPaths hostPaths, ProjectSlug project, string runtimeId, ReadOnlyMemory<byte> bytes,
         CancellationToken cancellationToken)
+        => WriteFactorySnapshotAtomicallyAsync(hostPaths, project, runtimeId, bytes, null, cancellationToken);
+
+    internal static async Task WriteFactorySnapshotAtomicallyAsync(
+        HostPaths hostPaths, ProjectSlug project, string runtimeId, ReadOnlyMemory<byte> bytes,
+        Func<CancellationToken, Task>? beforeFlush, CancellationToken cancellationToken)
     {
         var path = RuntimePaths.Normalize(hostPaths.FactoryTelemetryPath(project));
         var temporaryPath = path + "." + runtimeId + ".tmp";
@@ -192,7 +197,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         if (!OperatingSystem.IsWindows())
         {
             Directory.CreateDirectory(directory);
-            await WritePortableFactorySnapshotAsync(temporaryPath, path, bytes, cancellationToken).ConfigureAwait(false);
+            await WritePortableFactorySnapshotAsync(temporaryPath, path, bytes, beforeFlush, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -213,6 +218,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
             {
                 temporaryCreated = true;
                 await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+                if (beforeFlush is not null) await beforeFlush(cancellationToken).ConfigureAwait(false);
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
 
@@ -244,7 +250,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         if (!OperatingSystem.IsWindows())
         {
             Directory.CreateDirectory(directory);
-            await WritePortableFactorySnapshotAsync(temporaryPath, fullPath, bytes, cancellationToken).ConfigureAwait(false);
+            await WritePortableFactorySnapshotAsync(temporaryPath, fullPath, bytes, null, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -451,7 +457,8 @@ internal sealed class InvocationRuntimeFiles : IDisposable
     }
 
     private static async Task WritePortableFactorySnapshotAsync(
-        string temporaryPath, string path, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken)
+        string temporaryPath, string path, ReadOnlyMemory<byte> bytes, Func<CancellationToken, Task>? beforeFlush,
+        CancellationToken cancellationToken)
     {
         var temporaryCreated = false;
         try
@@ -461,6 +468,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
             {
                 temporaryCreated = true;
                 await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+                if (beforeFlush is not null) await beforeFlush(cancellationToken).ConfigureAwait(false);
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
 

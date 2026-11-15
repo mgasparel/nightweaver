@@ -9,6 +9,49 @@ command lifetimes, draft retention, source health and authority boundaries.
 
 ## Local checks
 
+### Telemetry teardown repair
+
+The subsequent human recovery requirement concerns hosted run `43657940380`:
+`ExplicitCursorsAreClampedToTheBoundedReplayWindow` failed when fixture cleanup
+deleted a still-open telemetry `.tmp` file. The historical owner report was
+empty; it does not identify that run's file holder.
+
+The controlled regression
+`PublisherDisposalSettlesOpenSnapshotBeforeFixtureCleanup` holds the actual
+atomic snapshot stream before flush, with its normal Windows sharing policy and
+directory pins. Before the repair, both cases failed: final-publication disposal
+returned after two seconds, and background-writer disposal after four seconds,
+while Windows rejected deletion of the open temporary file. This establishes a
+writer-lifetime defect capable of the exact observed cleanup failure without
+requiring an external file holder. It does not retrospectively identify the
+historical holder.
+
+`WaitAsync` bounded the wait without canceling or settling the underlying write.
+Disposal now stops observations, cancels and joins background producers, then
+attempts the final stopped snapshot with the existing two-second publication
+budget applied to the write's cancellation token. It awaits actual stream/pin
+unwind before disposing synchronization resources or returning. Concurrent
+disposal joins the same completion. The regression checks cancellation, both
+write lifetimes, concurrent disposal and immediate native cleanup without
+retries. The flush gate is a per-publisher internal test seam; normal writes use
+the unchanged atomic filesystem implementation. No fixture cleanup retries,
+test coverage or six-thread scheduling limits changed.
+
+The focused telemetry suite passed all 15 cases after the repair, including the
+original cursor test and both new settlement cases. The final complete suite
+passed all **1,194 tests**, zero failures/skips, in **293.541 seconds** including
+build, fixture publishing and teardown at the unchanged six-thread setting.
+This is candidate timing, not an integrated-main measurement. The warning-as-error
+solution build and all 33 Studio unit tests passed. Fresh browser results are
+recorded in the ns-mbd.4 implementation evidence comment: Attention/Workspace
+passed all real-command, live-update and history checks with zero uncaught page
+errors; all 21 captures at 1440/375/720 CSS pixels were reviewed. The subsequent
+shell probe encountered four HTTP 429s on that reused fixture; shell and legacy
+smoke passed with zero browser errors on a separate fresh isolated fixture.
+Both exact AppHosts stopped successfully and left empty Aspire inventories.
+
+### Original Studio validation
+
 - `dotnet build Nightweaver.slnx -warnaserror`: passed, zero warnings/errors.
 - `npm test --prefix src/Nightweaver.Web/Studio`: **33 passed**, including 11 new
   identity, wire-contract, duplicate-submit, late-response, 404/409, partial-write,

@@ -17,6 +17,74 @@ namespace Nightweaver.Tests;
 
 public sealed class FactoryTelemetryIntegrationTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PublisherDisposalSettlesOpenSnapshotBeforeFixtureCleanup(bool backgroundWrite)
+    {
+        using var directory = new TempDirectory();
+        var host = new HostPaths(directory.CreateDirectory("host"));
+        var target = directory.CreateDirectory("target");
+        var project = CreateProject(host, target, "settlement-test", capacity: 1);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var writes = 0;
+        async Task HoldOpenSnapshotAsync(CancellationToken cancellationToken)
+        {
+            // Let startup publish, then hold the real atomic writer's no-delete-sharing
+            // stream. Delayed I/O completion can outlive a cancellation request.
+            if (backgroundWrite && Interlocked.Increment(ref writes) == 1) return;
+            using var registration = cancellationToken.Register(() => cancellationRequested.TrySetResult());
+            entered.TrySetResult();
+            await release.Task;
+        }
+
+        var publisher = new FactoryTelemetryPublisher(host, project,
+            new ValidatedTargetRepository(target, "main"), 1, 1,
+            beforeSnapshotFlush: HoldOpenSnapshotAsync);
+        Task? disposal = null;
+        Task? concurrentDisposal = null;
+        try
+        {
+            if (backgroundWrite)
+            {
+                await publisher.StartAsync(TestContext.Current.CancellationToken);
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            }
+            disposal = publisher.DisposeAsync().AsTask();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            var temporaryPath = host.FactoryTelemetryPath(project.Name) + "." + publisher.RuntimeId + ".tmp";
+            Assert.True(File.Exists(temporaryPath));
+            if (OperatingSystem.IsWindows())
+                Assert.Throws<IOException>(() => File.Delete(temporaryPath));
+
+            // Cross both existing two-second waits without letting native I/O settle.
+            await Task.WhenAny(disposal, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+            if (disposal.IsCompleted) directory.PreserveForFailure();
+            Assert.False(disposal.IsCompleted,
+                "Publisher disposal returned while its telemetry temporary file was still open; fixture cleanup would race the writer.");
+            Assert.True(cancellationRequested.Task.IsCompletedSuccessfully,
+                "Shutdown must cancel the actual write, rather than only abandoning a wait.");
+            concurrentDisposal = publisher.DisposeAsync().AsTask();
+            Assert.False(concurrentDisposal.IsCompleted,
+                "Concurrent disposal must join the same writer settlement.");
+        }
+        finally
+        {
+            release.TrySetResult();
+            if (disposal is not null) await disposal;
+            else await publisher.DisposeAsync();
+            if (concurrentDisposal is not null) await concurrentDisposal;
+        }
+
+        // No cleanup retries: native handles and temporary siblings must already be gone.
+        var snapshotPath = host.FactoryTelemetryPath(project.Name);
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(snapshotPath)!, "*.tmp"));
+        using (new FileStream(snapshotPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) { }
+        File.Delete(snapshotPath);
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
