@@ -24,6 +24,8 @@ public sealed class HostedWorkflowContractTests
         Assert.Contains("dotnet tool install Aspire.Cli --version 13.6.5 --tool-path $tools", workflow, StringComparison.Ordinal);
         Assert.Contains("setup --install-path $bundle", workflow, StringComparison.Ordinal);
         Assert.Contains("AspireCliBundlePath=$bundle", workflow, StringComparison.Ordinal);
+        Assert.Contains("$env:ASPIRE_HOME = $bundle", workflow, StringComparison.Ordinal);
+        Assert.Contains("\"ASPIRE_HOME=$bundle\" | Out-File $env:GITHUB_ENV", workflow, StringComparison.Ordinal);
         Assert.True(workflow.IndexOf("Prepare Aspire CLI bundle", StringComparison.Ordinal)
             < workflow.IndexOf("Restore and build", StringComparison.Ordinal));
     }
