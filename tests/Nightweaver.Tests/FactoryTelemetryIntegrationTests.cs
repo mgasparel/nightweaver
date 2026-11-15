@@ -533,8 +533,8 @@ public sealed class FactoryTelemetryIntegrationTests
         }
         catch (Exception exception)
         {
-            var first = firstExecution.IsCompletedSuccessfully ? JsonSerializer.Serialize(firstExecution.Result) : firstExecution.Status.ToString();
-            var second = secondExecution.IsCompletedSuccessfully ? JsonSerializer.Serialize(secondExecution.Result) : secondExecution.Status.ToString();
+            var first = firstExecution.IsCompletedSuccessfully ? JsonSerializer.Serialize(await firstExecution) : firstExecution.Status.ToString();
+            var second = secondExecution.IsCompletedSuccessfully ? JsonSerializer.Serialize(await secondExecution) : secondExecution.Status.ToString();
             throw new InvalidOperationException(
                 $"Native slot observation failed. Snapshot: {JsonSerializer.Serialize(reader.Read())}; "
                 + $"publication failures: {string.Join("; ", publicationFailures)}; first: {first}; second: {second}", exception);
