@@ -59,3 +59,14 @@ The multi-pool smoke holds Planning preparation until the unrelated native Imple
 Stream-cleanup readiness reports are published by writing and closing a temporary JSON file before atomic rename. Windows observers can still encounter an incompatible open handle on the published path. `StreamReadinessTests` holds exclusive and read-sharing writers open, verifies recovery after closure, and verifies that persistent sharing expires within the original deadline. The coordinator retries only JSON incompleteness and Windows sharing/lock violations (32/33); other IO failures propagate. The native blocked-drain and launch-burst cases remain retained. Planning authority and graph reads are batched as described in [Planning evidence](../docs/agents/planning-evidence.md), retaining fresh checks across writes and all existing fault-injection and native publication cases. No timeout, coverage or parallelism reduction is involved.
 
 Lifecycle readiness obtains both unassigned-open and exact-owned-in-progress memberships from one unlimited native `bd list --ready --status open,in_progress` read. Native Beads still decides blockers and deferment. Every returned row is checked against the fresh complete inventory before ownership selection and the publication gate; a mismatched pair is refreshed once, and repeated disagreement fails closed. The real inventory fixture compares both memberships with the former separate commands across blocked, deferred, foreign, assigned, closed, gate and more-than-50-row controls. Component tests retain tracker failure, stale-pair refresh, competing claims and interstage mutation coverage. Collection weights use the complete local `repair-recovery-isolated.xml` run (1,207 passing tests), including operational observations and measured worktree cost. All cases, deadlines and the six-thread cap remain unchanged; weights and filtered checks do not establish the five-minute gate.
+
+
+The ns-mbd.5 timing follow-up overlaps the independent CLI publish, standalone
+AgentCliTrap publish and isolated Beads-template initialization before any test
+collection starts. The existing CLI project build gate remains, all prerequisites
+settle even on failure, and trap checks still run before the fixture is exposed.
+This changes setup order only: no test, native boundary, deadline or six-thread
+limit is removed. Collection weights use the 1,230-case merged-main measurement,
+including previously unweighted native collections. A fast setup probe improved
+from 9.817s to 8.055s; that diagnostic and scheduling replay are not complete-suite
+or latest-main acceptance. The complete timed command above remains the gate.
