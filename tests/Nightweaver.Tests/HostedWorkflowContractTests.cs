@@ -7,9 +7,10 @@ public sealed class HostedWorkflowContractTests
     public void DraftEventsSkipTheOnlyExpensiveJobAndReadinessRetriggersIt()
     {
         var workflow = Read(".github", "workflows", "build-test.yml");
-        Assert.Contains("types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]", workflow, StringComparison.Ordinal);
+        Assert.Contains("types: [opened, synchronize, reopened, ready_for_review]", workflow, StringComparison.Ordinal);
         Assert.Contains("if: github.event_name != 'pull_request' || github.event.pull_request.draft == false", workflow, StringComparison.Ordinal);
         Assert.Contains("branches: [main]", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("converted_to_draft", workflow, StringComparison.Ordinal);
         Assert.Equal(1, workflow.Split("runs-on:", StringSplitOptions.None).Length - 1);
         Assert.True(workflow.IndexOf("    if:", StringComparison.Ordinal) < workflow.IndexOf("    runs-on:", StringComparison.Ordinal));
         Assert.Contains("group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}", workflow, StringComparison.Ordinal);
