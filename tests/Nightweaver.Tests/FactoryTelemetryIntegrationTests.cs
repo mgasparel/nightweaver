@@ -457,8 +457,10 @@ public sealed class FactoryTelemetryIntegrationTests
         var promptRoot = Directory.CreateDirectory(Path.Combine(host.Root, "prompts"));
         await File.WriteAllTextAsync(Path.Combine(promptRoot.FullName, "implementer.md"), "Fixture prompt.",
             TestContext.Current.CancellationToken);
+        var publicationFailures = new System.Collections.Concurrent.ConcurrentQueue<string>();
         await using var publisher = new FactoryTelemetryPublisher(host, project, repository,
-            project.Concurrency.MaxConcurrentDelivery, ConcurrencyConfig.MergerSlots);
+            project.Concurrency.MaxConcurrentDelivery, ConcurrencyConfig.MergerSlots,
+            reportFailure: publicationFailures.Enqueue);
         await publisher.StartAsync(TestContext.Current.CancellationToken);
         var reader = factory.Services.GetRequiredService<FactoryTelemetryReader>();
 
@@ -494,8 +496,9 @@ public sealed class FactoryTelemetryIntegrationTests
             TestContext.Current.CancellationToken);
         try
         {
-            await WaitForFileAsync(firstReady, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-            await WaitForFileAsync(secondReady, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            await Task.WhenAll(
+                WaitForFileAsync(firstReady, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken),
+                WaitForFileAsync(secondReady, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
             var snapshot = await WaitForSnapshotAsync(reader, value =>
                 value.Delivery.Slots.Count(slot => slot.Invocation?.Status == "running") == 2,
                 TestContext.Current.CancellationToken);
@@ -527,6 +530,14 @@ public sealed class FactoryTelemetryIntegrationTests
             var secondResult = await secondExecution.WaitAsync(deadline.Token);
             Assert.Equal(AgentExecutionStatus.Exited, firstResult.Status);
             Assert.Equal(AgentExecutionStatus.Exited, secondResult.Status);
+        }
+        catch (Exception exception)
+        {
+            var first = firstExecution.IsCompletedSuccessfully ? JsonSerializer.Serialize(firstExecution.Result) : firstExecution.Status.ToString();
+            var second = secondExecution.IsCompletedSuccessfully ? JsonSerializer.Serialize(secondExecution.Result) : secondExecution.Status.ToString();
+            throw new InvalidOperationException(
+                $"Native slot observation failed. Snapshot: {JsonSerializer.Serialize(reader.Read())}; "
+                + $"publication failures: {string.Join("; ", publicationFailures)}; first: {first}; second: {second}", exception);
         }
         finally
         {

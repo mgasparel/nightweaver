@@ -206,3 +206,23 @@ worktree. These results resolve the candidate validation blocker without
 attributing every historical timeout to contention. Exact-head hosted
 verification and a complete latest-main measurement after integration remain
 separate final gates.
+
+
+### Hosted follow-up repair
+
+The first final hosted run, 43717429479, failed two of 1,223 cases in 349.534s.
+The generated Delivery drain exhausted its unchanged 15-second claim-finalization
+budget; retained native timings showed an 11.898-second inventory read. Drain
+now obtains a fresh exact-Bead preflight, validates the guarded update's complete
+returned row, and performs one exact-Bead reconciliation only if the response
+is uncertain. It never replays the release or accepts changed workflow/ownership.
+Seven fast cases fail against the original implementation and pass the repair;
+the complete Delivery/DispatchClaim selection passes 57 cases.
+
+The separate two-native-slot telemetry observation case passed locally after
+the hosted failure; its cause is not established. Its readiness waits now run
+concurrently under the existing ten-second limits, and any future failure
+records the persisted reader result, publisher diagnostics and both executor
+outcomes. The five-second publication wait and 25-second invocation clocks
+remain unchanged. No failing observation is represented as proven repaired by
+a passing rerun. Full and hosted verification of this follow-up remain required.

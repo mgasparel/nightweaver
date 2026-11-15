@@ -7,6 +7,63 @@ namespace Nightweaver.Tests;
 
 public sealed class DeliverySlotCoordinatorTests
 {
+    [Theory]
+    [InlineData("receipt", true, 1)]
+    [InlineData("malformed", true, 2)]
+    [InlineData("lost-after", true, 2)]
+    [InlineData("lost-before", false, 2)]
+    [InlineData("foreign", false, 2)]
+    [InlineData("read-failure", false, 2)]
+    [InlineData("wrong-state", false, 1)]
+    public async Task GracefulDrainUsesTargetedAuthorityAndSettledReleaseEvidence(
+        string mode, bool completed, int expectedReads)
+    {
+        using var fixture = new FastSlotFixture();
+        var bead = fixture.CreateTask();
+        var gate = new ContinuousStopGate();
+        using var context = ContinuousAgentLaunchContext.Enter(gate);
+        var draining = false;
+        var released = false;
+        var reads = 0;
+        var releases = 0;
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            if (draining && SlotFixture.IsInventoryRead(request))
+                throw new InvalidOperationException("Drain must not read unrelated inventory.");
+            if (draining && request.Arguments.Contains("show"))
+            {
+                reads++;
+                if (released && mode == "read-failure") throw new IOException("lost reconciliation");
+            }
+            if (draining && SlotFixture.IsRelease(bead, request))
+            {
+                releases++;
+                if (mode == "lost-before") throw new IOException("write did not settle");
+                await fixture.Runner.RunAsync(request, token);
+                released = true;
+                if (mode == "foreign") await fixture.SimulateCompetingClaimAsync(bead);
+                if (mode == "lost-after") throw new IOException("lost response after commit");
+                if (mode is "malformed" or "foreign" or "read-failure") return new ProcessResult(0, "{}", "");
+                var row = System.Text.Json.Nodes.JsonNode.Parse(fixture.ReadBead(bead).Payload.GetRawText())!;
+                if (mode == "wrong-state") row["labels"] = new System.Text.Json.Nodes.JsonArray("stage:qa");
+                return new ProcessResult(0, new System.Text.Json.Nodes.JsonArray(row).ToJsonString(), "");
+            }
+            return await fixture.Runner.RunAsync(request, token);
+        });
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            fixture.Advance(bead, role);
+            gate.RequestStop();
+            draining = true;
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, runner);
+        Assert.Equal(completed, outcome.ClaimHandoffCompleted);
+        Assert.Equal(completed ? DeliverySlotDisposition.Refused : DeliverySlotDisposition.Failed, outcome.Disposition);
+        Assert.Equal(expectedReads, reads);
+        Assert.Equal(1, releases);
+        Assert.Single(fixture.ExpectedStates);
+    }
+
     [Fact]
     public async Task UnlabeledPlanRunsAllThreeRolesAndReleasesOnceAtMerge()
     {
@@ -1580,6 +1637,11 @@ public sealed class DeliverySlotCoordinatorTests
 
             if (request.Arguments.SequenceEqual(BeadsCommand.Create(repositoryPath).Arguments))
                 return Task.FromResult(Json(beads.Select(ToRow)));
+            if (request.Arguments.Contains("show"))
+            {
+                var id = request.Arguments[request.Arguments.ToList().IndexOf("show") + 1];
+                return Task.FromResult(Json(beads.Where(bead => bead.Id == id).Select(ToRow)));
+            }
             if (request.Arguments.SequenceEqual(BeadsCommand.CreateLifecycleReadiness(repositoryPath).Arguments))
                 return Task.FromResult(Json(beads.Where(bead => bead.Status is "open" or "in_progress").Select(ToRow)));
 
