@@ -1,5 +1,71 @@
 # Studio Digest acceptance
 
+## Resumed verification after the shared repair
+
+**Validation remains blocked.** The fresh complete run reported the native
+observer and Merger timeouts described below. The earlier passing rebase run
+does not establish reliable complete-suite acceptance.
+
+The validated 2026-11-15 retry starts from retained candidate
+`d371cdc24b21c07d0e3780a2c8444a50a76c99eb`, rebased onto main `72ae9de`.
+The candidate includes the integrated ns-mbd.5 repairs: `a4a8212` retries
+Windows readiness sharing/lock violations within the original deadline and
+batches fresh Planning verification reads; `3de792e` batches lifecycle readiness
+reads. Subsequent merged test/runtime work is also present. This reassessment
+uses those integrated repairs and new verification; it does not attribute all
+historical timeouts to the readiness exception or discard the failures below.
+
+Both adapted probes passed again on a fresh exact isolated AppHost:
+`digest-qa.mjs` and `digest-threads-qa.mjs`. Real same-origin checkpoint persistence,
+concurrent external activity remaining unread, external live updates, all windows,
+last-good retention and late-save filter isolation passed. The fourth child,
+sixth standalone item and fifth root retain focus/disclosure/viewport across
+insertion; actual removal restores the Digest disclosure focus. The exact
+AppHost stopped successfully in `finally` before complete-suite verification.
+
+Fresh 1440/375/720 captures replace the linked representative images below.
+Visual review covered compact desktop/mobile, expanded 720px, empty, caught-up,
+retained-error and focused-child states: long titles wrap, actions remain
+reachable, focus is visible and source errors retain their context. Probe output
+is preserved in `TestResults/digest-resume-20261115` and
+`TestResults/digest-threads-resume-20261115`.
+
+Studio `npm test` passes all 46 tests. `npm run build` passes TypeScript/Vite;
+Vite reports the existing vendor-script and React Router directive notices.
+`dotnet build Nightweaver.slnx -warnaserror --no-restore` passes with zero
+warnings/errors. Three mixed line endings in the retained checkpoint regression
+were normalized; its behavior is unchanged.
+
+The retained maintenance-rebase report independently confirms 1,233/1,233 passed,
+zero failed/skipped, exit 0 and 200.2115171 seconds including build/publish/teardown
+at normal six-thread parallelism (`TestResults/digest-rebase-full.xml`,
+`TestResults/rebase-20261115/time.json`). This is candidate evidence; latest-main
+timing must still be measured after integration. Hosted verification remains
+Merger-owned and the PR stays draft.
+
+The fresh complete command is `dotnet test --solution Nightweaver.slnx
+--minimum-expected-tests 995 --report-xunit-xml --report-xunit-xml-filename
+digest-resume-full.xml --show-slowest-tests 20`, with the committed six threads.
+Result: **1,231/1,233 passed, two failed, zero skipped, exit 2; 312.5061735
+seconds** outer wall time including build, fixture publishing, tests and teardown.
+This fails both correctness and the five-minute candidate timing check.
+`NativeBdSmokeDetectsExternalCommentsAndDependenciesAndReportsCost` timed out
+waiting for the combined external comment/dependency update after its initial
+Workspace read succeeded (line 265). The retained envelope reports repeated
+`source-timeout` for detail, comments, relations and inventory, with last-good
+data still visible. `NativeMergerSynchronizesChecksAndLeavesCompletionToTheCompletionOwner`
+also timed out at `MergerPoolIntegrationTests.cs:97`. Its fixture is retained at
+`H:/Nightweaver/prod/tmp/nightshift/ns-mbd.6/20261115T2113595433551Z-implementer/nightweaver-17fcf1de692c4ada8b3d82b8190ea56c`.
+The causes are not established. No native repair, deadline increase, coverage
+reduction or broad rerun was used to hide these failures. The full log and outer
+stopwatch evidence are preserved in that invocation's `full-suite.log` and
+`full-suite-time.json`.
+
+## Historical implementation and repair evidence
+
+The following results describe the earlier candidates before the shared repair
+integrated. Their failed reports and invocation evidence remain preserved.
+
 The 2026-11-15 review repair reproduced the fourth-child focus loss in the
 adapted browser probe before the fix (`false !== true` for the original control's
 connected/focused identity). Child and standalone previews now retain only
