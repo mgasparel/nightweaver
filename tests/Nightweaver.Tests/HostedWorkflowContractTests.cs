@@ -7,13 +7,27 @@ public sealed class HostedWorkflowContractTests
     public void DraftEventsSkipTheOnlyExpensiveJobAndReadinessRetriggersIt()
     {
         var workflow = Read(".github", "workflows", "build-test.yml");
-        Assert.Contains("types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]", workflow, StringComparison.Ordinal);
+        Assert.Contains("types: [opened, synchronize, reopened, ready_for_review]", workflow, StringComparison.Ordinal);
         Assert.Contains("if: github.event_name != 'pull_request' || github.event.pull_request.draft == false", workflow, StringComparison.Ordinal);
         Assert.Contains("branches: [main]", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("converted_to_draft", workflow, StringComparison.Ordinal);
         Assert.Equal(1, workflow.Split("runs-on:", StringSplitOptions.None).Length - 1);
         Assert.True(workflow.IndexOf("    if:", StringComparison.Ordinal) < workflow.IndexOf("    runs-on:", StringComparison.Ordinal));
         Assert.Contains("group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}", workflow, StringComparison.Ordinal);
         Assert.Contains("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FullSolutionBuildHasAnExplicitVersionedAspireBundle()
+    {
+        var workflow = Read(".github", "workflows", "build-test.yml");
+        Assert.Contains("dotnet tool install Aspire.Cli --version 13.6.5 --tool-path $tools", workflow, StringComparison.Ordinal);
+        Assert.Contains("setup --install-path $bundle", workflow, StringComparison.Ordinal);
+        Assert.Contains("AspireCliBundlePath=$bundle", workflow, StringComparison.Ordinal);
+        Assert.Contains("$env:ASPIRE_HOME = $bundle", workflow, StringComparison.Ordinal);
+        Assert.Contains("\"ASPIRE_HOME=$bundle\" | Out-File $env:GITHUB_ENV", workflow, StringComparison.Ordinal);
+        Assert.True(workflow.IndexOf("Prepare Aspire CLI bundle", StringComparison.Ordinal)
+            < workflow.IndexOf("Restore and build", StringComparison.Ordinal));
     }
 
     [Fact]

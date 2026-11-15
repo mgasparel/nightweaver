@@ -51,6 +51,101 @@ public sealed class MergerOutcomeVerifierTests
         Assert.Equal(1, fixture.Runner.RequiredChecksCount);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AcceptsPinnedFailedReadinessJobAfterDraftConversionMasksTheRequiredCheck(bool masked)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.PinRemoteFinding();
+        fixture.Runner.CheckSkipped = masked;
+        fixture.Runner.RequiredLinkIsPinned = !masked;
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.True(result.Succeeded, result.Diagnostic);
+        Assert.Equal(2, fixture.Runner.PullRequestViewCount);
+    }
+
+    [Fact]
+    public async Task PinnedFailureWithSkippedRollupReachesOneGuardedRepairHandoff()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.PinRemoteFinding();
+        fixture.Runner.CheckSkipped = true;
+        fixture.Runner.Status = "open";
+        fixture.Runner.Assignee = null;
+        var result = await fixture.RunSlotAsync();
+        Assert.True(result.RepairHandoffCompleted, result.Diagnostic);
+        Assert.Equal("stage:implement", fixture.Runner.Stage);
+        Assert.Equal(1, fixture.Runner.RepairCycles);
+        Assert.Null(fixture.Runner.Assignee);
+        var write = Assert.Single(fixture.Runner.PublicationWrites);
+        Assert.Contains("--if-status", write);
+        Assert.Contains("--if-assignee", write);
+    }
+
+    [Theory]
+    [InlineData("head")]
+    [InlineData("repository")]
+    [InlineData("head-repository")]
+    [InlineData("branch")]
+    [InlineData("pr")]
+    [InlineData("event")]
+    [InlineData("attempt")]
+    [InlineData("job")]
+    [InlineData("job-head")]
+    [InlineData("job-name")]
+    [InlineData("workflow")]
+    [InlineData("skipped")]
+    [InlineData("passed")]
+    [InlineData("cancelled")]
+    [InlineData("pending")]
+    [InlineData("link")]
+    [InlineData("old-run")]
+    [InlineData("rerun")]
+    [InlineData("newer-passed")]
+    [InlineData("hidden-passed")]
+    [InlineData("history-overflow")]
+    [InlineData("jobs-overflow")]
+    public async Task RejectsUnrelatedOrNonFailingPinnedHostedEvidence(string mutation)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.PinRemoteFinding();
+        fixture.Runner.CheckSkipped = true;
+        fixture.Runner.HostedMutation = mutation;
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Empty(fixture.Runner.PublicationWrites);
+    }
+
+    [Fact]
+    public async Task RejectsChangedHeadAfterPinnedFailureVerification()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.PinRemoteFinding();
+        fixture.Runner.CheckSkipped = true;
+        fixture.Runner.HeadAfterChecks = new string('d', 40);
+        var result = await fixture.VerifyAsync();
+        Assert.False(result.Succeeded);
+        Assert.Contains("changed while required checks", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(8)]
+    public async Task ReadsRequiredCheckJsonDespiteGhCheckStatusExitCode(int exitCode)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.PinRemoteFinding();
+        fixture.Runner.CheckSkipped = true;
+        fixture.Runner.RequiredChecksExitCode = exitCode;
+        var result = await fixture.VerifyAsync();
+        Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
     [Fact]
     public async Task AcceptsLocalBuildFailureWithoutAFailedRemoteCheck()
     {
@@ -719,6 +814,15 @@ public sealed class MergerOutcomeVerifierTests
             SetFinding("checks", command, summary, details, "local", exitCode, transcript);
         }
 
+        internal void PinRemoteFinding()
+        {
+            var fields = JsonSerializer.Deserialize<Dictionary<string, object?>>(Comments[^1].Text)!;
+            fields["workflow_run_id"] = 100L;
+            fields["workflow_run_attempt"] = 1L;
+            fields["workflow_job_id"] = 200L;
+            Comments = [new("current", JsonSerializer.Serialize(fields), DateTimeOffset.UtcNow)];
+        }
+
         internal void SetFinding(string kind, string subject, string summary, string details,
             string? checkSource = null, int? localExitCode = null, string? transcript = null)
         {
@@ -782,6 +886,7 @@ public sealed class MergerOutcomeVerifierTests
     private sealed class VerifierProcessRunner(string head, string branch, string pullRequest) : IProcessRunner
     {
         private readonly SystemProcessRunner system = new();
+        private readonly string originalHead = head;
         internal string OriginUrl { get; set; } = "https://github.com/example/project.git";
         internal string? OriginUrlAfterChecks { get; set; }
         internal string ReportedPullRequestUrl { get; set; } = pullRequest;
@@ -796,6 +901,9 @@ public sealed class MergerOutcomeVerifierTests
         private readonly List<string> publishedComments = [];
         internal bool CheckFailed { get; set; } = true;
         internal bool CheckSkipped { get; set; }
+        internal string? HostedMutation { get; set; }
+        internal int RequiredChecksExitCode { get; set; }
+        internal bool RequiredLinkIsPinned { get; set; }
         internal string AdvertisedHead { get; set; } = head;
         internal string? HeadAfterChecks { get; set; }
         internal string BaseBranch { get; set; } = "main";
@@ -807,6 +915,62 @@ public sealed class MergerOutcomeVerifierTests
 
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
+            if (request.FileName == "gh" && request.Arguments[0] == "api")
+            {
+                Assert.Equal("github.com", request.Arguments[2]);
+                var path = request.Arguments[3];
+                Assert.StartsWith("repos/example/project/actions/", path, StringComparison.Ordinal);
+                if (path.Contains("/jobs/", StringComparison.Ordinal))
+                {
+                    var current = path.EndsWith("/201", StringComparison.Ordinal);
+                    return Task.FromResult(Json(new
+                    {
+                        id = current ? 201L : 200L,
+                        run_id = current ? 101L : HostedMutation == "job" ? 999L : 100L,
+                        run_attempt = 1,
+                        head_sha = HostedMutation == "job-head" ? new string('e', 40) : originalHead,
+                        name = HostedMutation == "job-name" ? "unrelated" : "fixture checks",
+                        status = HostedMutation == "pending" ? "in_progress" : "completed",
+                        conclusion = current ? HostedMutation == "newer-passed" ? "success" : "skipped" : HostedMutation switch
+                        {
+                            "skipped" => "skipped", "passed" => "success", "cancelled" => "cancelled", _ => "failure"
+                        }
+                    }));
+                }
+                object RunRow(long runId, bool rerun = false) => new
+                {
+                    id = runId,
+                    run_attempt = HostedMutation == "attempt" || rerun ? 2 : 1,
+                    run_started_at = HostedMutation == "old-run" ? "2026-11-03T12:00:00Z" : "2026-11-04T12:01:00Z",
+                    workflow_id = runId == 101 && HostedMutation == "workflow" ? 888 : 300,
+                    head_sha = HostedMutation == "head" ? new string('e', 40) : originalHead,
+                    head_branch = HostedMutation == "branch" ? "unrelated" : branch,
+                    @event = HostedMutation == "event" ? "workflow_dispatch" : "pull_request",
+                    repository = new { full_name = HostedMutation == "repository" ? "unrelated/repo" : "example/project" },
+                    head_repository = new { full_name = HostedMutation == "head-repository" ? "fork/project" : "example/project" },
+                    pull_requests = new[] { new { number = HostedMutation == "pr" ? 999 : 123 } },
+                    status = "completed", conclusion = runId == 100 ? "failure" : "success"
+                };
+                if (path.Contains("/workflows/", StringComparison.Ordinal))
+                {
+                    var rows = new List<object> { RunRow(100), RunRow(101) };
+                    if (HostedMutation == "hidden-passed") rows.Add(RunRow(102));
+                    return Task.FromResult(Json(new { total_count = HostedMutation == "history-overflow" ? 11 : rows.Count, workflow_runs = rows }));
+                }
+                if (path.Contains("/jobs?", StringComparison.Ordinal))
+                {
+                    var hidden = path.Contains("/runs/102/", StringComparison.Ordinal);
+                    return Task.FromResult(Json(new
+                    {
+                        total_count = HostedMutation == "jobs-overflow" ? 101 : 1,
+                        jobs = new[] { new { id = hidden ? 202 : 201, run_id = hidden ? 102 : 101, run_attempt = 1,
+                            name = "fixture checks", status = "completed", conclusion = hidden ? "success" : "skipped" } }
+                    }));
+                }
+                var latest = path.EndsWith("/101", StringComparison.Ordinal);
+                var rerun = path.EndsWith("/100", StringComparison.Ordinal) && HostedMutation == "rerun";
+                return Task.FromResult(Json(RunRow(latest ? 101 : 100, rerun)));
+            }
             if (request.FileName == "git")
             {
                 if (request.Arguments.SequenceEqual(["config", "--get", "remote.origin.url"], StringComparer.Ordinal))
@@ -917,9 +1081,10 @@ public sealed class MergerOutcomeVerifierTests
                     ? request.Arguments[repoIndex + 1] : null;
                 RequiredChecksCount++;
                 if (HeadAfterChecks is not null) AdvertisedHead = HeadAfterChecks;
-                return Task.FromResult(new ProcessResult(0, JsonSerializer.Serialize(new[]
+                return Task.FromResult(new ProcessResult(RequiredChecksExitCode, JsonSerializer.Serialize(new[]
                 {
-                    new { name = "fixture checks", state = CheckSkipped ? "SKIPPED" : CheckFailed ? "FAILURE" : "SUCCESS", bucket = CheckSkipped ? "skipping" : CheckFailed ? "fail" : "pass" }
+                    new { name = "fixture checks", state = CheckSkipped ? "SKIPPED" : CheckFailed ? "FAILURE" : "SUCCESS", bucket = CheckSkipped ? "skipping" : CheckFailed ? "fail" : "pass",
+                        link = HostedMutation == "link" ? "https://github.com/unrelated/repo/actions/runs/101/job/201" : RequiredLinkIsPinned ? "https://github.com/example/project/actions/runs/100/job/200" : "https://github.com/example/project/actions/runs/101/job/201" }
                 }), string.Empty));
             }
             throw new InvalidOperationException($"Unexpected verifier command: {request.FileName} {string.Join(' ', request.Arguments)}");

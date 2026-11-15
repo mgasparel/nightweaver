@@ -13,7 +13,10 @@ internal sealed record MergerRejectionFinding(
     string Details,
     string SourceCommentId,
     string? CheckSource = null,
-    int? LocalExitCode = null);
+    int? LocalExitCode = null,
+    HostedFailureIdentity? HostedFailure = null);
+
+internal sealed record HostedFailureIdentity(long RunId, long Attempt, long JobId);
 
 internal sealed record MergerRejectionVerification(bool Succeeded, string Diagnostic,
     MergerRejectionFinding? Finding = null);
@@ -327,8 +330,8 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                 return Failed("The Merger invocation log contains invalid UTF-8 and cannot verify its rejection finding.");
             if (finding.Kind == "checks")
             {
-                var checkFailure = await VerifyCheckFailureAsync(session.Worktree.Path, finding,
-                    expectedBranch, expectedHead!, log, cancellationToken).ConfigureAwait(false);
+                var checkFailure = await VerifyCheckFailureAsync(session.Repository, session.Worktree.Path, finding,
+                    expectedBranch, expectedHead!, invocation.InvocationId, log, cancellationToken).ConfigureAwait(false);
                 if (checkFailure is not null) return Failed(checkFailure);
             }
             else if (!log.Text.Contains(finding.Subject, StringComparison.OrdinalIgnoreCase)
@@ -349,10 +352,12 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
     }
 
     private async Task<string?> VerifyCheckFailureAsync(
+        ValidatedTargetRepository repository,
         string worktreePath,
         MergerRejectionFinding finding,
         string expectedBranch,
         string expectedHead,
+        string invocationId,
         FailureLogTail log,
         CancellationToken cancellationToken)
     {
@@ -363,26 +368,184 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         if (finding.CheckSource == "local")
             return VerifyLocalCheckFailure(finding, expectedHead, log);
 
-        var checks = await RunJsonCommandAsync("gh",
-            ["pr", "checks", finding.PullRequest, "--required", "--json", "name,state,bucket"],
-            worktreePath, cancellationToken).ConfigureAwait(false);
+        var identity = GitHubRepositoryIdentity.ParsePullRequestUrl(finding.PullRequest);
+        if (identity is null || repository.OriginRepository is not { } origin
+            || !origin.Matches(identity.Repository)
+            || !await OriginMatchesValidatedTargetAsync(repository, origin, cancellationToken).ConfigureAwait(false))
+            return "The remote failure does not identify the validated Target Repository origin.";
+
+        var checks = await processRunner.RunAsync(new ProcessRequest("gh",
+            ["pr", "checks", finding.PullRequest, "--required", "--json", "name,state,bucket,link"],
+            worktreePath, new Dictionary<string, string?> { ["GH_PROMPT_DISABLED"] = "1" }, ProcessTimeout), cancellationToken).ConfigureAwait(false);
+        // gh returns 1 for failed checks and 8 for pending checks, with valid JSON.
+        if (checks.ExitCode is not (0 or 1 or 8))
+            return "Could not read required pull request checks.";
         using var checksDocument = JsonDocument.Parse(checks.StandardOutput, new JsonDocumentOptions { MaxDepth = 8 });
         if (checksDocument.RootElement.ValueKind != JsonValueKind.Array)
             return "gh pr checks did not return a JSON array of required checks.";
-        var matchedFailure = checksDocument.RootElement.EnumerateArray().Any(check =>
+        var required = checksDocument.RootElement.EnumerateArray().Where(check =>
             check.ValueKind == JsonValueKind.Object
-            && ReadString(check, "name", out var name) && name == finding.Subject
-            && ReadString(check, "bucket", out var bucket) && bucket == "fail"
-            && ReadString(check, "state", out var checkState)
-            && checkState is "FAILURE" or "ERROR" or "TIMED_OUT" or "CANCELLED");
-        if (!matchedFailure)
-            return "No required check with the reported name is in a failed terminal state for the current HEAD.";
+            && ReadString(check, "name", out var name) && name == finding.Subject).ToArray();
+        if (finding.HostedFailure is { } hosted)
+        {
+            if (required.Length != 1 || !ReadString(required[0], "link", out var link))
+                return "The reported job is not an identifiable required check.";
+            var failure = await VerifyHostedFailureAsync(identity, hosted, finding.Subject, link,
+                expectedBranch, expectedHead, invocationId, worktreePath, cancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
+        }
+        else
+        {
+            var matchedFailure = required.Any(check =>
+                ReadString(check, "bucket", out var bucket) && bucket == "fail"
+                && ReadString(check, "state", out var checkState)
+                && checkState is "FAILURE" or "ERROR" or "TIMED_OUT" or "CANCELLED");
+            if (!matchedFailure)
+                return "No required check with the reported name is in a failed terminal state for the current HEAD.";
+        }
 
         var after = await ReadPullRequestAsync(worktreePath, finding.PullRequest, cancellationToken).ConfigureAwait(false);
+        if (!await OriginMatchesValidatedTargetAsync(repository, origin, cancellationToken).ConfigureAwait(false))
+            return "The Target Repository origin changed while remote failure evidence was being verified.";
         return MatchesCurrentPullRequest(after, finding.PullRequest, expectedBranch, expectedHead)
             ? null
             : "The pull request identity or head changed while required checks were being observed.";
     }
+
+    private async Task<string?> VerifyHostedFailureAsync(GitHubPullRequestIdentity pullRequest,
+        HostedFailureIdentity evidence, string subject, string requiredLink, string branch, string head,
+        string invocationId, string worktreePath, CancellationToken cancellationToken)
+    {
+        // A later draft-skipped check may replace the rollup. Its workflow identity must
+        // still match the pinned failed attempt; an unrelated same-name job is insufficient.
+        var repository = pullRequest.Repository;
+        var prefix = $"https://{repository.Host}/{repository.FullName}/actions/runs/";
+        if (!requiredLink.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return "The required check link does not identify the Target Repository workflow.";
+        var segments = requiredLink[prefix.Length..].Split('/');
+        if (segments.Length != 3 || segments[1] != "job"
+            || !long.TryParse(segments[0], out var currentRunId) || currentRunId <= 0
+            || !long.TryParse(segments[2], out var currentJobId) || currentJobId <= 0)
+            return "The required check link has no bounded workflow run/job identity.";
+
+        async Task<JsonDocument> ReadApi(string path)
+        {
+            var result = await RunJsonCommandAsync("gh", ["api", "--hostname", repository.Host,
+                $"repos/{repository.FullName}/actions/{path}"], worktreePath, cancellationToken).ConfigureAwait(false);
+            return JsonDocument.Parse(result.StandardOutput, new JsonDocumentOptions { MaxDepth = 16 });
+        }
+
+        using var run = await ReadApi($"runs/{evidence.RunId}/attempts/{evidence.Attempt}").ConfigureAwait(false);
+        var row = run.RootElement;
+        if (!MatchesRun(row, evidence.RunId) || !HasNumber(row, "run_attempt", evidence.Attempt)
+            || invocationId.Length < 23
+            || !DateTimeOffset.TryParseExact(invocationId[..23], "yyyyMMdd'T'HHmmssfffffff'Z'",
+                System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var started)
+            || !ReadString(row, "run_started_at", out var startedText)
+            || !DateTimeOffset.TryParse(startedText, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal, out var runStarted)
+            || runStarted < started.AddTicks(-(started.Ticks % TimeSpan.TicksPerSecond))
+            || !ReadString(row, "status", out var status) || status != "completed"
+            || !ReadString(row, "conclusion", out var conclusion) || !IsFailedConclusion(conclusion)
+            || !row.TryGetProperty("workflow_id", out var workflow) || !workflow.TryGetInt64(out var workflowId)
+            || workflowId <= 0)
+            return "The pinned workflow attempt is not a failed run for the current PR, repository and HEAD.";
+
+        using var latestAttempt = await ReadApi($"runs/{evidence.RunId}").ConfigureAwait(false);
+        if (!MatchesRun(latestAttempt.RootElement, evidence.RunId)
+            || !HasNumber(latestAttempt.RootElement, "run_attempt", evidence.Attempt))
+            return "The pinned workflow attempt has been superseded by a rerun.";
+
+        using var job = await ReadApi($"jobs/{evidence.JobId}").ConfigureAwait(false);
+        var jobRow = job.RootElement;
+        if (!HasNumber(jobRow, "id", evidence.JobId) || !HasNumber(jobRow, "run_id", evidence.RunId)
+            || !HasNumber(jobRow, "run_attempt", evidence.Attempt)
+            || !ReadString(jobRow, "head_sha", out var jobHead) || !string.Equals(jobHead, head, StringComparison.OrdinalIgnoreCase)
+            || !ReadString(jobRow, "name", out var name) || name != subject
+            || !ReadString(jobRow, "status", out var jobStatus) || jobStatus != "completed"
+            || !ReadString(jobRow, "conclusion", out var jobConclusion) || !IsFailedConclusion(jobConclusion))
+            return "The pinned job is not a failed terminal job of the reported workflow attempt and HEAD.";
+
+        using var currentRun = await ReadApi($"runs/{currentRunId}").ConfigureAwait(false);
+        if (!MatchesRun(currentRun.RootElement, currentRunId)
+            || !HasNumber(currentRun.RootElement, "workflow_id", workflowId))
+            return "The pinned failure belongs to a different workflow than the current required check.";
+        using var currentJob = await ReadApi($"jobs/{currentJobId}").ConfigureAwait(false);
+        if (!HasNumber(currentJob.RootElement, "id", currentJobId)
+            || !HasNumber(currentJob.RootElement, "run_id", currentRunId)
+            || !ReadString(currentJob.RootElement, "name", out var currentName) || currentName != subject)
+            return "The required check job does not belong to the verified workflow.";
+        if (currentRunId != evidence.RunId || currentJobId != evidence.JobId)
+        {
+            if (!ReadString(currentJob.RootElement, "conclusion", out var currentConclusion) || currentConclusion != "skipped")
+                return "A newer executed required check superseded the pinned failure.";
+        }
+
+        // The rollup may hide an executed run behind a still newer skipped run.
+        // Bound the entire same-head history and fail closed rather than accepting
+        // an arbitrary historical failure or silently ignoring pagination.
+        using var history = await ReadApi($"workflows/{workflowId}/runs?head_sha={head}&branch={Uri.EscapeDataString(branch)}&event=pull_request&per_page=10").ConfigureAwait(false);
+        var historyRoot = history.RootElement;
+        if (!historyRoot.TryGetProperty("total_count", out var count) || !count.TryGetInt32(out var total)
+            || total is < 1 or > 10 || !historyRoot.TryGetProperty("workflow_runs", out var runs)
+            || runs.ValueKind != JsonValueKind.Array || runs.GetArrayLength() != total)
+            return "The same-head workflow history is incomplete or exceeds the verification bound.";
+        var foundPinned = false;
+        foreach (var candidate in runs.EnumerateArray())
+        {
+            if (!candidate.TryGetProperty("id", out var idElement) || !idElement.TryGetInt64(out var id)
+                || !MatchesRun(candidate, id) || !HasNumber(candidate, "workflow_id", workflowId)
+                || !ReadString(candidate, "run_started_at", out var candidateStartedText)
+                || !DateTimeOffset.TryParse(candidateStartedText, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var candidateStarted))
+                return "The same-head workflow history has invalid run identity.";
+            if (id == evidence.RunId)
+            {
+                if (!HasNumber(candidate, "run_attempt", evidence.Attempt))
+                    return "The pinned workflow attempt has been superseded by a rerun.";
+                foundPinned = true;
+            }
+            else if (candidateStarted >= runStarted)
+            {
+                if (!ReadString(candidate, "status", out var candidateStatus) || candidateStatus != "completed"
+                    || !candidate.TryGetProperty("run_attempt", out var attemptValue)
+                    || !attemptValue.TryGetInt64(out var attempt) || attempt <= 0)
+                    return "A newer workflow run is not settled.";
+                using var jobs = await ReadApi($"runs/{id}/attempts/{attempt}/jobs?per_page=100").ConfigureAwait(false);
+                if (!jobs.RootElement.TryGetProperty("total_count", out var jobsCount) || !jobsCount.TryGetInt32(out var jobTotal)
+                    || jobTotal is < 1 or > 100 || !jobs.RootElement.TryGetProperty("jobs", out var jobRows)
+                    || jobRows.ValueKind != JsonValueKind.Array || jobRows.GetArrayLength() != jobTotal)
+                    return "The newer workflow job history is incomplete or exceeds the verification bound.";
+                var matching = jobRows.EnumerateArray().Where(item =>
+                    ReadString(item, "name", out var jobName) && jobName == subject).ToArray();
+                if (matching.Length != 1 || !HasNumber(matching[0], "run_id", id)
+                    || !HasNumber(matching[0], "run_attempt", attempt)
+                    || !ReadString(matching[0], "status", out var newerStatus) || newerStatus != "completed"
+                    || !ReadString(matching[0], "conclusion", out var newerConclusion) || newerConclusion != "skipped")
+                    return "A newer executed required check superseded the pinned failure.";
+            }
+        }
+        if (!foundPinned) return "The pinned failure is absent from the same-head workflow history.";
+        return null;
+
+        bool MatchesRun(JsonElement candidate, long id) =>
+            candidate.ValueKind == JsonValueKind.Object && HasUniqueNames(candidate) && HasNumber(candidate, "id", id)
+            && ReadString(candidate, "event", out var trigger) && trigger == "pull_request"
+            && ReadString(candidate, "head_sha", out var sha) && string.Equals(sha, head, StringComparison.OrdinalIgnoreCase)
+            && ReadString(candidate, "head_branch", out var headBranch) && headBranch == branch
+            && candidate.TryGetProperty("repository", out var repo)
+            && ReadString(repo, "full_name", out var fullName) && string.Equals(fullName, repository.FullName, StringComparison.OrdinalIgnoreCase)
+            && candidate.TryGetProperty("head_repository", out var headRepo)
+            && ReadString(headRepo, "full_name", out var headFullName) && string.Equals(headFullName, repository.FullName, StringComparison.OrdinalIgnoreCase)
+            && candidate.TryGetProperty("pull_requests", out var prs) && prs.ValueKind == JsonValueKind.Array
+            && prs.EnumerateArray().Any(pr => HasNumber(pr, "number", pullRequest.Number));
+    }
+
+    private static bool HasNumber(JsonElement row, string name, long expected) =>
+        row.ValueKind == JsonValueKind.Object && row.TryGetProperty(name, out var value)
+        && value.TryGetInt64(out var number) && number == expected;
+
+    private static bool IsFailedConclusion(string conclusion) => conclusion is "failure" or "timed_out";
 
     private async Task<PullRequestObservation> ReadPullRequestAsync(string worktreePath, string pullRequest,
         CancellationToken cancellationToken)
@@ -569,12 +732,18 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
 
                 string? checkSource = null;
                 int? localExitCode = null;
+                HostedFailureIdentity? hostedFailure = null;
                 if (kind == "checks")
                 {
                     if (!ReadString(root, "check_source", out checkSource)) continue;
                     if (checkSource == "remote")
                     {
-                        if (root.EnumerateObject().Count() != 8) continue;
+                        if (root.EnumerateObject().Count() == 11
+                            && root.TryGetProperty("workflow_run_id", out var runElement) && runElement.TryGetInt64(out var runId) && runId > 0
+                            && root.TryGetProperty("workflow_run_attempt", out var attemptElement) && attemptElement.TryGetInt64(out var attempt) && attempt > 0
+                            && root.TryGetProperty("workflow_job_id", out var jobElement) && jobElement.TryGetInt64(out var jobId) && jobId > 0)
+                            hostedFailure = new(runId, attempt, jobId);
+                        else if (root.EnumerateObject().Count() != 8) continue;
                     }
                     else if (checkSource == "local")
                     {
@@ -593,7 +762,7 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                     continue;
 
                 if (kind == "conflict" && !IsSafeRepositoryRelativePath(subject)) continue;
-                return new(kind, uri.AbsoluteUri, checkedHead, subject, summary, details, comment.Id, checkSource, localExitCode);
+                return new(kind, uri.AbsoluteUri, checkedHead, subject, summary, details, comment.Id, checkSource, localExitCode, hostedFailure);
             }
             catch (JsonException) { }
         }
