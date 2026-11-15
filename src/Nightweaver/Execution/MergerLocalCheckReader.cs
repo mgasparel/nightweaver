@@ -17,9 +17,10 @@ internal static class MergerLocalCheckReader
     internal static string Marker(string invocationId) => "NIGHTWEAVER_LOCAL_CHECK_V2 " + invocationId;
     internal static string Prefix(string invocationId) => Marker(invocationId) + " ";
     internal static string End(string invocationId) => "END_" + Marker(invocationId);
+    internal static string RerunMarker(string invocationId) => "NIGHTWEAVER_LOCAL_RERUN_V1 " + invocationId;
 
     internal static async Task<FailureLogTail> ReadAsync(HostPaths paths, ProjectSlug project,
-        AgentStageResult invocation, string command, CancellationToken cancellationToken)
+        AgentStageResult invocation, MergerRejectionFinding finding, CancellationToken cancellationToken)
     {
         using var pinned = InvocationRuntimeFiles.OpenExistingSettledLogForRead(
             paths, project, invocation.BeadId, invocation.InvocationId, invocation.LogFilePath);
@@ -32,10 +33,13 @@ internal static class MergerLocalCheckReader
         // echoes with other identities have no authority. Count every mention of the current marker,
         // including quoted/malformed copies, across the entire bounded log.
         var marker = Encoding.ASCII.GetBytes(Marker(invocation.InvocationId));
+        var rerunMarker = Encoding.ASCII.GetBytes(RerunMarker(invocation.InvocationId));
         // The marker and timestamp-role invocation ID contain no internal 'N'.
         var buffer = new byte[4096];
         var positions = new List<long>(2);
         var matched = 0;
+        var rerunMatched = 0;
+        var rerunPositions = new List<long>(2);
         var passingMatched = new int[PassingMarkers.Length];
         var prefixResults = new PrefixTerminalResults();
         long lastPassingPosition = -1;
@@ -48,7 +52,8 @@ internal static class MergerLocalCheckReader
             for (var index = 0; index < count; index++)
             {
                 var value = buffer[index];
-                if (positions.Count == 0) prefixResults.Observe(value);
+                if (positions.Count == 0) prefixResults.Observe(value, position + index);
+                MatchMarker(value, position + index, rerunMarker, ref rerunMatched, rerunPositions);
                 var folded = value is >= (byte)'A' and <= (byte)'Z' ? (byte)(value + 32) : value;
                 for (var pass = 0; pass < PassingMarkers.Length; pass++)
                 {
@@ -76,15 +81,45 @@ internal static class MergerLocalCheckReader
 
         var start = positions[0];
         var end = positions[1] + marker.Length;
-        // The frame repeats the final result, so its failure must not overwrite a passing
-        // rerun already observed in tool output. Compare command types: a successful build
-        // (including dotnet test's build phase) does not supersede a failed test run.
-        if (prefixResults.HasUnclosedFrame || prefixResults.LastResultPassed(command))
+        long verifiedRerunEnd = -1;
+        if (rerunPositions.Count != 0)
+        {
+            if (rerunPositions.Count != 2 || rerunPositions[1] + rerunMarker.Length >= start)
+                throw new InvalidDataException("The current rerun evidence is incomplete or out of order.");
+            var rerun = await ReadFrameAsync(stream, length, rerunPositions, rerunMarker.Length, cancellationToken)
+                .ConfigureAwait(false);
+            var diagnostic = MergerOutcomeVerifier.VerifyLocalCheckFailure(finding, finding.CheckedHead,
+                invocation.InvocationId, new FailureLogTail(rerun, length, false, false), rerun: true);
+            if (diagnostic is not null) throw new InvalidDataException("Invalid current rerun evidence: " + diagnostic);
+            verifiedRerunEnd = rerunPositions[1] + rerunMarker.Length;
+        }
+        // Unattributed failures never erase a pass. Only a separately completed current-ID
+        // rerun, checked against the same finding and candidate, can supersede it.
+        if (prefixResults.HasUnclosedFrame || prefixResults.LastPassPosition(finding.Subject) > verifiedRerunEnd)
             throw new InvalidDataException("A preceding passing result or incomplete result frame contradicts the local check failure summary.");
         // A passing tool result after the reported final frame contradicts the rejection.
         // Scan the suffix too, including matches split across read buffers; do not decode or retain it.
         if (lastPassingPosition >= end)
             throw new InvalidDataException("A later passing result contradicts the local check failure summary.");
+        var text = await ReadFrameAsync(stream, length, positions, marker.Length, cancellationToken).ConfigureAwait(false);
+        return new FailureLogTail(text, length, false, false);
+    }
+
+    private static void MatchMarker(byte value, long position, byte[] marker, ref int matched, List<long> positions)
+    {
+        matched = value == marker[matched] ? matched + 1 : value == marker[0] ? 1 : 0;
+        if (matched != marker.Length) return;
+        positions.Add(position + 1 - marker.Length);
+        matched = 0;
+        if (positions.Count > 2)
+            throw new InvalidDataException("Local rerun framing is ambiguous: duplicate or quoted marker mentions.");
+    }
+
+    private static async Task<string> ReadFrameAsync(Stream stream, long length, List<long> positions,
+        int markerLength, CancellationToken cancellationToken)
+    {
+        var start = positions[0];
+        var end = positions[1] + markerLength;
         if (end - start > MaximumEvidenceBytes)
             throw new InvalidDataException("Local check evidence exceeds the bounded 32 KiB frame limit.");
         var offset = Math.Max(0, start - 1);
@@ -100,8 +135,7 @@ internal static class MergerLocalCheckReader
 
         // Decode only the evidence. Its first byte is ASCII at a proven line boundary;
         // no truncated UTF-8 character from unrelated prefix can enter the frame.
-        var text = new UTF8Encoding(false, true).GetString(bytes, first, last - first);
-        return new FailureLogTail(text, length, false, false);
+        return new UTF8Encoding(false, true).GetString(bytes, first, last - first);
     }
 
     private sealed class PrefixTerminalResults
@@ -111,20 +145,20 @@ internal static class MergerLocalCheckReader
         private readonly char[] line = new char[256];
         private int length;
         private bool overflow;
-        private bool? buildPassed;
-        private bool? testPassed;
+        private long buildPassPosition = -1;
+        private long testPassPosition = -1;
         private string? foreignFrameEnd;
 
         internal bool HasUnclosedFrame => foreignFrameEnd is not null;
 
-        internal bool LastResultPassed(string command) => command switch
+        internal long LastPassPosition(string command) => command switch
         {
-            "dotnet build" => buildPassed == true,
-            "dotnet test" => testPassed == true,
-            _ => false
+            "dotnet build" => buildPassPosition,
+            "dotnet test" => testPassPosition,
+            _ => -1
         };
 
-        internal void Observe(byte value)
+        internal void Observe(byte value, long position)
         {
             if (value != (byte)'\n')
             {
@@ -150,10 +184,8 @@ internal static class MergerLocalCheckReader
             }
             else if (!overflow)
             {
-                if (text.Equals("Build succeeded.", StringComparison.OrdinalIgnoreCase)) buildPassed = true;
-                else if (text.Equals("Build FAILED.", StringComparison.OrdinalIgnoreCase)) buildPassed = false;
-                else if (text.Equals("Test run summary: Passed!", StringComparison.OrdinalIgnoreCase)) testPassed = true;
-                else if (text.Equals("Test run summary: Failed!", StringComparison.OrdinalIgnoreCase)) testPassed = false;
+                if (text.Equals("Build succeeded.", StringComparison.OrdinalIgnoreCase)) buildPassPosition = position;
+                else if (text.Equals("Test run summary: Passed!", StringComparison.OrdinalIgnoreCase)) testPassPosition = position;
             }
             length = 0;
             overflow = false;

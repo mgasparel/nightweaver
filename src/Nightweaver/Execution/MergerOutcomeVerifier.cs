@@ -325,7 +325,7 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                 return Failed("The rejection finding does not identify the retained current HEAD.");
 
             var log = finding is { Kind: "checks", CheckSource: "local" }
-                ? await MergerLocalCheckReader.ReadAsync(hostPaths, project.Name, invocation, finding.Subject, cancellationToken).ConfigureAwait(false)
+                ? await MergerLocalCheckReader.ReadAsync(hostPaths, project.Name, invocation, finding, cancellationToken).ConfigureAwait(false)
                 : await FailureLogTailReader.ReadAsync(hostPaths, project.Name, invocation, cancellationToken).ConfigureAwait(false);
             if (log.HadInvalidUtf8)
                 return Failed("The Merger invocation log contains invalid UTF-8 and cannot verify its rejection finding.");
@@ -572,12 +572,14 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         && string.Equals(pullRequest.Head, expectedHead, StringComparison.OrdinalIgnoreCase)
         && string.Equals(pullRequest.Url, expectedUrl, StringComparison.Ordinal);
 
-    private static string? VerifyLocalCheckFailure(MergerRejectionFinding finding, string expectedHead, string invocationId, FailureLogTail log)
+    internal static string? VerifyLocalCheckFailure(MergerRejectionFinding finding, string expectedHead, string invocationId,
+        FailureLogTail log, bool rerun = false)
     {
         if (log.Truncated || log.HadInvalidUtf8)
             return "The local check transcript is truncated or invalid and cannot verify its result.";
-        var localCheckEvidencePrefix = MergerLocalCheckReader.Prefix(invocationId);
-        var localCheckEvidenceEnd = MergerLocalCheckReader.End(invocationId);
+        var marker = rerun ? MergerLocalCheckReader.RerunMarker(invocationId) : MergerLocalCheckReader.Marker(invocationId);
+        var localCheckEvidencePrefix = marker + " ";
+        var localCheckEvidenceEnd = "END_" + marker;
         var lines = log.Text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
         var startLines = lines.Select((line, index) => (line, index))
             .Where(item => item.line.StartsWith(localCheckEvidencePrefix, StringComparison.Ordinal)).ToArray();
