@@ -52,8 +52,6 @@ internal interface IMergerOutcomeVerifier
 internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMergerOutcomeVerifier
 {
     private static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(20);
-    private const string LocalCheckEvidencePrefix = "NIGHTWEAVER_LOCAL_CHECK_V1 ";
-    private const string LocalCheckEvidenceEnd = "END_NIGHTWEAVER_LOCAL_CHECK_V1";
     private readonly BeadsReader beadsReader = new(processRunner);
 
     public async Task<MergerApprovalVerification> VerifyApprovalAsync(
@@ -369,7 +367,7 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
             return "The pull request does not identify the open retained branch and current checked HEAD.";
 
         if (finding.CheckSource == "local")
-            return VerifyLocalCheckFailure(finding, expectedHead, log);
+            return VerifyLocalCheckFailure(finding, expectedHead, invocationId, log);
 
         var identity = GitHubRepositoryIdentity.ParsePullRequestUrl(finding.PullRequest);
         if (identity is null || repository.OriginRepository is not { } origin
@@ -574,22 +572,24 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         && string.Equals(pullRequest.Head, expectedHead, StringComparison.OrdinalIgnoreCase)
         && string.Equals(pullRequest.Url, expectedUrl, StringComparison.Ordinal);
 
-    private static string? VerifyLocalCheckFailure(MergerRejectionFinding finding, string expectedHead, FailureLogTail log)
+    private static string? VerifyLocalCheckFailure(MergerRejectionFinding finding, string expectedHead, string invocationId, FailureLogTail log)
     {
         if (log.Truncated || log.HadInvalidUtf8)
             return "The local check transcript is truncated or invalid and cannot verify its result.";
+        var localCheckEvidencePrefix = MergerLocalCheckReader.Prefix(invocationId);
+        var localCheckEvidenceEnd = MergerLocalCheckReader.End(invocationId);
         var lines = log.Text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
         var startLines = lines.Select((line, index) => (line, index))
-            .Where(item => item.line.StartsWith(LocalCheckEvidencePrefix, StringComparison.Ordinal)).ToArray();
+            .Where(item => item.line.StartsWith(localCheckEvidencePrefix, StringComparison.Ordinal)).ToArray();
         var endLines = lines.Select((line, index) => (line, index))
-            .Where(item => item.line == LocalCheckEvidenceEnd).ToArray();
+            .Where(item => item.line == localCheckEvidenceEnd).ToArray();
         if (startLines.Length != 1 || endLines.Length != 1 || endLines[0].index <= startLines[0].index)
             return "The settled log does not contain one complete local check transcript for this invocation.";
 
         JsonDocument transcript;
         try
         {
-            var metadata = startLines[0].line[LocalCheckEvidencePrefix.Length..];
+            var metadata = startLines[0].line[localCheckEvidencePrefix.Length..];
             transcript = JsonDocument.Parse(metadata, new JsonDocumentOptions { MaxDepth = 4 });
         }
         catch (JsonException)
@@ -600,7 +600,9 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         {
             var root = transcript.RootElement;
             if (root.ValueKind != JsonValueKind.Object || !HasUniqueNames(root)
-                || root.EnumerateObject().Count() != 3
+                || root.EnumerateObject().Count() != 4
+                || !ReadString(root, "pull_request", out var pullRequest)
+                || !string.Equals(pullRequest, finding.PullRequest, StringComparison.Ordinal)
                 || !ReadString(root, "command", out var command)
                 || command is not ("dotnet build" or "dotnet test")
                 || !ReadString(root, "checked_head", out var checkedHead)

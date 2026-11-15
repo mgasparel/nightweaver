@@ -320,6 +320,63 @@ public sealed class MergerOutcomeVerifierTests
         Assert.Contains("keep:label", fixture.Runner.Labels);
     }
 
+    [Fact]
+    public async Task FullInvocationWithPromptAndDocumentationEchoesReachesGuardedRepairHandoff()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetLocalCheckFinding("dotnet test", 2);
+        var frame = File.ReadAllText(fixture.Invocation.LogFilePath);
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Nightweaver.slnx"))) root = root.Parent;
+        Assert.NotNull(root);
+        var prompt = File.ReadAllText(Path.Combine(root.FullName, "prompts", "merger.md"));
+        var specification = File.ReadAllText(Path.Combine(root.FullName, "SPEC.md"));
+        File.WriteAllText(fixture.Invocation.LogFilePath,
+            "OpenAI Codex\nuser\n" + prompt +
+            "\nexec\npwsh -Command Get-Content SPEC.md\nsucceeded in 10ms:\n" +
+            specification + "\nDocumentation mentions NIGHTWEAVER_LOCAL_CHECK_V1 and END_NIGHTWEAVER_LOCAL_CHECK_V1.\n" +
+            "exec\npwsh -Command \"Write-Output (\\\"NIGHTWEAVER_LOCAL_CHECK_V2 \\\" + $env:NIGHTWEAVER_INVOCATION_ID)\"\nsucceeded in 10ms:\n" + frame +
+            "codex\nRecorded the settled local test failure in the Bead comment.\n");
+        fixture.Runner.Status = "open";
+        fixture.Runner.Assignee = null;
+        var result = await fixture.RunSlotAsync();
+        Assert.True(result.RepairHandoffCompleted, result.Diagnostic);
+        Assert.Equal("stage:implement", fixture.Runner.Stage);
+        Assert.Equal(1, fixture.Runner.RepairCycles);
+        Assert.Null(fixture.Runner.Assignee);
+        Assert.Single(fixture.Runner.PublicationWrites);
+    }
+
+    [Fact]
+    public async Task PromptExampleWithoutActualCurrentInvocationEvidenceCannotReject()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetPromptExample();
+        var frame = File.ReadAllText(fixture.Invocation.LogFilePath);
+        File.WriteAllText(fixture.Invocation.LogFilePath,
+            frame.Replace(fixture.Invocation.InvocationId, "20000101T0000000000000Z-merger", StringComparison.Ordinal));
+        var result = await fixture.VerifyAsync();
+        Assert.False(result.Succeeded);
+        Assert.Empty(fixture.Runner.PublicationWrites);
+        Assert.Equal(0, fixture.Runner.RepairCycles);
+    }
+
+    [Theory]
+    [InlineData("Build succeeded.")]
+    [InlineData("Test run summary: Passed!")]
+    [InlineData("  build SUCCEEDED.\r\n")]
+    [InlineData("test RUN summary: PASSED!")]
+    public async Task LaterPassingToolOutputOutsideFrameCannotAuthorizeRejection(string passed)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetLocalCheckFinding("dotnet test", 2);
+        File.AppendAllText(fixture.Invocation.LogFilePath,
+            "exec\npwsh -Command dotnet test\nsucceeded in 10ms:\n" + passed + "\n");
+        var result = await fixture.VerifyAsync();
+        Assert.False(result.Succeeded);
+        Assert.Empty(fixture.Runner.PublicationWrites);
+    }
+
     [Theory]
     [InlineData(4075, false)]
     [InlineData(4095, true)]
@@ -346,6 +403,8 @@ public sealed class MergerOutcomeVerifierTests
     [InlineData("quoted-end", "complete local check transcript")]
     [InlineData("malformed", "metadata is malformed")]
     [InlineData("duplicate-field", "allowlisted failing command")]
+    [InlineData("invocation", "complete local check transcript")]
+    [InlineData("pr", "allowlisted failing command")]
     [InlineData("head", "retained HEAD")]
     [InlineData("command", "allowlisted failing command")]
     [InlineData("summary", "summary and diagnostics")]
@@ -369,6 +428,8 @@ public sealed class MergerOutcomeVerifierTests
             "quoted-end" => text.Replace("END_NIGHTWEAVER", "> END_NIGHTWEAVER", StringComparison.Ordinal),
             "malformed" => text.Replace("{", "{broken", StringComparison.Ordinal),
             "duplicate-field" => text.Replace("{", "{\"command\":\"dotnet test\",", StringComparison.Ordinal),
+            "invocation" => text.Replace("20261104T1200000000000Z-merger", "20261103T1200000000000Z-merger", StringComparison.Ordinal),
+            "pr" => text.Replace(fixture.PullRequest, "https://github.com/example/project/pull/999", StringComparison.Ordinal),
             "head" => text.Replace(fixture.Head, new string('f', 40), StringComparison.Ordinal),
             "command" => text.Replace("\"command\":\"dotnet test\"", "\"command\":\"dotnet run\"", StringComparison.Ordinal),
             "summary" => text.Replace("Local dotnet test failed for the checked HEAD.", "Other summary", StringComparison.Ordinal),
@@ -943,13 +1004,13 @@ public sealed class MergerOutcomeVerifierTests
             var prompt = File.ReadAllText(Path.Combine(root.FullName, "prompts", "merger.md"))
                 .Replace("0123456789abcdef0123456789abcdef01234567", Head, StringComparison.Ordinal)
                 .Replace("https://github.com/example/repository/pull/123", PullRequest, StringComparison.Ordinal);
-            var frameStart = prompt.IndexOf("NIGHTWEAVER_LOCAL_CHECK_V1 {", StringComparison.Ordinal);
-            var frameEnd = prompt.IndexOf("END_NIGHTWEAVER_LOCAL_CHECK_V1", frameStart, StringComparison.Ordinal)
-                + "END_NIGHTWEAVER_LOCAL_CHECK_V1".Length;
+            var frameStart = prompt.IndexOf("NIGHTWEAVER_LOCAL_CHECK_V2 20000101T0000000000000Z-merger {", StringComparison.Ordinal);
+            var frameEnd = prompt.IndexOf("END_NIGHTWEAVER_LOCAL_CHECK_V2 20000101T0000000000000Z-merger", frameStart, StringComparison.Ordinal)
+                + "END_NIGHTWEAVER_LOCAL_CHECK_V2 20000101T0000000000000Z-merger".Length;
             var jsonStart = prompt.IndexOf("```json", frameEnd, StringComparison.Ordinal) + "```json".Length;
             var jsonEnd = prompt.IndexOf("```", jsonStart, StringComparison.Ordinal);
             Comments = [new("current", prompt[jsonStart..jsonEnd].Trim(), DateTimeOffset.UtcNow)];
-            File.WriteAllText(Invocation.LogFilePath, new string('x', 400_000) + "\n" + prompt[frameStart..frameEnd]);
+            File.WriteAllText(Invocation.LogFilePath, new string('x', 400_000) + "\n" + prompt[frameStart..frameEnd].Replace("20000101T0000000000000Z-merger", invocationId, StringComparison.Ordinal));
         }
 
         internal Task<MergerSlotOutcome> RunSlotAsync()
@@ -973,11 +1034,11 @@ public sealed class MergerOutcomeVerifierTests
                 ? "Failed: LocalCheckFailureTests.RejectsInvalidInput [1 ms]"
                 : "error CS1002: expected ';' in Fixture.cs";
             var reportedExitCode = transcriptExitCode ?? exitCode;
-            var envelope = JsonSerializer.Serialize(new { command, checked_head = Head, exit_code = reportedExitCode });
+            var envelope = JsonSerializer.Serialize(new { command, checked_head = Head, exit_code = reportedExitCode, pull_request = PullRequest });
             var terminal = command == "dotnet test"
                 ? "Test run summary: Failed!\ntotal: 1\nfailed: 1"
                 : "Build FAILED.\n1 Error(s)";
-            var transcript = $"NIGHTWEAVER_LOCAL_CHECK_V1 {envelope}\n{summary}\n{details}\n{terminal}\n{trailingOutput}\nEND_NIGHTWEAVER_LOCAL_CHECK_V1\n";
+            var transcript = $"NIGHTWEAVER_LOCAL_CHECK_V2 {invocationId} {envelope}\n{summary}\n{details}\n{terminal}\n{trailingOutput}\nEND_NIGHTWEAVER_LOCAL_CHECK_V2 {invocationId}\n";
             SetFinding("checks", command, summary, details, "local", exitCode, transcript);
         }
 

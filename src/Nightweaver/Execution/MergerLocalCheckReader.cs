@@ -8,7 +8,15 @@ internal static class MergerLocalCheckReader
 {
     internal const int MaximumLogBytes = 8 * 1024 * 1024;
     internal const int MaximumEvidenceBytes = 32 * 1024;
-    private static readonly byte[] Marker = Encoding.ASCII.GetBytes("NIGHTWEAVER_LOCAL_CHECK_V1");
+    private static readonly byte[][] PassingMarkers =
+    [
+        Encoding.ASCII.GetBytes("build succeeded."),
+        Encoding.ASCII.GetBytes("test run summary: passed!")
+    ];
+
+    internal static string Marker(string invocationId) => "NIGHTWEAVER_LOCAL_CHECK_V2 " + invocationId;
+    internal static string Prefix(string invocationId) => Marker(invocationId) + " ";
+    internal static string End(string invocationId) => "END_" + Marker(invocationId);
 
     internal static async Task<FailureLogTail> ReadAsync(HostPaths paths, ProjectSlug project,
         AgentStageResult invocation, CancellationToken cancellationToken)
@@ -20,11 +28,16 @@ internal static class MergerLocalCheckReader
         if (length > MaximumLogBytes)
             throw new InvalidDataException("Local check log exceeds the bounded 8 MiB scan limit.");
 
-        // Scan every byte for marker mentions, including quoted or malformed frames.
-        // Marker has no internal 'N', so a mismatch can restart at the current byte.
+        // Only the dispatch identity designates result output. Prompt examples and repository/tool
+        // echoes with other identities have no authority. Count every mention of the current marker,
+        // including quoted/malformed copies, across the entire bounded log.
+        var marker = Encoding.ASCII.GetBytes(Marker(invocation.InvocationId));
+        // The marker and timestamp-role invocation ID contain no internal 'N'.
         var buffer = new byte[4096];
         var positions = new List<long>(2);
         var matched = 0;
+        var passingMatched = new int[PassingMarkers.Length];
+        long lastPassingPosition = -1;
         long position = 0;
         while (position < length)
         {
@@ -34,9 +47,22 @@ internal static class MergerLocalCheckReader
             for (var index = 0; index < count; index++)
             {
                 var value = buffer[index];
-                matched = value == Marker[matched] ? matched + 1 : value == Marker[0] ? 1 : 0;
-                if (matched != Marker.Length) continue;
-                positions.Add(position + index + 1 - Marker.Length);
+                var folded = value is >= (byte)'A' and <= (byte)'Z' ? (byte)(value + 32) : value;
+                for (var pass = 0; pass < PassingMarkers.Length; pass++)
+                {
+                    var passing = PassingMarkers[pass];
+                    var match = passingMatched[pass];
+                    match = folded == passing[match] ? match + 1 : folded == passing[0] ? 1 : 0;
+                    if (match == passing.Length)
+                    {
+                        lastPassingPosition = position + index + 1 - passing.Length;
+                        match = 0;
+                    }
+                    passingMatched[pass] = match;
+                }
+                matched = value == marker[matched] ? matched + 1 : value == marker[0] ? 1 : 0;
+                if (matched != marker.Length) continue;
+                positions.Add(position + index + 1 - marker.Length);
                 matched = 0;
                 if (positions.Count > 2)
                     throw new InvalidDataException("Local check framing is ambiguous: duplicate or quoted marker mentions.");
@@ -47,7 +73,11 @@ internal static class MergerLocalCheckReader
             throw new InvalidDataException("The settled log does not contain one complete local check transcript for this invocation.");
 
         var start = positions[0];
-        var end = positions[1] + Marker.Length;
+        var end = positions[1] + marker.Length;
+        // A passing tool result after the reported final frame contradicts the rejection.
+        // Scan the suffix too, including matches split across read buffers; do not decode or retain it.
+        if (lastPassingPosition >= end)
+            throw new InvalidDataException("A later passing result contradicts the local check failure summary.");
         if (end - start > MaximumEvidenceBytes)
             throw new InvalidDataException("Local check evidence exceeds the bounded 32 KiB frame limit.");
         var offset = Math.Max(0, start - 1);

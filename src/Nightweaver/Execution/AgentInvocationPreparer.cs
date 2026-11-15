@@ -127,6 +127,13 @@ internal sealed class AgentInvocationPreparer
             ["TEMP"] = temporaryDirectory,
             ["TMPDIR"] = temporaryDirectory
         };
+        if (string.Equals(roleSuffix, "merger", StringComparison.Ordinal))
+        {
+            environmentOverrides["NIGHTWEAVER_INVOCATION_ID"] = invocationId;
+            // Codex repeats final answers on stdout/stderr; Claude print mode exposes only the final answer.
+            environmentOverrides["NIGHTWEAVER_LOCAL_CHECK_OUTPUT"] = settings.Cli == AgentCli.Codex
+                ? "terminal" : "final-response";
+        }
         if (string.Equals(roleSuffix, "outcome-classifier", StringComparison.Ordinal))
             environmentOverrides["NIGHTWEAVER_INVOCATION_PURPOSE"] = "outcome-classifier";
 
