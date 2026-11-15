@@ -42,7 +42,9 @@ function ExplorerResults({ project }: { project: string }) {
     const next = new URLSearchParams(params); next.set("page", String(data.page)); setParams(next, { replace: true });
   }, [current, data, query.page, params, setParams]);
   const pageLink = (page: number) => { const next = new URLSearchParams(params); next.set("page", String(page)); return `?${next}`; };
-  return <Panel title="Project inventory" accessory={<Status>Tracker observation</Status>}>
+  // This boundary must render with observations: the route boundary does not
+  // rerender when a live update removes a row from a still-valid page.
+  return <FocusBoundary><Panel title="Project inventory" accessory={<Status>Tracker observation</Status>}>
     <Freshness snapshot={snapshot} project={project} resource={query.key} />
     <p className="explorer-policy">Active means tracker status in progress. Tracker ownership does not establish a running Agent. Runtime execution is shown on the Delivery floor.</p>
     {notice && <p className="bead-notice" role="status">{notice}</p>}
@@ -65,5 +67,5 @@ function ExplorerResults({ project }: { project: string }) {
         </div>
       </nav>}
     </>}
-  </Panel>;
+  </Panel></FocusBoundary>;
 }

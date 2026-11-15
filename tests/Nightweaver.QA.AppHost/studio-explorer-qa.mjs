@@ -59,6 +59,25 @@ try {
   const bounded = await page.evaluate(async () => (await (await fetch('/api/operations/v1/projects/qa/resources?key=explorer:all:U3R1ZGlvIEV4cGxvcmVy:1')).json()).data);
   assert.equal(bounded.items.length, 40); assert.equal(bounded.total, 81);
   await capture('inventory');
+  // Keep page 1 valid: no URL clamp or parent navigation may mask focus loss.
+  const pageOneUrl = page.url();
+  const surviving = page.getByRole('link', { name: rows[1].title, exact: true });
+  await surviving.focus();
+  bd(['update', rows[0].id, '--title', 'Studio Explorer focus removal candidate']);
+  const removed = page.getByRole('link', { name: 'Studio Explorer focus removal candidate', exact: true });
+  await removed.waitFor();
+  assert(await surviving.evaluate(node => node === document.activeElement));
+  assert.equal(page.url(), pageOneUrl);
+  await removed.focus();
+  bd(['update', rows[0].id, '--title', 'Outside current query']);
+  await waitText('80 matching Beads · Page 1 of 2');
+  await removed.waitFor({ state: 'detached' });
+  assert.equal(page.url(), pageOneUrl);
+  assert(await page.locator('h1').evaluate(node => node === document.activeElement),
+    'Removing a focused row on a valid page must focus the Beads heading');
+  bd(['update', rows[0].id, '--title', rows[0].title]);
+  await waitText('81 matching Beads · Page 1 of 3');
+  mark('live valid-page row removal restores heading focus without navigation; surviving row keeps focus');
   await page.getByRole('link', { name: 'Next page', exact: true }).click();
   await waitText('81 matching Beads · Page 2 of 3');
   assert.equal(await list.count(), 40);

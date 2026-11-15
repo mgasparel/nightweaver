@@ -14,6 +14,16 @@ An earlier native Ready-view observation reached the existing two-second source 
 
 The exact isolated stack was stopped successfully in `finally`. Browser output remains in ignored `TestResults/studio-explorer` and `TestResults/studio`; the final backend XML is `TestResults/timing.xml`. Invocation-local build/suite logs and stopwatch output are retained under `H:/Nightweaver/prod/tmp/nightshift/ns-mbd.9/`.
 
+## Reviewer R1 repair
+
+The retained `71ffba0` implementation failed the added isolated Playwright assertion: after an external title change removed the focused row from page 1, the URL stayed unchanged but focus did not return to the Beads heading. The earlier final-page clamp scenario rerendered the route and masked this case.
+
+Explorer now renders a focus boundary with its observation-driven results. The regression keeps page 1 valid, verifies a surviving row retains focus across an external update, then removes a focused row from the search and asserts heading focus and the exact unchanged URL. It restores the title before the existing scenarios continue.
+
+Repair checks: all 35 frontend tests, TypeScript/Vite build, warning-as-error solution build (zero .NET warnings/errors), probe syntax check and `git diff --check` passed. The complete updated Explorer probe and Studio shell regression passed on a fresh exact isolated AppHost, including all three viewport widths and no page errors. The exact stack stopped successfully in `finally`; [repair results](studio-explorer/repair-results.json) record the Explorer assertions. New screenshots remain in ignored `TestResults/studio-explorer-repair-after` and `TestResults/studio-repair`; inventory captures at 1440/375/720px were visually reviewed for readability and overflow. The failing pre-fix capture is retained in `TestResults/studio-explorer-repair-before`.
+
+The backend suite was not repeated for this focus-boundary-only repair; the earlier 1,201-test result and 434.032-second candidate measurement above remain historical evidence. No latest-main timing acceptance or hosted verification is claimed.
+
 ## Visual evidence
 
 Visually reviewed desktop, 375px and 720px captures for hierarchy, readable controls, source-state distinction and no horizontal page overflow. Top and bottom pagination keep the bounded list navigable. [Probe results](studio-explorer/results.json) record the final checks.
