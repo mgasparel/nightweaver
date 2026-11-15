@@ -37,12 +37,13 @@ public sealed class PublishedCliArtifactFixture : IDisposable
 
         var projectPath = Path.GetFullPath(Path.Combine(RepositoryRoot, "src", "Nightweaver", "Nightweaver.csproj"));
         PublishCommand = $"dotnet publish {projectPath} -c Release --self-contained false -p:UseAppHost=true -o {PublishDirectory}";
-        TestProjectBuildGate.NightweaverProject.Wait();
-        try { RunDotnetPublish(projectPath, PublishDirectory); }
-        finally { TestProjectBuildGate.NightweaverProject.Release(); }
-
         var trapProjectPath = Path.GetFullPath(Path.Combine(RepositoryRoot, "tests", "AgentCliTrap", "AgentCliTrap.csproj"));
-        RunDotnetPublish(trapProjectPath, helperPublishDirectory);
+        // These projects have no shared project references, and tracker setup owns
+        // a separate disposable root. Settle every prerequisite before publishing
+        // the fixture to any of the six test workers, including on failure.
+        Task.WhenAll(PublishCliAsync(projectPath),
+            RunDotnetPublishAsync(trapProjectPath, helperPublishDirectory),
+            Task.Run(BeadsFixture.PrepareTemplate)).GetAwaiter().GetResult();
         CopyDirectory(helperPublishDirectory, TrapDirectory);
 
         var helperAppHost = Path.Combine(helperPublishDirectory, OperatingSystem.IsWindows() ? "AgentCliTrap.exe" : "AgentCliTrap");
@@ -55,10 +56,6 @@ public sealed class PublishedCliArtifactFixture : IDisposable
         }
 
         SelfTestTrapsAndPrerequisites();
-        // Prepare the shared embedded tracker before six native test collections
-        // compete for CPU and process startup. A failed Lazy initialization would
-        // otherwise poison every later copy of this prerequisite.
-        BeadsFixture.PrepareTemplate();
     }
 
     public Dictionary<string, string?> EnvironmentWithAgentTraps(IReadOnlyDictionary<string, string?>? inherited = null)
@@ -112,13 +109,20 @@ public sealed class PublishedCliArtifactFixture : IDisposable
         File.Delete(TrapRecordPath);
     }
 
-    private void RunDotnetPublish(string projectPath, string outputPath)
+    private async Task PublishCliAsync(string projectPath)
+    {
+        await TestProjectBuildGate.NightweaverProject.WaitAsync().ConfigureAwait(false);
+        try { await RunDotnetPublishAsync(projectPath, PublishDirectory).ConfigureAwait(false); }
+        finally { TestProjectBuildGate.NightweaverProject.Release(); }
+    }
+
+    private async Task RunDotnetPublishAsync(string projectPath, string outputPath)
     {
         var arguments = new[]
         {
             "publish", projectPath, "-c", "Release", "--self-contained", "false", "-p:UseAppHost=true", "-o", outputPath
         };
-        var result = ProcessTool.RunAsync("dotnet", arguments, RepositoryRoot, null, TimeSpan.FromMinutes(3)).GetAwaiter().GetResult();
+        var result = await ProcessTool.RunAsync("dotnet", arguments, RepositoryRoot, null, TimeSpan.FromMinutes(3)).ConfigureAwait(false);
         if (result.ExitCode != 0)
             throw new InvalidOperationException($"dotnet publish failed for '{projectPath}' (exit {result.ExitCode})\n{result.StandardOutputText}\n{result.StandardErrorText}");
     }
