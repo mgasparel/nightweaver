@@ -9,6 +9,7 @@ public sealed class OperationalObservationServiceTests
     [Theory]
     [InlineData("explorer:all:YWJj", "abc")]
     [InlineData("explorer:ready:", "")]
+    [InlineData("explorer:ready::250", "")]
     [InlineData("cleanup:1250:all:YSAgYg", "a  b")]
     public void CanonicalSearchPreservesInteriorWhitespace(string key, string expected)
         => Assert.Equal(expected, OperationKey.Parse(key).Query);
@@ -18,6 +19,11 @@ public sealed class OperationalObservationServiceTests
     [InlineData("explorer:all:YR")]
     [InlineData("explorer:all:_w")]
     [InlineData("explorer:all:IGE")]
+    [InlineData("explorer:all::0")]
+    [InlineData("explorer:all::01")]
+    [InlineData("explorer:all::251")]
+    [InlineData("explorer:unknown::1")]
+    [InlineData("explorer:all:YR:1")]
     [InlineData("cleanup:01:all:")]
     [InlineData("cleanup:1251:all:")]
     [InlineData("workspace:../foreign")]
@@ -57,15 +63,19 @@ public sealed class OperationalObservationServiceTests
         var source = new Source(clock);
         using var service = Service(source, clock);
         service.Read("explorer:ready:");
+        service.Read("explorer:ready::2");
         service.Read("factory");
         await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
         var good = service.Read("explorer:ready:");
+        var paged = service.Read("explorer:ready::2");
         source.Content = "do not blend this new inventory with failed readiness";
         source.Error = new("source-timeout", "Source timed out.");
         await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
         await service.CollectOnceAsync(true, TestContext.Current.CancellationToken);
         var stale = service.Read("explorer:ready:");
         Assert.Equal(good.Data?.GetRawText(), stale.Data?.GetRawText());
+        Assert.Equal(paged.Data?.GetRawText(), service.Read("explorer:ready::2").Data?.GetRawText());
+        Assert.Equal("stale", service.Read("explorer:ready::2").Health);
         Assert.Equal(good.ObservedAt, stale.ObservedAt);
         Assert.Equal("stale", stale.Health);
         Assert.Equal("fresh", service.Read("factory").Health);

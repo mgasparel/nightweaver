@@ -231,7 +231,8 @@ internal sealed class OperationalObservationSource(
                     }).Where(item => string.IsNullOrEmpty(key.Query) || item.Id.Contains(key.Query, StringComparison.OrdinalIgnoreCase)
                         || item.Title.Contains(key.Query, StringComparison.OrdinalIgnoreCase)).OrderBy(item => item.Priority)
                         .ThenBy(item => item.Id, StringComparer.Ordinal).ToArray();
-                    result[key.Value] = Sample(filtered, started, ids);
+                    result[key.Value] = Sample(key.Value.Count(character => character == ':') == 3 && filtered is not null
+                        ? ExplorerPage.Project(filtered, key.Page) : filtered, started, ids);
                 }
             }
             catch (Exception exception) when (IsSourceFailure(exception))

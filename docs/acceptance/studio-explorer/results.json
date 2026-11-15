@@ -1,0 +1,12 @@
+{
+  "checks": [
+    "bounded 40-row pages, stable ID order, URL reload/back/forward, external title and retained page/focus",
+    "Workspace exact identity/context; current-page removal clamps URL with accessible explanation and safe focus",
+    "native dependency removal and Active/Closed empty views",
+    "all five views, native external dependency/readiness membership and empty results",
+    "header search uses current project across all views; deferred cross-project control makes no unsupported request",
+    "stale retained result remains visibly historical at all three layouts",
+    "malformed queries render recovery without an invalid observation request; no page errors"
+  ],
+  "errors": []
+}
