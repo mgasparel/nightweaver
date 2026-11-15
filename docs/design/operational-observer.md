@@ -8,6 +8,11 @@ The wire contract is [Operational observations v1, amendment v1.1](operational-o
 
 The tracker loop targets one-second start-to-start collection. One inventory feeds Explorer filters, Digest and Attention projections; ready and blocked membership remain separate native observations. Selected Workspace collection preserves inventory/detail/relations/comments/confirming-inventory workflow identity checks. A transient mismatch is a retryable conflict; confirmed absence clears the resource. Relation failures preserve the legacy directional partial states and independently observed Workspace data with explicit stale source/envelope health. Other failed collections retain the complete last good projection. Initial unavailable data stays null.
 
+Ready and Blocked membership commands run only while their respective Explorer
+filters are subscribed. Digest, Attention, Workspace and All inventory views do
+not spend the shared native-work budget on unused memberships. When both filters
+are selected their existing rotating priority and independent health remain.
+
 Tracker access releases after each observer command. Waiting guarded operations take priority, with one due observer admitted after eight consecutive guarded operations. Guarded mutations keep uninterrupted fresh reads, expected-workflow checks and confirming reads. Successful and ambiguous outcomes request reconciliation only after releasing the gate. Checkpoint and cleanup POST completion also requests reconciliation, including uncertain failures. Cached observations never authorize writes.
 
 Each tracker process has a two-second timeout and bounded stdout/stderr while receiving. Inventory and membership accept at most 8 MiB and 10,000 rows; list/ready request the 10,001-row sentinel. Detail/comments/relations accept at most 2 MiB; existing comment parsing additionally limits histories to 2,048 entries. Processes are killed and settled before their gate is released. No collection retry is hidden inside a sweep.

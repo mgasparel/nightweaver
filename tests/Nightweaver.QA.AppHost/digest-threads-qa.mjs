@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
+import { digestFixture, refreshDigest } from './digest-fixture.mjs';
 
 const url = process.env.NIGHTWEAVER_QA_URL;
 if (!url) throw new Error('Set NIGHTWEAVER_QA_URL from aspire describe.');
@@ -36,8 +37,9 @@ try {
         ...(j === 0 ? { status: 'open', activityKind: 'updated', outcome: 'open', outcomeLabel: 'Updated' } : {}) })) })),
     standaloneCompleted: [], standaloneOpen: [] };
   data.threads[3].root.activityKind = 'context';
-  await page.route(/\/api\/digest(?:\?.*)?$/, route => route.fulfill({ json: data }));
-  await page.goto(url, { waitUntil: 'networkidle' });
+  if (baseline) await page.route(/\/api\/digest(?:\?.*)?$/, route => route.fulfill({ json: data }));
+  else await digestFixture(page, () => ({data}));
+  await page.goto(baseline ? url : url + '/projects/qa/catch-up', { waitUntil: 'networkidle' });
   await page.locator('#digest-toggle').click();
   const section = page.locator('#digest-threads-section');
   const height = await section.evaluate(element => element.getBoundingClientRect().height);
@@ -53,10 +55,7 @@ try {
     const noOverflow = async () => assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
     const card = i => page.locator(`[data-root-bead-id="thread-${i}"]`);
     const toggle = i => card(i).locator('.digest-activity-toggle');
-    const refresh = async () => {
-      await page.locator('#digest-refresh').evaluate(button => button.click());
-      await page.waitForFunction(() => !document.querySelector('#digest-refresh').disabled);
-    };
+    const refresh = () => refreshDigest(page);
     await count('#digest-threads > article', 5);
     await count('#digest-threads .digest-item-row', 0);
     await count('#digest-threads .digest-summary', 0);
@@ -67,7 +66,7 @@ try {
       assert.equal(await card(i).locator('.digest-thread-items > .digest-item-row').count(), [4, 1, 4][i]);
     }
     await count('[data-root-bead-id="thread-3"] .digest-item-row', 0);
-    assert.equal(await card(1).locator('[data-bead-id="child-1-0"] a').getAttribute('href'), '#bead/child-1-0');
+    assert.equal(await card(1).locator('[data-bead-id="child-1-0"] h4 a').getAttribute('href'), '/projects/qa/beads/child-1-0');
     const more = card(0).getByRole('button', { name: 'Show 4 more in thread', exact: true });
     await more.focus(); await page.keyboard.press('Enter');
     await count('[data-root-bead-id="thread-0"] .digest-thread-items > .digest-item-row', 8);
@@ -84,13 +83,50 @@ try {
     await toggle(4).focus();
     await page.keyboard.press('Enter');
     assert.equal(await toggle(4).getAttribute('aria-expanded'), 'true');
+    const focusedTop = await toggle(4).evaluate(node => node.getBoundingClientRect().top);
     data.threads.unshift({ ...structuredClone(data.threads[4]), root: item('new-thread') });
     await refresh();
     assert.equal(await page.evaluate(() => document.activeElement.dataset.digestFocus), 'activity:thread-4');
     assert.equal(await toggle(4).getAttribute('aria-expanded'), 'true');
     await count('#digest-threads > article', 8);
+    assert.ok(Math.abs(await toggle(4).evaluate(node => node.getBoundingClientRect().top) - focusedTop) < 3);
     assert.equal(await page.locator('[data-root-bead-id="new-thread"] .digest-activity-toggle').getAttribute('aria-expanded'), 'false');
     assert.equal(await toggle(1).getAttribute('aria-expanded'), 'true');
+    // Surviving child/standalone controls must retain their actual DOM identity,
+    // open summary and viewport position when new activity crosses the preview.
+    const boundary = async (selector, prepend, remove, screenshot) => {
+      const row = page.locator(selector);
+      const control = row.getByRole('button', { name: 'Show more', exact: true });
+      await control.focus(); await page.keyboard.press('Enter');
+      const open = row.getByRole('button', { name: 'Show less', exact: true });
+      const original = await open.elementHandle();
+      const top = await open.evaluate(node => node.getBoundingClientRect().top);
+      prepend(); await refresh();
+      assert.equal(await original.evaluate(node => node.isConnected && document.activeElement === node), true);
+      assert.equal(await open.getAttribute('aria-expanded'), 'true');
+      assert.ok(Math.abs(await open.evaluate(node => node.getBoundingClientRect().top) - top) < 3);
+      await page.screenshot({ path: `${output}/${screenshot}.png` });
+      // Expanded summaries also survive when keyboard focus moves elsewhere.
+      await page.locator('[data-digest-window]').first().focus(); await refresh();
+      assert.equal(await open.getAttribute('aria-expanded'), 'true');
+      await open.focus(); remove(); await refresh();
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'digest-toggle');
+    };
+    await toggle(0).click();
+    await boundary('[data-bead-id="child-0-3"]',
+      () => data.threads.find(t => t.root.id === 'thread-0').items.unshift(item('new-child')),
+      () => { const thread = data.threads.find(t => t.root.id === 'thread-0'); thread.items = thread.items.filter(i => i.id !== 'child-0-3'); },
+      'focused-child-boundary');
+    data.standaloneCompleted = Array.from({ length: 9 }, (_, i) => item(`solo-${i}`));
+    await refresh();
+    await count('#digest-standalone > .digest-item-row', 6);
+    await boundary('[data-bead-id="solo-5"]',
+      () => data.standaloneCompleted.unshift(item('new-solo')),
+      () => { data.standaloneCompleted = data.standaloneCompleted.filter(i => i.id !== 'solo-5'); },
+      'focused-standalone-boundary');
+    await count('#digest-standalone > .digest-item-row', 6);
+    data.standaloneCompleted = []; await refresh();
+    await toggle(4).focus();
     await toggle(4).scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${output}/focused-boundary-refresh.png` });
     await page.keyboard.press('Enter');
@@ -125,9 +161,8 @@ try {
     data.threads[0].root.id = realId;
     await refresh();
     await page.locator(`[data-root-bead-id="${realId}"] .digest-thread-title a`).click();
-    await page.waitForFunction(() => location.hash.startsWith('#bead/'));
-    assert.equal(decodeURIComponent(await page.evaluate(() => location.hash)), `#bead/${realId}`);
-    await page.waitForFunction(id => document.querySelector('#workspace-id').textContent === id, realId);
+    await page.waitForURL(`**/projects/qa/beads/${realId}`);
+    await page.locator('.bead-facts').waitFor();
     assert.deepEqual(errors, []);
     console.log('Thread QA passed: zero default children/descriptions; independent 1/4/8 activity; preview/all; refresh/focus across fifth-thread boundary; new threads; unique IDs; navigation; 375/720 reflow.');
   }

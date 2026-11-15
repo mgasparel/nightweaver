@@ -161,7 +161,7 @@ internal sealed class GitFixture : IDisposable
         startInfo.Environment["GIT_CONFIG_GLOBAL"] = System.IO.Path.Combine(workingDirectory, "missing-global-config");
         startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
         startInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start git");
+        using var process = FixtureProcess.Start(startInfo) ?? throw new InvalidOperationException("Could not start git");
         var standardOutput = process.StandardOutput.ReadToEnd();
         var standardError = process.StandardError.ReadToEnd();
         process.WaitForExit();
@@ -257,7 +257,7 @@ internal static class Snapshot
         startInfo.Environment["GIT_CONFIG_GLOBAL"] = System.IO.Path.Combine(path, "missing-global-config");
         startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
         startInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start git");
+        using var process = FixtureProcess.Start(startInfo) ?? throw new InvalidOperationException("Could not start git");
         var stdout = process.StandardOutput.ReadToEnd();
         var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();

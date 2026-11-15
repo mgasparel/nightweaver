@@ -21,7 +21,7 @@ public sealed class FixtureProcessObservationTests
         start.ArgumentList.Add("/d");
         start.ArgumentList.Add("/c");
         start.ArgumentList.Add("set /p fixture_probe= & exit /b 7");
-        using var owner = Process.Start(start)!;
+        using var owner = FixtureProcess.Start(start)!;
         var ticks = owner.StartTime.ToUniversalTime().Ticks + (wrongStart ? 1 : 0);
         var identity = Path.Combine(directory.Path, "agent.pid");
         File.WriteAllText(identity, $"{owner.Id}|{ticks}");

@@ -70,7 +70,7 @@ public sealed class BackgroundTerminalLifetimeTests
         var cleanupName = $"Local\\Nightweaver.TerminalProbe.{Guid.NewGuid():N}";
         using var cleanupJob = TerminalOwnerProbe.CreateCleanupJob(cleanupName);
         var executable = Path.Combine(AppContext.BaseDirectory, "ExecutionCrashHost.exe");
-        using var terminal = Process.Start(new ProcessStartInfo(executable)
+        using var terminal = FixtureProcess.Start(new ProcessStartInfo(executable)
         {
             ArgumentList = { "--terminal-owner-probe", mode, ready, cleanupName },
             WorkingDirectory = directory.Path,
@@ -170,7 +170,7 @@ public sealed class BackgroundTerminalLifetimeTests
         var ready = Path.Combine(directory.Path, "owner.ready");
         var cleanupName = $"Local\\Nightweaver.TerminalProbe.{Guid.NewGuid():N}";
         using var cleanupJob = TerminalOwnerProbe.CreateCleanupJob(cleanupName);
-        using var terminal = Process.Start(new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "ExecutionCrashHost.exe"))
+        using var terminal = FixtureProcess.Start(new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "ExecutionCrashHost.exe"))
         {
             ArgumentList = { "--terminal-owner-probe", "restricted", ready, cleanupName },
             WorkingDirectory = directory.Path,

@@ -970,7 +970,7 @@ public abstract class AgentStageIntegrationTestSupport
             }
             startInfo.Environment["GIT_CONFIG_GLOBAL"] = System.IO.Path.Combine(workingDirectory, "missing-global-config");
             startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
-            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start '{fileName}'.");
+            using var process = FixtureProcess.Start(startInfo) ?? throw new InvalidOperationException($"Could not start '{fileName}'.");
             var stdoutTask = process.StandardOutput.ReadToEndAsync();
             var stderrTask = process.StandardError.ReadToEndAsync();
             process.WaitForExit();

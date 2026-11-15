@@ -177,7 +177,7 @@ public sealed class WorktreeInspectionTests
         {
             var start = new System.Diagnostics.ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
             start.ArgumentList.Add("/c"); start.ArgumentList.Add("mklink"); start.ArgumentList.Add("/J"); start.ArgumentList.Add(path); start.ArgumentList.Add(target);
-            using var process = System.Diagnostics.Process.Start(start)!;
+            using var process = FixtureProcess.Start(start)!;
             process.WaitForExit();
             var stdout = process.StandardOutput.ReadToEnd();
             var stderr = process.StandardError.ReadToEnd();

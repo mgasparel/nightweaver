@@ -229,7 +229,7 @@ public sealed class ManualPilotEvidenceLogTests
                 startInfo.Environment[key] = value;
         startInfo.ArgumentList.Add(typeof(FixtureMarker).Assembly.Location);
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
-        return new RunningChild(Process.Start(startInfo)
+        return new RunningChild(FixtureProcess.Start(startInfo)
             ?? throw new InvalidOperationException("Could not start the AgentInvocationFixture child process."));
     }
 

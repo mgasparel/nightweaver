@@ -9,6 +9,62 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
 {
     private static readonly string[] ClosedMergeLabels = ["stage:merge"];
 
+    [Theory]
+    [InlineData("open")]
+    [InlineData("paused")]
+    [InlineData("assigned")]
+    [InlineData("missing")]
+    [InlineData("foreign-id")]
+    public async Task ExactTaskReadFailsClosedBeforeBranchDeletion(string change)
+    {
+        using var temp = new TempDirectory();
+        var repository = new ValidatedTargetRepository(temp.CreateDirectory("target"), "main");
+        var host = new HostPaths(temp.CreateDirectory("host"));
+        var slug = ProjectSlug.Parse("demo");
+        var settings = new AgentSettings(AgentCli.Codex, null, "low", 1);
+        var project = new ProjectConfig(slug, "fixture.json", new(repository.Path, "main"),
+            new(1, 1, 1), new(3, 1), settings,
+            new RoleSettings(AgentRoles.All.ToDictionary(role => role, _ => settings)));
+        const string id = "task-1";
+        var head = new string('a', 40);
+        var state = new BeadWorkflowState(id, "task", "closed", "stage:merge", false, false, false, 0);
+        var session = new AgentStageSession(host, project, repository, id, AgentRole.Merger,
+            WorktreePurpose.Delivery, new(Path.Combine(host.WorktreesRoot(slug), id), head), state, null,
+            new AgentDispatchContext(id, "task", "stage:merge", 0), PreserveInheritedChanges: true);
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            Assert.Equal(repository.Path, request.WorkingDirectory);
+            if (request.FileName == "git")
+            {
+                var args = request.Arguments;
+                if (args.SequenceEqual(["worktree", "list", "--porcelain", "-z"]))
+                    return Task.FromResult(new ProcessResult(0,
+                        $"worktree {repository.Path}\0HEAD {head}\0branch refs/heads/main\0\0", ""));
+                if (args.SequenceEqual(["show-ref", "--verify", "--quiet", "refs/heads/nightweaver/task-1"]))
+                    return Task.FromResult(new ProcessResult(0, "", ""));
+                if (args.SequenceEqual(["rev-parse", "refs/heads/nightweaver/task-1"]))
+                    return Task.FromResult(new ProcessResult(0, head, ""));
+                throw new InvalidOperationException("Unexpected Git command: " + string.Join(' ', args));
+            }
+            Assert.Equal("bd", request.FileName);
+            Assert.Equal(new[] { "--readonly", "--sandbox", "show", id, "--json" }, request.Arguments);
+            object[] rows = change == "missing" ? [] : [new
+            {
+                id = change == "foreign-id" ? "other-task" : id,
+                issue_type = "task", status = change == "open" ? "open" : "closed", priority = 2,
+                created_at = "2026-11-15T00:00:00Z",
+                assignee = change == "assigned" ? "other-owner" : (string?)null,
+                labels = change == "paused" ? ["stage:merge", "needs-human"] : ClosedMergeLabels
+            }];
+            return Task.FromResult(new ProcessResult(0, System.Text.Json.JsonSerializer.Serialize(rows), ""));
+        });
+        await Assert.ThrowsAsync<ToolExecutionException>(() => new MergerCompletionFinalizer(runner)
+            .CleanupBranchesAsync(session, Evidence(head), TestContext.Current.CancellationToken));
+        Assert.Single(runner.Requests, request => request.FileName == "bd");
+        Assert.DoesNotContain(runner.Requests, request => request.Arguments[0] is "update-ref" or "push");
+    }
+
     [Fact]
     public async Task QaRetainedArtifactsRecoverAfterLostClosureAndLockedTmpRetryAcrossRestart()
     {
@@ -178,7 +234,7 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         {
             if (request.FileName == "bd")
             {
-                Assert.Contains("list", request.Arguments);
+                Assert.Equal(new[] { "--readonly", "--sandbox", "show", beadId, "--json" }, request.Arguments);
                 Assert.DoesNotContain("update", request.Arguments);
                 Assert.Equal(target.Path, request.WorkingDirectory);
                 beadReads++;
@@ -225,7 +281,7 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         Assert.Contains("local branch changed since validation", error.Message, StringComparison.Ordinal);
         Assert.Equal(1, beadReads);
         Assert.All(runner.Requests.Where(request => request.FileName == "bd"),
-            request => Assert.Contains("list", request.Arguments));
+            request => Assert.Contains("show", request.Arguments));
         Assert.False(Directory.Exists(worktreePath));
         Assert.Equal(movedHead, await GitValueAsync("rev-parse", branchRef));
     }

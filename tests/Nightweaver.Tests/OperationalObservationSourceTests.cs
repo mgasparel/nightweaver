@@ -50,6 +50,35 @@ public sealed class OperationalObservationSourceTests
     }
 
     [Fact]
+    public async Task SharedDigestCheckpointUsesPreReadWholeSecondCutoffAndRetainsBoundaryActivity()
+    {
+        using var target = new BeadsApplicationFixture();
+        var clock = new CostClock();
+        clock.Advance(TimeSpan.FromMilliseconds(400));
+        var cutoff = DateTimeOffset.FromUnixTimeSeconds(clock.GetUtcNow().ToUnixTimeSeconds());
+        // The inventory itself crosses the boundary; unrelated membership reads
+        // must not be needed to advance the test clock.
+        var runner = new Runner { Advance = () => clock.Advance(TimeSpan.FromMilliseconds(900)) };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var token = TestContext.Current.CancellationToken;
+        var first = await source.ReadTrackerAsync(Keys("digest:24h"), token);
+        var displayed = Assert.IsType<CatchUpDigestResponse>(first["digest:24h"].Data);
+        Assert.Equal(cutoff, displayed.GeneratedAt);
+        Assert.True(clock.GetUtcNow() > cutoff.AddSeconds(1));
+        Assert.Empty(displayed.StandaloneOpen);
+        await factory.Services.GetRequiredService<CatchUpCheckpointStore>().WriteLastCaughtUpAtAsync(displayed.GeneratedAt, token);
+        // An unseen write in the exact boundary second must remain unread, even
+        // though the first inventory and its projection completed after that second.
+        runner.UpdatedAt = cutoff.ToString("O", CultureInfo.InvariantCulture);
+        var next = await source.ReadTrackerAsync(Keys("digest:since_caught_up"), token);
+        var digest = Assert.IsType<CatchUpDigestResponse>(next["digest:since_caught_up"].Data);
+        Assert.Equal(cutoff, digest.LastCaughtUpAt);
+        Assert.False(digest.IsCaughtUp);
+        Assert.Equal(cutoff, Assert.Single(digest.StandaloneOpen).ActivityAt);
+    }
+
+    [Fact]
     public async Task SharedInventoryProjectsAllViewsAndSelectedCommentsAreSharedWithAttention()
     {
         using var target = new BeadsApplicationFixture();
@@ -339,6 +368,24 @@ public sealed class OperationalObservationSourceTests
         Assert.Contains("show", runner.Commands);
     }
 
+    [Theory]
+    [InlineData("workspace:task-1")]
+    [InlineData("digest:all")]
+    [InlineData("explorer:all:")]
+    public async Task UnselectedMembershipsDoNotConsumeTheObservationBudget(string key)
+    {
+        using var target = new BeadsApplicationFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Advance = () => clock.Advance(TimeSpan.FromSeconds(1.4)) };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        await source.ReadTrackerAsync(Keys(key), TestContext.Current.CancellationToken);
+        Assert.DoesNotContain("ready", runner.Commands);
+        Assert.DoesNotContain("blocked", runner.Commands);
+        if (key.StartsWith("workspace:", StringComparison.Ordinal))
+            Assert.Contains("show", runner.Commands);
+    }
+
     private static OperationalObservationSource Adapter(NightweaverWebApplicationFactory factory, ObservationMemoryBudget? memory = null)
         => ActivatorUtilities.CreateInstance<OperationalObservationSource>(factory.Services, memory ?? new ObservationMemoryBudget());
 
@@ -377,6 +424,7 @@ public sealed class OperationalObservationSourceTests
         internal bool FailReady { get; init; }
         internal bool Conflict { get; init; }
         internal int Rows { get; set; } = 1;
+        internal string UpdatedAt { get; set; } = "2026-01-01T00:00:00Z";
         internal string Comment { get; set; } = "Initial comment";
         private int inventories;
         public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
@@ -403,7 +451,7 @@ public sealed class OperationalObservationSourceTests
             object[] rows = Enumerable.Range(1, Rows).Select(index => (object)new
             {
                 id = $"task-{index}", title, issue_type = "task", priority = Conflict && inventories > 0 ? 2 : 1, status = "open", assignee = (string?)null,
-                labels = (string[])["product-decision-required"], created_at = "2026-01-01T00:00:00Z", updated_at = "2026-01-01T00:00:00Z",
+                labels = (string[])["product-decision-required"], created_at = "2026-01-01T00:00:00Z", updated_at = UpdatedAt,
                 description = "Description"
             }).ToArray();
             if (command == "list") inventories++;

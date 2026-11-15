@@ -223,7 +223,7 @@ public sealed class ManualPilotMergerRetryTests
         startInfo.Environment["GIT_COMMITTER_NAME"] = "Nightweaver Fixture Test";
         startInfo.Environment["GIT_COMMITTER_EMAIL"] = "fixture@example.invalid";
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start git for Merger safety test.");
+        using var process = FixtureProcess.Start(startInfo) ?? throw new InvalidOperationException("Could not start git for Merger safety test.");
         var stdout = process.StandardOutput.ReadToEnd();
         var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();

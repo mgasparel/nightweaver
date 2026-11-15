@@ -181,8 +181,13 @@ internal sealed class OperationalObservationSource(
             ready = null; blocked = null;
             for (var index = 0; index < 2 && HasBudget; index++)
             {
-                if ((index == 0) == readyFirst) ready = await ReadAsync("ready", () => reader.ReadExplorerReadinessAsync(repository, token), token);
-                else blocked = await ReadAsync("blocked", () => reader.ReadExplorerBlockedAsync(repository, token), token);
+                if ((index == 0) == readyFirst)
+                {
+                    if (keys.Any(key => key.Kind == "explorer" && key.Argument == "ready"))
+                        ready = await ReadAsync("ready", () => reader.ReadExplorerReadinessAsync(repository, token), token);
+                }
+                else if (keys.Any(key => key.Kind == "explorer" && key.Argument == "blocked"))
+                    blocked = await ReadAsync("blocked", () => reader.ReadExplorerBlockedAsync(repository, token), token);
             }
             readyFirst = !readyFirst;
             retainedInventory = inventory; retainedReady = ready; retainedBlocked = blocked;

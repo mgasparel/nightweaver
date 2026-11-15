@@ -19,6 +19,7 @@ import { operations } from "./operations-browser";
 import { AttentionView, BeadWorkspace } from "./bead-views";
 import { Explorer } from "./explorer";
 import { DeliveryView, DeliveryMetric, RuntimeSummary } from "./delivery-views";
+import { CatchUpView, DigestMetric } from "./digest-views";
 
 const sections = [
   ["overview", "Overview"],
@@ -310,7 +311,7 @@ function ProjectRoutes({
         <Route
           key={id}
           path={id}
-          element={id === "delivery" ? <DeliveryView project={context.projectId} /> : id === "attention" ? <AttentionView project={context.projectId} /> : id === "beads" ? <Explorer project={context.projectId} /> : <FeatureRoute id={id} title={title} />}
+          element={id === "delivery" ? <DeliveryView project={context.projectId} /> : id === "attention" ? <AttentionView project={context.projectId} /> : id === "beads" ? <Explorer project={context.projectId} /> : id === "catch-up" ? <CatchUpView project={context.projectId} /> : <FeatureRoute id={id} title={title} />}
         />
       ))}
       <Route path="beads/:beadId" element={<BeadWorkspace project={context.projectId} />} />
@@ -361,9 +362,9 @@ function Overview({
         {[
           ["Delivery", "Runtime not connected"],
           ["Attention", "Tracker not connected"],
-          ["Merged", "Digest not connected"],
+          ["Completed", "Digest unavailable"],
           ["Ready", "Tracker not connected"],
-        ].map(([label, detail]) => label === "Delivery" ? <DeliveryMetric key={label} project={context.projectId} /> : label === "Attention" ? <AttentionMetric key={label} projectId={context.projectId} /> : (
+        ].map(([label, detail]) => label === "Delivery" ? <DeliveryMetric key={label} project={context.projectId} /> : label === "Attention" ? <AttentionMetric key={label} projectId={context.projectId} /> : label === "Completed" ? <DigestMetric key={label} project={context.projectId} /> : (
           <div className="metric" key={label}>
             <span className="eyebrow">{label}</span>
             <strong aria-label="Unavailable">—</strong>
@@ -427,17 +428,7 @@ function Overview({
           title="Catch up"
           accessory={<span className="eyebrow">Meaningful changes</span>}
         >
-          <Unavailable
-            title="Pick up where you left off."
-            href="/#catch-up"
-            action="Open existing digest"
-          >
-            Milestones, bounded history and your catch-up checkpoint remain in
-            the existing console until the digest is connected.
-          </Unavailable>
-          <Link className="text-link" to={`${base}/catch-up`}>
-            Visit catch up <Icon name="arrow" />
-          </Link>
+          <CatchUpView project={context.projectId} compact />
         </Panel>
       </div>
     </>
