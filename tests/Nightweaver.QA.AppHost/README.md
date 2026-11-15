@@ -234,6 +234,12 @@ these cases against their actual implementations.
 
 ## Cleanup
 
+`digest-threads-qa.mjs` also prepends activity while the fourth child and sixth
+standalone summary controls are focused. It checks the original DOM node,
+expanded summary and viewport position, retention after moving focus away,
+bounded standalone defaults and the fallback after actual item removal. Captures
+include `focused-child-boundary.png` and `focused-standalone-boundary.png`.
+
 Always stop the same AppHost in a cleanup/finally step, including after a failed browser check:
 
 ```powershell

@@ -19,6 +19,13 @@ preserve the focused DOM control and its viewport position. Removing that contro
 returns focus to the digest disclosure, without selecting another Bead. Changing
 the window starts a bounded disclosure view for that filter.
 
+Child and standalone previews retain surviving focused items and open summaries
+when newer activity pushes them past the four/six-item boundary. Only those
+identities are added to the preview; unrelated hidden history stays bounded.
+Moving focus outside a collection releases its focus retention, while explicitly
+opened summaries remain visible. Show more counts reflect the remaining hidden
+items. Removing the actual item uses the same digest-disclosure focus fallback.
+
 Mark Caught Up is an explicit same-origin checkpoint POST. The tab-owned command
 captures `generatedAt` from the displayed successful observation before awaiting
 anything, prevents duplicate submissions, and has a ten-second deadline covering

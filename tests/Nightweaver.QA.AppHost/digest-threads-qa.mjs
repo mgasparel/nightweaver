@@ -92,6 +92,41 @@ try {
     assert.ok(Math.abs(await toggle(4).evaluate(node => node.getBoundingClientRect().top) - focusedTop) < 3);
     assert.equal(await page.locator('[data-root-bead-id="new-thread"] .digest-activity-toggle').getAttribute('aria-expanded'), 'false');
     assert.equal(await toggle(1).getAttribute('aria-expanded'), 'true');
+    // Surviving child/standalone controls must retain their actual DOM identity,
+    // open summary and viewport position when new activity crosses the preview.
+    const boundary = async (selector, prepend, remove, screenshot) => {
+      const row = page.locator(selector);
+      const control = row.getByRole('button', { name: 'Show more', exact: true });
+      await control.focus(); await page.keyboard.press('Enter');
+      const open = row.getByRole('button', { name: 'Show less', exact: true });
+      const original = await open.elementHandle();
+      const top = await open.evaluate(node => node.getBoundingClientRect().top);
+      prepend(); await refresh();
+      assert.equal(await original.evaluate(node => node.isConnected && document.activeElement === node), true);
+      assert.equal(await open.getAttribute('aria-expanded'), 'true');
+      assert.ok(Math.abs(await open.evaluate(node => node.getBoundingClientRect().top) - top) < 3);
+      await page.screenshot({ path: `${output}/${screenshot}.png` });
+      // Expanded summaries also survive when keyboard focus moves elsewhere.
+      await page.locator('[data-digest-window]').first().focus(); await refresh();
+      assert.equal(await open.getAttribute('aria-expanded'), 'true');
+      await open.focus(); remove(); await refresh();
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'digest-toggle');
+    };
+    await toggle(0).click();
+    await boundary('[data-bead-id="child-0-3"]',
+      () => data.threads.find(t => t.root.id === 'thread-0').items.unshift(item('new-child')),
+      () => { const thread = data.threads.find(t => t.root.id === 'thread-0'); thread.items = thread.items.filter(i => i.id !== 'child-0-3'); },
+      'focused-child-boundary');
+    data.standaloneCompleted = Array.from({ length: 9 }, (_, i) => item(`solo-${i}`));
+    await refresh();
+    await count('#digest-standalone > .digest-item-row', 6);
+    await boundary('[data-bead-id="solo-5"]',
+      () => data.standaloneCompleted.unshift(item('new-solo')),
+      () => { data.standaloneCompleted = data.standaloneCompleted.filter(i => i.id !== 'solo-5'); },
+      'focused-standalone-boundary');
+    await count('#digest-standalone > .digest-item-row', 6);
+    data.standaloneCompleted = []; await refresh();
+    await toggle(4).focus();
     await toggle(4).scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${output}/focused-boundary-refresh.png` });
     await page.keyboard.press('Enter');

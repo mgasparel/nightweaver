@@ -94,26 +94,40 @@ export function CatchUpView({ project, compact = false }: { project: string; com
 function More({ total, limit, all, label, onClick }: { total: number; limit: number; all: boolean; label: string; onClick: () => void }) {
   return total > limit ? <button className="digest-inline-toggle text-link" aria-expanded={all} onClick={onClick}>{all ? `Show fewer ${label}` : `Show ${total - limit} more ${label}`}</button> : null;
 }
-function Item({ project, item, context = "item" }: { project: string; item: DigestItem; context?: string }) {
+function Item({ project, item, context = "item", onFocus, onDisclosure }: { project: string; item: DigestItem; context?: string; onFocus?: () => void; onDisclosure?: (open: boolean) => void }) {
   const [expanded, setExpanded] = useState(false);
   const long = item.summary?.length > 140;
   const id = `digest-summary-${encodeURIComponent(context + ":" + item.id)}`;
-  return <div className="digest-item-row" data-bead-id={item.id}>
+  return <div className="digest-item-row" data-bead-id={item.id} onFocusCapture={onFocus}>
     <div className="digest-item-meta"><Status>{item.presentation?.role ?? "Role unavailable"} · Type: {item.type} · P{item.priority}</Status><Status>{item.activityKind === "context" ? `Root context (${item.status})` : (item.activityKind === "closed" ? item.outcomeLabel : item.presentation?.summary ?? item.outcomeLabel)}</Status>
       {item.fromId && <span>↳ {item.fromRelation ?? "Lineage"}: <Link to={beadPath(project, item.fromId)}>{item.fromId}</Link></span>}
       {item.commits?.map(sha => <code key={sha}>{sha.slice(0, 7)}</code>)}{item.pullRequests?.map(pr => <span key={pr}>{pr}</span>)}</div>
     <h4><Link to={beadPath(project, item.id)}>{item.id} · {item.title}</Link></h4>
     <p className="digest-item-time">{stamp(item.activityAt)}</p>
     {item.summary && <p id={id} className={`digest-summary${long && !expanded ? " is-clamped" : ""}`}>{item.summary}</p>}
-    {long && <button className="digest-inline-toggle text-link" aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded(!expanded)}>{expanded ? "Show less" : "Show more"}</button>}
+    {long && <button className="digest-inline-toggle text-link" aria-expanded={expanded} aria-controls={id} onClick={() => { setExpanded(!expanded); onDisclosure?.(!expanded); }}>{expanded ? "Show less" : "Show more"}</button>}
   </div>;
+}
+
+/** Keep only surviving focused/open items beyond the normal preview, not the entire history. */
+function ItemList({ project, items, limit, label, context, id, className }: { project: string; items: DigestItem[]; limit: number; label: string; context?: string; id?: string; className?: string }) {
+  const [all, setAll] = useState(false);
+  const [focused, setFocused] = useState<string>();
+  const [disclosed, setDisclosed] = useState(new Set<string>());
+  const visible = all ? items : items.filter((item, index) => index < limit || item.id === focused || disclosed.has(item.id));
+  return <>
+    <div id={id} className={className} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(undefined); }}>
+      {visible.map(item => <Item key={item.id} project={project} item={item} context={context} onFocus={() => setFocused(item.id)} onDisclosure={open => {
+        setDisclosed(previous => { const next = new Set(previous); if (open) next.add(item.id); else next.delete(item.id); return next; });
+      }} />)}
+    </div>
+    <More total={items.length} limit={all ? limit : visible.length} all={all} label={label} onClick={() => setAll(!all)} />
+  </>;
 }
 
 function DigestContents({ project, data }: { project: string; data: Digest }) {
   const [expanded, setExpanded] = useState(new Set<string>());
-  const [allItems, setAllItems] = useState(new Set<string>());
   const [allThreads, setAllThreads] = useState(false);
-  const [allStandalone, setAllStandalone] = useState(false);
   const [focused, setFocused] = useState<string>();
   const toggle = (ids: Set<string>, id: string) => { const next = new Set(ids); if (next.has(id)) next.delete(id); else next.add(id); return next; };
   const threads = visibleThreads(data, allThreads, expanded, focused);
@@ -129,11 +143,10 @@ function DigestContents({ project, data }: { project: string; data: Digest }) {
             <button className="digest-inline-toggle digest-activity-toggle text-link" data-digest-focus={`activity:${id}`} aria-label={`${open ? "Hide" : "Show"} activity for ${id} (${thread.items.length} items)`} aria-controls={activity} aria-expanded={open} onClick={() => setExpanded(toggle(expanded, id))}>{open ? "Hide activity" : `Show activity (${thread.items.length})`}</button></div>
           <div id={activity} className="digest-thread-activity" hidden={!open}>{open && <>
             <Item project={project} item={thread.root} context={`root:${id}`} />
-            <div className="digest-thread-items">{(allItems.has(id) ? thread.items : thread.items.slice(0, 4)).map(item => <Item key={item.id} project={project} item={item} context={id} />)}</div>
-            <More total={thread.items.length} limit={4} all={allItems.has(id)} label="in thread" onClick={() => setAllItems(toggle(allItems, id))} />
+            <ItemList project={project} items={thread.items} limit={4} label="in thread" context={id} className="digest-thread-items" />
           </>}</div>
         </article>; })}
     </div><More total={data.threads.length} limit={5} all={threads.length > 5} label="threads" onClick={() => { const show = threads.length <= 5; setAllThreads(show); if (!show) { setExpanded(new Set()); setFocused(undefined); } }} /></section>}
-    {!!standalone.length && <section id="digest-standalone-section"><h3>Standalone activity</h3><div id="digest-standalone">{(allStandalone ? standalone : standalone.slice(0, 6)).map(item => <Item key={item.id} project={project} item={item} />)}</div><More total={standalone.length} limit={6} all={allStandalone} label="standalone items" onClick={() => setAllStandalone(!allStandalone)} /></section>}
+    {!!standalone.length && <section id="digest-standalone-section"><h3>Standalone activity</h3><ItemList project={project} items={standalone} limit={6} label="standalone items" id="digest-standalone" /></section>}
   </>;
 }

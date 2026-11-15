@@ -1,5 +1,38 @@
 # Studio Digest acceptance
 
+The 2026-11-15 review repair reproduced the fourth-child focus loss in the
+adapted browser probe before the fix (`false !== true` for the original control's
+connected/focused identity). Child and standalone previews now retain only
+surviving focused/open identities beyond their normal bounds. The probe passes
+with both the fourth-child and sixth-standalone summary expanded and focused
+while activity is prepended: identical DOM control, open summary and viewport
+position within three CSS pixels. Moving focus away preserves the open summary;
+removing the actual item returns focus to the Digest disclosure. The standalone
+preview returns to six after removal. Existing fifth-root, keyboard, navigation
+and 375/720 reflow assertions also pass.
+
+Reviewed repair captures: [child boundary](studio-digest/focused-child-boundary.png)
+and [standalone boundary](studio-digest/focused-standalone-boundary.png). Both show
+readable long titles and the retained control's visible keyboard focus. The full
+`digest-qa.mjs` checkpoint/window/error probe and all 39 Studio tests also pass
+after the repair. The exact isolated AppHost was stopped successfully before
+the new complete-suite run. Prior failed-run evidence below remains preserved.
+
+Repair complete-suite run: 1,194/1,195 passed, zero skipped, exit 2, **469.295
+seconds** wall time including normal build/publish/teardown at the committed
+six-thread parallelism. Both previously failing Planning concurrency and Merger
+cases passed in this run. The sole failure was
+`AgentStreamCleanupIntegrationTests.NativeExecutorAndManagedRunnerExposeBothBlockedDrainsWithReleaseControls`:
+the fixture's `WaitForJsonAsync` attempted to read `scenario/holder.json` while
+another process held the file, producing `IOException` at
+`tests/ExecutionCrashHost/AgentStreamCleanupCoordinator.cs:520`. That helper
+catches malformed JSON but not sharing errors. This evidence explains the
+reported exception, without establishing the causes of the earlier timeouts.
+Those native tests/helpers and production lifecycle code remain unchanged.
+Full-suite correctness and timing acceptance remain blocked; no passing full
+suite or latest-main timing is claimed. Evidence: `TestResults/digest-repair-full.xml`
+and `H:/Nightweaver/prod/tmp/nightshift/ns-mbd.6/20261115T0253575215179Z-implementer/full-suite.log`.
+
 Local browser checks on 2026-11-15 used this branch's isolated QA AppHost, with
 its discovered direct web endpoint and disposable `qa` tracker. The exact AppHost
 was stopped after the probes. No production tracker or runtime was changed.
