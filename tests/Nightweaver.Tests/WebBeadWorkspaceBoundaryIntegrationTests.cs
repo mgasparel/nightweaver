@@ -55,51 +55,18 @@ public sealed class WebBeadWorkspaceBoundaryIntegrationTests
     [Fact]
     public async Task WorkspaceRejectsForeignAndReparseGitAdminPointersBeforeStatusAndRechecksBeforeStatus()
     {
-        using var target = new BeadsFixture("workspace admin pointer target");
-        using var foreign = new GitFixture("workspace foreign admin repository");
-        var markerId = target.Create("Reparse marker");
-        var adminDirectoryId = target.Create("Reparse admin directory");
-        var foreignBacklinkId = target.Create("Foreign backlink");
-        var backlinkId = target.Create("Reparse backlink");
-        var replacementId = target.Create("Admin marker replaced at status boundary");
-        string worktreeList = string.Empty;
-        string? replacementMarker = null;
-        string? replacementAdminDirectory = null;
-        var replacementEnabled = 0;
-        var replacementListCalls = 0;
-        var statusRequests = new ConcurrentQueue<string?>();
-        using var factory = CreateFactory(target, out var runner, intercept: (request, _) =>
-        {
-            if (IsGit(request, "worktree") && request.Arguments.Skip(1).FirstOrDefault() == "list"
-                && worktreeList.Length > 0)
-            {
-                if (Volatile.Read(ref replacementEnabled) == 1
-                    && Interlocked.Increment(ref replacementListCalls) == 2)
-                {
-                    Assert.NotNull(replacementMarker);
-                    Assert.NotNull(replacementAdminDirectory);
-                    File.Delete(replacementMarker!);
-                    CreateDirectoryJunction(replacementMarker!, replacementAdminDirectory!);
-                }
-                return Task.FromResult<ProcessResult?>(new(0, worktreeList, string.Empty));
-            }
-            if (IsGit(request, "status"))
-            {
-                statusRequests.Enqueue(request.WorkingDirectory);
-                return Task.FromResult<ProcessResult?>(new(0, string.Empty, string.Empty));
-            }
-            return Task.FromResult<ProcessResult?>(null);
-        });
-        using var client = factory.CreateClient();
-        var markerWorktree = AddManagedWorktree(target, factory, markerId, detached: true);
-        var adminDirectoryWorktree = AddManagedWorktree(target, factory, adminDirectoryId, detached: true);
-        var foreignBacklinkWorktree = AddManagedWorktree(target, factory, foreignBacklinkId, detached: true);
-        var backlinkWorktree = AddManagedWorktree(target, factory, backlinkId, detached: true);
-        var replacementWorktree = AddManagedWorktree(target, factory, replacementId, detached: true);
-        GitFixture.RunGit(foreign.Path, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "workspace foreign base"]);
-        var foreignSentinel = Path.Combine(foreign.Path, "foreign-admin-sentinel.txt");
-        File.WriteAllText(foreignSentinel, "foreign repository must remain unchanged");
-        worktreeList = target.Run("git", ["worktree", "list", "--porcelain", "-z"]);
+        using var fixture = new WorkspaceBoundaryFixture("workspace admin pointers");
+        var markerId = "marker-reparse";
+        var adminDirectoryId = "admin-reparse";
+        var foreignBacklinkId = "foreign-backlink";
+        var backlinkId = "backlink-reparse";
+        var replacementId = "marker-replaced-at-status";
+        var markerWorktree = fixture.AddManagedWorktree(markerId);
+        var adminDirectoryWorktree = fixture.AddManagedWorktree(adminDirectoryId);
+        var foreignBacklinkWorktree = fixture.AddManagedWorktree(foreignBacklinkId);
+        var backlinkWorktree = fixture.AddManagedWorktree(backlinkId);
+        var replacementWorktree = fixture.AddManagedWorktree(replacementId);
+        fixture.WriteSentinels();
 
         var markerFile = Path.Combine(markerWorktree, ".git");
         var markerAdmin = ReadAdminDirectory(markerWorktree);
@@ -107,89 +74,74 @@ public sealed class WebBeadWorkspaceBoundaryIntegrationTests
         CreateDirectoryJunction(markerFile, markerAdmin);
 
         var adminDirectory = ReadAdminDirectory(adminDirectoryWorktree);
-        var backupAdminDirectory = Path.Combine(target.Path, ".git", "workspace-admin-backup-" + adminDirectoryId);
+        var backupAdminDirectory = Path.Combine(fixture.CommonDirectory, "worktrees", "admin-backup");
         Directory.Move(adminDirectory, backupAdminDirectory);
         CreateDirectoryJunction(adminDirectory, backupAdminDirectory);
 
         var foreignBacklinkAdmin = ReadAdminDirectory(foreignBacklinkWorktree);
-        File.WriteAllText(Path.Combine(foreignBacklinkAdmin, "gitdir"), Path.Combine(foreign.Path, ".git"));
+        File.WriteAllText(Path.Combine(foreignBacklinkAdmin, "gitdir"), Path.Combine(fixture.ForeignRepository, ".git"));
 
         var backlinkAdmin = ReadAdminDirectory(backlinkWorktree);
         var backlinkFile = Path.Combine(backlinkAdmin, "gitdir");
         File.Delete(backlinkFile);
-        CreateDirectoryJunction(backlinkFile, foreign.Path);
+        CreateDirectoryJunction(backlinkFile, fixture.ForeignRepository);
 
-        replacementMarker = Path.Combine(replacementWorktree, ".git");
-        replacementAdminDirectory = ReadAdminDirectory(replacementWorktree);
-        var foreignTreeBefore = Snapshot.FileTree(foreign.Path);
-        var foreignGitBefore = Snapshot.GitStatus(foreign.Path);
-        var initialTargetSentinel = Path.Combine(target.Path, "target-admin-sentinel.txt");
-        File.WriteAllText(initialTargetSentinel, "target source sentinel remains unchanged");
-        var targetTreeBefore = Snapshot.FileTree(target.Path, allowReadOnlyBdLastTouchedTimestamp: true);
+        var replacementMarker = Path.Combine(replacementWorktree, ".git");
+        var replacementAdminDirectory = ReadAdminDirectory(replacementWorktree);
+        var targetTreeBefore = Snapshot.FileTree(fixture.TargetRepository);
+        var foreignTreeBefore = Snapshot.FileTree(fixture.ForeignRepository);
 
-        foreach (var (beadId, title) in new[]
+        var runner = fixture.CreateRunner();
+        var observer = fixture.CreateObserver(runner);
+        foreach (var beadId in new[] { markerId, adminDirectoryId, foreignBacklinkId, backlinkId })
         {
-            (markerId, "Reparse marker"),
-            (adminDirectoryId, "Reparse admin directory"),
-            (foreignBacklinkId, "Foreign backlink"),
-            (backlinkId, "Reparse backlink")
-        })
-        {
-            using var response = await client.GetAsync($"/api/beads/{beadId}", TestContext.Current.CancellationToken);
-            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            Assert.Equal(beadId, document.RootElement.GetProperty("bead").GetProperty("id").GetString());
-            Assert.Equal(title, document.RootElement.GetProperty("bead").GetProperty("title").GetString());
-            var environment = document.RootElement.GetProperty("environment");
-            Assert.Equal("unsafe", environment.GetProperty("state").GetString());
-            Assert.Equal("unknown", environment.GetProperty("gitStatus").GetString());
-            Assert.Equal(JsonValueKind.Null, environment.GetProperty("worktreePath").ValueKind);
+            var environment = await observer.ObserveAsync(fixture.Target, beadId, TestContext.Current.CancellationToken);
+            Assert.Equal("unsafe", environment.State);
+            Assert.Equal("unknown", environment.GitStatus);
+            Assert.Null(environment.WorktreePath);
+            Assert.Empty(runner.StatusRequests);
         }
-        Assert.Empty(statusRequests);
+        Assert.Equal(4, runner.CommonDirectoryRequests);
 
-        Volatile.Write(ref replacementListCalls, 0);
-        Volatile.Write(ref replacementEnabled, 1);
-        using (var response = await client.GetAsync($"/api/beads/{replacementId}", TestContext.Current.CancellationToken))
-        using (var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)))
+        var raceRunner = fixture.CreateRunner(() =>
         {
-            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            Assert.Equal(replacementId, document.RootElement.GetProperty("bead").GetProperty("id").GetString());
-            Assert.Equal("unsafe", document.RootElement.GetProperty("environment").GetProperty("state").GetString());
-            Assert.Equal("unknown", document.RootElement.GetProperty("environment").GetProperty("gitStatus").GetString());
-            Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("environment").GetProperty("worktreePath").ValueKind);
-        }
-        Assert.Equal(2, Volatile.Read(ref replacementListCalls));
-        Assert.True((File.GetAttributes(replacementMarker!) & FileAttributes.ReparsePoint) != 0);
-        Assert.Empty(statusRequests);
-        Assert.Contains("target source sentinel remains unchanged", File.ReadAllText(initialTargetSentinel), StringComparison.Ordinal);
-        Assert.Contains("foreign repository must remain unchanged", File.ReadAllText(foreignSentinel), StringComparison.Ordinal);
-        Assert.Equal(foreignTreeBefore, Snapshot.FileTree(foreign.Path));
-        Assert.Equal(foreignGitBefore, Snapshot.GitStatus(foreign.Path));
-        Assert.Equal(targetTreeBefore, Snapshot.FileTree(target.Path, allowReadOnlyBdLastTouchedTimestamp: true));
-        Assert.DoesNotContain(runner.Requests, request => IsGit(request, "status"));
+            File.Delete(replacementMarker);
+            CreateDirectoryJunction(replacementMarker, replacementAdminDirectory);
+        });
+        var replacement = await fixture.CreateObserver(raceRunner).ObserveAsync(
+            fixture.Target, replacementId, TestContext.Current.CancellationToken);
+        Assert.Equal("unsafe", replacement.State);
+        Assert.Equal("unknown", replacement.GitStatus);
+        Assert.Null(replacement.WorktreePath);
+        Assert.True((File.GetAttributes(replacementMarker) & FileAttributes.ReparsePoint) != 0);
+        Assert.Equal(2, raceRunner.WorktreeListRequests);
+        Assert.Equal(1, raceRunner.CommonDirectoryRequests);
+        Assert.Empty(runner.StatusRequests);
+        Assert.Empty(raceRunner.StatusRequests);
+        Assert.Equal("target source sentinel remains unchanged", File.ReadAllText(fixture.TargetSentinel));
+        Assert.Equal("foreign repository must remain unchanged", File.ReadAllText(fixture.ForeignSentinel));
+        Assert.Equal(targetTreeBefore, Snapshot.FileTree(fixture.TargetRepository));
+        Assert.Equal(foreignTreeBefore, Snapshot.FileTree(fixture.ForeignRepository));
     }
 
     [Fact]
     public async Task WorkspaceReportsReparsePointAncestryWithoutFollowingIt()
     {
-        using var target = new BeadsFixture("workspace reparse target");
-        var beadId = target.Create("Reparse ancestry");
-        using var factory = CreateFactory(target, out _);
-        using var client = factory.CreateClient();
-        var host = factory.Services.GetRequiredService<HostPaths>();
-        var project = factory.Services.GetRequiredService<ProjectConfig>();
-        var worktreesRoot = host.WorktreesRoot(project.Name);
-        Directory.CreateDirectory(Path.GetDirectoryName(worktreesRoot)!);
-        CreateDirectoryJunction(worktreesRoot, target.Path);
-        var targetBefore = target.Run("git", ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]);
+        using var fixture = new WorkspaceBoundaryFixture("workspace reparse ancestry");
+        fixture.WriteSentinels();
+        var targetBefore = Snapshot.FileTree(fixture.TargetRepository);
+        var worktreesRoot = fixture.HostPaths.WorktreesRoot(fixture.Project.Name);
+        CreateDirectoryJunction(worktreesRoot, fixture.TargetRepository);
+        var runner = fixture.CreateRunner();
 
-        using var response = await client.GetAsync($"/api/beads/{beadId}", TestContext.Current.CancellationToken);
-        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-        var environment = document.RootElement.GetProperty("environment");
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal("unsafe", environment.GetProperty("state").GetString());
-        Assert.Equal(JsonValueKind.Null, environment.GetProperty("worktreePath").ValueKind);
-        Assert.Equal(targetBefore, target.Run("git", ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]));
+        var environment = await fixture.CreateObserver(runner).ObserveAsync(
+            fixture.Target, "reparse-ancestry", TestContext.Current.CancellationToken);
+
+        Assert.Equal("unsafe", environment.State);
+        Assert.Equal("unknown", environment.GitStatus);
+        Assert.Null(environment.WorktreePath);
+        Assert.Empty(runner.Requests);
+        Assert.Equal(targetBefore, Snapshot.FileTree(fixture.TargetRepository));
     }
 
     [Fact]
@@ -431,9 +383,129 @@ public sealed class WebBeadWorkspaceBoundaryIntegrationTests
         return factory;
     }
 
-    private sealed class FixedRuntimeObserver(BeadWorkspaceRuntimeObservation value) : IBeadWorkspaceRuntimeObserver
+    private sealed class WorkspaceBoundaryFixture : IDisposable
     {
-        public BeadWorkspaceRuntimeObservation Observe(string project, string beadId) => value;
+        private readonly TempDirectory temp;
+        private readonly List<string> managedWorktrees = [];
+
+        internal WorkspaceBoundaryFixture(string name)
+        {
+            temp = new TempDirectory();
+            TargetRepository = Directory.CreateDirectory(Path.Combine(temp.Path, name, "target")).FullName;
+            CommonDirectory = Directory.CreateDirectory(Path.Combine(TargetRepository, ".git")).FullName;
+            Directory.CreateDirectory(Path.Combine(CommonDirectory, "worktrees"));
+            Directory.CreateDirectory(Path.Combine(CommonDirectory, "objects"));
+            Directory.CreateDirectory(Path.Combine(CommonDirectory, "refs", "heads"));
+            File.WriteAllText(Path.Combine(CommonDirectory, "HEAD"), "ref: refs/heads/main\n");
+            ForeignRepository = Directory.CreateDirectory(Path.Combine(temp.Path, name, "foreign")).FullName;
+            Directory.CreateDirectory(Path.Combine(ForeignRepository, ".git"));
+            HostPaths = new(Path.Combine(temp.Path, name, "host"));
+            Directory.CreateDirectory(HostPaths.Root);
+            Project = CreateProject(TargetRepository);
+        }
+
+        internal string TargetRepository { get; }
+        internal string CommonDirectory { get; }
+        internal string ForeignRepository { get; }
+        internal string TargetSentinel => Path.Combine(TargetRepository, "target-admin-sentinel.txt");
+        internal string ForeignSentinel => Path.Combine(ForeignRepository, "foreign-admin-sentinel.txt");
+        internal HostPaths HostPaths { get; }
+        internal ProjectConfig Project { get; }
+        internal ValidatedTargetRepository Target => new(TargetRepository, "main");
+
+        internal string AddManagedWorktree(string beadId)
+        {
+            var worktree = Path.Combine(HostPaths.WorktreesRoot(Project.Name), beadId);
+            var admin = Path.Combine(CommonDirectory, "worktrees", beadId);
+            Directory.CreateDirectory(worktree);
+            Directory.CreateDirectory(admin);
+            Directory.CreateDirectory(Path.Combine(admin, "logs"));
+            File.WriteAllText(Path.Combine(admin, "HEAD"), new string('b', 40) + "\n");
+            File.WriteAllText(Path.Combine(admin, "commondir"), Path.GetRelativePath(admin, CommonDirectory) + "\n");
+            File.WriteAllText(Path.Combine(admin, "gitdir"), Path.Combine(worktree, ".git") + "\n");
+            File.WriteAllText(Path.Combine(admin, "logs", "HEAD"), string.Empty);
+            File.WriteAllText(Path.Combine(worktree, ".git"), "gitdir: " + admin + "\n");
+            managedWorktrees.Add(worktree);
+            return worktree;
+        }
+
+        internal void WriteSentinels()
+        {
+            File.WriteAllText(TargetSentinel, "target source sentinel remains unchanged");
+            File.WriteAllText(ForeignSentinel, "foreign repository must remain unchanged");
+        }
+
+        internal WorkspaceBoundaryProcessRunner CreateRunner(Action? onSecondWorktreeList = null)
+            => new(TargetRepository, CommonDirectory, managedWorktrees, onSecondWorktreeList);
+
+        internal BeadWorkspaceEnvironmentObserver CreateObserver(IProcessRunner runner)
+            => new(HostPaths, Project, new GitWorktreeReader(runner), runner, new UnavailableBeadWorkspaceRuntimeObserver());
+
+        private static ProjectConfig CreateProject(string target)
+        {
+            var settings = AgentRoles.All.ToDictionary(role => role,
+                _ => new AgentSettings(AgentCli.Claude, null, "low", 1));
+            return new(ProjectSlug.Parse("workspace-test"), "workspace-test.json", new(target, "main"),
+                new(1, 1, 1), new(3, 1), new(AgentCli.Claude, null, "low", 1), new RoleSettings(settings));
+        }
+
+        public void Dispose() => temp.Dispose();
+    }
+
+    private sealed class WorkspaceBoundaryProcessRunner : IProcessRunner
+    {
+        private static readonly string[] WorktreeArguments = ["worktree", "list", "--porcelain", "-z"];
+        private static readonly string[] CommonDirectoryArguments = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
+        private static readonly string[] StatusArguments = ["status", "--porcelain=v1", "-z", "--untracked-files=normal", "--ignore-submodules=all"];
+        private readonly string targetRepository;
+        private readonly string commonDirectory;
+        private readonly string worktreeOutput;
+        private readonly Action? onSecondWorktreeList;
+        private readonly ConcurrentQueue<ProcessRequest> requests = new();
+        private int worktreeListRequests;
+        private int commonDirectoryRequests;
+
+        internal WorkspaceBoundaryProcessRunner(string targetRepository, string commonDirectory,
+            IReadOnlyList<string> managedWorktrees, Action? onSecondWorktreeList)
+        {
+            this.targetRepository = targetRepository;
+            this.commonDirectory = commonDirectory;
+            this.onSecondWorktreeList = onSecondWorktreeList;
+            var rows = new List<string>
+            {
+                $"worktree {targetRepository}\0HEAD {new string('a', 40)}\0branch refs/heads/main\0\0"
+            };
+            rows.AddRange(managedWorktrees.Select(path =>
+                $"worktree {path}\0HEAD {new string('b', 40)}\0detached\0\0"));
+            worktreeOutput = string.Concat(rows);
+        }
+
+        internal IReadOnlyList<ProcessRequest> Requests => requests.ToArray();
+        internal IReadOnlyList<ProcessRequest> StatusRequests => requests.ToArray()
+            .Where(request => request.Arguments.SequenceEqual(StatusArguments, StringComparer.Ordinal)).ToArray();
+        internal int WorktreeListRequests => Volatile.Read(ref worktreeListRequests);
+        internal int CommonDirectoryRequests => Volatile.Read(ref commonDirectoryRequests);
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            requests.Enqueue(request);
+            if (request.FileName != "git" || !RuntimePaths.Comparer.Equals(request.WorkingDirectory, targetRepository))
+                throw new InvalidOperationException($"Unexpected process request: {request.FileName} {string.Join(' ', request.Arguments)} in {request.WorkingDirectory}");
+            if (request.Arguments.SequenceEqual(WorktreeArguments, StringComparer.Ordinal))
+            {
+                if (Interlocked.Increment(ref worktreeListRequests) == 2) onSecondWorktreeList?.Invoke();
+                return Task.FromResult(new ProcessResult(0, worktreeOutput, string.Empty));
+            }
+            if (request.Arguments.SequenceEqual(CommonDirectoryArguments, StringComparer.Ordinal))
+            {
+                Interlocked.Increment(ref commonDirectoryRequests);
+                return Task.FromResult(new ProcessResult(0, commonDirectory + "\r\n", string.Empty));
+            }
+            if (request.Arguments.SequenceEqual(StatusArguments, StringComparer.Ordinal))
+                throw new InvalidOperationException("Git status must not run for a rejected worktree path.");
+            throw new InvalidOperationException($"Unexpected Git request: {string.Join(' ', request.Arguments)}");
+        }
     }
 
     private sealed class WorkspaceFixtureProcessRunner(BeadsFixture target,
