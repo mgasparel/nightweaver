@@ -52,6 +52,7 @@ epoch. Keys are case-sensitive strings, not filesystem paths:
 | `factory` | Exact object returned by `/api/factory/state`, including snake_case nested snapshot |
 | `attention` | Exact `AttentionDeskItem[]` from `/api/attention` |
 | `explorer:{view}:{query}` | Exact `BeadExplorerItem[]` from `/api/beads?view=...&q=...` |
+| `explorer:{view}:{query}:{page}` | Bounded Studio `ExplorerPage` v1: `items`, `total`, `page`, `pages`, `pageSize` |
 | `digest:{window}` | Exact `CatchUpDigestResponse` from `/api/digest?window=...` |
 | `workspace:{id}` | Exact `BeadWorkspaceResponse` from `/api/beads/{id}` |
 | `cleanup:{page}:{status}:{query}` | Exact `/api/cleanup` response |
@@ -74,8 +75,8 @@ retained base b63cca8e6c2ac6fbb9e3169562ca449ab8f80b7d, including nullable field
 presentation metadata, relation observation and history. Their sources are linked
 below. Additive nullable fields may evolve; removing/renaming/changing types needs
 v2. Arrays preserve existing sort order. UI pagination bounds rendering; it does
-not change legacy payloads or silently truncate inventory. A future server-paged
-Explorer needs its own versioned contract. Exact invocation output keeps the
+not change legacy payloads or silently truncate inventory. The server-paged
+Explorer uses the additive four-part key contract above, leaving the legacy three-part key unchanged. Its canonical page is 1–250 (the supported 10,000-row inventory at 40 rows per page). Items contain exact ID, bounded title (400 code units plus ellipsis), type/status/stage (80), assignee (200), and priority. Search and ordering use complete source values before display truncation. Each shared sweep collects inventory/readiness/blocked membership once for all page keys, with the same independent source health and retained-result policy. Page projection returns at most 40 rows and clamps only pages beyond the final page; an empty result has page/pages 1. Exact invocation output keeps the
 independent existing `/api/telemetry/stream` protocol and its byte cursor.
 
 ## Read envelope: `nightweaver-observation-v1`

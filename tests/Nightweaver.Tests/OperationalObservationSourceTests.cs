@@ -14,6 +14,42 @@ namespace Nightweaver.Tests;
 public sealed class OperationalObservationSourceTests
 {
     [Fact]
+    public async Task ExplorerPagesShareInventoryAndReconcileExternalChangesWithBoundedResponses()
+    {
+        using var target = new BeadsApplicationFixture();
+        var runner = new Runner { Rows = 2000 };
+        using var factory = Factory(target.Path, runner);
+        var source = Adapter(factory);
+        var keys = Keys("explorer:all::1", "explorer:all::2", "explorer:all::50", "explorer:ready::1", "explorer:blocked::1", "explorer:all:T3JpZ2luYWw:1");
+        var first = await source.ReadTrackerAsync(keys, TestContext.Current.CancellationToken);
+        Assert.Single(runner.Commands, command => command == "list");
+        var one = Assert.IsType<ExplorerPage>(first[keys[0].Value].Data);
+        var two = Assert.IsType<ExplorerPage>(first[keys[1].Value].Data);
+        Assert.Equal(2000, one.Total);
+        Assert.Equal(40, one.Items.Count);
+        Assert.Equal(40, two.Items.Count);
+        Assert.Empty(one.Items.Select(row => row.Id).Intersect(two.Items.Select(row => row.Id)));
+        Assert.Equal(one.Items.OrderBy(row => row.Priority).ThenBy(row => row.Id, StringComparer.Ordinal), one.Items);
+        Assert.Single(Assert.IsType<ExplorerPage>(first[keys[3].Value].Data).Items);
+        Assert.Empty(Assert.IsType<ExplorerPage>(first[keys[4].Value].Data).Items);
+        runner.Rows = 41; runner.Ready = false; runner.Blocked = true; runner.Title = new string('T', 1000);
+        var second = await source.ReadTrackerAsync(keys, TestContext.Current.CancellationToken);
+        var last = Assert.IsType<ExplorerPage>(second[keys[2].Value].Data);
+        Assert.Equal(2, last.Page);
+        Assert.Single(last.Items);
+        Assert.Equal(401, last.Items[0].Title.Length);
+        Assert.Empty(Assert.IsType<ExplorerPage>(second[keys[3].Value].Data).Items);
+        Assert.Single(Assert.IsType<ExplorerPage>(second[keys[4].Value].Data).Items);
+        Assert.Empty(Assert.IsType<ExplorerPage>(second[keys[5].Value].Data).Items);
+        Assert.Equal(2, Assert.IsType<ExplorerPage>(second[keys[1].Value].Data).Page);
+        runner.Rows = 0;
+        var empty = await source.ReadTrackerAsync(keys, TestContext.Current.CancellationToken);
+        Assert.Null(empty[keys[1].Value].Error);
+        Assert.Equal(1, Assert.IsType<ExplorerPage>(empty[keys[1].Value].Data).Page);
+        Assert.Empty(Assert.IsType<ExplorerPage>(empty[keys[1].Value].Data).Items);
+    }
+
+    [Fact]
     public async Task SharedInventoryProjectsAllViewsAndSelectedCommentsAreSharedWithAttention()
     {
         using var target = new BeadsApplicationFixture();
@@ -316,6 +352,8 @@ public sealed class OperationalObservationSourceTests
         internal Action? Advance { get; init; }
         internal bool FailRelations { get; init; }
         internal bool Ready { get; set; } = true;
+        internal bool Blocked { get; set; }
+        internal string Title { get; set; } = "Original title";
         internal bool FailReady { get; init; }
         internal bool Conflict { get; init; }
         internal int Rows { get; set; } = 1;
@@ -341,7 +379,7 @@ public sealed class OperationalObservationSourceTests
             }
             if (command == "dep" && FailRelations) throw new ToolExecutionException("Relations unavailable");
             if (command == "ready" && FailReady) throw new ToolExecutionException("bd timed out after 2s", "secret stderr");
-            var title = Conflict && inventories > 0 ? "Concurrent edit" : "Original title";
+            var title = Conflict && inventories > 0 ? "Concurrent edit" : Title;
             object[] rows = Enumerable.Range(1, Rows).Select(index => (object)new
             {
                 id = $"task-{index}", title, issue_type = "task", priority = Conflict && inventories > 0 ? 2 : 1, status = "open", assignee = (string?)null,
@@ -351,7 +389,8 @@ public sealed class OperationalObservationSourceTests
             if (command == "list") inventories++;
             var json = command switch
             {
-                "blocked" or "dep" => "[]",
+                "blocked" => Blocked ? "[{\"id\":\"task-1\",\"blocked_by_count\":1,\"blocked_by\":[\"task-2\"]}]" : "[]",
+                "dep" => "[]",
                 "ready" => Ready ? "[{\"id\":\"task-1\"}]" : "[]",
                 "show" => JsonSerializer.Serialize(rows.Take(1)),
                 "comments" => JsonSerializer.Serialize(new[] { new { id = "comment-1", issue_id = args[3], author = "human", text = Comment, created_at = "2026-01-01T00:00:00Z" } }),

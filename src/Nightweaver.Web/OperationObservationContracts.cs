@@ -16,6 +16,11 @@ internal sealed record OperationKey(string Value, string Kind, string? Argument 
             return new(value, "digest", window);
         if (parts is ["explorer", var view, var query] && view is "all" or "active" or "ready" or "blocked" or "closed")
             return new(value, "explorer", view, Decode(query));
+        if (parts is ["explorer", var pagedView, var pagedQuery, var pageText]
+            && pagedView is "all" or "active" or "ready" or "blocked" or "closed"
+            && int.TryParse(pageText, NumberStyles.None, CultureInfo.InvariantCulture, out var explorerPage)
+            && explorerPage is >= 1 and <= 250 && pageText == explorerPage.ToString(CultureInfo.InvariantCulture))
+            return new(value, "explorer", pagedView, Decode(pagedQuery), explorerPage);
         if (parts is ["cleanup", var page, var status, var search]
             && int.TryParse(page, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
             && number is >= 1 and <= 1250 && page == number.ToString(CultureInfo.InvariantCulture)

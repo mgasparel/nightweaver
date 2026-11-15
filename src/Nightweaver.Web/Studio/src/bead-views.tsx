@@ -62,7 +62,7 @@ function Evidence({ message, fallback }: { message?: Message | null; fallback: s
 }
 
 /** A removed focused disclosure/control returns to this surviving heading, never another Bead. */
-function FocusBoundary({ children }: { children: ReactNode }) {
+export function FocusBoundary({ children }: { children: ReactNode }) {
   const host = useRef<HTMLDivElement>(null);
   const focused = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
@@ -75,7 +75,7 @@ function FocusBoundary({ children }: { children: ReactNode }) {
   return <div ref={host} onFocusCapture={event => { focused.current = event.target as HTMLElement; }}>{children}</div>;
 }
 
-function Freshness({ snapshot, project, resource }: { snapshot: Snapshot; project: string; resource: string }) {
+export function Freshness({ snapshot, project, resource }: { snapshot: Snapshot; project: string; resource: string }) {
   const [error, setError] = useState("");
   const envelope = snapshot.observation;
   return <div className="bead-freshness">
@@ -222,6 +222,7 @@ function WorkspaceIdentity({ project, id }: { project: string; id: string }) {
   useEffect(() => { if (valid?.attention) setHadAttention(true); }, [valid?.attention]);
   return <FocusBoundary>
     <Heading title={valid?.bead.title ?? `Bead ${id}`}>{id} · Full Bead Workspace</Heading>
+    <Link className="text-link" to={`/projects/${encodeURIComponent(project)}/beads?${params}`}>Back to Explorer</Link>
     <Freshness snapshot={snapshot} project={project} resource={resource} />
     <WorkspaceTabs />
     {missing && <p className="bead-notice" role="status">This Bead no longer exists. Retained details are historical; actions are unavailable.</p>}

@@ -2,7 +2,6 @@ import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 const url = process.env.NIGHTWEAVER_QA_URL;
 assert.ok(url, 'Set NIGHTWEAVER_QA_URL from aspire describe.');
@@ -37,13 +36,13 @@ try {
   }
   await page.getByRole('searchbox', { name: 'Search Beads' }).fill('retained query');
   await page.getByRole('combobox', { name: 'View', exact: true }).selectOption('all');
-  await page.getByRole('button', { name: 'Save view in URL' }).click();
+  await page.getByRole('button', { name: 'Search project' }).click();
   await page.waitForURL('**?q=retained+query&view=all');
   await page.reload();
-  assert.equal(await page.getByRole('searchbox').inputValue(), 'retained query');
+  assert.equal(await page.getByRole('searchbox', { name: 'Search Beads', exact: true }).inputValue(), 'retained query');
   await nav.getByRole('link', { name: 'Delivery floor' }).click();
   await page.goBack();
-  assert.equal(await page.getByRole('searchbox').inputValue(), 'retained query');
+  assert.equal(await page.getByRole('searchbox', { name: 'Search Beads', exact: true }).inputValue(), 'retained query');
   await page.goForward();
   await page.getByRole('heading', { name: 'Delivery floor', exact: true, level: 1 }).waitFor();
 
@@ -114,7 +113,7 @@ try {
   const reference = await browser.newPage();
   for (const width of [1440, 375, 720]) {
     await reference.setViewportSize({ width, height: 1000 });
-    await reference.goto(pathToFileURL(resolve('../../docs/design/nightweaver-multiproject-prototype.html')).href + '?variant=A');
+    await reference.goto(new URL('../../docs/design/nightweaver-multiproject-prototype.html', import.meta.url).href + '?variant=A');
     await reference.screenshot({ path: `${output}/prototype-${width}.png`, fullPage: true });
   }
   console.log(JSON.stringify({ projectId, widths: [1440, 375, 720], errors, mutations, output, checks: 'direct reload, history, keyboard, query state, legacy IDs, unknown project/route, dialogs and focus' }));

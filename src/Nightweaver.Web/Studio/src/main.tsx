@@ -10,7 +10,6 @@ import {
   useLocation,
   useNavigate,
   useParams,
-  useSearchParams,
 } from "react-router";
 import { readContext, type StudioContext } from "./context";
 import { Icon, Panel, Status, Unavailable } from "./primitives";
@@ -18,6 +17,7 @@ import "./studio.css";
 import { useObservation } from "./use-observation";
 import { operations } from "./operations-browser";
 import { AttentionView, BeadWorkspace } from "./bead-views";
+import { Explorer } from "./explorer";
 
 const sections = [
   ["overview", "Overview"],
@@ -174,6 +174,10 @@ function AppShell({ context }: { context: StudioContext }) {
             Workspace <span>/</span> <strong>{context.projectId}</strong>
           </div>
           {location.pathname.startsWith(`${base}/`) && <SynchronizationStatus projectId={context.projectId} />}
+          <form className="project-search" role="search" onSubmit={event => {
+            event.preventDefault(); const data = new FormData(event.currentTarget);
+            navigate(`${base}/beads?${new URLSearchParams({ view: "all", q: String(data.get("q") ?? "").trim() })}`);
+          }}><label><span className="sr-only">Search current project</span><input name="q" type="search" maxLength={200} placeholder={`Search ${context.projectId}`} /></label><button className="button" type="submit">Search</button></form>
           <a className="console-link" href="/">
             Existing console <Icon name="arrow" />
           </a>
@@ -305,7 +309,7 @@ function ProjectRoutes({
         <Route
           key={id}
           path={id}
-          element={id === "attention" ? <AttentionView project={context.projectId} /> : <FeatureRoute id={id} title={title} />}
+          element={id === "attention" ? <AttentionView project={context.projectId} /> : id === "beads" ? <Explorer project={context.projectId} /> : <FeatureRoute id={id} title={title} />}
         />
       ))}
       <Route path="beads/:beadId" element={<BeadWorkspace project={context.projectId} />} />
@@ -465,7 +469,6 @@ function FeatureRoute({ id, title }: { id: string; title: string }) {
             : "A dedicated place for your current project."
         }
       />
-      {id === "beads" && <ExplorerContext />}
       <Panel title={title} accessory={<Status>Not connected</Status>}>
         <Unavailable
           title={`${title} is taking shape.`}
@@ -476,52 +479,6 @@ function FeatureRoute({ id, title }: { id: string; title: string }) {
         </Unavailable>
       </Panel>
     </>
-  );
-}
-
-function ExplorerContext() {
-  const [params, setParams] = useSearchParams();
-  return (
-    <form
-      className="explorer-controls"
-      onSubmit={(event) => {
-        event.preventDefault();
-        const data = new FormData(event.currentTarget);
-        const next = new URLSearchParams(params);
-        next.set("q", String(data.get("q") ?? ""));
-        next.set("view", String(data.get("view") ?? "ready"));
-        next.delete("page");
-        setParams(next);
-      }}
-    >
-      <label>
-        Search Beads
-        <input
-          key={params.get("q")}
-          name="q"
-          type="search"
-          defaultValue={params.get("q") ?? ""}
-          placeholder="Search by title or Bead ID"
-        />
-      </label>
-      <label>
-        View
-        <select
-          key={params.get("view")}
-          name="view"
-          defaultValue={params.get("view") ?? "ready"}
-        >
-          <option value="ready">Ready</option>
-          <option value="all">All</option>
-          <option value="active">Active</option>
-          <option value="closed">Closed</option>
-        </select>
-      </label>
-      <button className="button" type="submit">
-        Save view in URL
-      </button>
-      <p>View preferences only; tracker results are not connected.</p>
-    </form>
   );
 }
 
