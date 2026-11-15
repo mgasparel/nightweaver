@@ -148,46 +148,59 @@ internal static class Program
                 Console.OpenStandardOutput().Write(Encoding.UTF8.GetBytes("root-exit\n"));
                 return exitCode;
             }
-            case "spawn-bd-lock-exit":
+            case "spawn-dolt-lock-exit":
             {
-                var start = new ProcessStartInfo("bd")
+                var doltRepository = Path.Combine(args[1], ".beads", "embeddeddolt", "stage");
+                var start = new ProcessStartInfo("dolt")
                 {
-                    WorkingDirectory = args[1], UseShellExecute = false, CreateNoWindow = true,
+                    WorkingDirectory = doltRepository, UseShellExecute = false, CreateNoWindow = true,
                     RedirectStandardOutput = true, RedirectStandardError = true
                 };
-                foreach (var argument in new[] { "--readonly", "--sandbox", "sql", "SELECT SLEEP(30)" })
+                foreach (var argument in new[] { "sql", "-q", "SELECT SLEEP(30)" })
                     start.ArgumentList.Add(argument);
-                using var child = Process.Start(start) ?? throw new InvalidOperationException("Could not start bd lock probe.");
+                using var child = Process.Start(start) ?? throw new InvalidOperationException("Could not start native Dolt lock holder.");
                 WriteAtomicText(args[2], $"{child.Id}|{child.StartTime.ToUniversalTime().Ticks}");
-                var lockPath = Path.Combine(args[1], ".beads", "embeddeddolt", "stage", ".dolt", "noms", "LOCK");
-                var deadline = DateTime.UtcNow.AddSeconds(10);
+                var lockPath = Path.Combine(doltRepository, ".dolt", "noms", "LOCK");
+                var lockDeadline = DateTime.UtcNow.AddSeconds(10);
+                var rootDeadline = DateTime.UtcNow.AddSeconds(15);
                 while (true)
                 {
-                    if (child.HasExited)
-                    {
-                        var exitCode = child.ExitCode;
-                        var childStart = child.StartTime.ToUniversalTime().Ticks;
-                        var standardOutput = child.StandardOutput.ReadToEnd();
-                        var standardError = child.StandardError.ReadToEnd();
-                        WriteAtomicText(args[2] + ".failure.json", JsonSerializer.Serialize(new
-                        {
-                            pid = child.Id,
-                            start_ticks = childStart,
-                            exit_code = exitCode,
-                            standard_output = standardOutput,
-                            standard_error = standardError
-                        }));
-                        throw new InvalidOperationException(
-                            $"bd lock probe exited before lock readiness: pid={child.Id}, startTicks={childStart}, exitCode={exitCode}, "
-                            + $"stdout={JsonSerializer.Serialize(standardOutput)}, stderr={JsonSerializer.Serialize(standardError)}");
-                    }
+                    EnsureDoltChildAlive("before LOCK readiness");
                     try { using var unlocked = File.Open(lockPath, FileMode.Open, FileAccess.Read, FileShare.None); }
                     catch (IOException exception) when ((exception.HResult & 0xFFFF) == 32)
-                    {
-                        return 0;
-                    }
-                    if (DateTime.UtcNow >= deadline) throw new TimeoutException("bd did not acquire the fixture database lock.");
+                    { break; }
+                    if (DateTime.UtcNow >= lockDeadline) throw new TimeoutException("Dolt did not acquire the fixture database lock within the existing ten-second fixture bound.");
                     Thread.Sleep(10);
+                }
+                WriteAtomicText(args[3], "native Dolt child holds LOCK");
+                while (!File.Exists(args[4]))
+                {
+                    EnsureDoltChildAlive("waiting for test root-release signal");
+                    if (DateTime.UtcNow >= rootDeadline) throw new TimeoutException("Test did not retain the native Dolt process handle and release the fixture root within 15 seconds.");
+                    Thread.Sleep(10);
+                }
+                EnsureDoltChildAlive("after test root-release signal");
+                return 0;
+
+                void EnsureDoltChildAlive(string phase)
+                {
+                    if (!child.HasExited) return;
+                    var exitCode = child.ExitCode;
+                    var childStart = child.StartTime.ToUniversalTime().Ticks;
+                    var standardOutput = child.StandardOutput.ReadToEnd();
+                    var standardError = child.StandardError.ReadToEnd();
+                    WriteAtomicText(args[2] + ".failure.json", JsonSerializer.Serialize(new
+                    {
+                        phase,
+                        pid = child.Id,
+                        start_ticks = childStart,
+                        exit_code = exitCode,
+                        standard_output = standardOutput,
+                        standard_error = standardError
+                    }));
+                    throw new InvalidOperationException(
+                        $"Dolt lock holder exited during {phase}: pid={child.Id}, startTicks={childStart}, exitCode={exitCode}, "
+                        + $"stdout={JsonSerializer.Serialize(standardOutput)}, stderr={JsonSerializer.Serialize(standardError)}");
                 }
             }
             case "relay":
