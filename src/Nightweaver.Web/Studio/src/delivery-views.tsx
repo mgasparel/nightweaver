@@ -36,7 +36,7 @@ export function DeliveryView({ project, compact = false, bead }: { project: stri
     {compact && <h3 id="factory-title" ref={heading} tabIndex={-1}>{bead ? `Output for ${bead}` : "Runtime activity"}</h3>}
     <div className="delivery-health" id="factory-status" data-state={state} role="status"><Status tone={state === 'live' || state === 'idle' ? 'accent' : 'warn'}>{state}</Status>
       <span>{snapshot ? `Observed ${time(snapshot.observed_at)}` : 'Runtime observations unavailable'}</span>
-      <button className="button" disabled={observation.refreshing} onClick={() => { setError(''); void operations.refresh([{ projectId: project, key: 'factory' }]).catch(e => setError(String(e))); }}>Refresh runtime</button>
+      <button className="button" onClick={() => { setError(''); void operations.refresh([{ projectId: project, key: 'factory' }]).catch(e => setError(String(e))); }}>{observation.refreshing ? 'Refresh runtime again' : 'Refresh runtime'}</button>
     </div>
     {(observation.error || observation.observation?.error || error) && <p role="alert">{error || observation.error || observation.observation?.error?.message}</p>}
     {state !== 'live' && state !== 'idle' && snapshot && <p>Showing last observed activity. Current execution is unconfirmed.</p>}

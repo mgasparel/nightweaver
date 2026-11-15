@@ -61,3 +61,34 @@ probe failures identified missing Tab wrapping (fixed and retested), asynchronou
 React assertion timing (probe now waits for rendering), and a shell reference
 capture invoked from the wrong working directory (rerun from the documented QA
 directory passed). No pending product questions or downstream findings remain.
+
+## Review repair — stalled runtime reconciliation
+
+Reviewer P2 at `delivery-views.tsx:39` identified that disabling Refresh runtime
+while `refreshing` is true prevents recovery after an accepted reconciliation
+whose collector stalls. The action now remains enabled and reads Refresh runtime
+again, following the shared synchronization contract. Coordinator behavior and
+invocation streaming are unchanged.
+
+`runtime-refresh-qa.mjs` passed against a fresh exact isolated AppHost on
+2026-11-15 UTC. Delivery, Overview and Workspace Output each received a 202 and
+at least three subsequent successful cached reads with unchanged `lastAttemptAt`.
+The action remained enabled; a later explicit click issued a second POST, while
+another click during that pending POST remained coalesced. Each surface recorded
+exactly two POSTs and zero page errors. Geometry passed at 1440/375/720 CSS pixels.
+Reviewed [Delivery at 375px](studio-delivery/refresh-repair/delivery-375.png),
+[Workspace Output at 375px](studio-delivery/refresh-repair/output-375.png) and
+[Overview at 720px](studio-delivery/refresh-repair/overview-720.png); the retry
+label wraps/reflows without obscuring controls. [Results](studio-delivery/refresh-repair/results.json)
+retain read/request counts and fixed attempt identities. All nine captures also
+remain in ignored QA `TestResults/runtime-refresh-repair`.
+
+Repair validation: solution build with `-warnaserror` passed (zero warnings/errors,
+7.15s reported build time); Studio `npm test` passed all 38 tests (564ms reported);
+combined `StudioWebTests` and `FactoryTelemetryIntegrationTests` passed all 33
+tests with `--minimum-expected-tests 33` (46.534s reported). `git diff --check`
+passed. No full-suite timing or hosted-verification claim. The first browser
+probe attempt rejected the legitimate initial unavailable envelope; the probe
+now allows initial collection before freezing the completed attempt. Both exact
+AppHost runs were stopped in `finally`; final `aspire describe` reports no running
+AppHost for this worktree. No QA/Merger repair findings or human questions remain.

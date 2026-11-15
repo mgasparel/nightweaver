@@ -1,0 +1,26 @@
+{
+  "passed": true,
+  "results": [
+    {
+      "name": "delivery",
+      "reads": 6,
+      "posts": 2,
+      "cachedAttempt": "2026-11-15T02:52:07.2599831Z",
+      "errors": []
+    },
+    {
+      "name": "overview",
+      "reads": 5,
+      "posts": 2,
+      "cachedAttempt": "2026-11-15T02:52:11.2501443Z",
+      "errors": []
+    },
+    {
+      "name": "output",
+      "reads": 5,
+      "posts": 2,
+      "cachedAttempt": "2026-11-15T02:52:21.2472534Z",
+      "errors": []
+    }
+  ]
+}

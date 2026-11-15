@@ -50,6 +50,14 @@ No browser UI changed in this investigation. See the
 
 `node studio-explorer-qa.mjs` verifies Studio Explorer and current-project header search against a fresh isolated default fixture. Set the exact discovered URL and config as below. The probe imports 81 disposable Beads, verifies native external title/dependency changes, all views, bounded pages, Back/Forward/reload, focused-row removal on a still-valid page without URL changes, surviving-row focus, page removal and focus, Workspace query context, deferred cross-project controls and stale retained results. Captures at 1440/375/720 CSS pixels and results go to `TestResults/studio-explorer` (or `NIGHTWEAVER_QA_OUTPUT`). Stop the same AppHost in `finally`.
 
+`node runtime-refresh-qa.mjs` verifies Delivery, Overview and Workspace Output
+against the same exact isolated stack. Accepted reconciliation responses and
+successful factory reads with unchanged `lastAttemptAt` reproduce a stalled
+collector. The runtime action stays enabled across polls, an explicit retry
+issues a second POST, and concurrent clicks share that pending POST. Captures
+at 1440/375/720 CSS pixels and results go to `NIGHTWEAVER_QA_OUTPUT` or
+`TestResults/runtime-refresh`. Stop the exact AppHost in `finally`.
+
 `node studio-attention-qa.mjs` verifies the live Studio Attention and dedicated
 Bead Workspace slice on a fresh isolated default fixture. Set both
 `NIGHTWEAVER_QA_URL` and `NIGHTWEAVER_QA_CONFIG` from the exact direct `web`

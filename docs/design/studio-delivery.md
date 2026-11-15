@@ -9,6 +9,11 @@ shows the runtime's bounded Planning, Delivery and singleton Merger inventory.
 Diagnostics contain paths, branch, runtime identity, configured model and observed
 model. Missing observed model remains Unavailable, never inferred from configuration.
 
+Runtime Refresh stays available while reconciliation is pending, labelled
+Refresh runtime again. A 202 acceptance followed by unchanged cached attempt
+timestamps must not block an explicit retry. The shared coordinator coalesces
+concurrent requests; polling never replays reconciliation POSTs.
+
 Inspection captures an immutable runtime/slot/invocation selection. Shared
 operational revisions can update the floor without changing that selection,
 output, follow preference, scroll position or focused control. A replaced runtime
