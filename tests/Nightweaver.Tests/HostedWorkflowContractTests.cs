@@ -18,6 +18,17 @@ public sealed class HostedWorkflowContractTests
     }
 
     [Fact]
+    public void FullSolutionBuildHasAnExplicitVersionedAspireBundle()
+    {
+        var workflow = Read(".github", "workflows", "build-test.yml");
+        Assert.Contains("dotnet tool install Aspire.Cli --version 13.6.5 --tool-path $tools", workflow, StringComparison.Ordinal);
+        Assert.Contains("setup --install-path $bundle", workflow, StringComparison.Ordinal);
+        Assert.Contains("AspireCliBundlePath=$bundle", workflow, StringComparison.Ordinal);
+        Assert.True(workflow.IndexOf("Prepare Aspire CLI bundle", StringComparison.Ordinal)
+            < workflow.IndexOf("Restore and build", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void DispatchRequiresAttributionAndRecordsActualCheckoutWithoutShellInterpolation()
     {
         var workflow = Read(".github", "workflows", "build-test.yml");
