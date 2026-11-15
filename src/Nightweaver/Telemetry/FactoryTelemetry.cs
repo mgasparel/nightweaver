@@ -75,15 +75,18 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
     private readonly string targetRepository;
     private readonly Action<string>? reportFailure;
     private readonly IProcessRunner? processRunner;
+    private readonly Func<CancellationToken, Task>? beforeSnapshotFlush;
     private Task? writer;
     private Task? diffSampler;
+    private Task? disposal;
     private long revision;
     private string runtimeStatus = "live";
     private bool disposed;
 
     internal FactoryTelemetryPublisher(HostPaths paths, ProjectConfig project,
         ValidatedTargetRepository repository, int deliveryCapacity, int mergerCapacity,
-        Action<string>? reportFailure = null, IProcessRunner? processRunner = null)
+        Action<string>? reportFailure = null, IProcessRunner? processRunner = null,
+        Func<CancellationToken, Task>? beforeSnapshotFlush = null)
     {
         this.paths = paths;
         this.project = project.Name;
@@ -97,6 +100,7 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
         this.mergerCapacity = mergerCapacity;
         this.reportFailure = reportFailure;
         this.processRunner = processRunner;
+        this.beforeSnapshotFlush = beforeSnapshotFlush;
         targetRepository = Path.GetFullPath(repository.Path);
         for (var index = 1; index <= deliveryCapacity; index++)
         {
@@ -378,37 +382,52 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
 
         var bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonOptions);
         await InvocationRuntimeFiles.WriteFactorySnapshotAtomicallyAsync(paths, project, runtimeId, bytes,
-            cancellationToken).ConfigureAwait(false);
+            beforeSnapshotFlush, cancellationToken).ConfigureAwait(false);
         }
         finally { writeGate.Release(); }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         lock (sync)
         {
-            if (disposed) return;
-            runtimeStatus = "stopped";
-            revision++;
+            return new ValueTask(disposal ??= DisposeCoreAsync());
         }
-        SignalWriter();
-        try { await WriteSnapshotAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); }
-        catch (Exception) { }
-        lock (sync) disposed = true;
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        // Stop accepting observations before settling every producer. A timed-out
+        // WaitAsync only abandons the wait; it does not close the atomic writer's
+        // stream or directory pins, so callers cannot safely dispose their root.
+        disposed = true;
+        runtimeStatus = "stopped";
+        revision++;
         stop.Cancel();
         if (writer is not null)
         {
-            try { await writer.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); }
-            catch (Exception) { }
+            try { await writer.ConfigureAwait(false); }
+            catch (Exception exception) { ReportFailure(exception); }
         }
         if (diffSampler is not null)
         {
-            try { await diffSampler.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); }
-            catch (Exception) { }
+            try { await diffSampler.ConfigureAwait(false); }
+            catch (Exception exception) { ReportFailure(exception); }
         }
-        stop.Dispose();
-        signal.Dispose();
-        writeGate.Dispose();
+        try
+        {
+            // Keep the existing final-publication budget, but cancel the operation
+            // itself and await its unwind, including asynchronous stream disposal.
+            using var finalWrite = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            await WriteSnapshotAsync(finalWrite.Token).ConfigureAwait(false);
+        }
+        catch (Exception exception) { ReportFailure(exception); }
+        finally
+        {
+            stop.Dispose();
+            signal.Dispose();
+            writeGate.Dispose();
+        }
     }
 }
 

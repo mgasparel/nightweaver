@@ -56,7 +56,7 @@ try {
     await page.waitForURL(`**${base}/beads/${beadId}?tab=history`);
     assert.equal((await page.reload()).status(), 200);
     await page.getByRole('heading', { name: `Bead ${beadId}`, exact: true }).waitFor();
-    await page.getByRole('heading', { name: 'History', exact: true }).waitFor();
+    await page.locator('.workspace-tabs a[aria-current="page"]').filter({ hasText: 'History' }).waitFor();
   }
   for (const path of ['/api/missing', '/studio/assets/missing.js', `${base}/beads/ns-mbd.1/missing.js`]) {
     assert.equal((await page.request.get(`${url}${path}`)).status(), 404);
@@ -70,10 +70,10 @@ try {
   await page.keyboard.press('Enter');
   await page.waitForURL('**?tab=history');
   await page.reload();
-  await page.getByRole('heading', { name: 'History', exact: true }).waitFor();
+  await page.locator('.workspace-tabs a[aria-current="page"]').filter({ hasText: 'History' }).waitFor();
   await page.getByRole('link', { name: 'Output', exact: true }).click();
   await page.goBack();
-  await page.getByRole('heading', { name: 'History', exact: true }).waitFor();
+  await page.locator('.workspace-tabs a[aria-current="page"]').filter({ hasText: 'History' }).waitFor();
   await page.goto(`${url}/projects/foreign/overview`);
   await page.getByRole('heading', { name: 'Project unavailable' }).waitFor();
   await page.goto(`${url}${base}/unknown`);
