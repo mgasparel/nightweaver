@@ -1,5 +1,61 @@
 # Studio Digest acceptance
 
+## QA drain repair verification
+
+Candidate `0e3dbc7f2bd971e92e8ce1fb5ecdddc40957d358` passes the complete
+documented suite: **1,243 discovered/passed, zero failed/skipped, exit 0,
+outer 262.0749291 seconds**, including build, fixture publishing, execution
+and teardown at the committed six threads. Report:
+`TestResults/fixture-launch-full.xml`. This is candidate validation;
+latest-main timing still requires measurement after integration.
+
+The preceding QA run at `a4204eb` passed Digest behavior and visual checks but
+failed `NativeLaunchBurstDoesNotDependOnAvailableThreadPoolWorkers` while
+awaiting coordinator stdout after root exit and Job-empty confirmation.
+Its 1,240/1,241 result and 334.9294306-second wall time remain preserved in
+`TestResults/qa-full.xml` and the `20261115T2159449750013Z-qa` invocation.
+
+A controlled native reproduction pinned an unrelated managed helper launch
+inside the native launcher's temporary inheritable-pipe window. With the native
+root settled and its Job empty/closed, stdout still timed out; releasing the
+live foreign helper immediately allowed both drains to finish. HANDLE_LIST
+limits the native child, but an unrelated managed CreateProcess can inherit
+the same temporary writers. Production runners already share
+`WindowsProcessLauncher.ProcessCreationGate`; test-owned raw `Process.Start`
+calls did not. This reproduces the exact QA failure mechanism. QA did not record
+the historical writer owner, so its identity cannot be established retrospectively.
+
+All managed starts in the shared test process now go through `FixtureProcess`,
+which holds that existing gate only during process creation. Shared manual
+Delivery/QA helpers use it too. Both Start overloads have small contention
+regressions observed failing before the guard and passing afterward; their
+combined full-suite cost is 1.190 seconds. The existing native blocked-drain and
+launch-burst smokes remain and pass in 16.446s and 1.664s respectively. Native
+observer and Merger completion checks also pass (30.148s and 86.838s). No
+production code, source deadlines, drain timeout, coverage or scheduling cap was
+changed. Temporary launcher instrumentation and the diagnostic test were removed
+before final validation; their source/patch and result remain in invocation evidence.
+
+Solution build with `-warnaserror --no-restore` passes with zero warnings/errors;
+Studio tests pass 46/46 and TypeScript/Vite build passes with existing notices.
+Both fresh isolated Digest browser probes pass: real checkpoint persistence and
+concurrent unread activity, automatic updates, all windows, last-good errors,
+lineage/disclosure bounds and fifth-root/fourth-child/sixth-standalone focus and
+viewport preservation. Fresh captures at 1440/375/720 are retained under this
+invocation's `digest` and `digest-threads` directories. Desktop compact, mobile
+retained-error and focused-child captures were visually inspected for readable
+wrapping, reachable controls, visible focus and explicit retained-state context.
+The exact Aspire AppHost stopped successfully before the full suite; `aspire ps`
+returned an empty list. No hosted CI was dispatched.
+
+Current evidence root:
+`H:/Nightweaver/prod/tmp/nightshift/ns-mbd.6/20261115T2210416116096Z-implementer`.
+It contains `full-suite.log`, `full-suite-time.json`, the controlled reproduction
+source/patch/result and both browser logs/capture sets. Focused red/green reports
+are `TestResults/fixture-launch-red.xml` (two failures before repair) and
+`TestResults/fixture-launch-green.xml` (four passes including both native smokes).
+Historical findings and failed runs below remain evidence, not current acceptance.
+
 ## Native budget repair verification
 
 Candidate `d24eabf555776bb74ff24ddcb029f74cc767635f` passes the complete
