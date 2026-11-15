@@ -10,10 +10,8 @@ namespace Nightweaver.Tests;
 
 public sealed class ManualPilotMergerRecoveryIntegrationTests : AgentStageIntegrationTestSupport
 {
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task AlreadyMergedRecoveryRequiresFreshChecksWithoutRecreatingTheBranch(bool checksPass)
+    [Fact]
+    public async Task AlreadyMergedRecoveryRejectsFailedChecksThenAcceptsFreshChecksWithoutRecreatingTheBranch()
     {
         await using var fixture = await ManualPilot.CreateAsync(seedProfile: ManualPilotSeedProfile.Empty,
             cancellationToken: TestContext.Current.CancellationToken);
@@ -21,18 +19,16 @@ public sealed class ManualPilotMergerRecoveryIntegrationTests : AgentStageIntegr
         var paths = new HostPaths(fixture.NightweaverRoot);
         var project = ProjectConfigLoader.Load(fixture.ConfigPath, ProjectSlug.Parse("manualqa"), paths);
         var bead = await fixture.CreateMergeGateTaskAsync("Recover already merged native fixture", token);
-        var environment = new Dictionary<string, string?>(fixture.CreateEnvironment(), StringComparer.OrdinalIgnoreCase)
+        var beadsEnvironment = new Dictionary<string, string?>(fixture.CreateEnvironment(), StringComparer.OrdinalIgnoreCase)
         {
-            ["BD_ACTOR"] = project.RecoveryActor,
-            ["NIGHTWEAVER_FIXTURE_CI_RESULT"] = checksPass ? "success" : "fail",
-            ["NIGHTWEAVER_FIXTURE_GH_LOG"] = Path.Combine(fixture.Root, "recovery-gh.jsonl")
+            ["BD_ACTOR"] = project.RecoveryActor
         };
         var system = new SystemProcessRunner();
         var runner = new RecordingProcessRunner((request, cancellation) =>
         {
-            var merged = new Dictionary<string, string?>(request.Environment, StringComparer.OrdinalIgnoreCase);
-            foreach (var pair in environment) merged[pair.Key] = pair.Value;
-            return system.RunAsync(request with { Environment = merged }, cancellation);
+            var environment = new Dictionary<string, string?>(request.Environment, StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in beadsEnvironment) environment[pair.Key] = pair.Value;
+            return system.RunAsync(request with { Environment = environment }, cancellation);
         });
         var repository = new ValidatedTargetRepository(fixture.Repository, "main");
         try
@@ -50,28 +46,73 @@ public sealed class ManualPilotMergerRecoveryIntegrationTests : AgentStageIntegr
             Assert.Equal("MERGED", existing.RootElement.GetProperty("state").GetString());
             Assert.Equal(expected.HeadSha, existing.RootElement.GetProperty("headRefOid").GetString());
             await new BeadsWriter(runner).AcquireDispatchClaimAsync(repository, bead, project.RecoveryActor, token);
-            var invocation = await new AgentInvocationPreparer().PrepareAsync(paths, project, AgentRole.Merger,
+
+            var beforeState = await fixture.ReadBeadAsync(bead, token);
+            Assert.Equal("in_progress", beforeState.GetProperty("status").GetString());
+            Assert.Equal(project.RecoveryActor, beforeState.GetProperty("assignee").GetString());
+            var beforeLabels = ReadLabels(beforeState);
+            var beforeComments = await ReadCommentTextsAsync(fixture, bead, token);
+            var mainHead = (await fixture.ReadOriginRefAsync("refs/heads/main", token)).Trim();
+            Assert.Equal(expected.HeadSha, mainHead);
+            var remoteBranch = $"refs/heads/nightweaver/{bead}";
+            Assert.Empty(await Git("ls-remote", "origin", remoteBranch));
+
+            var failedGhLog = Path.Combine(fixture.Root, "recovery-failed-gh.jsonl");
+            var failedEnvironment = CreateInvocationEnvironment(fixture, project.RecoveryActor, "fail", failedGhLog);
+            Assert.False(File.Exists(failedGhLog));
+            var preparer = new AgentInvocationPreparer();
+            var failedInvocation = await preparer.PrepareAsync(paths, project, AgentRole.Merger,
                 new AgentDispatchContext(bead, "task", "stage:merge", 0), worktree.Path, token);
-            var result = await AgentInvocationExecutor.ExecuteAsync(paths, project.Name, invocation,
-                new AgentStageTargetFixture.FixtureEnvironmentOverlayProcessLauncher(environment), token);
-            Assert.Equal(AgentExecutionStatus.Exited, result.Status);
-            if (checksPass)
-                Assert.True(result.ExitCode == 0, $"{result.ExitCode}: {File.ReadAllText(invocation.LogFilePath)}");
-            else Assert.NotEqual(0, result.ExitCode);
-            Assert.Empty(await Git("ls-remote", "origin", $"refs/heads/nightweaver/{bead}"));
-            Assert.Equal(expected.HeadSha, (await fixture.ReadOriginRefAsync("refs/heads/main", token)).Trim());
-            var comments = await fixture.ReadBeadCommentsAsync(bead, token);
-            if (checksPass)
-                Assert.Contains($"checked_head={expected.HeadSha} required_checks=passed merge_method=squash merge_commit={expected.HeadSha}", comments, StringComparison.Ordinal);
-            else Assert.DoesNotContain("nightweaver-merge-v1", comments, StringComparison.Ordinal);
-            var state = await fixture.ReadBeadAsync(bead, token);
-            Assert.Equal("in_progress", state.GetProperty("status").GetString());
-            Assert.Equal(project.RecoveryActor, state.GetProperty("assignee").GetString());
-            var commands = File.ReadAllLines(environment["NIGHTWEAVER_FIXTURE_GH_LOG"]!)
-                .Select(line => JsonSerializer.Deserialize<string[]>(line)!).ToArray();
-            Assert.NotEmpty(commands);
-            Assert.DoesNotContain(commands, command => command.Length > 1 && command[0] == "pr" && command[1] == "merge");
-            Assert.DoesNotContain(commands, command => command.Contains("--watch", StringComparer.Ordinal));
+            var failedResult = await AgentInvocationExecutor.ExecuteAsync(paths, project.Name, failedInvocation,
+                new AgentStageTargetFixture.FixtureEnvironmentOverlayProcessLauncher(failedEnvironment), token);
+            Assert.Equal(AgentExecutionStatus.Exited, failedResult.Status);
+            Assert.NotEqual(0, failedResult.ExitCode);
+            Assert.Equal(failedInvocation.InvocationId, failedResult.InvocationId);
+            Assert.Equal(failedInvocation.LogFilePath, failedResult.LogFilePath);
+            var failedInvocationLog = await File.ReadAllTextAsync(failedResult.LogFilePath, token);
+            Assert.Contains($"gh pr checks {AgentStageTargetFixture.FixturePullRequestUrl} --required --json name,state,bucket exited 1",
+                failedInvocationLog, StringComparison.Ordinal);
+            Assert.Contains("\"state\":\"FAILURE\"", failedInvocationLog, StringComparison.Ordinal);
+
+            var failedCommands = ReadGhCommands(failedGhLog);
+            AssertFreshRecoveryRequests(failedCommands);
+            Assert.Empty(await Git("ls-remote", "origin", remoteBranch));
+            Assert.Equal(mainHead, (await fixture.ReadOriginRefAsync("refs/heads/main", token)).Trim());
+            Assert.Equal(beforeComments, await ReadCommentTextsAsync(fixture, bead, token));
+            Assert.DoesNotContain(beforeComments, comment => comment.Contains("nightweaver-merge-v1", StringComparison.Ordinal));
+            AssertBeadWorkflowUnchanged(beforeState, await fixture.ReadBeadAsync(bead, token),
+                beforeLabels, project.RecoveryActor);
+
+            var successfulGhLog = Path.Combine(fixture.Root, "recovery-success-gh.jsonl");
+            var successfulEnvironment = CreateInvocationEnvironment(fixture, project.RecoveryActor, "success", successfulGhLog);
+            Assert.False(File.Exists(successfulGhLog));
+            Assert.NotSame(failedEnvironment, successfulEnvironment);
+            var successfulInvocation = await preparer.PrepareAsync(paths, project, AgentRole.Merger,
+                new AgentDispatchContext(bead, "task", "stage:merge", 0), worktree.Path, token);
+            var successfulResult = await AgentInvocationExecutor.ExecuteAsync(paths, project.Name, successfulInvocation,
+                new AgentStageTargetFixture.FixtureEnvironmentOverlayProcessLauncher(successfulEnvironment), token);
+            Assert.Equal(AgentExecutionStatus.Exited, successfulResult.Status);
+            Assert.Equal(0, successfulResult.ExitCode);
+            Assert.Equal(successfulInvocation.InvocationId, successfulResult.InvocationId);
+            Assert.Equal(successfulInvocation.LogFilePath, successfulResult.LogFilePath);
+            Assert.NotEqual(failedInvocation.InvocationId, successfulInvocation.InvocationId);
+            Assert.NotEqual(failedInvocation.LogFilePath, successfulInvocation.LogFilePath);
+            Assert.NotEqual(failedGhLog, successfulGhLog);
+            Assert.Equal("fail", failedEnvironment["NIGHTWEAVER_FIXTURE_CI_RESULT"]);
+            Assert.Equal("success", successfulEnvironment["NIGHTWEAVER_FIXTURE_CI_RESULT"]);
+            var successfulInvocationLog = await File.ReadAllTextAsync(successfulResult.LogFilePath, token);
+            Assert.Contains("fixture action completed: merger-verified-merge", successfulInvocationLog, StringComparison.Ordinal);
+
+            var successfulCommands = ReadGhCommands(successfulGhLog);
+            AssertFreshRecoveryRequests(successfulCommands);
+            Assert.Empty(await Git("ls-remote", "origin", remoteBranch));
+            Assert.Equal(mainHead, (await fixture.ReadOriginRefAsync("refs/heads/main", token)).Trim());
+            var successfulComments = await ReadCommentTextsAsync(fixture, bead, token);
+            Assert.Equal(beforeComments.Length + 1, successfulComments.Length);
+            Assert.Contains(successfulComments,
+                comment => comment.Contains($"checked_head={expected.HeadSha} required_checks=passed merge_method=squash merge_commit={expected.HeadSha}", StringComparison.Ordinal));
+            AssertBeadWorkflowUnchanged(beforeState, await fixture.ReadBeadAsync(bead, token),
+                beforeLabels, project.RecoveryActor);
         }
         catch
         {
@@ -79,5 +120,58 @@ public sealed class ManualPilotMergerRecoveryIntegrationTests : AgentStageIntegr
             TestContext.Current.TestOutputHelper?.WriteLine($"Already-merged native fixture preserved at {fixture.Root}");
             throw;
         }
+    }
+
+    private static Dictionary<string, string?> CreateInvocationEnvironment(ManualPilot fixture,
+        string recoveryActor, string checksResult, string ghLogPath)
+    {
+        var environment = new Dictionary<string, string?>(fixture.CreateEnvironment(), StringComparer.OrdinalIgnoreCase)
+        {
+            ["BD_ACTOR"] = recoveryActor,
+            ["NIGHTWEAVER_FIXTURE_CI_RESULT"] = checksResult,
+            ["NIGHTWEAVER_FIXTURE_GH_LOG"] = ghLogPath
+        };
+        return environment;
+    }
+
+    private static string[] ReadCommentTexts(string commentsJson)
+    {
+        using var document = JsonDocument.Parse(commentsJson);
+        var root = document.RootElement;
+        var comments = root.ValueKind == JsonValueKind.Array ? root.EnumerateArray().ToArray() : [root];
+        return comments.Select(comment => comment.TryGetProperty("text", out var text)
+            ? text.GetString() ?? string.Empty
+            : string.Empty).ToArray();
+    }
+
+    private static async Task<string[]> ReadCommentTextsAsync(ManualPilot fixture, string beadId, CancellationToken token) =>
+        ReadCommentTexts(await fixture.ReadBeadCommentsAsync(beadId, token));
+
+    private static string[] ReadLabels(JsonElement bead) => bead.GetProperty("labels").EnumerateArray()
+        .Select(label => label.GetString()!).ToArray();
+
+    private static void AssertBeadWorkflowUnchanged(JsonElement before, JsonElement after,
+        IReadOnlyList<string> beforeLabels, string recoveryActor)
+    {
+        Assert.Equal("in_progress", after.GetProperty("status").GetString());
+        Assert.Equal(recoveryActor, after.GetProperty("assignee").GetString());
+        Assert.Equal(before.GetProperty("status").GetString(), after.GetProperty("status").GetString());
+        Assert.Equal(before.GetProperty("assignee").GetString(), after.GetProperty("assignee").GetString());
+        Assert.Equal(beforeLabels, ReadLabels(after));
+    }
+
+    private static string[][] ReadGhCommands(string path) => File.ReadAllLines(path)
+        .Select(line => JsonSerializer.Deserialize<string[]>(line)!).ToArray();
+
+    private static void AssertFreshRecoveryRequests(IReadOnlyList<string[]> commands)
+    {
+        Assert.Contains(commands, command => command.SequenceEqual(
+            ["pr", "view", AgentStageTargetFixture.FixturePullRequestUrl, "--json", "state,baseRefName,headRefName,headRefOid,url"],
+            StringComparer.Ordinal));
+        Assert.Contains(commands, command => command.SequenceEqual(
+            ["pr", "checks", AgentStageTargetFixture.FixturePullRequestUrl, "--required", "--json", "name,state,bucket"],
+            StringComparer.Ordinal));
+        Assert.DoesNotContain(commands, command => command.Length > 1 && command[0] == "pr" && command[1] == "merge");
+        Assert.DoesNotContain(commands, command => command.Contains("--watch", StringComparer.Ordinal));
     }
 }
