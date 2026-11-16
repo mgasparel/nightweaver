@@ -91,7 +91,17 @@ the scripted Merger verifier and workspace security cases no longer displace the
 longer native collections at startup. These setup/scheduling changes require a
 new complete timed run; historical-duration replay is not timing acceptance.
 
-`MergerOutcomeVerifierTests` keeps its detailed rejection-evidence, local transcript, hosted-job metadata, PR identity, count, and framing matrix on a strict scripted Git fixture. These component cases use stable valid commit identities and temporary log paths; they do not initialize/copy a Git database or start Git. The script matches the production Git arguments and working directory, returns deterministic observations, and fails immediately on an unknown command. The production Merger verifier still parses the real fixture files and makes every acceptance, rejection, identity, and guarded-publication decision; the GitHub and Beads fakes remain process-boundary responses. The current focused class run discovers 104 cases.
+Post-exit observation overlaps its independent status, branch and HEAD reads,
+then settles every result before reading fresh tracker state. Independent Merger
+verification likewise overlaps its local branch/HEAD/index/rebase-path probes
+after the ownership read, settling all before evidence queries or acceptance.
+There is no observation cache or overlap across writes. Six controlled component
+cases hold the Git responses until every read starts, require no downstream
+query before settlement, and retain failure diagnostics and rejection when a
+read fails. These cases failed on the serial implementation. The complete timed
+suite, with its unchanged six-thread cap, remains the performance gate.
+
+`MergerOutcomeVerifierTests` keeps its detailed rejection-evidence, local transcript, hosted-job metadata, PR identity, count, and framing matrix on a strict scripted Git fixture. These component cases use stable valid commit identities and temporary log paths; they do not initialize/copy a Git database or start Git. The script matches the production Git arguments and working directory, returns deterministic observations, and fails immediately on an unknown command. The production Merger verifier still parses the real fixture files and makes every acceptance, rejection, identity, and guarded-publication decision; the GitHub and Beads fakes remain process-boundary responses. The current focused class run discovers 108 cases.
 
 `WebBeadWorkspaceBoundaryIntegrationTests.WorkspaceRejectsForeignAndReparseGitAdminPointersBeforeStatusAndRechecksBeforeStatus` and `WorkspaceReportsReparsePointAncestryWithoutFollowingIt` call the production workspace observer against ordinary on-disk repository/worktree metadata and actual Windows junctions. A strict scripted Git runner supplies only the exact worktree-list and common-directory responses and fails on any unexpected command; rejected paths assert that Git status is never requested. The cases retain marker, admin-directory, foreign backlink, reparse backlink, pre-status replacement race, and managed-root ancestry hazards with target/foreign tree snapshots. This removes repeated native Beads initialization and native worktree setup from the security permutations. Native HTTP and Beads coverage remains in `WorkspaceReadsNativeChildrenAndParentWithoutTrackerMutation` and `WorkspaceScrubsHostileAmbientTrackerAndGitRoutingVariables`, preserving relation direction, configured-versus-foreign routing, and a real managed-worktree status read.
 
