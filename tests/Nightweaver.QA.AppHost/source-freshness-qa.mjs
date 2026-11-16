@@ -73,8 +73,20 @@ try {
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     await page.screenshot({path:path.join(output,`history-${width}.png`),fullPage:true});
   }
+  // Workspace interests survive navigation briefly. Digest must remain fresh
+  // while its checkpoint and the serial Workspace sources are both active.
+  const digestReady = page.waitForResponse(async response => response.url().includes('/resources?')
+    && new URL(response.url()).searchParams.get('key')?.startsWith('digest:') && (await response.json()).health === 'fresh');
+  await page.goto(`${base}/projects/qa/overview`);
+  await digestReady;
+  await page.waitForFunction(() => document.querySelector('.synchronization [role=status]')?.textContent === 'Live connection · Tracker fresh');
+  responses.length = 0;
+  await page.waitForTimeout(10000);
+  const digest = responses.filter(value => value.key.startsWith('digest:'));
+  assert(digest.length >= 3, 'Observe Digest during retained Workspace interest');
+  assert(digest.every(value => value.health === 'fresh'), 'Successful checkpoint reads must revalidate retained Digest data');
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({checks:{stableNativeCollections:true,externalCommentVisible:true}, responses:responses.length, states}));
+  console.log(JSON.stringify({checks:{stableNativeCollections:true,externalCommentVisible:true,digestOverlapFresh:true}, responses:responses.length, states}));
 } finally {
   fs.writeFileSync(path.join(output,'evidence.json'),JSON.stringify({steady,responses,errors,states:page ? await page.evaluate(() => window.sourceStates).catch(() => null) : null},null,2));
   await browser.close();

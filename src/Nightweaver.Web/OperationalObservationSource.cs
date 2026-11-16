@@ -98,20 +98,25 @@ internal sealed class OperationalObservationSource(
 
     private bool HasBudget => nativeMilliseconds - sweepNativeStarted < 4000;
 
+    private void RecordSuccessfulRead(string id, object? result, DateTimeOffset attemptedAt)
+    {
+        // BeadsInventory's map is internal; serializing the wrapper would
+        // produce {} and falsely treat different inventories as identical.
+        object? content = result is BeadsInventory inventory ? inventory.ById : result;
+        var hash = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(content, ObservationJson.Options));
+        if (!sourceContent.TryGetValue(id, out var previousContent) || !hash.AsSpan().SequenceEqual(previousContent.Hash))
+            sourceContent[id] = (hash, new object());
+        states[id] = new("fresh", clock.GetUtcNow(), attemptedAt, null) { ContentIdentity = sourceContent[id].Identity };
+        revalidate?.Invoke(id, states[id]);
+    }
+
     private async Task<T?> ReadAsync<T>(string id, Func<Task<T>> read, CancellationToken token) where T : class
     {
         var attempt = clock.GetUtcNow();
         try
         {
             var result = await read();
-            // BeadsInventory's map is internal; serializing the wrapper would
-            // produce {} and falsely treat different inventories as identical.
-            object content = result is BeadsInventory inventory ? inventory.ById : result;
-            var hash = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(content, ObservationJson.Options));
-            if (!sourceContent.TryGetValue(id, out var previousContent) || !hash.AsSpan().SequenceEqual(previousContent.Hash))
-                sourceContent[id] = (hash, new object());
-            states[id] = new("fresh", clock.GetUtcNow(), attempt, null) { ContentIdentity = sourceContent[id].Identity };
-            revalidate?.Invoke(id, states[id]);
+            RecordSuccessfulRead(id, result, attempt);
             return result;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
@@ -233,7 +238,7 @@ internal sealed class OperationalObservationSource(
         try
         {
             caughtUp = checkpoint.ReadLastCaughtUpAt(strict: true);
-            states["checkpoint"] = new("fresh", checkpointAttempt, checkpointAttempt, null);
+            RecordSuccessfulRead("checkpoint", caughtUp, checkpointAttempt);
         }
         catch (Exception exception) when (IsSourceFailure(exception))
         { states["checkpoint"] = new("unavailable", null, checkpointAttempt, Error(exception)); }
