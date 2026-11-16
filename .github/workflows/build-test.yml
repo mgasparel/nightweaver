@@ -131,5 +131,9 @@ jobs:
           path: |
             ${{ steps.suite.outputs.fixture-temp }}/nightweaver-console-*/**
             ${{ steps.suite.outputs.fixture-temp }}/nightweaver-manual-delivery-*/**
+            ${{ steps.suite.outputs.fixture-temp }}/nightweaver-*/published-classifier-force-gates/**
+            ${{ steps.suite.outputs.fixture-temp }}/nightweaver-*/published-nightweaver-host/telemetry/**
+            ${{ steps.suite.outputs.fixture-temp }}/nightweaver-*/published-nightweaver-host/logs/**
+            ${{ steps.suite.outputs.fixture-temp }}/nightweaver-*/published-nightweaver-host/run/**
           if-no-files-found: ignore
           include-hidden-files: true

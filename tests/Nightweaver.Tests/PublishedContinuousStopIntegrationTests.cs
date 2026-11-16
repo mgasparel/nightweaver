@@ -65,6 +65,22 @@ public sealed class PublishedContinuousStopIntegrationTests(PublishedCliArtifact
             Assert.Single(ReadStageLaunchLines(stageLaunchLog));
             Assert.Equal("in_progress", target.ReadBead(beadId).Status);
         }
+        catch
+        {
+            target.PreserveForFailure();
+            var telemetry = Path.Combine(hostRoot, "telemetry", "demo", "factory.json");
+            try
+            {
+                if (File.Exists(telemetry))
+                    File.Copy(telemetry, Path.Combine(gateDirectory, "factory-at-failure.json"));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                TestContext.Current.TestOutputHelper?.WriteLine($"Could not snapshot failure telemetry: {exception.Message}");
+            }
+            TestContext.Current.TestOutputHelper?.WriteLine($"Retained published classifier failure: {target.RootPath}; runtime PID {runtime.Id}");
+            throw;
+        }
         finally
         {
             if (!File.Exists(agentRelease)) File.WriteAllText(agentRelease, "test cleanup", new UTF8Encoding(false));
