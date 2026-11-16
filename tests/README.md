@@ -20,6 +20,18 @@ Use `--report-xunit-xml --report-xunit-xml-filename timing.xml` to collect per-t
 
 ## Coverage pyramid
 
+The classifier timeout fixture publishes root/descendant PID handshakes by
+renaming a completed, closed same-directory temporary file. Existence cannot
+authorize forced termination while a PID writer is still empty. A cheap fixture
+case pauses before writing and checks that the public marker is absent; the
+native smoke retains actual Job termination of both processes and its original
+deadlines. `SystemProcessRunnerTests` uses the existing managed `flood` fixture
+for its bulk-stream boundary: both 1,100,000-byte streams and their exact contents
+must drain within the unchanged 30-second limit. This removes PowerShell startup
+from that contract while retaining a real child and pipe backpressure; the
+PowerShell output-limit, timeout and environment cases remain. The earlier hosted
+PowerShell timeout did not establish a shared production cause.
+
 Test fixtures copy settled immutable repositories into independent file trees,
 including Git objects and tracker stores. The small `GitFixture` initializes one
 empty Git baseline; manual-pilot profile templates seed independent copies of
