@@ -44,6 +44,33 @@ public sealed class OperationalObservationSourceTests
     }
 
     [Fact]
+    public async Task RefusedHistoryReplacementCannotAttachNewContentProvenanceToCachedComments()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 5, Advance = () => clock.Advance(TimeSpan.FromMilliseconds(100)) };
+        using var factory = Factory(target.Path, runner, clock);
+        var memory = new ObservationMemoryBudget();
+        var source = Adapter(factory, memory);
+        var keys = Keys("workspace:task-1", "attention");
+        var token = TestContext.Current.CancellationToken;
+        var reads = new List<ObservationSourceState>();
+        var first = await source.ReadTrackerAsync(keys, token, (id, state) => { if (id == "comments:task-1") reads.Add(state); });
+        Assert.False(first.ContainsKey("attention")); // Four-history cap leaves a cohort in progress.
+        var original = Assert.Single(reads);
+        var filler = new object();
+        Assert.True(memory.TryReplace([], [(filler, ObservationMemoryBudget.MaximumBytes - memory.Used - 512)]));
+        runner.CommentOverrides["task-1"] = new string('B', 10000);
+        reads.Clear();
+        var next = await source.ReadTrackerAsync(keys, token, (id, state) => { if (id == "comments:task-1") reads.Add(state); });
+        Assert.Equal("source-limit", next["workspace:task-1"].Error?.Code);
+        Assert.NotNull(next["attention"].Data);
+        Assert.NotSame(original.ContentIdentity, reads[0].ContentIdentity);
+        Assert.Same(original.ContentIdentity, next["attention"].Sources["comments:task-1"].ContentIdentity);
+        Assert.Equal(original.ObservedAt, next["attention"].Sources["comments:task-1"].ObservedAt);
+    }
+
+    [Fact]
     public async Task SelectedHistoryCacheRefusalRemainsAnExplicitRecoverableSourceLimit()
     {
         using var target = new ObservationTargetFixture();
@@ -705,6 +732,7 @@ public sealed class OperationalObservationSourceTests
         internal int Rows { get; set; } = 1;
         internal string UpdatedAt { get; set; } = "2026-01-01T00:00:00Z";
         internal string Comment { get; set; } = "Initial comment";
+        internal Dictionary<string, string> CommentOverrides { get; } = new(StringComparer.Ordinal);
         private int inventories;
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
@@ -759,7 +787,7 @@ public sealed class OperationalObservationSourceTests
                 "dep" => "[]",
                 "ready" => Ready ? "[{\"id\":\"task-1\"}]" : "[]",
                 "show" => JsonSerializer.Serialize(rows.Where(row => row.id == args[3])),
-                "comments" => JsonSerializer.Serialize(new[] { new { id = "comment-1", issue_id = args[3], author = "human", text = Comment, created_at = "2026-01-01T00:00:00Z" } }),
+                "comments" => JsonSerializer.Serialize(new[] { new { id = "comment-1", issue_id = args[3], author = "human", text = CommentOverrides.GetValueOrDefault(args[3], Comment), created_at = "2026-01-01T00:00:00Z" } }),
                 _ => JsonSerializer.Serialize(rows)
             };
             return Task.FromResult(new ProcessResult(0, json, ""));
