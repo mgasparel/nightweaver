@@ -43,7 +43,8 @@ public sealed class PublishedCliArtifactFixture : IDisposable
         // the fixture to any of the six test workers, including on failure.
         Task.WhenAll(PublishCliAsync(projectPath),
             RunDotnetPublishAsync(trapProjectPath, helperPublishDirectory),
-            Task.Run(BeadsFixture.PrepareTemplate)).GetAwaiter().GetResult();
+            Task.Run(BeadsFixture.PrepareTemplate),
+            Task.Run(AgentStageIntegrationTestSupport.PrepareTemplate)).GetAwaiter().GetResult();
         CopyDirectory(helperPublishDirectory, TrapDirectory);
 
         var helperAppHost = Path.Combine(helperPublishDirectory, OperatingSystem.IsWindows() ? "AgentCliTrap.exe" : "AgentCliTrap");
