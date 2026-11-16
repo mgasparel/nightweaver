@@ -29,7 +29,8 @@ independence. Provisioning preservation snapshots obtain HEAD, branch and status
 from one native `git status --porcelain=v2 --branch` command instead of launching
 three processes or adding concurrent native work. Index bytes, working files,
 HEAD, branch and status assertions
-remain intact. These setup changes retain all cases and native
+remain intact; upstream ahead/behind metadata is excluded because an allowed
+fetch can update remote refs without changing the checkout. These setup changes retain all cases and native
 boundaries; only a complete timed command establishes their suite cost.
 
 Test-owned managed launches use `FixtureProcess.Start`, including shared manual

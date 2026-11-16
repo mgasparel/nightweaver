@@ -340,12 +340,15 @@ internal sealed class ProvisioningGitFixture : IDisposable
     {
         // Porcelain v2 includes HEAD and branch in the same native observation.
         // Avoid three separate process launches for every preservation snapshot.
-        var status = Git(Target, ["status", "--porcelain=v2", "--branch", "--untracked-files=all"]).Output;
-        var lines = status.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var observation = Git(Target, ["status", "--porcelain=v2", "--branch", "--untracked-files=all"]).Output;
+        var lines = observation.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         const string headPrefix = "# branch.oid ";
         const string branchPrefix = "# branch.head ";
         var head = lines.Single(line => line.StartsWith(headPrefix, StringComparison.Ordinal))[headPrefix.Length..];
         var branch = lines.Single(line => line.StartsWith(branchPrefix, StringComparison.Ordinal))[branchPrefix.Length..];
+        // Fresh fetch may update upstream refs and ahead/behind metadata. Keep
+        // only file status here; HEAD and branch are compared explicitly above.
+        var status = string.Join('\n', observation.Split('\n').Where(line => !line.StartsWith("# ", StringComparison.Ordinal)));
         var index = File.ReadAllBytes(Path.Combine(Target, ".git", "index"));
         var content = Directory.EnumerateFileSystemEntries(Target)
             .Where(path => !string.Equals(Path.GetFileName(path), ".git", StringComparison.OrdinalIgnoreCase))

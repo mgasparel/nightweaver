@@ -42,6 +42,7 @@ public sealed class FixtureTemplateTests
         var initial = first.TargetCheckout();
         Assert.Equal(first.InitialSha, initial.Head);
         Assert.Equal("main", initial.Branch);
+        Assert.DoesNotContain("# ", initial.Status, StringComparison.Ordinal);
         Assert.Contains("README.md", initial.Status, StringComparison.Ordinal);
         Assert.Contains("staged-root.txt", initial.Status, StringComparison.Ordinal);
         Assert.Contains("untracked-root.txt", initial.Status, StringComparison.Ordinal);
