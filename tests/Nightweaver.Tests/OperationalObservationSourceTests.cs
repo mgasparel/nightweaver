@@ -213,13 +213,16 @@ public sealed class OperationalObservationSourceTests
         var clock = new CostClock();
         var runner = new Runner
         {
-            Rows = 2, Advance = () => clock.Advance(TimeSpan.FromSeconds(1.6)),
+            Advance = () => clock.Advance(TimeSpan.FromSeconds(1.6)),
             FailCommentOnce = "task-1", CommentTimeoutsRemaining = 1000
         };
         using var factory = Factory(target.Path, runner, clock);
         var source = Adapter(factory);
-        var keys = Keys("workspace:task-1", "workspace:task-2");
+        var keys = Keys("workspace:task-1");
         var token = TestContext.Current.CancellationToken;
+        await source.ReadTrackerAsync(keys, token);
+        runner.Rows = 2;
+        keys = Keys("workspace:task-1", "workspace:task-2");
         async Task<BeadWorkspaceResponse?> ReadHealthyAsync()
         {
             var samples = await source.ReadTrackerAsync(keys, token);

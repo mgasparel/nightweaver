@@ -37,14 +37,14 @@ Windows command-line launch checks remain. Hosted PowerShell timeouts in the
 bulk, output-limit and environment checks did not establish a shared production
 cause; removing that unrelated shell dependency does not diagnose its startup.
 
-Workspace-only observation retries retain their captured inventory while detail
-work is pending, avoiding a redundant native core read before each unfinished
-step. A fresh confirming inventory still guards publication and changed identity
+Workspace-only observation retries retain their captured inventory for one
+continuation turn while detail work is pending, avoiding redundant native core
+reads without indefinitely retaining a snapshot. A fresh confirming inventory still guards publication and changed identity
 fails closed. Mixed attention/explorer subscriptions keep their core cadence.
 The existing controlled timeout cases assert the reduced command counts, and
 the slow-clock case models 1.9-second reads without adding wall-clock waits.
-A cheap two-Workspace case holds one history source timed out, changes the other
-Workspace's identity and requires the edit to publish. Identity conflicts force
+A cheap two-Workspace case holds one history source timed out, creates and selects
+another Workspace, then changes its identity and requires both updates to publish. Identity conflicts force
 a fresh core read so another pending cycle cannot retain the old baseline forever.
 Failed published classifier smoke runs retain their gates and runtime telemetry
 for hosted diagnosis; this does not extend their Agent-start or stop deadlines.

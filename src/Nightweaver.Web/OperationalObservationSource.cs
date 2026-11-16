@@ -172,7 +172,8 @@ internal sealed class OperationalObservationSource(
         var reader = CreateReader();
         BeadsInventory? inventory;
         FrozenSet<string>? ready, blocked;
-        if (resumeDetails && retainedInventory is not null)
+        var resumedDetails = resumeDetails && retainedInventory is not null;
+        if (resumedDetails)
         {
             // Resume bounded detail work against its captured inventory. A Workspace
             // still rereads inventory before publication; source age stays visible.
@@ -278,9 +279,11 @@ internal sealed class OperationalObservationSource(
             }
         else if (inventory is null && keys.Any(key => key.Kind == "attention")) result["attention"] = Sample(null, started, "inventory");
         if (attentionFirst) await ReadSelectedAsync();
-        resumeDetails = (workspaces.Count > 0 && keys.All(key => key.Kind == "workspace"))
+        // Bound reuse to one continuation turn even if another selected Workspace
+        // never recovers. New interest and external creation must reach a fresh core.
+        resumeDetails = !resumedDetails && ((workspaces.Count > 0 && keys.All(key => key.Kind == "workspace"))
             || (!HasBudget && CommandCount == detailCommandsBefore
-                && (selected.Length > 0 || keys.Any(key => key.Kind == "attention")));
+                && (selected.Length > 0 || keys.Any(key => key.Kind == "attention"))));
         // A new cycle must not repeatedly compare an external edit against the
         // old core while a different Workspace remains pending indefinitely.
         if (result.Values.Any(sample => sample.Error?.Code == "source-conflict")) resumeDetails = false;
