@@ -62,7 +62,7 @@ Guidance is memory-only and is deliberately not retained after a full page
 reload or tab closure. No production stack or tracker is used or deployed.
 
 The complete solution command retains committed six-thread parallelism and a
-current positive floor of 1,268 tests. The initial integrated candidate passed all 1,265 tests,
+current positive floor of 1,318 tests. The initial integrated candidate passed all 1,265 tests,
 with zero skips, in **239.285 seconds** on 2026-11-16 UTC using
 `dotnet test --solution Nightweaver.slnx --minimum-expected-tests 1265 --report-xunit-xml --report-xunit-xml-filename dispatch-cutover.xml --show-slowest-tests 20`.
 The stopwatch surrounds the entire command, including build, fixture publishing
@@ -265,3 +265,66 @@ successfully. Fresh desktop/375/720 captures were reviewed for bounded layouts,
 wrapping, reachable controls and separate transport/source health. Logs and
 captures remain under `TestResults/repair3-{repro,browser,attention-repeat}`.
 Prior physical-sleep/manual-pilot limitations remain; no deployment occurred.
+
+## Synchronized recovery after hosted rejection
+
+The resumed candidate incorporates main `d1a664e` (PR54) and `a5cbf89` (PR46)
+without discarding retained Studio work. The former fixes the rejected native
+console test: `hold` lacked its required PID-path argument and could exit before
+the unchanged 50ms timeout assertion. The retained replacement starts
+`hold-published-pid`, verifies bounded readiness and the actual PID, and preserves
+timeout, cancellation, repeat-wait and native-settlement assertions.
+
+The first combined run at `c3a0b47` discovered 1,318 cases and failed only the two
+retained slow-Attention component rows in 94.071 seconds. Their recording wrapper
+bypassed the new scripted runner's target-path setup. They now use the existing
+lightweight observation fixture and set the wrapped runner's path explicitly;
+both simulated-cost and transient-timeout assertions remain intact. No new
+native journey or test case was added for this repair.
+
+The complete command at `77074a05a4aaa619d7517bdb0e32d505cd358c2c`, with
+`--minimum-expected-tests 1318`, passed **1,318 tests, zero failures/skips in
+95.242 seconds**, including build, fixture publishing and teardown at six threads.
+Evidence: `TestResults/resume-1931-repaired.{log,xml}` and
+`resume-1931-repaired-timing.json`. The retained main `d1a664e` baseline passed
+1,304 tests in 90.435 seconds after reboot; this candidate adds 14 cutover cases
+and took 4.807 seconds (5.32 percent) longer. Different checkout/temp roots and
+machine activity prevent attributing that entire difference to the code. Both
+240-second operating and 300-second hard budgets pass on this candidate;
+latest-main measurement after integration remains required. The focused run
+passed all 26 selected assertions but returned exit 9 because its requested
+minimum was mistakenly 29; the successful complete run covers those same cases.
+
+Clean npm installs, all 57 frontend tests, production TypeScript/build,
+warning-as-error solution build and disposable Release Web publish passed.
+The initial shell browser run sampled heading focus before React's navigation
+effect completed. The probe now waits for actual heading focus before the same
+assertion, without a blind delay or changing application behavior. Its failed
+log and successful exact-stack teardown remain in `TestResults/resume-1931-browser/Default`;
+fresh validation uses separate output directories.
+
+Fresh Default, Presentation, Recovery and Commands groups passed on the synchronized
+candidate. Attention passed nine groups with 14 expected POSTs and no page errors;
+Explorer imported 81 native Beads; Digest persisted a real checkpoint; stalled
+read/reconciliation and runtime retry probes retained their original assertions.
+Presentation retained 43-child grouped paging and actual native structured
+evidence navigation without external requests or commands. Recovery changed the
+server epoch while preserving two drafts and converging three burst edits;
+intake/readiness and fifth-attempt cleanup passed their actual guarded requests.
+Logs, result JSON and fresh desktop/375/720 captures are under
+`TestResults/resume-1931-browser`, with group logs `resume-1931-*.log`.
+Reviewed Overview against the approved reference and inspected narrow Workspace,
+relations, evidence and recovered drafts: coherent hierarchy, readable wrapping,
+reachable controls, visible focus and no asserted page horizontal overflow.
+Every group uses discovered direct endpoints and finally-stops its exact stack.
+
+Invocation also passed its presentation, native Planning and native Delivery
+stream probes, including exact identity, reconnect cursor without duplicate
+output, completion without retry, follow/Escape focus and narrow effective
+200-percent layout. All 18 probes passed across the five final groups. All six
+stacks started in this dispatch (including the initial failed shell probe) stopped
+successfully; final `aspire ps --format Json` returned `[]`. The remaining edits
+after the complete .NET run are this evidence and the browser-only focus wait;
+the tested .NET/frontend application sources are unchanged. No hosted run or
+production deployment was performed. Physical sleep and long manual-pilot limits
+remain as described above.

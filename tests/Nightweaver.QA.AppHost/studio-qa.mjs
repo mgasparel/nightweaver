@@ -30,6 +30,8 @@ try {
     await page.keyboard.press('Enter');
     await page.waitForURL(`**${base}/${route}`);
     await page.getByRole('heading', { name: label, exact: true, level: 1 }).waitFor();
+    // A visible route heading can precede React's navigation focus effect.
+    await page.waitForFunction(() => document.querySelector('h1') === document.activeElement);
     assert.equal(await page.locator('h1').evaluate(node => node === document.activeElement), true);
     await page.reload();
     await page.getByRole('heading', { name: label, exact: true, level: 1 }).waitFor();
