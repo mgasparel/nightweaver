@@ -108,6 +108,15 @@ lazy template while occupying test lanes. Every prerequisite still settles on
 failure, and tests still receive separate mutable Git/Beads copies. This moves
 existing setup work; it adds no cached runtime observation or native scenario.
 
+Observer component cases script both Git root validation and tracker responses,
+with exact Git arguments and working directories and real filesystem/backend
+guards. They exercise the production projections, budgets, cohorts and HTTP
+routes without repeated native launches for an unchanged valid root. The native
+observer smoke still uses real Git/Beads and verifies external comments and
+dependencies through HTTP. All 17 cases and assertions remain. Collection weights
+now use the complete 1,297-case `ns-3i4-prepared-complete.xml` measurement, updated
+with the focused observer cost; only scheduling order changes, with six threads.
+
 `MergerOutcomeVerifierTests` keeps its detailed rejection-evidence, local transcript, hosted-job metadata, PR identity, count, and framing matrix on a strict scripted Git fixture. These component cases use stable valid commit identities and temporary log paths; they do not initialize/copy a Git database or start Git. The script matches the production Git arguments and working directory, returns deterministic observations, and fails immediately on an unknown command. The production Merger verifier still parses the real fixture files and makes every acceptance, rejection, identity, and guarded-publication decision; the GitHub and Beads fakes remain process-boundary responses. The ns-3i4 verifier class now discovers 146 cases, including full prompt/document echoes, stale failure frames after passing checks, separately attributable failed reruns, and controlled local-read overlap/settlement. These framing cases reuse the scripted fixture; no additional native journey is introduced. The compact native group below retains the real Git boundary.
 
 `WebBeadWorkspaceBoundaryIntegrationTests.WorkspaceRejectsForeignAndReparseGitAdminPointersBeforeStatusAndRechecksBeforeStatus` and `WorkspaceReportsReparsePointAncestryWithoutFollowingIt` call the production workspace observer against ordinary on-disk repository/worktree metadata and actual Windows junctions. A strict scripted Git runner supplies only the exact worktree-list and common-directory responses and fails on any unexpected command; rejected paths assert that Git status is never requested. The cases retain marker, admin-directory, foreign backlink, reparse backlink, pre-status replacement race, and managed-root ancestry hazards with target/foreign tree snapshots. This removes repeated native Beads initialization and native worktree setup from the security permutations. Native HTTP and Beads coverage remains in `WorkspaceReadsNativeChildrenAndParentWithoutTrackerMutation` and `WorkspaceScrubsHostileAmbientTrackerAndGitRoutingVariables`, preserving relation direction, configured-versus-foreign routing, and a real managed-worktree status read.
