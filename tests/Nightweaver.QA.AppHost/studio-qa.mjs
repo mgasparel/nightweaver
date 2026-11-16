@@ -11,13 +11,13 @@ const browser = await chromium.launch({ headless: true });
 const errors = [];
 const mutations = [];
 try {
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('request', request => { if (!['GET', 'HEAD'].includes(request.method())) mutations.push(request.url()); });
   const { projectId } = await (await page.request.get(`${url}/api/studio/context`)).json();
   const base = `/projects/${encodeURIComponent(projectId)}`;
-  await page.goto(`${url}/studio`);
+  await page.goto(url);
   await page.waitForURL(`**${base}/overview`);
   await page.getByRole('heading', { name: `${projectId}, at a glance.` }).waitFor();
   await page.reload();
@@ -46,8 +46,13 @@ try {
   await page.goForward();
   await page.getByRole('heading', { name: 'Delivery floor', exact: true, level: 1 }).waitFor();
 
+  for (const [hash, route] of [['factory', 'delivery'], ['attention', 'attention'], ['catch-up', 'catch-up'], ['beads', 'beads'], ['cleanup', 'cleanup']]) {
+    await page.goto(`${url}/#${hash}`);
+    await page.waitForURL(`**${base}/${route}`);
+    assert.equal((await page.reload()).status(), 200);
+  }
   for (const beadId of ['ns-mbd.1', 'ns-mbd.1.2']) {
-    await page.goto(`${url}/studio#bead/${beadId}`);
+    await page.goto(`${url}/#bead/${beadId}`);
     await page.waitForURL(`**${base}/beads/${beadId}`);
     assert.equal((await page.reload()).status(), 200);
     await page.getByRole('heading', { name: `Bead ${beadId}`, exact: true }).waitFor();
@@ -64,7 +69,6 @@ try {
   await page.goto(`${url}/studio#bead/qa-%3Cscript%3E`);
   await page.waitForURL(`**${base}/beads/qa-%3Cscript%3E`);
   await page.getByRole('heading', { name: 'Bead qa-<script>', exact: true }).waitFor();
-  assert.equal(await page.getByRole('link', { name: 'Open existing Bead Workspace' }).getAttribute('href'), '/#bead/qa-%3Cscript%3E');
   await page.getByRole('link', { name: 'History', exact: true }).focus();
   await page.keyboard.press('Enter');
   await page.waitForURL('**?tab=history');
@@ -79,9 +83,11 @@ try {
   await page.getByRole('heading', { name: 'Page not found' }).waitFor();
 
   for (const width of [1440, 375, 720]) {
-    await page.setViewportSize({ width, height: 1000 });
+    await page.setViewportSize({ width, height: 900 });
     await page.goto(`${url}${base}/overview`);
     await page.getByRole('heading', { name: `${projectId}, at a glance.` }).waitFor();
+    await page.waitForFunction(() => [...document.querySelectorAll('.metrics .metric strong')].length === 4
+      && [...document.querySelectorAll('.metrics .metric strong')].every(node => /^\d+$/.test(node.textContent)), null, { timeout: 90000 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `overflow at ${width}`);
     await page.screenshot({ path: `${output}/overview-${width}.png`, fullPage: true });
     for (const label of ['All projects', 'Add project']) {
@@ -89,7 +95,7 @@ try {
       await trigger.focus();
       await page.keyboard.press('Enter');
       await page.getByRole('dialog').waitFor();
-      await page.getByText('Unavailable in this preview', { exact: true }).waitFor();
+      await page.getByText('Unavailable', { exact: true }).waitFor();
       assert.equal(await page.getByRole('dialog').locator('input,textarea,select').count(), 0);
       // Escape restores native focus before the queued close event runs React's
       // onClose. Wait for that event before checking focus or moving it again.
@@ -104,6 +110,7 @@ try {
     await nav.getByRole('link', { name: 'Attention', exact: true }).focus();
     await page.keyboard.press('Enter');
     await page.getByRole('heading', { name: 'Attention', exact: true, level: 1 }).waitFor();
+    await page.locator('.attention-row').first().waitFor({ timeout: 90000 });
     await page.screenshot({ path: `${output}/attention-${width}.png`, fullPage: true });
   }
   assert.deepEqual(mutations, [], 'Preview must never issue mutations');
@@ -112,7 +119,7 @@ try {
   // Compare the captured reference without modifying the source prototype.
   const reference = await browser.newPage();
   for (const width of [1440, 375, 720]) {
-    await reference.setViewportSize({ width, height: 1000 });
+    await reference.setViewportSize({ width, height: 900 });
     await reference.goto(new URL('../../docs/design/nightweaver-multiproject-prototype.html', import.meta.url).href + '?variant=A');
     await reference.screenshot({ path: `${output}/prototype-${width}.png`, fullPage: true });
   }

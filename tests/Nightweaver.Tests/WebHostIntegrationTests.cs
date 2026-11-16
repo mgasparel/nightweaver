@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Nightweaver.Configuration;
+using Nightweaver.Background;
 
 namespace Nightweaver.Tests;
 
@@ -143,8 +144,8 @@ public sealed class WebHostIntegrationTests
             using var studio = await client.GetAsync("/projects/standalone/overview", timeout.Token);
             Assert.Equal(HttpStatusCode.OK, studio.StatusCode);
             Assert.Contains("Nightweaver · Studio", await studio.Content.ReadAsStringAsync(timeout.Token), StringComparison.Ordinal);
-            await AssertStaticAssetAsync(client, "/css/site.css", ["text/css"], timeout.Token);
-            await AssertStaticAssetAsync(client, "/js/app.js", JavaScriptMediaTypes, timeout.Token);
+            await AssertStaticAssetAsync(client, "/vendor/purify.min.js", JavaScriptMediaTypes, timeout.Token);
+            await AssertStaticAssetAsync(client, "/vendor/markdown-it.min.js", JavaScriptMediaTypes, timeout.Token);
             using var response = await client.GetAsync("/health", timeout.Token);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Equal("{\"status\":\"ok\"}", await response.Content.ReadAsStringAsync(timeout.Token));
@@ -253,18 +254,7 @@ public sealed class WebHostIntegrationTests
             using var ready = JsonDocument.Parse(target.Run("bd", ["--readonly", "--sandbox", "ready", "--limit", "0", "--json"]));
             Assert.Contains(ready.RootElement.EnumerateArray(), bead => bead.GetProperty("id").GetString() == createdId);
 
-            using var page = await client.GetAsync("/", timeout.Token);
-            Assert.Equal(HttpStatusCode.OK, page.StatusCode);
-            var html = await page.Content.ReadAsStringAsync(timeout.Token);
-            Assert.Contains("id=\"beads-search\"", html, StringComparison.Ordinal);
-            Assert.Contains("aria-pressed=\"true\"", html, StringComparison.Ordinal);
-            using var script = await client.GetAsync("/js/app.js", timeout.Token);
-            Assert.Equal(HttpStatusCode.OK, script.StatusCode);
-            var javascript = await script.Content.ReadAsStringAsync(timeout.Token);
-            Assert.Contains("AbortController", javascript, StringComparison.Ordinal);
-            Assert.Contains("URLSearchParams", javascript, StringComparison.Ordinal);
-            Assert.Contains("textContent", javascript, StringComparison.Ordinal);
-            Assert.DoesNotContain("innerHTML", javascript, StringComparison.Ordinal);
+            await AssertDashboardPageAsync(client, "/", timeout.Token);
             Assert.Empty(Directory.EnumerateFileSystemEntries(host));
         }
         finally
@@ -276,6 +266,86 @@ public sealed class WebHostIntegrationTests
     }
 
     [Fact]
+    public async Task PublishedStudioServesStandaloneAndBackgroundHosts()
+    {
+        using var directory = new TempDirectory();
+        var root = directory.CreateDirectory("host");
+        directory.CreateDirectory("target");
+        var config = directory.WriteFile("project.json", """
+            {"name":"embedded","target_repository":{"path":"target"}}
+            """);
+        var appDirectory = typeof(WebHostIntegrationTests).Assembly.GetCustomAttributes(
+            typeof(System.Reflection.AssemblyMetadataAttribute), false)
+            .Cast<System.Reflection.AssemblyMetadataAttribute>()
+            .Single(attribute => attribute.Key == "NightweaverWebAppDir").Value!;
+        var webProject = Path.GetFullPath(Path.Combine(appDirectory, "../../../Nightweaver.Web.csproj"));
+        var published = directory.CreateDirectory("published");
+        await TestProjectBuildGate.NightweaverProject.WaitAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            var publish = await ProcessTool.RunAsync("dotnet",
+                ["publish", webProject, "-c", "Release", "-o", published],
+                Path.GetDirectoryName(webProject)!, null, TimeSpan.FromMinutes(2));
+            Assert.True(publish.ExitCode == 0, publish.StandardOutputText + publish.StandardErrorText);
+        }
+        finally { TestProjectBuildGate.NightweaverProject.Release(); }
+        Assert.False(Directory.Exists(Path.Combine(published, "Studio")));
+        Assert.False(File.Exists(Path.Combine(published, "wwwroot", "js", "app.js")));
+        Assert.False(File.Exists(Path.Combine(published, "wwwroot", "css", "site.css")));
+        var log = Path.Combine(root, "web.log");
+        await using var host = BackgroundWebHost.Start(
+            Path.Combine(published, "Nightweaver.Web.exe"), root, config, "http://127.0.0.1:0", log);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        string address;
+        while (true)
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            Assert.False(host.HasExited, "Embedded Web host exited before listening.");
+            using var stream = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            var match = Regex.Match(await reader.ReadToEndAsync(deadline.Token), @"Now listening on: (http://127\.0\.0\.1:\d+)");
+            if (match.Success) { address = match.Groups[1].Value; break; }
+            await Task.Delay(50, deadline.Token);
+        }
+        using var client = new HttpClient { BaseAddress = new Uri(address) };
+        await AssertDashboardPageAsync(client, "/", deadline.Token);
+        await AssertDashboardPageAsync(client, "/projects/embedded/beads/ns-mbd.7?tab=history", deadline.Token);
+        using var missing = await client.GetAsync("/api/missing", deadline.Token);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+
+        var start = new ProcessStartInfo(Path.Combine(published, "Nightweaver.Web.exe"))
+        {
+            WorkingDirectory = directory.Path, UseShellExecute = false,
+            RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true
+        };
+        start.Environment["PATH"] = ""; // Published Studio has no Node runtime dependency.
+        foreach (var argument in new[] { "--urls", "http://127.0.0.1:0", "--Nightweaver:Root", root, "--Nightweaver:ConfigPath", config })
+            start.ArgumentList.Add(argument);
+        using var standalone = FixtureProcess.Start(start) ?? throw new InvalidOperationException("Standalone Web host did not start.");
+        var errors = standalone.StandardError.ReadToEndAsync(deadline.Token);
+        try
+        {
+            string? standaloneAddress = null;
+            while (await standalone.StandardOutput.ReadLineAsync(deadline.Token) is { } line)
+            {
+                var match = Regex.Match(line, @"Now listening on: (http://127\.0\.0\.1:\d+)");
+                if (match.Success) { standaloneAddress = match.Groups[1].Value; break; }
+            }
+            Assert.NotNull(standaloneAddress);
+            using var publishedClient = new HttpClient { BaseAddress = new Uri(standaloneAddress) };
+            await AssertDashboardPageAsync(publishedClient, "/", deadline.Token);
+            await AssertDashboardPageAsync(publishedClient, "/projects/embedded/beads/ns-mbd.7?tab=output", deadline.Token);
+        }
+        finally
+        {
+            if (!standalone.HasExited) standalone.Kill(entireProcessTree: true);
+            await standalone.WaitForExitAsync(TestContext.Current.CancellationToken);
+            await errors;
+        }
+    }
+
+    [Fact]
     public async Task DashboardAndAssetsAreServedFromTheWebRoot()
     {
         using var factory = new NightweaverWebApplicationFactory();
@@ -283,8 +353,8 @@ public sealed class WebHostIntegrationTests
 
         await AssertDashboardPageAsync(client, "/", TestContext.Current.CancellationToken);
         await AssertDashboardPageAsync(client, "/index.html", TestContext.Current.CancellationToken);
-        await AssertStaticAssetAsync(client, "/css/site.css", ["text/css"], TestContext.Current.CancellationToken);
-        await AssertStaticAssetAsync(client, "/js/app.js", JavaScriptMediaTypes, TestContext.Current.CancellationToken);
+        await AssertStaticAssetAsync(client, "/vendor/purify.min.js", JavaScriptMediaTypes, TestContext.Current.CancellationToken);
+        await AssertStaticAssetAsync(client, "/vendor/markdown-it.min.js", JavaScriptMediaTypes, TestContext.Current.CancellationToken);
     }
 
     [Theory]
@@ -360,23 +430,19 @@ public sealed class WebHostIntegrationTests
         var html = await response.Content.ReadAsStringAsync(cancellationToken);
         var title = Regex.Match(html, "<title>(.*?)</title>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
         Assert.True(title.Success, "The dashboard document must contain a title element.");
-        Assert.Equal("Nightweaver | Factory Console", WebUtility.HtmlDecode(title.Groups[1].Value));
+        Assert.Equal("Nightweaver · Studio", WebUtility.HtmlDecode(title.Groups[1].Value));
         Assert.Contains("Nightweaver", html, StringComparison.Ordinal);
-        foreach (var section in new[] { "catch-up", "attention", "factory", "beads" })
+        Assert.Contains("id=\"root\"", html, StringComparison.Ordinal);
+        var assets = Regex.Matches(html, "/studio/assets/[^\" ]+\\.(?:js|css)");
+        Assert.Equal(2, assets.Count);
+        foreach (Match asset in assets)
         {
-            Assert.Contains($"id=\"{section}\"", html, StringComparison.Ordinal);
-            Assert.Contains($"href=\"#{section}\"", html, StringComparison.Ordinal);
+            await AssertStaticAssetAsync(client, asset.Value,
+                asset.Value.EndsWith(".css", StringComparison.Ordinal) ? ["text/css"] : JavaScriptMediaTypes,
+                cancellationToken);
         }
-        Assert.DoesNotContain("href=\"#workspace\"", html, StringComparison.Ordinal);
-        Assert.DoesNotContain("Bead Workspace", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"new-bead-trigger\"", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"bead-intake-dialog\"", html, StringComparison.Ordinal);
-        Assert.Contains("aria-labelledby=\"intake-title\"", html, StringComparison.Ordinal);
-        Assert.Contains("name=\"type\"", html, StringComparison.Ordinal);
-        Assert.Contains("name=\"priority\"", html, StringComparison.Ordinal);
-        Assert.Contains("name=\"title\" type=\"text\" maxlength=\"200\" required", html, StringComparison.Ordinal);
-        Assert.Contains("name=\"description\" maxlength=\"4000\"", html, StringComparison.Ordinal);
-        Assert.Contains("name=\"acceptanceCriteria\" maxlength=\"2000\"", html, StringComparison.Ordinal);
+        // Interactive behavior is covered by Studio component and isolated browser tests.
+
     }
 
     private static async Task AssertStaticAssetAsync(

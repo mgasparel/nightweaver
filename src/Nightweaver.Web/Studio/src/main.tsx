@@ -12,12 +12,13 @@ import {
   useParams,
 } from "react-router";
 import { readContext, type StudioContext } from "./context";
-import { Icon, Panel, Status, Unavailable } from "./primitives";
+import { Icon, Panel, Status } from "./primitives";
 import "./studio.css";
 import { useObservation } from "./use-observation";
 import { operations } from "./operations-browser";
 import { AttentionView, BeadWorkspace } from "./bead-views";
 import { Explorer } from "./explorer";
+import { explorerQuery, type ExplorerData } from "./explorer-model";
 import { DeliveryView, DeliveryMetric, RuntimeSummary } from "./delivery-views";
 import { CatchUpView, DigestMetric } from "./digest-views";
 import { CleanupView, ProductIntake } from "./product-views";
@@ -30,12 +31,6 @@ const sections = [
   ["beads", "Beads"],
   ["cleanup", "Housekeeping"],
 ] as const;
-const legacySection: Record<string, string> = {
-  delivery: "factory",
-  attention: "attention",
-  "catch-up": "catch-up",
-  beads: "beads",
-};
 const projectPath = (id: string) => `/projects/${encodeURIComponent(id)}`;
 
 function Bootstrap() {
@@ -65,9 +60,6 @@ function Bootstrap() {
             <button className="button" onClick={() => window.location.reload()}>
               Try again
             </button>
-            <a className="button" href="/">
-              Open existing console
-            </a>
           </>
         )}
       </main>
@@ -87,7 +79,11 @@ function AppShell({ context }: { context: StudioContext }) {
   const section = sections.find(([id]) => id === pathParts[3]);
 
   useEffect(() => {
-    if (!location.hash.startsWith("#bead/")) return;
+    if (!location.hash.startsWith("#bead/")) {
+      const section = ({ "#factory": "delivery", "#attention": "attention", "#catch-up": "catch-up", "#beads": "beads", "#cleanup": "cleanup" } as Record<string, string>)[location.hash];
+      if (section) navigate(`${base}/${section}${location.search}`, { replace: true });
+      return;
+    }
     try {
       const id = decodeURIComponent(location.hash.slice(6));
       if (id)
@@ -161,15 +157,12 @@ function AppShell({ context }: { context: StudioContext }) {
           </button>
         </div>
         <div className="side-bottom">
-          <Status>Studio preview</Status>
+          <Status>Studio</Status>
           <p>
             Current project only.
             <br />
             Your local workspace.
           </p>
-          <a href="/">
-            Open existing console <Icon name="arrow" />
-          </a>
         </div>
       </aside>
       <div className="main">
@@ -182,12 +175,11 @@ function AppShell({ context }: { context: StudioContext }) {
             event.preventDefault(); const data = new FormData(event.currentTarget);
             navigate(`${base}/beads?${new URLSearchParams({ view: "all", q: String(data.get("q") ?? "").trim() })}`);
           }}><label><span className="sr-only">Search current project</span><input name="q" type="search" maxLength={200} placeholder={`Search ${context.projectId}`} /></label><button className="button" type="submit">Search</button></form>
-          <a className="console-link" href="/">
-            Existing console <Icon name="arrow" />
-          </a>
         </header>
         <main className="canvas" id="content" ref={main}>
           <Routes>
+            <Route path="/" element={<Navigate to={`${base}/overview${location.search}${location.hash}`} replace />} />
+            <Route path="/index.html" element={<Navigate to={`${base}/overview${location.search}${location.hash}`} replace />} />
             <Route
               path="/studio/*"
               element={
@@ -229,7 +221,7 @@ function AppShell({ context }: { context: StudioContext }) {
           </button>
         </div>
         <div className="dialog-body">
-          <Status tone="warn">Unavailable in this preview</Status>
+          <Status tone="warn">Unavailable</Status>
           <p>
             Studio is connected to the configured current project only.
             Multi-project navigation and project setup will be available in a
@@ -278,6 +270,15 @@ function AttentionMetric({ projectId }: { projectId: string }) {
   </div>;
 }
 
+function ReadyMetric({ projectId }: { projectId: string }) {
+  const snapshot = useObservation<ExplorerData>(projectId, explorerQuery(new URLSearchParams()).key);
+  const data = snapshot.observation?.data;
+  return <div className="metric"><span className="eyebrow">Ready</span>
+    <strong>{data?.total ?? "—"}</strong>
+    <small>{data ? `Native readiness · ${snapshot.stale ? "retained" : snapshot.observation?.health}` : "Readiness unavailable"}</small>
+  </div>;
+}
+
 function ProjectRoutes({
   context,
   onAdd,
@@ -309,11 +310,11 @@ function ProjectRoutes({
         path="overview"
         element={<Overview context={context} onAdd={onAdd} />}
       />
-      {sections.slice(1).map(([id, title]) => (
+      {sections.slice(1).map(([id]) => (
         <Route
           key={id}
           path={id}
-          element={id === "delivery" ? <DeliveryView project={context.projectId} /> : id === "attention" ? <AttentionView project={context.projectId} /> : id === "beads" ? <><Explorer project={context.projectId} /><ProductIntake project={context.projectId} /></> : id === "catch-up" ? <CatchUpView project={context.projectId} /> : id === "cleanup" ? <CleanupView project={context.projectId} /> : <FeatureRoute id={id} title={title} />}
+          element={id === "delivery" ? <DeliveryView project={context.projectId} /> : id === "attention" ? <AttentionView project={context.projectId} /> : id === "beads" ? <><Explorer project={context.projectId} /><ProductIntake project={context.projectId} /></> : id === "catch-up" ? <CatchUpView project={context.projectId} /> : id === "cleanup" ? <CleanupView project={context.projectId} /> : <NotFound base={base} />}
         />
       ))}
       <Route path="beads/:beadId" element={<BeadWorkspace project={context.projectId} />} />
@@ -332,7 +333,7 @@ function PageHeading({
   return (
     <div className="page-heading">
       <p className="eyebrow">
-        Your local workspace <span> / </span> Studio preview
+        Your local workspace <span> / </span> Studio
       </p>
       <h1 tabIndex={-1}>{title}</h1>
       <p>{description}</p>
@@ -361,18 +362,10 @@ function Overview({
         </Link>
       </div>
       <div className="metrics" aria-label="Observation availability">
-        {[
-          ["Delivery", "Runtime not connected"],
-          ["Attention", "Tracker not connected"],
-          ["Completed", "Digest unavailable"],
-          ["Ready", "Tracker not connected"],
-        ].map(([label, detail]) => label === "Delivery" ? <DeliveryMetric key={label} project={context.projectId} /> : label === "Attention" ? <AttentionMetric key={label} projectId={context.projectId} /> : label === "Completed" ? <DigestMetric key={label} project={context.projectId} /> : (
-          <div className="metric" key={label}>
-            <span className="eyebrow">{label}</span>
-            <strong aria-label="Unavailable">—</strong>
-            <small>{detail}</small>
-          </div>
-        ))}
+        <DeliveryMetric project={context.projectId} />
+        <AttentionMetric projectId={context.projectId} />
+        <DigestMetric project={context.projectId} />
+        <ReadyMetric projectId={context.projectId} />
       </div>
       <div className="studio-overview">
         <Panel
@@ -433,30 +426,6 @@ function Overview({
           <CatchUpView project={context.projectId} compact />
         </Panel>
       </div>
-    </>
-  );
-}
-
-function FeatureRoute({ id, title }: { id: string; title: string }) {
-  return (
-    <>
-      <PageHeading
-        title={title}
-        description={
-          id === "beads"
-            ? "Manually planned by you. Carried through Delivery by Nightweaver."
-            : "A dedicated place for your current project."
-        }
-      />
-      <Panel title={title} accessory={<Status>Not connected</Status>}>
-        <Unavailable
-          title={`${title} is taking shape.`}
-          href={`/#${legacySection[id]}`}
-        >
-          This Studio route is ready for integration. Use the existing console
-          for current observations and operational actions.
-        </Unavailable>
-      </Panel>
     </>
   );
 }

@@ -3,8 +3,8 @@
 Studio's current-project Attention route and overview preview consume the shared
 `attention` observation. Dedicated `/projects/:projectId/beads/:beadId` routes
 subscribe to the exact `workspace:<beadId>` key. They reuse the tab's coordinator;
-there is no feature-owned response cache, polling loop or EventSource. Existing
-root-console routes remain available. Summary, History and Output are native
+there is no feature-owned response cache, polling loop or EventSource. Legacy
+root-console links translate into Studio routes. Summary, History and Output are native
 query links, with direct loads and browser history supported by the shell.
 
 Attention is an explicit selection: incoming rows never select themselves.

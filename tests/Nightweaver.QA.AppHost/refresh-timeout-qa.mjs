@@ -30,7 +30,7 @@ try {
       return new Promise(resolve => { probe.releases[index] = () => resolve(new Response(body, { status: response.status, headers: response.headers })); });
     };
   });
-  const refresh = page.getByRole('button', { name: /^Refresh/ });
+  const refresh = page.locator('.synchronization').getByRole('button', { name: /^Refresh/ });
   await refresh.click();
   await page.waitForFunction(() => window.refreshProbe.releases[0]);
   await page.waitForFunction(() => window.refreshProbe.aborted, null, { timeout: 20000 });

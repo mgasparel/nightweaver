@@ -59,7 +59,7 @@ function Evidence({ message, fallback }: { message?: Message | null; fallback: s
     {message.sections.map((section, index) => section.details
       ? <details key={`${section.label}:${index}`}><summary>{section.label}</summary><Markdown text={section.text} /></details>
       : <section key={`${section.label}:${index}`}><h3>{section.label}</h3><Markdown text={section.text} /></section>)}
-    <details><summary>Original source message</summary><pre className="bead-original">{message.original}</pre></details>
+    <details><summary>Original source message</summary><pre className="bead-original" tabIndex={0} aria-label="Original source message">{message.original}</pre></details>
   </div>;
 }
 
@@ -103,7 +103,9 @@ function Guidance({ project, id, item, current }: { project: string; id: string;
   const blocked = !current || !item || state.pending || state.uncertain;
   const invalidDraft = draft.includes("\0") || new TextEncoder().encode(draft.trim()).length > 16 * 1024;
   useEffect(() => { if (confirm) cancel.current?.focus(); }, [confirm]);
-  useEffect(() => { if (!current || !item?.canAbort) setConfirm(false); }, [current, item?.canAbort]);
+  // A transport replacement temporarily blocks submission; it does not revoke
+  // this exact Bead's confirmation or its focused Cancel control.
+  useEffect(() => { if (!item?.canAbort) setConfirm(false); }, [item?.canAbort]);
   return <FocusBoundary><section className="guidance" aria-label={`Actions for ${id}`}>
     <h2 tabIndex={-1}>Human guidance</h2>
     <p>Save Note preserves the pause. Resume and Retry allow ordinary scheduling; they do not launch an Agent directly. The host checks fresh tracker state before every action, including when the displayed source is stale.</p>
@@ -178,6 +180,15 @@ export function AttentionView({ project, compact = false }: { project: string; c
   </FocusBoundary>;
 }
 
+function Relations({ data, project }: { data: WorkspaceData; project: string }) {
+  const [count, setCount] = useState(15);
+  return <details><summary>Relations · {data.relations.length}</summary>
+    <p>Incoming {data.relationObservation.incoming} · Outgoing {data.relationObservation.outgoing}</p>
+    <ul>{data.relations.slice(0, count).map(row => <li key={`${row.direction}:${row.type}:${row.id}`}><Link to={beadPath(project, row.id)}>{row.id} · {row.title ?? "Title unavailable"}</Link> · {row.type} · {row.direction} · {row.role} · Type: {row.issueType ?? "Unavailable"} · {row.status ?? "Status unavailable"}</li>)}</ul>
+    {data.relations.length > count && <button className="button" onClick={() => setCount(value => value + 15)}>Show 15 more relations</button>}
+  </details>;
+}
+
 function History({ data }: { data: WorkspaceData }) {
   const [count, setCount] = useState(8);
   const active = data.comments.find(comment => comment.id === data.history.activeCommentId);
@@ -200,7 +211,6 @@ export function BeadWorkspace({ project }: { project: string }) {
     <Heading title={`Bead ${beadId}`}>Full Bead Workspace · current project</Heading>
     <WorkspaceTabs />
     <Panel title="Bead unavailable"><p>This Bead identifier cannot be queried. No observations or actions are available.</p></Panel>
-    <a className="text-link" href={`/#bead/${encodeURIComponent(beadId)}`}>Open existing Bead Workspace</a>
   </FocusBoundary>;
   return <WorkspaceIdentity key={beadId} project={project} id={beadId} />;
 }
@@ -234,13 +244,25 @@ function WorkspaceIdentity({ project, id }: { project: string; id: string }) {
         <div className="bead-facts"><span>{valid.bead.type} · P{valid.bead.priority}</span><span>{valid.bead.stage ?? "No stage"}</span>
           <span>Repairs {valid.bead.repairCycles ?? 0}</span><span>Assignee: {valid.bead.assignee ?? "Unassigned"}</span></div>
         <p className="bead-labels">{valid.bead.labels.join(" · ") || "No labels"}</p>
+        {valid.presentation && <>
+          <p className="bead-notice">{valid.presentation.role} · {valid.presentation.summary}</p>
+          <details><summary>Workflow and source facts</summary>
+            <dl className="bead-environment">{([
+              ["Role", valid.presentation.role], ["Tracked stage", valid.presentation.trackedStage],
+              ["Planning", valid.presentation.planning], ["Publication", valid.presentation.publication],
+              ["Pause", valid.presentation.pause], ["Ownership", valid.presentation.ownership],
+              ["Repairs used", valid.presentation.repairsUsed], ["Configured repair limit", valid.presentation.repairsMax],
+              ["Diagnostic", valid.presentation.diagnostic]
+            ] as const).map(([name, value]) =>
+              <div key={name}><dt>{name}</dt><dd>{value ?? "Unavailable"}</dd></div>)}</dl>
+            <p>These are tracker observations; ownership and stage do not establish running execution.</p>
+            <pre className="bead-original" tabIndex={0} aria-label="Original tracker metadata">{valid.sourceMetadata ?? "No source metadata recorded."}</pre>
+          </details>
+        </>}
         <PlanningAuthorization project={project} data={valid} current={!missing && !snapshot.stale && snapshot.observation?.health !== "unavailable"} />
         {[["Description", valid.bead.description], ["Acceptance criteria", valid.bead.acceptanceCriteria]].map(([label, text]) => <section key={label}><h3>{label}</h3><Markdown text={text || "Not provided."} /></section>)}
         <details><summary>Design and notes</summary><Markdown text={valid.bead.design || "No design recorded."} /><Markdown text={valid.bead.notes || "No notes recorded."} /></details>
-        <details><summary>Relations · {valid.relations.length}</summary>
-          <p>Incoming {valid.relationObservation.incoming} · Outgoing {valid.relationObservation.outgoing}</p>
-          <ul>{valid.relations.map(row => <li key={`${row.direction}:${row.type}:${row.id}`}><Link to={beadPath(project, row.id)}>{row.id} · {row.title ?? "Title unavailable"}</Link> · {row.type} · {row.direction} · {row.role}</li>)}</ul>
-        </details>
+        <Relations data={valid} project={project} />
         <details><summary>Retained environment · {valid.environment.state}</summary><dl className="bead-environment">
           {([["Worktree", valid.environment.worktreePath], ["Branch", valid.environment.branch], ["HEAD", valid.environment.head],
             ["Git status", valid.environment.gitStatus], ["Environment observed", valid.environment.observedAt], ["Environment source", valid.environment.source],
@@ -258,6 +280,5 @@ function WorkspaceIdentity({ project, id }: { project: string; id: string }) {
       </Panel>}
     </>}
     {!valid && interactions.get(project, id) && <Guidance project={project} id={id} current={false} />}
-    <a className="text-link" href={`/#bead/${encodeURIComponent(id)}`}>Open existing Bead Workspace</a>
   </FocusBoundary>;
 }

@@ -86,10 +86,11 @@ public sealed class Program
         var app = builder.Build();
         // Resolve before listening, after all host configuration providers have been applied.
         _ = app.Services.GetRequiredService<ProjectConfig>();
-        app.UseDefaultFiles();
         app.UseStaticFiles();
-        // Candidate SPA routes only: keep the existing console and API 404 behavior
-        // during migration. Assets are served by this host; Node is build-time only.
+        // Serve Studio at the console entry points; narrowly scoped fallbacks
+        // preserve API and missing-asset 404s. Node is build-time only.
+        app.MapFallbackToFile("/", "studio/index.html");
+        app.MapFallbackToFile("/index.html", "studio/index.html");
         app.MapGet("/api/studio/context", (HttpContext context, ProjectConfig project) =>
         {
             context.Response.Headers.CacheControl = "no-store";
@@ -97,8 +98,9 @@ public sealed class Program
         });
         app.MapFallbackToFile("/studio/{*path:nonfile}", "studio/index.html");
         // Bead IDs may contain hierarchy dots; the generic nonfile constraint
-        // treats them as file extensions. Scope this exception to Workspace IDs.
-        app.MapFallbackToFile("/projects/{projectId}/beads/{beadId}", "studio/index.html");
+        // treats them as file extensions. Scope this exception to Workspace IDs,
+        // excluding static-asset suffixes even at the exact Workspace depth.
+        app.MapFallbackToFile("/projects/{projectId}/beads/{beadId:regex(^(?!.*[.](js|mjs|css|map|json|html|htm|svg|png|jpg|jpeg|gif|webp|avif|ico|woff|woff2|ttf|otf|wasm|txt|xml)$)[A-Za-z0-9][A-Za-z0-9_.-]*$)}", "studio/index.html");
         app.MapFallbackToFile("/projects/{*path:nonfile}", "studio/index.html");
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
         app.MapOperationalObservations();

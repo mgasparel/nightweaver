@@ -287,13 +287,7 @@ h1:focus:not(:focus-visible) {
   font-weight: 600;
   color: var(--ink);
 }
-.console-link {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 11px;
-  color: var(--muted);
-}
+
 .canvas {
   max-width: 1570px;
   margin: auto;
@@ -716,9 +710,6 @@ dialog::backdrop {
   .topbar > .status {
     display: none;
   }
-  .console-link {
-    font-size: 10px;
-  }
   .canvas {
     padding: 23px 19px 60px;
   }
@@ -864,7 +855,7 @@ summary:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
 @media(max-width:900px) { .attention-layout { grid-template-columns:minmax(0,1fr); } }
 @media(max-width:600px) { .bead-actions > .button { width:100%; } .bead-environment > div { grid-template-columns:minmax(0,1fr); gap:2px; } .bead-freshness { align-items:flex-start; } }
 
-.bead-original { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.65; padding:14px; background:var(--bg); border-radius:6px; }
+.bead-original { white-space:pre-wrap; overflow-wrap:anywhere; max-height:24rem; overflow:auto; font-size:12px; line-height:1.65; padding:14px; background:var(--bg); border-radius:6px; }
 .attention-board { display:grid; grid-template-columns:minmax(0, .9fr) minmax(0, 1.1fr); align-items:start; gap:24px; }
 .attention-board > div { min-width:0; }
 .attention-board .attention-inventory { max-height:760px; overflow:auto; padding:4px; }

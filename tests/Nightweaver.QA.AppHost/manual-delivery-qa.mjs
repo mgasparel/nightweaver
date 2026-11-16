@@ -188,8 +188,8 @@ try {
       mutationRequests.push({ url, request });
   });
 
-  await page.goto(baseUrl, { waitUntil: 'networkidle' });
-  await page.getByRole('heading', { name: 'Nightweaver console' }).waitFor();
+  await page.goto(baseUrl + '/projects/manualqa/delivery');
+  await page.getByRole('heading', { name: 'Delivery floor' }).waitFor();
   const state = await waitForLiveFactoryState();
   const slot = state.snapshot.delivery.slots.find(candidate => candidate.bead_id === manifest.tasks.parentless);
   if (slot?.status !== 'running' || !(slot.invocation?.process_id > 0))
@@ -197,7 +197,7 @@ try {
   const runtimeId = state.snapshot.runtime_id;
   const agentPid = slot.invocation.process_id;
 
-  const card = page.locator('#delivery-slots .factory-slot').filter({ hasText: manifest.tasks.parentless });
+  const card = page.locator('[aria-label="Delivery pool"] .delivery-bay').filter({ hasText: manifest.tasks.parentless });
   await card.locator('[data-open-telemetry-slot]').click();
   const dialog = page.getByRole('dialog', { name: new RegExp(manifest.tasks.parentless) });
   await dialog.waitFor({ state: 'visible' });
@@ -208,7 +208,7 @@ try {
     throw new Error('The live invocation drawer metadata does not identify the gated task.');
 
   // Close the real EventSource and page while its native Agent is still held at the gate.
-  await page.getByRole('button', { name: 'Close invocation telemetry' }).click();
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
   await dialog.waitFor({ state: 'hidden' });
   await page.close();
   page = null;
@@ -229,8 +229,8 @@ try {
     if (request.method() === 'POST' && /^\/api\/beads\/[^/]+\/(decide|retry|abort)$/.test(url.pathname))
       mutationRequests.push({ url, request });
   });
-  await page.goto(baseUrl, { waitUntil: 'networkidle' });
-  await page.getByRole('heading', { name: 'Nightweaver console' }).waitFor();
+  await page.goto(baseUrl + '/projects/manualqa/delivery');
+  await page.getByRole('heading', { name: 'Delivery floor' }).waitFor();
 
   await waitForClosed(page.request, manifest.tasks.parentless);
   await waitForClosed(page.request, manifest.tasks.productTask);
@@ -243,7 +243,7 @@ try {
 
   await routeTo(manifest.tasks.decision);
   await waitForTitle('QA manual pilot product decision');
-  await page.locator('#workspace-guidance-input').fill('Keep the compatibility boundary unchanged.');
+  await page.getByRole('textbox', { name: `Guidance for ${manifest.tasks.decision}` }).fill('Keep the compatibility boundary unchanged.');
   const decisionResponsePromise = page.waitForResponse(response => response.request().method() === 'POST'
     && new URL(response.url()).pathname === `/api/beads/${encodeURIComponent(manifest.tasks.decision)}/decide`);
   await page.getByRole('button', { name: 'Send & Resume' }).click();
@@ -253,7 +253,7 @@ try {
       || decisionAction.action !== 'resume' || decisionAction.resolved !== true
       || decisionAction.commentRecorded !== true || decisionAction.stateChanged !== true)
     throw new Error(`Send & Resume response did not confirm the guarded browser action: ${JSON.stringify(decisionAction)}.`);
-  await page.locator('#workspace-guidance-context').getByText('No active human pause is available for this Bead.', { exact: true }).waitFor();
+  await page.getByText('The previous action is unavailable:', { exact: false }).waitFor();
   const decision = await getDetail(page.request, manifest.tasks.decision);
   if (decision.bead.labels.includes('product-decision-required') || decision.attention !== null
       || !decision.comments.some(comment => comment.kind === 'human-guidance' && comment.body.includes('Keep the compatibility boundary unchanged.')))
@@ -302,16 +302,16 @@ try {
       || retry.bead.repairCycles !== 0 || retry.bead.status !== 'in_progress' || retry.bead.assignee !== 'nightweaver:manualqa'
       || !retry.comments.some(comment => comment.kind === 'human-action' && comment.body.includes('retry')))
     throw new Error(`The guarded same-origin Retry did not reset and dispatch the Plan task: ${JSON.stringify(retry.bead)}.`);
-  await page.goto(baseUrl, { waitUntil: 'networkidle' });
-  await page.getByRole('heading', { name: 'Nightweaver console' }).waitFor();
-  const retryCard = page.locator('#delivery-slots .factory-slot').filter({ hasText: manifest.tasks.paused });
+  await page.goto(baseUrl + '/projects/manualqa/delivery');
+  await page.getByRole('heading', { name: 'Delivery floor' }).waitFor();
+  const retryCard = page.locator('[aria-label="Delivery pool"] .delivery-bay').filter({ hasText: manifest.tasks.paused });
   await retryCard.locator('[data-open-telemetry-slot]').click();
   const retryDialog = page.getByRole('dialog', { name: new RegExp(manifest.tasks.paused) });
   await retryDialog.waitFor({ state: 'visible' });
   const retryLiveLine = `manual-delivery-live bead=${manifest.tasks.paused} role=implementer stage=stage:implement`;
   await page.waitForFunction(line => document.querySelector('#invocation-output')?.textContent.includes(line), retryLiveLine,
     { timeout: 20000 });
-  await page.getByRole('button', { name: 'Close invocation telemetry' }).click();
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
   await retryDialog.waitFor({ state: 'hidden' });
   const worktree = join(manifest.nightweaverRoot, 'worktrees', 'manualqa', manifest.tasks.paused);
   const retainedBranch = execFileSync('git', ['-C', worktree, 'branch', '--show-current'], { encoding: 'utf8' }).trim();

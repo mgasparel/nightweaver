@@ -33,7 +33,7 @@ try {
   });
   await page.waitForFunction(() => window.readProbe.releases[0]);
   const refresh = page.waitForResponse(response => response.url().endsWith('/operations/v1/projects/qa/refresh') && response.request().method() === 'POST');
-  await page.getByRole('button', { name: /^Refresh/ }).click();
+  await page.locator('.synchronization').getByRole('button', { name: /^Refresh/ }).click();
   assert.equal((await refresh).status(), 202);
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.locator('.synchronization [role="alert"]').waitFor({ timeout: 20000 });
@@ -46,7 +46,7 @@ try {
   await page.waitForFunction(() => !document.querySelector('.synchronization [role="status"]')?.textContent.includes('Awaiting current data'));
   const recovered = await page.locator('#attention-navigation-count').innerText();
   await page.evaluate(() => window.readProbe.releases[0]());
-  await page.getByRole('button', { name: /^Refresh/ }).waitFor();
+  await page.locator('.synchronization').getByRole('button', { name: /^Refresh/ }).waitFor();
   assert.equal(await page.locator('#attention-navigation-count').innerText(), recovered);
   assert.deepEqual(errors, []);
   assert.deepEqual(posts, ['/api/operations/v1/projects/qa/refresh']);

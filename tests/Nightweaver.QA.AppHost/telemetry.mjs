@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 const url = process.env.NIGHTWEAVER_QA_URL;
 if (!url) throw new Error('Set NIGHTWEAVER_QA_URL to the web endpoint from aspire describe.');
 
-const studio = process.argv.includes('--studio');
+const studio = true;
 const browser = await chromium.launch({ headless: true });
 let releaseFiles = [];
 try {
@@ -39,7 +39,7 @@ try {
     if (pending) captureReconnectHeader(event.requestId, pending);
   });
   cdp.on('Network.requestWillBeSentExtraInfo', event => captureReconnectHeader(event.requestId, event.headers));
-  await page.goto(studio ? url + '/projects/qa/delivery' : url, { waitUntil: 'networkidle' });
+  await page.goto(studio ? url + '/projects/qa/delivery' : url);
   await page.getByRole('heading', { name: studio ? 'Delivery floor' : 'Nightweaver console', exact: true }).waitFor();
   await page.waitForFunction(() => {
     const cards = Array.from(document.querySelectorAll('.delivery-bay, #delivery-slots .factory-slot'));

@@ -56,7 +56,10 @@ try {
     await page.locator(`nav a[href="/projects/qa/${route}"]`).click();
     await page.waitForURL(`**/projects/qa/${route}`);
   }
-  assert.equal((await page.evaluate(() => window.streamEvidence)).opened, 1, 'route mounting shares one connection');
+  const mounted = await page.evaluate(() => window.streamEvidence);
+  assert.equal(mounted.maximum, 1, 'route subscriptions share one active connection');
+  assert.equal(mounted.active, 1);
+  const helloBeforeReconnect = mounted.hello;
   // Deliberately miss notifications while leaving the real stream and source alive.
   await page.evaluate(() => { window.streamEvidence.drop = true; });
   const created = JSON.parse(execFileSync('bd', ['--sandbox', 'create', '--title', 'Operational stream QA pause', '--type', 'task', '--labels', 'needs-human', '--json'],
@@ -70,9 +73,9 @@ try {
     window.currentOperationStream.close();
     window.currentOperationStream.dispatchEvent(new Event('error'));
   });
-  await page.waitForFunction(() => window.streamEvidence.hello >= 2 && document.querySelector('.synchronization')?.textContent.includes('Live connection'), null, { timeout: 90000 });
+  await page.waitForFunction(before => window.streamEvidence.hello > before && document.querySelector('.synchronization')?.textContent.includes('Live connection'), helloBeforeReconnect, { timeout: 90000 });
   const refresh = page.waitForResponse(response => response.url().endsWith('/operations/v1/projects/qa/refresh') && response.request().method() === 'POST');
-  await page.getByRole('button', { name: /^Refresh/ }).click();
+  await page.locator('.synchronization').getByRole('button', { name: /^Refresh/ }).click();
   assert.equal((await refresh).status(), 202);
   for (const width of [1440, 375, 720]) {
     await page.setViewportSize({ width, height: 1000 });
