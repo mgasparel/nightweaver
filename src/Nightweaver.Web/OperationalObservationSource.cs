@@ -44,7 +44,8 @@ internal sealed class OperationalObservationSource(
     internal long CommandCount { get; private set; }
     internal double NativeMilliseconds => nativeMilliseconds;
 
-    private sealed record History(IReadOnlyList<BeadsCommentSnapshot> Comments, DateTimeOffset ReadAt, int Bytes);
+    private sealed record History(IReadOnlyList<BeadsCommentSnapshot> Comments, DateTimeOffset ReadAt, int Bytes,
+        ObservationSourceState Source);
     private sealed class WorkspaceCycle(BeadSnapshot initial, DateTimeOffset started)
     {
         internal IReadOnlyList<BeadWorkspaceRelation> Relations { get; set; } = [];
@@ -394,7 +395,10 @@ internal sealed class OperationalObservationSource(
                         }
                         else if (histories.TryGetValue(id, out var history) && commentsReadThisSweep.Contains(id)
                             && states[sourceId].Error is null)
+                        {
                             cycle.Comments = history.Comments;
+                            capturedState = history.Source;
+                        }
                         else
                         {
                             if (commentsThisSweep >= 4)
@@ -531,6 +535,7 @@ internal sealed class OperationalObservationSource(
         var sample = Sample(items, attentionStarted, InventorySource.Concat(paused.Select(bead => "comments:" + bead.Id)).ToArray());
         var sources = sample.Sources.ToDictionary();
         sources["inventory"] = attentionInventoryState!;
+        foreach (var bead in paused) sources["comments:" + bead.Id] = histories[bead.Id].Source;
         result["attention"] = sample with { Sources = sources, ObservedAt = sources.Values.Min(state => state.ObservedAt) };
         attentionBeads = null;
         attentionPresentations.Clear();
@@ -542,7 +547,7 @@ internal sealed class OperationalObservationSource(
         if (!histories.ContainsKey(id) && histories.Count >= 64
             || histories.Where(pair => pair.Key != id).Sum(pair => pair.Value.Bytes) + bytes > 16 * 1024 * 1024)
             throw new ToolExecutionException("comment cache exceeded read limit");
-        var history = new History(comments, clock.GetUtcNow(), bytes);
+        var history = new History(comments, clock.GetUtcNow(), bytes, states["comments:" + id]);
         var previous = histories.GetValueOrDefault(id);
         if (!memory.TryReplace(previous is null ? [] : [previous], [(history, bytes)]))
             throw new ToolExecutionException("shared observation cache exceeded read limit");
