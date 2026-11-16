@@ -25,10 +25,11 @@ including Git objects and tracker stores. The small `GitFixture` initializes one
 empty Git baseline; manual-pilot profile templates seed independent copies of
 one empty Git/Beads baseline. Consumer writes must never reach a template or
 another copy. Existing isolation cases check configuration, tracker and origin
-independence. Provisioning snapshots overlap only independent read-only Git
-observations of a quiescent fixture, with optional locks disabled, and settle all
-readers before returning. Index bytes, working files, HEAD, branch and status
-assertions remain intact. These setup changes retain all cases and native
+independence. Provisioning preservation snapshots obtain HEAD, branch and status
+from one native `git status --porcelain=v2 --branch` command instead of launching
+three processes or adding concurrent native work. Index bytes, working files,
+HEAD, branch and status assertions
+remain intact. These setup changes retain all cases and native
 boundaries; only a complete timed command establishes their suite cost.
 
 Test-owned managed launches use `FixtureProcess.Start`, including shared manual

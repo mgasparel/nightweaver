@@ -338,12 +338,14 @@ internal sealed class ProvisioningGitFixture : IDisposable
 
     internal RootCheckoutState TargetCheckout()
     {
-        // Independent observations of a quiescent fixture; optional Git locks are
-        // disabled by RunGit. Settle every reader before returning or throwing.
-        var head = Task.Run(() => Git(Target, ["rev-parse", "HEAD"]).Output.Trim());
-        var branch = Task.Run(() => Git(Target, ["symbolic-ref", "--quiet", "HEAD"]).Output.Trim());
-        var status = Task.Run(() => Git(Target, ["status", "--porcelain=v1", "--untracked-files=all"]).Output);
-        Task.WhenAll(head, branch, status).GetAwaiter().GetResult();
+        // Porcelain v2 includes HEAD and branch in the same native observation.
+        // Avoid three separate process launches for every preservation snapshot.
+        var status = Git(Target, ["status", "--porcelain=v2", "--branch", "--untracked-files=all"]).Output;
+        var lines = status.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        const string headPrefix = "# branch.oid ";
+        const string branchPrefix = "# branch.head ";
+        var head = lines.Single(line => line.StartsWith(headPrefix, StringComparison.Ordinal))[headPrefix.Length..];
+        var branch = lines.Single(line => line.StartsWith(branchPrefix, StringComparison.Ordinal))[branchPrefix.Length..];
         var index = File.ReadAllBytes(Path.Combine(Target, ".git", "index"));
         var content = Directory.EnumerateFileSystemEntries(Target)
             .Where(path => !string.Equals(Path.GetFileName(path), ".git", StringComparison.OrdinalIgnoreCase))
@@ -359,7 +361,7 @@ internal sealed class ProvisioningGitFixture : IDisposable
             })
             .Order(StringComparer.Ordinal).ToArray();
         return new(Convert.ToHexString(SHA256.HashData(index)), string.Join("\n", content),
-            head.Result, branch.Result, status.Result);
+            head, branch, status);
     }
 
     internal GitResult Git(string cwd, IReadOnlyList<string> arguments, bool allowFailure = false) => RunGit(cwd, arguments, allowFailure);
