@@ -45,6 +45,19 @@ six-thread limit or assertion is relaxed.
 
 The retained suite keeps broad, fast decision and security checks in unit/coordinator tests and one representative set of expensive process boundaries:
 
+The duplicate-failure classifier timeout smoke uses a controlled role clock and
+a startup release file. Its former two-second real-time budget could expire
+before the managed fake CLI wrote either PID, testing startup speed instead of
+Job containment. The retained native journey now holds startup, consumes one
+second of the same two-second role budget, releases startup, waits for both
+root/descendant handshakes, then expires the remaining second. Both actual
+process termination assertions remain. Real handshake/result/cleanup bounds and
+six-thread scheduling are unchanged; failure cancels and settles the invocation
+before fixture disposal. `AgentInvocationDeadlineTests` covers startup/prompt
+delivery and time already consumed inside native launch without real processes
+or sleeps. Production uses `TimeProvider.System`, with the role deadline still
+starting before native launch; cleanup continues to use its separate real budget.
+
 | Concern | Detailed fast coverage | Retained real-tool boundary |
 | --- | --- | --- |
 | Ownership, read-only roles, failure classification, and budget precedence | `AgentPostExitVerifierTests`, `AuthorityMatrixTests`, retry and coordinator tests | One complete Delivery handoff and one Merger completion-owner/real Beads boundary |

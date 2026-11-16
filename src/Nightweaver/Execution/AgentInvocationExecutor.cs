@@ -24,7 +24,7 @@ internal sealed class AgentInvocationExecutor
         PreparedAgentInvocation invocation,
         CancellationToken cancellationToken)
     {
-        var result = await ExecuteCoreAsync(hostPaths, project, invocation, null, null, cancellationToken).ConfigureAwait(false);
+        var result = await ExecuteCoreAsync(hostPaths, project, invocation, null, null, TimeProvider.System, cancellationToken).ConfigureAwait(false);
         return result.Execution;
     }
 
@@ -36,7 +36,7 @@ internal sealed class AgentInvocationExecutor
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(processLauncher);
-        var result = await ExecuteCoreAsync(hostPaths, project, invocation, null, processLauncher, cancellationToken)
+        var result = await ExecuteCoreAsync(hostPaths, project, invocation, null, processLauncher, TimeProvider.System, cancellationToken)
             .ConfigureAwait(false);
         return result.Execution;
     }
@@ -49,7 +49,7 @@ internal sealed class AgentInvocationExecutor
         CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCapturedBytes);
-        return ExecuteCoreAsync(hostPaths, project, invocation, maximumCapturedBytes, null, cancellationToken);
+        return ExecuteCoreAsync(hostPaths, project, invocation, maximumCapturedBytes, null, TimeProvider.System, cancellationToken);
     }
 
     internal static Task<AgentStandardOutputCaptureResult> ExecuteWithStandardOutputCaptureAsync(
@@ -58,11 +58,23 @@ internal sealed class AgentInvocationExecutor
         PreparedAgentInvocation invocation,
         int maximumCapturedBytes,
         IAgentProcessLauncher processLauncher,
+        CancellationToken cancellationToken) =>
+        ExecuteWithStandardOutputCaptureAsync(hostPaths, project, invocation, maximumCapturedBytes,
+            processLauncher, TimeProvider.System, cancellationToken);
+
+    internal static Task<AgentStandardOutputCaptureResult> ExecuteWithStandardOutputCaptureAsync(
+        HostPaths hostPaths,
+        ProjectSlug project,
+        PreparedAgentInvocation invocation,
+        int maximumCapturedBytes,
+        IAgentProcessLauncher processLauncher,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCapturedBytes);
         ArgumentNullException.ThrowIfNull(processLauncher);
-        return ExecuteCoreAsync(hostPaths, project, invocation, maximumCapturedBytes, processLauncher, cancellationToken);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        return ExecuteCoreAsync(hostPaths, project, invocation, maximumCapturedBytes, processLauncher, timeProvider, cancellationToken);
     }
 
     private static async Task<AgentStandardOutputCaptureResult> ExecuteCoreAsync(
@@ -71,6 +83,7 @@ internal sealed class AgentInvocationExecutor
         PreparedAgentInvocation invocation,
         int? maximumCapturedBytes,
         IAgentProcessLauncher? processLauncher,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(hostPaths);
@@ -109,7 +122,7 @@ internal sealed class AgentInvocationExecutor
                 throw new InvalidDataException($"Prepared timeout '{invocation.Timeout}' must be positive.");
 
             // The role wall-clock budget starts immediately before native launch and includes prompt delivery.
-            var launchStarted = Stopwatch.GetTimestamp();
+            var launchStarted = timeProvider.GetTimestamp();
             nativeLaunchAttempted = true;
             if (!ContinuousAgentLaunchContext.TryLaunchAgent(() => processLauncher is null
                     ? WindowsProcessLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment)
@@ -127,7 +140,7 @@ internal sealed class AgentInvocationExecutor
             stdinWrite = WriteInputAndCloseAsync(launchedChild.StandardInput, Encoding.UTF8.GetBytes(invocation.StandardInput));
 
             var outcome = await WaitForOutcomeAsync(rootExit, stdinWrite, stdoutPump, stderrPump,
-                invocation.Timeout, launchStarted, cancellationToken).ConfigureAwait(false);
+                invocation.Timeout, launchStarted, timeProvider, cancellationToken).ConfigureAwait(false);
             status = outcome.Status;
             exitCode = outcome.ExitCode;
         }
@@ -248,13 +261,14 @@ internal sealed class AgentInvocationExecutor
         return environment;
     }
 
-    private static async Task<(AgentExecutionStatus Status, int? ExitCode)> WaitForOutcomeAsync(
+    internal static async Task<(AgentExecutionStatus Status, int? ExitCode)> WaitForOutcomeAsync(
         Task<uint> rootExit,
         Task stdinWrite,
         Task stdoutPump,
         Task stderrPump,
         TimeSpan timeout,
         long started,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         var remainingTasks = new HashSet<Task> { rootExit, stdinWrite, stdoutPump, stderrPump };
@@ -262,43 +276,55 @@ internal sealed class AgentInvocationExecutor
             ? Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken)
             : Task.Delay(Timeout.InfiniteTimeSpan, CancellationToken.None);
 
-        while (true)
+        using var timeoutStop = new CancellationTokenSource();
+        Task? timeoutTask = null;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (rootExit.IsCompleted)
+            while (true)
             {
-                var code = await rootExit.ConfigureAwait(false);
-                if (Stopwatch.GetElapsedTime(started) >= timeout)
-                    return (AgentExecutionStatus.TimedOut, unchecked((int)code));
-                if (!stdinWrite.IsCompleted)
-                    throw new IOException("Agent CLI exited before the prepared stdin payload had been delivered.");
-                await stdinWrite.ConfigureAwait(false);
-                if (stdoutPump.IsCompleted) await stdoutPump.ConfigureAwait(false);
-                if (stderrPump.IsCompleted) await stderrPump.ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
-                return (AgentExecutionStatus.Exited, unchecked((int)code));
-            }
+                if (rootExit.IsCompleted)
+                {
+                    var code = await rootExit.ConfigureAwait(false);
+                    if (timeProvider.GetElapsedTime(started) >= timeout)
+                        return (AgentExecutionStatus.TimedOut, unchecked((int)code));
+                    if (!stdinWrite.IsCompleted)
+                        throw new IOException("Agent CLI exited before the prepared stdin payload had been delivered.");
+                    await stdinWrite.ConfigureAwait(false);
+                    if (stdoutPump.IsCompleted) await stdoutPump.ConfigureAwait(false);
+                    if (stderrPump.IsCompleted) await stderrPump.ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return (AgentExecutionStatus.Exited, unchecked((int)code));
+                }
 
-            var elapsed = Stopwatch.GetElapsedTime(started);
-            if (elapsed >= timeout) return (AgentExecutionStatus.TimedOut, null);
-            var left = timeout - elapsed;
-            var delay = left > TimeSpan.FromDays(30) ? TimeSpan.FromDays(30) : left;
-            var timeoutTask = Task.Delay(delay, CancellationToken.None);
-            var all = remainingTasks.Append(timeoutTask).Append(cancellationTask).ToArray();
-            var completed = await Task.WhenAny(all).ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (completed == cancellationTask) throw new OperationCanceledException(cancellationToken);
-            if (completed == timeoutTask)
-            {
-                if (rootExit.IsCompleted) continue;
-                return (AgentExecutionStatus.TimedOut, null);
-            }
+                var elapsed = timeProvider.GetElapsedTime(started);
+                if (elapsed >= timeout) return (AgentExecutionStatus.TimedOut, null);
+                var left = timeout - elapsed;
+                var delay = left > TimeSpan.FromDays(30) ? TimeSpan.FromDays(30) : left;
+                timeoutTask ??= Task.Delay(delay, timeProvider, timeoutStop.Token);
+                var all = remainingTasks.Append(timeoutTask).Append(cancellationTask).ToArray();
+                var completed = await Task.WhenAny(all).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (completed == cancellationTask) throw new OperationCanceledException(cancellationToken);
+                if (completed == timeoutTask)
+                {
+                    if (rootExit.IsCompleted) continue;
+                    // A very long role can exceed the maximum single timer interval.
+                    if (timeProvider.GetElapsedTime(started) < timeout)
+                    {
+                        timeoutTask = null;
+                        continue;
+                    }
+                    return (AgentExecutionStatus.TimedOut, null);
+                }
 
-            if (completed == rootExit) continue;
-            if (!remainingTasks.Remove(completed)) continue;
-            // A completed input/pump task is awaited here so early stdin closure and pipe/log faults are failures.
-            await completed.ConfigureAwait(false);
+                if (completed == rootExit) continue;
+                if (!remainingTasks.Remove(completed)) continue;
+                // A completed input/pump task is awaited here so early stdin closure and pipe/log faults are failures.
+                await completed.ConfigureAwait(false);
+            }
         }
+        finally { timeoutStop.Cancel(); }
     }
 
     private static async Task WriteInputAndCloseAsync(Stream input, byte[] payload)

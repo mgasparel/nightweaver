@@ -1144,6 +1144,8 @@ internal static class Program
 
     private static int RunClassifierAction(string action)
     {
+        var startupRelease = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_STARTUP_RELEASE");
+        if (startupRelease is not null) WaitForFile(startupRelease);
         using var input = Console.OpenStandardInput();
         using var inputBytes = new MemoryStream();
         input.CopyTo(inputBytes);
