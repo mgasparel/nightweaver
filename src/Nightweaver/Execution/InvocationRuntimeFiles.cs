@@ -258,7 +258,9 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         ValidateRegularFile(source, temporaryPath, "factory snapshot temporary file");
         // Use the Win32 full-path form with a null root. The caller keeps every
         // component of this validated destination pinned until publication settles.
-        var name = System.Text.Encoding.Unicode.GetBytes(ToExtendedLengthPath(path));
+        // Win32 paths are UTF-16 code units, including unmatched surrogates. An
+        // encoder's replacement fallback could redirect into a different directory.
+        var name = MemoryMarshal.AsBytes(ToExtendedLengthPath(path).AsSpan()).ToArray();
         var header = new FileRenameInformation
         {
             Flags = RenameReplaceIfExists | RenamePosixSemantics,

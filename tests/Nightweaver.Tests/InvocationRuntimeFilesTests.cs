@@ -53,10 +53,16 @@ public sealed class InvocationRuntimeFilesTests
     {
         Assert.True(OperatingSystem.IsWindows(), "Runtime native file boundaries use Windows no-follow handles.");
         using var temp = new TempDirectory();
-        var root = Path.Combine(temp.Path, "host with spaces");
+        var root = Path.Combine(temp.Path, minimumHostLength == 0 ? "host with spaces" : "host with spaces\uD800");
         while (root.Length < minimumHostLength) root = Path.Combine(root, "nested host");
         var paths = new HostPaths(root);
         var project = ProjectSlug.Parse("runtime-paths");
+        var snapshotAlias = minimumHostLength == 0 ? null : paths.FactoryTelemetryPath(project).Replace('\uD800', '\uFFFD');
+        if (snapshotAlias is not null)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(snapshotAlias)!);
+            await File.WriteAllTextAsync(snapshotAlias, "outside-encoding-sentinel", TestContext.Current.CancellationToken);
+        }
         var payload = Encoding.UTF8.GetBytes("runtime boundary sentinel");
         const string runId = "ns135-runtime-boundary";
 
@@ -97,6 +103,8 @@ public sealed class InvocationRuntimeFilesTests
         using var oldContents = new MemoryStream();
         await readOnly.CopyToAsync(oldContents, TestContext.Current.CancellationToken);
         Assert.Equal(payload, oldContents.ToArray());
+        if (snapshotAlias is not null)
+            Assert.Equal("outside-encoding-sentinel", await File.ReadAllTextAsync(snapshotAlias, TestContext.Current.CancellationToken));
         Assert.Equal(replacement, await File.ReadAllBytesAsync(snapshotPath, TestContext.Current.CancellationToken));
         using var current = InvocationRuntimeFiles.OpenExistingFactorySnapshotForRead(paths, project);
         using var newContents = new MemoryStream();

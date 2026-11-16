@@ -62,6 +62,9 @@ the old reader keeps old bytes and fresh readers receive the complete replacemen
 The existing hard-link case also checks that this fallback preserves foreign
 content. Read-only destinations and unsafe reparse paths still fail closed;
 there is no delete-before-move or timeout increase.
+The native rename buffer copies exact UTF-16 path code units. The existing deep
+case uses an unmatched surrogate plus a distinct replacement-character alias
+with a foreign sentinel, proving encoding cannot redirect the publication.
 
 Test fixtures copy settled immutable repositories into independent file trees,
 including Git objects and tracker stores. The small `GitFixture` initializes one
