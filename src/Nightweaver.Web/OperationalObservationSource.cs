@@ -281,6 +281,9 @@ internal sealed class OperationalObservationSource(
         resumeDetails = (workspaces.Count > 0 && keys.All(key => key.Kind == "workspace"))
             || (!HasBudget && CommandCount == detailCommandsBefore
                 && (selected.Length > 0 || keys.Any(key => key.Kind == "attention")));
+        // A new cycle must not repeatedly compare an external edit against the
+        // old core while a different Workspace remains pending indefinitely.
+        if (result.Values.Any(sample => sample.Error?.Code == "source-conflict")) resumeDetails = false;
         TrimSources(selected.Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal));
         return result;
     }

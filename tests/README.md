@@ -43,6 +43,9 @@ step. A fresh confirming inventory still guards publication and changed identity
 fails closed. Mixed attention/explorer subscriptions keep their core cadence.
 The existing controlled timeout cases assert the reduced command counts, and
 the slow-clock case models 1.9-second reads without adding wall-clock waits.
+A cheap two-Workspace case holds one history source timed out, changes the other
+Workspace's identity and requires the edit to publish. Identity conflicts force
+a fresh core read so another pending cycle cannot retain the old baseline forever.
 Failed published classifier smoke runs retain their gates and runtime telemetry
 for hosted diagnosis; this does not extend their Agent-start or stop deadlines.
 

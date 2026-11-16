@@ -207,6 +207,42 @@ public sealed class OperationalObservationSourceTests
     }
 
     [Fact]
+    public async Task WorkspaceConflictRefreshesCoreWhileAnotherWorkspaceKeepsTimingOut()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner
+        {
+            Rows = 2, Advance = () => clock.Advance(TimeSpan.FromSeconds(1.6)),
+            FailCommentOnce = "task-1", CommentTimeoutsRemaining = 1000
+        };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("workspace:task-1", "workspace:task-2");
+        var token = TestContext.Current.CancellationToken;
+        async Task<BeadWorkspaceResponse?> ReadHealthyAsync()
+        {
+            var samples = await source.ReadTrackerAsync(keys, token);
+            if (samples.TryGetValue(keys[0].Value, out var blocked)) Assert.Null(blocked.Data);
+            return samples.GetValueOrDefault(keys[1].Value)?.Data as BeadWorkspaceResponse;
+        }
+        BeadWorkspaceResponse? first = null;
+        for (var turn = 0; turn < 20 && first is null; turn++) first = await ReadHealthyAsync();
+        Assert.NotNull(first);
+        runner.Title = "External edit while other Workspace is pending";
+        runner.Priority = 2;
+        BeadWorkspaceResponse? changed = null;
+        for (var turn = 0; turn < 20; turn++)
+        {
+            var sample = await ReadHealthyAsync();
+            if (sample?.Bead.Title == runner.Title) { changed = sample; break; }
+        }
+        Assert.NotNull(changed);
+        Assert.Equal(2, changed.Bead.Priority);
+        Assert.True(runner.CommentTimeoutsRemaining > 0);
+    }
+
+    [Fact]
     public async Task SlowWorkspaceWithTransientHistoryTimeoutsPublishesWithinTheNativeSmokeDeadline()
     {
         using var target = new ObservationTargetFixture();
@@ -585,7 +621,7 @@ public sealed class OperationalObservationSourceTests
             if (command == "dep" && FailRelations) throw new ToolExecutionException("Relations unavailable");
             if (command == "ready" && FailReady) throw new ToolExecutionException("bd timed out after 2s", "secret stderr");
             var title = Conflict && inventories > 0 ? "Concurrent edit" : Title;
-            object[] rows = Enumerable.Range(1, Rows).Select(index => (object)new
+            var rows = Enumerable.Range(1, Rows).Select(index => new
             {
                 id = $"task-{index}", title, issue_type = "task", priority = Conflict && inventories > 0 ? 2 : Priority, status = "open", assignee = (string?)null,
                 labels = (string[])["product-decision-required"], created_at = "2026-01-01T00:00:00Z", updated_at = UpdatedAt,
@@ -597,7 +633,7 @@ public sealed class OperationalObservationSourceTests
                 "blocked" => Blocked ? "[{\"id\":\"task-1\",\"blocked_by_count\":1,\"blocked_by\":[\"task-2\"]}]" : "[]",
                 "dep" => "[]",
                 "ready" => Ready ? "[{\"id\":\"task-1\"}]" : "[]",
-                "show" => JsonSerializer.Serialize(rows.Take(1)),
+                "show" => JsonSerializer.Serialize(rows.Where(row => row.id == args[3])),
                 "comments" => JsonSerializer.Serialize(new[] { new { id = "comment-1", issue_id = args[3], author = "human", text = Comment, created_at = "2026-01-01T00:00:00Z" } }),
                 _ => JsonSerializer.Serialize(rows)
             };
