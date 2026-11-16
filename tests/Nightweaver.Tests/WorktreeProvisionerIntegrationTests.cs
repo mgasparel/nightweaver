@@ -338,6 +338,12 @@ internal sealed class ProvisioningGitFixture : IDisposable
 
     internal RootCheckoutState TargetCheckout()
     {
+        // Independent observations of a quiescent fixture; optional Git locks are
+        // disabled by RunGit. Settle every reader before returning or throwing.
+        var head = Task.Run(() => Git(Target, ["rev-parse", "HEAD"]).Output.Trim());
+        var branch = Task.Run(() => Git(Target, ["symbolic-ref", "--quiet", "HEAD"]).Output.Trim());
+        var status = Task.Run(() => Git(Target, ["status", "--porcelain=v1", "--untracked-files=all"]).Output);
+        Task.WhenAll(head, branch, status).GetAwaiter().GetResult();
         var index = File.ReadAllBytes(Path.Combine(Target, ".git", "index"));
         var content = Directory.EnumerateFileSystemEntries(Target)
             .Where(path => !string.Equals(Path.GetFileName(path), ".git", StringComparison.OrdinalIgnoreCase))
@@ -353,9 +359,7 @@ internal sealed class ProvisioningGitFixture : IDisposable
             })
             .Order(StringComparer.Ordinal).ToArray();
         return new(Convert.ToHexString(SHA256.HashData(index)), string.Join("\n", content),
-            Git(Target, ["rev-parse", "HEAD"]).Output.Trim(),
-            Git(Target, ["symbolic-ref", "--quiet", "HEAD"]).Output.Trim(),
-            Git(Target, ["status", "--porcelain=v1", "--untracked-files=all"]).Output);
+            head.Result, branch.Result, status.Result);
     }
 
     internal GitResult Git(string cwd, IReadOnlyList<string> arguments, bool allowFailure = false) => RunGit(cwd, arguments, allowFailure);

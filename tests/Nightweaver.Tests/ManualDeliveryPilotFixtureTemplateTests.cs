@@ -144,5 +144,15 @@ public sealed class ManualDeliveryPilotFixtureTemplateTests
         var secondMainAfter = (await second.ReadOriginRefAsync("refs/heads/main", TestContext.Current.CancellationToken)).Trim();
         Assert.NotEqual(secondMainBefore, firstMainAfter);
         Assert.Equal(secondMainBefore, secondMainAfter);
+
+        // A profile seeded from the empty baseline must not seed that baseline
+        // itself or redirect its origin to either mutable consumer.
+        await using var empty = await ManualPilotFixture.CreateAsync(
+            seedProfile: ManualPilotSeedProfile.Empty,
+            cancellationToken: TestContext.Current.CancellationToken);
+        using var emptyInventory = System.Text.Json.JsonDocument.Parse(await empty.RunToolForTestAsync(
+            "bd", ["list", "--all", "--limit", "0", "--json"], empty.Repository, TestContext.Current.CancellationToken));
+        Assert.Empty(emptyInventory.RootElement.EnumerateArray());
+        Assert.Equal(secondMainBefore, (await empty.ReadOriginRefAsync("refs/heads/main", TestContext.Current.CancellationToken)).Trim());
     }
 }

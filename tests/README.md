@@ -20,6 +20,17 @@ Use `--report-xunit-xml --report-xunit-xml-filename timing.xml` to collect per-t
 
 ## Coverage pyramid
 
+Test fixtures copy settled immutable repositories into independent file trees,
+including Git objects and tracker stores. The small `GitFixture` initializes one
+empty Git baseline; manual-pilot profile templates seed independent copies of
+one empty Git/Beads baseline. Consumer writes must never reach a template or
+another copy. Existing isolation cases check configuration, tracker and origin
+independence. Provisioning snapshots overlap only independent read-only Git
+observations of a quiescent fixture, with optional locks disabled, and settle all
+readers before returning. Index bytes, working files, HEAD, branch and status
+assertions remain intact. These setup changes retain all cases and native
+boundaries; only a complete timed command establishes their suite cost.
+
 Test-owned managed launches use `FixtureProcess.Start`, including shared manual
 Delivery and QA helpers. It holds `WindowsProcessLauncher.ProcessCreationGate`
 only during `Process.Start`, matching the production process runners. A native

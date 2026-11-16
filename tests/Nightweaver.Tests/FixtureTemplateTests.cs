@@ -24,8 +24,19 @@ public sealed class FixtureTemplateTests
     }
 
     [Fact]
-    public void ProvisioningCopiesHaveIndependentOriginsAndSeedHistories()
+    public void GitCopiesHaveIndependentConfigurationOriginsAndSeedHistories()
     {
+        using var firstGit = new GitFixture();
+        using var secondGit = new GitFixture();
+        var firstConfig = Path.Combine(firstGit.Path, ".git", "config");
+        var originalConfig = File.ReadAllText(firstConfig);
+        File.AppendAllText(firstConfig, "\n[fixture]\n\tcopy = first\n");
+        File.WriteAllText(Path.Combine(firstGit.Path, ".beads", "metadata.json"), "first copy only");
+        Assert.Equal(originalConfig, File.ReadAllText(Path.Combine(secondGit.Path, ".git", "config")));
+        using var laterGit = new GitFixture();
+        Assert.Equal(originalConfig, File.ReadAllText(Path.Combine(laterGit.Path, ".git", "config")));
+        Assert.Equal("{\"backend\":\"dolt\"}", File.ReadAllText(Path.Combine(laterGit.Path, ".beads", "metadata.json")));
+
         using var first = new ProvisioningGitFixture();
         using var second = new ProvisioningGitFixture();
         first.AdvanceSeedMain();
