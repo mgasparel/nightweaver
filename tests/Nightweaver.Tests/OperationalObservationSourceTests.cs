@@ -190,7 +190,7 @@ public sealed class OperationalObservationSourceTests
         Assert.Null(recovered[keys[0].Value].Error);
         Assert.Single(runner.Commands, command => command == "show");
         Assert.Equal(2, runner.Commands.Count(command => command == "dep"));
-        Assert.Equal(confirmingInventory ? 4 : 3, runner.Commands.Count(command => command == "list"));
+        Assert.Equal(confirmingInventory ? 3 : 2, runner.Commands.Count(command => command == "list"));
         Assert.Equal(confirmingInventory ? 1 : 2, runner.Commands.Count(command => command == "comments"));
 
         // Retaining substeps cannot turn a changed workflow into a fresh blend.
@@ -207,13 +207,57 @@ public sealed class OperationalObservationSourceTests
     }
 
     [Fact]
-    public async Task SlowWorkspaceWithTransientHistoryTimeoutsPublishesWithinTheNativeSmokeDeadline()
+    public async Task WorkspaceConflictRefreshesCoreWhileAnotherWorkspaceKeepsTimingOut()
     {
         using var target = new ObservationTargetFixture();
         var clock = new CostClock();
         var runner = new Runner
         {
             Advance = () => clock.Advance(TimeSpan.FromSeconds(1.6)),
+            FailCommentOnce = "task-1", CommentTimeoutsRemaining = 1000
+        };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("workspace:task-1");
+        var token = TestContext.Current.CancellationToken;
+        await source.ReadTrackerAsync(keys, token);
+        runner.Rows = 2;
+        keys = Keys("workspace:task-1", "workspace:task-2");
+        async Task<BeadWorkspaceResponse?> ReadHealthyAsync()
+        {
+            var samples = await source.ReadTrackerAsync(keys, token);
+            if (samples.TryGetValue(keys[0].Value, out var blocked)) Assert.Null(blocked.Data);
+            return samples.GetValueOrDefault(keys[1].Value)?.Data as BeadWorkspaceResponse;
+        }
+        BeadWorkspaceResponse? first = null;
+        for (var turn = 0; turn < 20 && first is null; turn++) first = await ReadHealthyAsync();
+        Assert.NotNull(first);
+        runner.Title = "External edit while other Workspace is pending";
+        runner.Priority = 2;
+        BeadWorkspaceResponse? changed = null;
+        for (var turn = 0; turn < 20; turn++)
+        {
+            var sample = await ReadHealthyAsync();
+            if (sample?.Bead.Title == runner.Title) { changed = sample; break; }
+        }
+        Assert.NotNull(changed);
+        Assert.Equal(2, changed.Bead.Priority);
+        Assert.True(runner.CommentTimeoutsRemaining > 0);
+        var remaining = runner.CommentTimeoutsRemaining;
+        runner.FailEveryList = true;
+        for (var turn = 0; turn < 8; turn++) await ReadHealthyAsync();
+        Assert.True(remaining - runner.CommentTimeoutsRemaining >= 2,
+            "A failed core refresh must not discard the captured inventory needed to retry pending detail work.");
+    }
+
+    [Fact]
+    public async Task SlowWorkspaceWithTransientHistoryTimeoutsPublishesWithinTheNativeSmokeDeadline()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner
+        {
+            Advance = () => clock.Advance(TimeSpan.FromSeconds(1.9)),
             FailCommentOnce = "task-1", CommentTimeoutsRemaining = 4
         };
         using var factory = Factory(target.Path, runner, clock);
@@ -343,22 +387,31 @@ public sealed class OperationalObservationSourceTests
         using var client = factory.CreateClient();
         var token = TestContext.Current.CancellationToken;
         var path = $"/api/operations/v1/projects/web-test/resources?key=workspace:{bead}";
-        var cold = Stopwatch.StartNew();
-        JsonElement first;
-        try { first = await UntilAsync(client, path, root => root.GetProperty("data").ValueKind == JsonValueKind.Object, token); }
-        catch (TimeoutException)
+        async Task<JsonElement> ReadObservedAsync(Func<JsonElement, bool> condition)
         {
-            foreach (var measurement in measured) TestContext.Current.TestOutputHelper?.WriteLine(measurement);
-            throw;
+            try { return await UntilAsync(client, path, condition, token); }
+            catch (TimeoutException)
+            {
+                foreach (var measurement in measured) TestContext.Current.TestOutputHelper?.WriteLine(measurement);
+                throw;
+            }
         }
+        var cold = Stopwatch.StartNew();
+        var first = await ReadObservedAsync(root => root.GetProperty("data").ValueKind == JsonValueKind.Object);
         var coldSeconds = cold.Elapsed.TotalSeconds;
         var count = first.GetProperty("data").GetProperty("comments").GetArrayLength();
         var revision = first.GetProperty("revision").GetString();
-        target.Run("bd", ["comments", "add", bead, "External combined observer comment marker"]);
-        target.Run("bd", ["dep", "add", bead, blocker]);
+        // The fixture's default environment is for read-only probes. Model the
+        // production write profile explicitly while retaining external overlap.
+        var mutation = Stopwatch.StartNew();
+        target.Run("bd", ["--dolt-auto-commit", "on", "comments", "add", bead, "External combined observer comment marker"]);
+        measured.Enqueue($"external comment write (auto-commit on): {mutation.Elapsed.TotalMilliseconds:F1}ms");
+        mutation.Restart();
+        target.Run("bd", ["--dolt-auto-commit", "on", "dep", "add", bead, blocker]);
+        measured.Enqueue($"external dependency write (auto-commit on): {mutation.Elapsed.TotalMilliseconds:F1}ms");
         var changed = Stopwatch.StartNew();
         const string commentMarker = "External combined observer comment marker";
-        var combined = await UntilAsync(client, path, root =>
+        var combined = await ReadObservedAsync(root =>
         {
             if (root.GetProperty("data").ValueKind != JsonValueKind.Object
                 || root.GetProperty("revision").GetString() == revision)
@@ -373,7 +426,7 @@ public sealed class OperationalObservationSourceTests
                     relation.GetProperty("id").GetString() == blocker
                     && relation.GetProperty("type").GetString() == "blocks"
                     && relation.GetProperty("direction").GetString() == "outgoing");
-        }, token);
+        });
         var combinedSeconds = changed.Elapsed.TotalSeconds;
         Assert.NotEqual(revision, combined.GetProperty("revision").GetString());
         var combinedData = combined.GetProperty("data");
@@ -533,6 +586,7 @@ public sealed class OperationalObservationSourceTests
         internal string? FailCommentOnce { get; set; }
         internal int CommentTimeoutsRemaining { get; set; } = 1;
         internal int FailListAt { get; init; }
+        internal bool FailEveryList { get; set; }
         internal Action? Advance { get; init; }
         internal bool FailRelations { get; init; }
         internal bool Ready { get; set; } = true;
@@ -568,7 +622,7 @@ public sealed class OperationalObservationSourceTests
             var args = request.Arguments;
             var command = args[2];
             Commands.Enqueue(command);
-            if (command == "list" && inventories + 1 == FailListAt)
+            if (command == "list" && (FailEveryList || inventories + 1 == FailListAt))
             {
                 inventories++;
                 throw new ToolExecutionException("bd list timed out after 2s");
@@ -585,7 +639,7 @@ public sealed class OperationalObservationSourceTests
             if (command == "dep" && FailRelations) throw new ToolExecutionException("Relations unavailable");
             if (command == "ready" && FailReady) throw new ToolExecutionException("bd timed out after 2s", "secret stderr");
             var title = Conflict && inventories > 0 ? "Concurrent edit" : Title;
-            object[] rows = Enumerable.Range(1, Rows).Select(index => (object)new
+            var rows = Enumerable.Range(1, Rows).Select(index => new
             {
                 id = $"task-{index}", title, issue_type = "task", priority = Conflict && inventories > 0 ? 2 : Priority, status = "open", assignee = (string?)null,
                 labels = (string[])["product-decision-required"], created_at = "2026-01-01T00:00:00Z", updated_at = UpdatedAt,
@@ -597,7 +651,7 @@ public sealed class OperationalObservationSourceTests
                 "blocked" => Blocked ? "[{\"id\":\"task-1\",\"blocked_by_count\":1,\"blocked_by\":[\"task-2\"]}]" : "[]",
                 "dep" => "[]",
                 "ready" => Ready ? "[{\"id\":\"task-1\"}]" : "[]",
-                "show" => JsonSerializer.Serialize(rows.Take(1)),
+                "show" => JsonSerializer.Serialize(rows.Where(row => row.id == args[3])),
                 "comments" => JsonSerializer.Serialize(new[] { new { id = "comment-1", issue_id = args[3], author = "human", text = Comment, created_at = "2026-01-01T00:00:00Z" } }),
                 _ => JsonSerializer.Serialize(rows)
             };

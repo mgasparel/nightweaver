@@ -1,10 +1,30 @@
 using System.Diagnostics;
+using Nightweaver.Tests.AgentInvocationFixture;
 using Xunit.Sdk;
 
 namespace Nightweaver.Tests;
 
 public sealed class FixtureProcessObservationTests
 {
+    [Fact]
+    public void PidHandshakeIsInvisibleUntilItsContentsAreClosed()
+    {
+        using var directory = new TempDirectory();
+        var marker = Path.Combine(directory.Path, "child.pid");
+        var observedWriter = false;
+        FixturePidMarker.Publish(marker, 12345, beforeWrite: () =>
+        {
+            observedWriter = true;
+            // The timeout consumer treats existence as permission to kill the
+            // child. An empty or partially written PID must not be observable.
+            Assert.False(File.Exists(marker));
+        });
+        Assert.True(observedWriter);
+        using var settled = new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.None);
+        using var reader = new StreamReader(settled);
+        Assert.Equal("12345", reader.ReadToEnd());
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]

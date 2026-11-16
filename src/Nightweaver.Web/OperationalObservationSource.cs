@@ -172,10 +172,11 @@ internal sealed class OperationalObservationSource(
         var reader = CreateReader();
         BeadsInventory? inventory;
         FrozenSet<string>? ready, blocked;
-        if (resumeDetails && retainedInventory is not null)
+        var resumedDetails = resumeDetails && retainedInventory is not null;
+        if (resumedDetails)
         {
-            // When the previous core exhausted the sweep, give pending detail work
-            // one bounded turn before starting another core. Source age stays visible.
+            // Resume bounded detail work against its captured inventory. A Workspace
+            // still rereads inventory before publication; source age stays visible.
             inventory = retainedInventory; ready = retainedReady; blocked = retainedBlocked;
             generatedAt = inventoryGeneratedAt;
             states["inventory"] = retainedInventoryState!;
@@ -195,8 +196,13 @@ internal sealed class OperationalObservationSource(
                     blocked = await ReadAsync("blocked", () => reader.ReadExplorerBlockedAsync(repository, token), token);
             }
             readyFirst = !readyFirst;
-            retainedInventory = inventory; retainedReady = ready; retainedBlocked = blocked;
-            inventoryGeneratedAt = generatedAt;
+            // A failed core cannot erase the baseline of pending Workspace steps.
+            // Keep its failure state visible and still require final confirmation.
+            if (inventory is not null || workspaces.Count == 0 || keys.Any(key => key.Kind != "workspace"))
+            {
+                retainedInventory = inventory; retainedReady = ready; retainedBlocked = blocked;
+                inventoryGeneratedAt = generatedAt;
+            }
             retainedInventoryState = states["inventory"];
         }
         var inventoryState = states["inventory"];
@@ -278,8 +284,14 @@ internal sealed class OperationalObservationSource(
             }
         else if (inventory is null && keys.Any(key => key.Kind == "attention")) result["attention"] = Sample(null, started, "inventory");
         if (attentionFirst) await ReadSelectedAsync();
-        resumeDetails = !HasBudget && CommandCount == detailCommandsBefore
-            && (selected.Length > 0 || keys.Any(key => key.Kind == "attention"));
+        // Bound reuse to one continuation turn even if another selected Workspace
+        // never recovers. New interest and external creation must reach a fresh core.
+        resumeDetails = !resumedDetails && ((workspaces.Count > 0 && keys.All(key => key.Kind == "workspace"))
+            || (!HasBudget && CommandCount == detailCommandsBefore
+                && (selected.Length > 0 || keys.Any(key => key.Kind == "attention"))));
+        // A new cycle must not repeatedly compare an external edit against the
+        // old core while a different Workspace remains pending indefinitely.
+        if (result.Values.Any(sample => sample.Error?.Code == "source-conflict")) resumeDetails = false;
         TrimSources(selected.Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal));
         return result;
     }

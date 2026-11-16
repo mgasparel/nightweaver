@@ -88,7 +88,11 @@ internal static class Program
                 Console.OpenStandardOutput().Flush();
                 return args.Length > 1 && int.TryParse(args[^1], out var exitCode) ? exitCode : 0;
             }
+            case "environment":
+                Console.Write(Environment.GetEnvironmentVariable(args[1]));
+                return 0;
             case "flood":
+            case "flood-hold":
             {
                 using var input = Console.OpenStandardInput();
                 input.CopyTo(Stream.Null);
@@ -101,6 +105,7 @@ internal static class Program
                 output.Flush();
                 error.Write(errBuffer);
                 error.Flush();
+                if (args[0] == "flood-hold") Thread.Sleep(TimeSpan.FromSeconds(30));
                 return 0;
             }
             case "exit":
@@ -212,6 +217,9 @@ internal static class Program
                 return 0;
             case "hold":
                 File.WriteAllText(args[1], Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                while (true) Thread.Sleep(1000);
+            case "hold-published-pid":
+                FixturePidMarker.Publish(args[1], Environment.ProcessId);
                 while (true) Thread.Sleep(1000);
             case "hold-identity":
                 File.WriteAllText(args[1], $"{Environment.ProcessId}|{Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks}", new UTF8Encoding(false));
@@ -1195,10 +1203,10 @@ internal static class Program
             {
                 var handshake = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_HANDSHAKE")
                     ?? throw new InvalidOperationException("Classifier timeout handshake path is missing.");
-                File.WriteAllText(handshake + ".root", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                FixturePidMarker.Publish(handshake + ".root", Environment.ProcessId);
                 var classifierAction = Environment.GetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION");
                 Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", null);
-                try { SpawnProcess("hold", handshake + ".child"); }
+                try { SpawnProcess("hold-published-pid", handshake + ".child"); }
                 finally { Environment.SetEnvironmentVariable("NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION", classifierAction); }
                 WaitForFile(handshake + ".child");
                 while (true) Thread.Sleep(1000);

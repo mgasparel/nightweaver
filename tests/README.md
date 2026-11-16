@@ -20,6 +20,66 @@ Use `--report-xunit-xml --report-xunit-xml-filename timing.xml` to collect per-t
 
 ## Coverage pyramid
 
+The classifier timeout fixture publishes root/descendant PID handshakes by
+renaming a completed, closed same-directory temporary file. Existence cannot
+authorize forced termination while a PID writer is still empty. A cheap fixture
+case pauses before writing and checks that the public marker is absent; the
+native smoke retains actual Job termination of both processes and its original
+deadlines. `SystemProcessRunnerTests` uses the existing managed `flood` fixture
+for its bulk-stream boundary: both 1,100,000-byte streams and their exact contents
+must drain within the unchanged 30-second limit. This removes PowerShell startup
+from that contract while retaining a real child and pipe backpressure; the
+The output-limit check also uses the native producer, retaining a 30-second
+post-output hold so the unchanged 10-second deadline must be interrupted by the
+read limit. The environment-removal check uses a native environment probe and
+first verifies inheritance in a control invocation. PowerShell timeout and
+Windows command-line launch checks remain. Hosted PowerShell timeouts in the
+bulk, output-limit and environment checks did not establish a shared production
+cause; removing that unrelated shell dependency does not diagnose its startup.
+
+Workspace-only observation retries retain their captured inventory for one
+continuation turn while detail work is pending, avoiding redundant native core
+reads without indefinitely retaining a snapshot. A fresh confirming inventory still guards publication and changed identity
+fails closed. Mixed attention/explorer subscriptions keep their core cadence.
+The existing controlled timeout cases assert the reduced command counts, and
+the slow-clock case models 1.9-second reads without adding wall-clock waits.
+A cheap two-Workspace case holds one history source timed out, creates and selects
+another Workspace, then changes its identity and requires both updates to publish. Identity conflicts force
+a fresh core read so another pending cycle cannot retain the old baseline forever.
+The same case then fails all core refreshes and requires pending detail retries to
+continue against their captured baseline; failed refreshes retain visible errors
+and cannot satisfy the final confirming read. The Beads subprocess Go CPU budget
+also applies in production. A warmed balanced six-process probe measured a lower
+median (1,072ms to903ms) and CPU use with two Go workers; its tail did not improve,
+so this probe does not establish a fix for every hosted source timeout.
+Failed published classifier smoke runs retain their gates and runtime telemetry
+for hosted diagnosis; this does not extend their Agent-start or stop deadlines.
+
+Factory snapshot publication falls back from Windows move access-denied to a
+no-follow source handle rename while all destination parents stay pinned. Existing
+short/deep file-boundary cases hold a delete-sharing reader that denies writes:
+the old reader keeps old bytes and fresh readers receive the complete replacement.
+The existing hard-link case also checks that this fallback preserves foreign
+content. Read-only destinations and unsafe reparse paths still fail closed;
+there is no delete-before-move or timeout increase.
+The native rename buffer copies exact UTF-16 path code units. The existing deep
+case uses an unmatched surrogate plus a distinct replacement-character alias
+with a foreign sentinel, proving encoding cannot redirect the publication.
+
+The native observer's two external writes explicitly enable Dolt auto-commit,
+matching production rather than inheriting its fixture's read-probe default.
+Read/write overlap and the original cold/update observation deadlines remain.
+A balanced local comparison after identical mutations measured 5/24 reads above
+two seconds with auto-commit off and 0/24 with it on; this is performance evidence,
+not a claim that off loses SQL-committed data. Both smoke phases retain command
+and external-write timing diagnostics on failure. `BD_DISABLE_EVENT_FLUSH` controls
+the detached metrics uploader, not durable tracker journaling, and is unchanged.
+
+The native wait/cancellation fixture starts the held child with its required PID
+path and verifies the published PID before testing the original 50ms wait. A
+bounded readiness phase reports early fixture exit instead of accidentally testing
+startup speed. Cancellation, repeated waits and native termination bounds remain.
+
 Test fixtures copy settled immutable repositories into independent file trees,
 including Git objects and tracker stores. The small `GitFixture` initializes one
 empty Git baseline; manual-pilot profile templates seed independent copies of

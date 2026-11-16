@@ -272,6 +272,20 @@ public sealed class FactoryTelemetryIntegrationTests
         Assert.Equal("outside-sentinel", await File.ReadAllTextAsync(sentinel, TestContext.Current.CancellationToken));
         Assert.NotEmpty(failures);
         Assert.Contains("could not publish its snapshot", failures[0], StringComparison.OrdinalIgnoreCase);
+        await publisher.DisposeAsync();
+        File.Delete(temporaryPath);
+
+        // Replacing a canonical hard-link entry must preserve the foreign file,
+        // including when a reader permits deletion but denies writes to that file.
+        CreateHardLink(snapshotPath, sentinel);
+        using var readOnly = new FileStream(snapshotPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        var replacementFailures = new List<string>();
+        await using var replacement = new FactoryTelemetryPublisher(host, project,
+            new ValidatedTargetRepository(targetPath, "main"), 1, 1, replacementFailures.Add);
+        await replacement.StartAsync(TestContext.Current.CancellationToken);
+        Assert.Empty(replacementFailures);
+        Assert.Equal(replacement.RuntimeId, new FactoryTelemetryReader(host, project).Read().Snapshot?.RuntimeId);
+        Assert.Equal("outside-sentinel", await File.ReadAllTextAsync(sentinel, TestContext.Current.CancellationToken));
     }
 
     [Fact]
