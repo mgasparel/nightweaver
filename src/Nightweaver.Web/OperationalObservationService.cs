@@ -249,7 +249,8 @@ internal sealed class OperationalObservationService(
             return;
         }
         var keys = captured.Select(entry => entry.Key).ToArray();
-        var samples = runtime ? await source.ReadRuntimeAsync(keys, token) : await source.ReadTrackerAsync(keys, token);
+        var samples = runtime ? await source.ReadRuntimeAsync(keys, token)
+            : await source.ReadTrackerAsync(keys, token, (id, state) => Revalidate(captured, id, state));
         lock (sync)
         {
             foreach (var entry in captured)
@@ -286,6 +287,29 @@ internal sealed class OperationalObservationService(
                     NextAttemptAt = clock.GetUtcNow().AddMilliseconds(entry.Envelope.TargetIntervalMs)
                 };
                 Publish(entry, updated);
+            }
+        }
+    }
+
+    private void Revalidate(Entry[] captured, string id, ObservationSourceState state)
+    {
+        if (state.ContentIdentity is null || state.Health != "fresh" || state.Error is not null) return;
+        lock (sync)
+        {
+            foreach (var entry in captured)
+            {
+                if (stopping || !entries.TryGetValue(entry.Key.Value, out var current) || !ReferenceEquals(current, entry)) continue;
+                var envelope = entry.Envelope;
+                if (envelope.Data is null || !envelope.Sources.TryGetValue(id, out var previous)
+                    || !ReferenceEquals(previous.ContentIdentity, state.ContentIdentity)) continue;
+                var sources = envelope.Sources.ToDictionary();
+                sources[id] = state;
+                var observed = sources.Values.Min(item => item.ObservedAt);
+                var recovered = envelope.Error?.Code == "budget-exceeded"
+                    && sources.Values.All(item => item.Health == "fresh" && item.Error is null);
+                Publish(entry, envelope with { Sources = sources,
+                    ObservedAt = observed > envelope.ObservedAt ? observed : envelope.ObservedAt,
+                    Health = recovered ? "fresh" : envelope.Health, Error = recovered ? null : envelope.Error });
             }
         }
     }

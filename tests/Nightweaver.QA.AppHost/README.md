@@ -48,6 +48,15 @@ No browser UI changed in this investigation. See the
 
 ## Studio default console
 
+`node source-freshness-qa.mjs` exercises the real native collector on a fresh
+exact isolated default stack. Set the discovered URL and config as below. It
+retains one disposable paused Bead, watches its actual Attention/Workspace
+responses and rendered statuses through repeated successful collections, then
+verifies an external comments-only edit reaches the selected Workspace. No responses
+or health metadata are substituted. Evidence and 1440/375/720 captures go to
+`TestResults/source-freshness` or `NIGHTWEAVER_QA_OUTPUT`. Stop the exact stack
+in `finally`, including on failure.
+
 `node status-stability-qa.mjs` checks the shared Studio status lifecycle against
 the exact isolated stack. It injects frequent version notifications and delays
 real factory replacement responses to catch stale/current flashing, then checks
