@@ -25,12 +25,31 @@ const output = path.resolve(process.env.NIGHTWEAVER_QA_OUTPUT || 'TestResults/st
 fs.mkdirSync(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const errors = []; const posts = []; const checks = [];
+const attentionObservations = [];
 const mark = text => { checks.push(text); console.log(text); };
 let page;
 try {
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.setDefaultTimeout(30000);
+  const waitForCommand = predicate => {
+    const pending = page.waitForResponse(predicate);
+    // A failed click must retain its own diagnostic when browser teardown cancels this waiter.
+    pending.catch(() => {});
+    return pending;
+  };
   page.on('pageerror', error => errors.push(error.message));
+  page.on('response', async response => {
+    const url = new URL(response.url());
+    if (!url.pathname.endsWith('/resources') || url.searchParams.get('key') !== 'attention') return;
+    try {
+      const value = await response.json();
+      attentionObservations.push({ at: new Date().toISOString(), health: value.health,
+        error: value.error, sources: value.sources, observedAt: value.observedAt,
+        lastAttemptAt: value.lastAttemptAt, beadIds: value.data?.map(row => row.beadId) });
+      if (attentionObservations.length > 64) attentionObservations.shift();
+      fs.writeFileSync(path.join(output, 'attention-observations.json'), JSON.stringify(attentionObservations, null, 2));
+    } catch { /* Teardown may cancel a pending read; preserve the original failure. */ }
+  });
   page.on('request', request => { if (request.method() === 'POST') posts.push({ path: new URL(request.url()).pathname, body: request.postDataJSON() }); });
   await page.addInitScript(() => {
     const Native = window.EventSource;
@@ -90,7 +109,7 @@ try {
   await page.unroute(`**/api/beads/${decision.beadId}/decide`);
   mark('404 and uncertain POST keep draft, prevent submission and never replay');
   // Save Note is a real same-origin browser request and leaves pause intact.
-  let response = page.waitForResponse(r => r.url().endsWith(`/${decision.beadId}/decide`) && r.request().method() === 'POST');
+  let response = waitForCommand(r => r.url().endsWith(`/${decision.beadId}/decide`) && r.request().method() === 'POST');
   await page.getByRole('button', { name: 'Save Note', exact: true }).click();
   assert.equal((await response).status(), 200);
   await page.getByText('Note saved.', { exact: false }).waitFor();
@@ -116,13 +135,13 @@ try {
     const body = route.request().postDataJSON(); body.expected.repairCycles += 10;
     return route.continue({ postData: JSON.stringify(body) });
   });
-  response = page.waitForResponse(r => r.url().endsWith(`/${retry.beadId}/retry`) && r.request().method() === 'POST');
+  response = waitForCommand(r => r.url().endsWith(`/${retry.beadId}/retry`) && r.request().method() === 'POST');
   await page.getByRole('button', { name: 'Reset Budget & Retry', exact: true }).click();
   assert.equal((await response).status(), 409);
   await page.getByText('Bead changed. Review current state', { exact: false }).waitFor();
   await page.unroute(`**/api/beads/${retry.beadId}/retry`);
   await go(retry.beadId);
-  response = page.waitForResponse(r => r.url().endsWith(`/${retry.beadId}/retry`) && r.request().method() === 'POST');
+  response = waitForCommand(r => r.url().endsWith(`/${retry.beadId}/retry`) && r.request().method() === 'POST');
   await page.getByRole('button', { name: 'Reset Budget & Retry', exact: true }).click();
   assert.equal((await response).status(), 200);
   mark('real stale-snapshot 409 and explicit fresh Retry through Workspace');
@@ -134,7 +153,7 @@ try {
   await page.keyboard.press('Escape');
   assert(await page.getByRole('button', { name: 'Abort & Close', exact: true }).evaluate(node => document.activeElement === node));
   await page.getByRole('button', { name: 'Abort & Close', exact: true }).click();
-  response = page.waitForResponse(r => r.url().endsWith(`/${abort.beadId}/abort`) && r.request().method() === 'POST');
+  response = waitForCommand(r => r.url().endsWith(`/${abort.beadId}/abort`) && r.request().method() === 'POST');
   await page.getByRole('button', { name: 'Confirm Abort & Close', exact: true }).click();
   assert.equal((await response).status(), 200);
   assert.equal(JSON.parse(bd(['show', abort.beadId, '--json']))[0].status, 'closed');
@@ -152,6 +171,8 @@ try {
   const detail = await (await page.request.get(base + `/api/beads/${created.id}`)).json();
   detail.comments = Array.from({ length: 80 }, (_, index) => ({ id: String(index), author: `Author ${index}`, createdAt: new Date(1700000000000 + index * 1000).toISOString(), body: `**Evidence ${index}**\n\n<script>window.unsafe=true</script>\n\n![bad](https://example.invalid/pixel) [bad](javascript:alert(1)) [safe](https://example.com)`, kind: 'ordinary' }));
   detail.history = { activeCommentId: '1', selectionSource: 'structured' };
+  detail.relations = Array.from({ length: 40 }, (_, index) => ({ id: `qa-related-${index}`, title: `Related Bead ${index}`,
+    type: 'parent-child', direction: 'incoming', role: 'child' }));
   let mode = 'busy'; let removeFocused = false;
   await page.route('**/api/operations/v1/projects/qa/resources?**', async route => {
     const key = new URL(route.request().url()).searchParams.get('key');
@@ -170,6 +191,13 @@ try {
     await route.fulfill({ response: actual, json: value });
   });
   await go(created.id);
+  const relations = page.locator('details').filter({ has: page.locator('summary').filter({ hasText: /^Relations ·/ }) });
+  await relations.locator('summary').click();
+  assert.equal(await relations.getByRole('link').count(), 15);
+  await relations.getByRole('button', { name: 'Next', exact: true }).click();
+  assert.equal(await relations.getByRole('link').count(), 15);
+  assert.equal(await relations.locator('[data-relation-range]').textContent(), 'Showing 16–30 of 40');
+  mark('Workspace relations retain exact links and directional source state with bounded disclosure');
   await page.getByRole('link', { name: 'History', exact: true }).click();
   assert.equal(await page.locator('.bead-comment').count(), 9);
   const active = page.locator('.bead-comment').filter({ hasText: 'Active pause evidence' });

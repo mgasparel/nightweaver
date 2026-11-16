@@ -41,7 +41,7 @@ internal sealed class NightweaverWebApplicationFactory : WebApplicationFactory<W
             .SingleOrDefault(attribute => attribute.Key == "NightweaverWebAppDir")?.Value
             ?? throw new InvalidOperationException("NightweaverWebAppDir assembly metadata is required to stage the built Web assets.");
         var sourceRoot = Path.Combine(appDirectory, "wwwroot");
-        var requiredAssets = new[] { "index.html", Path.Combine("css", "site.css"), Path.Combine("js", "app.js") };
+        var requiredAssets = new[] { Path.Combine("studio", "index.html"), Path.Combine("vendor", "markdown-it.min.js"), Path.Combine("vendor", "purify.min.js") };
         var missingAssets = requiredAssets
             .Select(relativePath => Path.Combine(sourceRoot, relativePath))
             .Where(path => !File.Exists(path))

@@ -22,11 +22,14 @@ public sealed partial class StudioWebTests
     }
 
     [Theory]
+    [InlineData("/")]
+    [InlineData("/index.html")]
     [InlineData("/studio")]
     [InlineData("/studio/")]
     [InlineData("/projects/web-test/overview")]
     [InlineData("/projects/web-test/delivery")]
     [InlineData("/projects/web-test/attention")]
+    [InlineData("/projects/web-test/cleanup")]
     [InlineData("/projects/web-test/catch-up")]
     [InlineData("/projects/web-test/beads?q=retained&view=all&page=3")]
     [InlineData("/projects/web-test/beads/ns-123?tab=history")]
@@ -55,9 +58,17 @@ public sealed partial class StudioWebTests
 
     [Theory]
     [InlineData("/api/missing")]
+    [InlineData("/api/missing.js")]
+    [InlineData("/js/app.js")]
+    [InlineData("/css/site.css")]
     [InlineData("/studio/assets/missing.js")]
     [InlineData("/projects/missing.js")]
     [InlineData("/projects/web-test/beads/ns-mbd.1/missing.js")]
+    [InlineData("/projects/web-test/beads/missing.js")]
+    [InlineData("/projects/web-test/beads/missing.css")]
+    [InlineData("/projects/web-test/beads/missing.svg")]
+    [InlineData("/projects/web-test/beads/missing.html")]
+    [InlineData("/projects/web-test/beads/missing.woff2")]
     [InlineData("/missing")]
     public async Task MissingAssetsAndApisNeverReturnSpa(string route)
     {

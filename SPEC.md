@@ -502,6 +502,28 @@ The wire schema and finite budgets are specified in [operational observations v1
 
 ---
 
+### 7.4 Studio console entry and interaction lifetime
+
+Studio is the default local Web Console at `/` and `/index.html`, with compatible
+`/studio` entry and dedicated `/projects/:projectId` routes. Root `#bead/` links
+translate to the exact current-project Workspace; old section hashes translate
+to dedicated Studio routes. SPA fallback is limited to these entries, candidate
+routes, project routes and exact dotted Workspace IDs. Missing API and asset
+requests remain HTTP errors. The old console HTML, JavaScript and CSS are retired;
+locally vendored Markdown parsing and sanitization remain shared presentation
+infrastructure. Both standalone and background embedded hosts serve packaged
+assets without a Node process.
+
+Guidance drafts are bounded, identity-bound browser memory independent of
+observation eviction and transport reconnection. Route changes, source refresh,
+web-server restart and page suspension/wake preserve them in the same tab;
+full reload or closing the tab does not persist guidance. A new host epoch
+requires a fresh handshake and observation before guarded commands are enabled.
+Connection health never asserts source freshness. See the [cutover parity and
+acceptance evidence](docs/acceptance/studio-cutover.md).
+
+---
+
 ## 8. Out of Scope
 
 - **Multi-Project Management UI**: A project-agnostic UI for creating/editing **Project** configurations, viewing/interacting with each **Project**'s `bd` tracker, and starting/monitoring/stopping per-**Project** **Orchestrator** processes is deferred to a separate effort.

@@ -46,7 +46,7 @@ costs; this does not claim a production observer, SSE or browser-rendering resul
 No browser UI changed in this investigation. See the
 [v1 contract and measurement interpretation](../../docs/design/operational-observations-v1.md).
 
-## Studio candidate shell
+## Studio default console
 
 `node studio-explorer-qa.mjs` verifies Studio Explorer and current-project header search against a fresh isolated default fixture. Set the exact discovered URL and config as below. The probe imports 81 disposable Beads, verifies native external title/dependency changes, all views, bounded pages, Back/Forward/reload, focused-row removal on a still-valid page without URL changes, surviving-row focus, page removal and focus, Workspace query context, deferred cross-project controls and stale retained results. Captures at 1440/375/720 CSS pixels and results go to `TestResults/studio-explorer` (or `NIGHTWEAVER_QA_OUTPUT`). Stop the same AppHost in `finally`.
 
@@ -69,8 +69,7 @@ actual absence, unchanged Bead and protected paused evidence, then substitutes
 only reads for bounded pagination/search, stopped/unavailable owners and denials.
 Both capture 1440/375/720 CSS-pixel layouts and browser errors under
 `TestResults/studio-product` and `TestResults/studio-cleanup` (or
-`NIGHTWEAVER_QA_OUTPUT`). The probes preserve the existing legacy mode without
-`--studio`.
+`NIGHTWEAVER_QA_OUTPUT`). The documented entry points now delegate to Studio; `--studio` remains harmless compatibility syntax.
 
 `node studio-attention-qa.mjs` verifies the live Studio Attention and dedicated
 Bead Workspace slice on a fresh isolated default fixture. Set both
@@ -84,6 +83,17 @@ focused disclosure refresh/removal, stale, unavailable and empty states.
 Screenshots at 1440/375/720 CSS pixels and JSON evidence go to
 `NIGHTWEAVER_QA_OUTPUT` or `TestResults/studio-attention`. Review the captures and
 stop the exact AppHost in `finally`, including on failure.
+
+The Attention probe also records the last 64 existing Attention resource responses
+in `attention-observations.json`, including source health and attempt times. This
+postmortem capture adds no requests and does not extend convergence deadlines.
+
+`node studio-presentation-qa.mjs` also verifies grouped Workspace relations with
+43 children and mixed kinds/directions: a hard 15-row bound per group, exact links,
+total/range, keyboard Previous/Next, independently retained pages, refresh and
+shrink/removal/regrowth clamping, and focus recovery at boundaries or removed
+rows/groups. It runs in the isolated Presentation group and captures desktop,
+375px and 720 CSS-pixel layouts without external evidence requests or commands.
 
 `node refresh-timeout-qa.mjs` holds real reconciliation 202 responses while the
 operational stream and resource reads continue. It verifies deadline abort,
@@ -99,7 +109,17 @@ Refresh, wake recovery, a replacement read and rejection of the late held respon
 The probe never replays commands. Screenshots go to `NIGHTWEAVER_QA_OUTPUT` or
 `TestResults/read-timeout`. Stop the same AppHost in `finally` after all probes.
 
-On a fresh isolated default fixture, use the discovered direct `web` HTTP URL below and run `node studio-qa.mjs` and `node smoke.mjs`. Studio checks candidate routes at `/studio` and `/projects/...`; the root console remains operational. Reference and candidate screenshots at 1440, 375 and 720 CSS pixels are saved under `TestResults/studio`. Checks include direct reload, Back/Forward, URL preferences, legacy Bead translation (including dotted hierarchical IDs reloaded with and without Workspace query state), missing-asset/API 404s, keyboard/focus, unavailable project controls, no mutations and no browser errors. Review the screenshots visually and stop the same exact AppHost afterward.
+For integrated cutover QA, run `./tests/Nightweaver.QA.AppHost/studio-cutover.ps1`
+from the repository root after the npm setup below. Repeat with `-Group Commands`,
+`-Group Invocation`, `-Group Recovery`, and `-Group Presentation`. Each group creates its own isolated
+fixture, waits for readiness, discovers the exact direct URL/config, records probe
+logs/screenshots in `TestResults/studio-cutover`, and stops that exact AppHost in
+`finally`, including on failure. Pass `-OutputDirectory <fresh-directory>` to
+preserve earlier evidence when repeating a group. Recovery restarts only the disposable web resource
+and simulates page suspension/wake while preserving two identity-bound drafts.
+This is browser lifecycle coverage, not a physical OS sleep test.
+
+On a fresh isolated default fixture, use the discovered direct `web` HTTP URL below and run `node studio-qa.mjs` and `node smoke.mjs`. Studio checks the default root entry, compatible `/studio` entry and `/projects/...` routes. The old root HTML/JS/CSS is retired. Reference and candidate screenshots at 1440, 375 and 720 CSS pixels are saved under `TestResults/studio`. Checks include direct reload, Back/Forward, URL preferences, legacy Bead translation (including dotted hierarchical IDs reloaded with and without Workspace query state), missing-asset/API 404s, keyboard/focus, unavailable project controls, no mutations and no browser errors. Review the screenshots visually and stop the same exact AppHost afterward.
 
 Requires .NET 10, Aspire CLI, Git, `bd`, Node.js and npm. From this directory, install the browser tools once:
 
@@ -140,7 +160,7 @@ The disposable tracker is seeded with separate attention items for the browser a
 
 Use headless Playwright on the same URL from `aspire describe`. Exercise each action in the page so the browser sends its same-origin headers; do not substitute `APIRequestContext` for these mutation checks. Confirm that each POST succeeds and that the page/tracker reflects the resulting state: the decision card and retry card resolve, and the abort item closes. Capture `pageerror` and console error events as in `smoke.mjs`, and close the browser in a `finally` block.
 
-Run the full fixture interaction checks with `node workspace-qa.mjs`; this covers the existing workspace and mutation flows in addition to the invocation stream check.
+Run `node workspace-qa.mjs` (the Studio Attention/Workspace probe) for guarded tracker actions and `node telemetry.mjs` separately for the native invocation stream.
 
 Run `node planning-readiness-qa.mjs` against a fresh default fixture to check the Product backlog control, a stale 409 request, explicit Ready for Planning, persisted readiness after reload, and the 375px layout. It saves desktop/mobile screenshots under `TestResults`. This authorizes only the disposable Product; ordinary continuous scheduling still requires a live repository owner.
 
@@ -203,25 +223,15 @@ Run scripts from this directory so `playwright` resolves from its local installa
 
 ## Beads Explorer QA
 
-Run `node explorer-qa.mjs` against a fresh isolated stack's discovered direct endpoint. Deterministic 211-Bead list responses check Ready as the initial view, 15-row bounds for every filter, range/page announcements, keyboard focus across navigation and refresh, full-dataset search, stale-request cancellation, empty/end-page clamping and responsive overflow. Real same-origin intake writes to the disposable tracker and real Workspace navigation verify created-ID discovery on a later Ready page, successful creation followed by a failed refresh and Retry without reposting, and Show in All when absent from Ready. No page/size API parameters are used. Screenshots under `TestResults/explorer` cover the large tracker at 1440×900, 375px and 720 CSS px plus empty and unavailable states. Always stop the same AppHost in `finally`.
-
-Representative Explorer evidence: [desktop](../../docs/acceptance/explorer/large-1440.png), [375px](../../docs/acceptance/explorer/large-375.png), [720 CSS px](../../docs/acceptance/explorer/large-720.png), [empty](../../docs/acceptance/explorer/empty.png) and [unavailable](../../docs/acceptance/explorer/error.png).
-
-Explorer focus checks also use 16 results to exercise keyboard Next/Previous onto both boundaries, then refresh down to one/zero results and an unavailable tracker. Focus moves to an enabled direction or the visible result range when neither direction is available. During loading the range holds focus; a response never restores pagination focus after the user moves elsewhere. The script asserts visible focus outlines and captures [boundary focus evidence](../../docs/acceptance/explorer/boundary-focus.png). Set `NIGHTWEAVER_QA_OUTPUT` to a separate directory to preserve evidence from earlier runs.
+`node explorer-qa.mjs` now delegates to `studio-explorer-qa.mjs`. The replacement uses the shared versioned resource and a native 81-row disposable inventory. Search, all five views, bounded pages, external edits/dependencies/readiness, direct links, Back/Forward and focus/removal are covered. Product creation and created-ID discovery are covered separately by `studio-product-qa.mjs`. See the [cutover parity matrix](../../docs/acceptance/studio-cutover.md).
 
 ## Integrated console polish QA
 
-Run `node console-qa.mjs --baseline` before implementation, or set `NIGHTWEAVER_QA_BASELINE` to the pre-change commit (for ns-1b1.6: `566899e1993469cc9f4ab624956093d5dc1746f2`). Baseline mode serves only the historical shell HTML/CSS/JavaScript from Git; the same isolated host supplies the APIs. Run `node console-qa.mjs` for the candidate. Both modes use identical four-paused-Bead and busy Delivery/Merger fixtures and capture desktop, 375px and 720 CSS px busy, long-context, stale/read-error and idle screenshots under `TestResults/console`. Candidate assertions cover two-card priority order/count, Show all/fewer, disclosures, drafts, focus on changed refresh/collapse, a delayed note action across refresh, the clear row and initial execution/Explorer visibility. The delayed note response is substituted to test rendering only; `workspace-qa.mjs` separately verifies real same-origin tracker mutations.
-
-Run the existing `digest-qa.mjs`, `explorer-qa.mjs`, `factory-qa.mjs`, `invocation-qa.mjs`, `telemetry.mjs`, `workspace-qa.mjs` and `planning-readiness-qa.mjs` for the complete acceptance matrix: large histories/inventory, real intake and Workspace actions, guarded readiness, diagnostics and native reconnect/output. Use a fresh isolated stack for mutation checks, and always stop the exact AppHost in `finally`, including after failed checks. Retained integrated evidence and the measured release gate are in [the console acceptance report](../../docs/acceptance/console-polish.md).
+`node console-qa.mjs` now delegates to `studio-qa.mjs`; legacy DOM probes are retired. Run `studio-cutover.ps1` and its Commands, Invocation, Recovery and Presentation groups for the integrated Studio matrix. The [cutover report](../../docs/acceptance/studio-cutover.md) maps every former surface to replacement browser/component/native coverage and reviewed screenshots.
 
 ## Schema message QA
 
-Start a fresh isolated stack with `NIGHTWEAVER_QA_SCENARIO=schema-messages`, discover the direct `web` resource's `http` URL with `aspire describe --format Json`, set `NIGHTWEAVER_QA_URL` and run `node schema-messages-qa.mjs`. Always stop that exact AppHost in `finally`. The scenario seeds actual disposable tracker comments for local/remote checks, conflict/design rejections, both escalation generations, supplemental failures, structured questions followed by notes, newer unsupported diagnostics, duplicate/wrong-type schema claims after supported diagnostics and questions, malformed/foreign payloads, hostile text and long nested findings/paths.
-
-The script checks the shared projection on all three message surfaces, exact original/source identity, independent corrective prose, keyboard disclosure state/focus across refresh, explicit uncertainty, keyboard-accessible HTTP(S) evidence navigation (destination intercepted locally), unsafe-scheme rejection, no automatic payload requests or mutations, and desktop/375px/720 CSS px reflow. Screenshots and result data go to `TestResults/schema-messages`; set `NIGHTWEAVER_QA_OUTPUT` to preserve another run. Review those screenshots visually. Run `workspace-qa.mjs` separately against a fresh default stack for real guarded actions and legacy questions.
-
-The same scenario also seeds mixed delivery publications, all four human audit actions, failed-request corrective prose, agent/host merge records with an in-history source link, finalization diagnostics, and classifier-only/malformed fallbacks. Planning fixtures include a 40-task/40-coverage candidate, a review with findings/questions/revalidation, and a snake_case host approval with resolved candidate and unresolved review references. Checks cover bounded default content, complete nested details, exact originals, source-link keyboard focus and preserved disclosure state across refresh. Additional screenshots use `verified-merge-*`, `human-resume-*`, `planning-candidate-*` and `planning-review-*` names.
+`node schema-messages-qa.mjs` now delegates to `studio-presentation-qa.mjs`, also run once by `studio-cutover.ps1 -Group Presentation`. The representative read projection checks structured/fallback/original evidence, safe keyboard links, disclosure focus, raw source literals, partial relations and responsive geometry in the actual Studio shell. Detailed schema/source/provenance decisions remain covered by `CommentPresentationTests`, `AuditMessagePresentationTests` and `BeadPresentationTests`; the browser no longer repeats that combinatorial native matrix.
 
 ## Operational protocol ordering
 
@@ -270,20 +280,25 @@ Deterministic read fixtures then verify all four states, expired owner acknowled
 
 Representative checks and reviewed screenshots are retained in [the Housekeeping acceptance report](../../docs/acceptance/cleanup.md).
 
+## Structured evidence navigation QA
+
+Run `node studio-evidence-qa.mjs` with both the exact discovered direct URL and
+config from a fresh isolated default stack, or use the Presentation group in
+`studio-cutover.ps1`. The probe validates fixture identity, seeds native merger
+rejection/verified-merge and Planning approval records through its disposable
+tracker, checks the actual server projections and exercises safe bare evidence
+links plus keyboard navigation to old candidate/review/source comments. It also
+checks repeat activation, focus/disclosures across a real external comment,
+unresolved sources, unsafe/credential URLs, no automatic external requests or
+commands, and 1440/375/720 screenshots. Stop the exact AppHost in `finally`.
+
 ## Native relations and Type QA
 
-Start a fresh isolated stack with `NIGHTWEAVER_QA_SCENARIO=relations`, discover the direct `web` HTTP endpoint as above, set `NIGHTWEAVER_QA_URL`, and run `node relations-qa.mjs`. Stop the exact AppHost in `finally`. The disposable tracker includes an actual epic with 17 children, a nested child under a feature, native spike/decision/chore types, independent blocking and lineage edges, and a standalone Bead.
-
-The script verifies real incoming/outgoing HTTP projection, deduplication, exact keyboard linked navigation, native Type labels, 15-row group pagination and boundary focus, successful empty reads, unchanged inventory and no browser writes. Presentation-only response fixtures cover delayed loading, partial/failed observations, missing metadata, unknown relationship/custom issue types, and hostile text; native directional failures are tested at the HTTP boundary in `WorkspaceRelationsWebTests`. Screenshots/results go to `TestResults/relations` (override `NIGHTWEAVER_QA_OUTPUT`), at 1440px, 375px and 720 CSS px. Review screenshots visually and run Workspace, Explorer and Planning readiness scripts on fresh default mutation fixtures.
-
+`node relations-qa.mjs` now delegates to the representative `studio-presentation-qa.mjs` smoke. It checks bounded typed relation links, directional unavailable state, safe literal text and 1440/375/720 reflow. Native hierarchy/blocking/lineage and partial-source semantics remain in `WorkspaceRelationsWebTests`, `WebBeadWorkspaceIntegrationTests` and presentation tests. Studio Attention additionally checks incremental relation disclosure with long history.
 
 ## Bead roles and tracked workflow QA
 
-Start a fresh isolated exact AppHost with `NIGHTWEAVER_QA_SCENARIO=workflow`, wait for `web`, and discover its direct HTTP endpoint through `aspire describe --format Json`. Set `NIGHTWEAVER_QA_URL` to that endpoint and run `node smoke.mjs` and `node workflow-qa.mjs`. Stop that same AppHost in `finally`.
-
-The disposable native tracker includes Product feature/bug, linked and parentless manual Plans, an epic, authorization, claimed in_progress work, historical planned technical attention, conflicting pauses, unknown/incompatible stages, invalid repairs, long hostile literal labels, published/held/conflicting generated graphs and matching-revision versus conflicting-revision held partial graphs before their immutable snapshots. The script compares shared facts through actual Workspace, Explorer, Attention, digest and relation HTTP responses, checks zero mutations and unchanged inventory, and captures compact/expanded 1440px, 375px and 720 CSS px views. It checks workflow/source disclosure focus across refresh, unavailable execution observations, safe text and page geometry. Review the screenshots visually; results default to `TestResults/workflow` (`NIGHTWEAVER_QA_OUTPUT` overrides).
-
-Run `workspace-qa.mjs`, `planning-readiness-qa.mjs` and `explorer-qa.mjs` on appropriate fresh default fixtures, and `schema-messages-qa.mjs` on its own fresh schema-messages fixture, as regression checks. Projection tests cover all seven stages, unsupported native types, malformed encodings, missing linked data, repair parsing and provenance loss without adding native process matrices.
+`node workflow-qa.mjs` now delegates to `studio-presentation-qa.mjs`. The Workspace displays the existing server-projected role, tracked stage, Planning/publication state, ownership, repair facts and diagnostic with raw source metadata in a collapsed disclosure. The browser checks visible facts and focus; `BeadPresentationTests` retains the detailed stage/type/publication/repair/provenance matrix. Neither displayed role nor tracker ownership claims active execution.
 
 ## Continuous Planning observations
 
@@ -298,7 +313,7 @@ the native smoke uses the original telemetry endpoint with the Studio dialog.
 Set `NIGHTWEAVER_QA_URL` from the direct `web` endpoint. Optional
 `NIGHTWEAVER_QA_OUTPUT` selects screenshot/results output. Default evidence goes
 to `TestResults/studio-factory` and `TestResults/studio-invocation` relative to the
-working directory. The no-flag scripts retain legacy console coverage.
+working directory. The no-flag scripts now target Studio too; factory and invocation share one representative presentation smoke.
 
 Coverage includes operational/log interleaving, pinned replacement identity,
 failed end/disconnect, reset, bounded sanitized output, disclosure/focus/follow,

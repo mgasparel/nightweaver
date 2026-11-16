@@ -8,9 +8,10 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  await page.goto(url, { waitUntil: 'networkidle' });
-  await page.getByRole('heading', { name: 'Nightweaver console' }).waitFor();
-  await page.locator('[data-view="active"]').click();
+  await page.goto(url);
+  await page.getByRole('navigation', { name: 'Project navigation' }).getByRole('link', { name: 'Beads', exact: true }).click();
+  await page.getByRole('combobox', { name: 'View', exact: true }).selectOption('active');
+  await page.getByRole('button', { name: 'Search project', exact: true }).click();
   await page.getByText('Active QA task', { exact: true }).waitFor();
   if (errors.length) throw new Error(errors.join('\n'));
   console.log(`Playwright reached ${url}: ${await page.title()}; seeded issue is visible.`);

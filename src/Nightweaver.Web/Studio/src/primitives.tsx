@@ -59,29 +59,3 @@ export function Panel({
     </section>
   );
 }
-
-export function Unavailable({
-  title,
-  children,
-  href,
-  action = "Open existing console",
-}: {
-  title: string;
-  children: ReactNode;
-  href?: string;
-  action?: string;
-}) {
-  return (
-    <div className="unavailable">
-      <span className="eyebrow">Awaiting integration</span>
-      <h3>{title}</h3>
-      <p>{children}</p>
-      {href && (
-        <a className="button" href={href}>
-          {action}
-          <Icon name="arrow" />
-        </a>
-      )}
-    </div>
-  );
-}

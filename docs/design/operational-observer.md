@@ -38,6 +38,13 @@ bounded cohort, and inactive Attention releases an interrupted cohort's history
 reservations. Shared selected comments use strict Workspace parsing whichever
 projection reads them first. At most four actual comment commands run per sweep.
 
+The observer retains its repository validator across sweeps. A successful literal
+default-branch syntax check is reusable; contextual expansions and invalid branch
+names are checked again. Repository existence, Git identity and tracker metadata
+are validated on every sweep. This avoids spending repeated native process time
+on immutable syntax while Attention histories await their bounded turns. The
+two-second command and four-second sweep budgets remain unchanged.
+
 A Workspace source timeout retains its completed substeps and resumes the failed
 substep on the next sweep, with the original workflow identity and attempt time.
 It publishes the timeout with no partial Workspace data while waiting. A successful

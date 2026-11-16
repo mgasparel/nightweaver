@@ -9,6 +9,10 @@ export type AttentionItem = {
   message?: Message | null; otherPauseReports?: Message[];
 };
 export type WorkspaceData = {
+  sourceMetadata?: string | null;
+  presentation?: { role: string; summary: string; trackedStage: string | null; planning: string | null;
+    publication: string | null; pause: string | null; ownership: string; repairsUsed: number | null;
+    repairsMax: number | null; diagnostic: string | null } | null;
   planning?: { ready: boolean; canAuthorize: boolean; expected: string } | null;
   bead: { id: string; title: string; type: string; status: string; priority: number;
     stage: string | null; labels: string[]; assignee: string | null; repairCycles: number | null;
@@ -16,7 +20,7 @@ export type WorkspaceData = {
   attention: AttentionItem | null;
   comments: { id: string; author: string; createdAt: string; body: string; kind: string; message?: Message | null }[];
   history: { activeCommentId: string | null; selectionSource: string };
-  relations: { id: string; type: string; direction: string; title: string | null; role: string }[];
+  relations: { id: string; type: string; direction: string; title: string | null; role: string; issueType?: string | null; status?: string | null }[];
   relationObservation: { incoming: string; outgoing: string };
   environment: { state: string; observedAt: string; worktreePath: string | null; branch: string | null;
     head: string | null; gitStatus: string; processId: number | null; processState: string;
@@ -34,4 +38,11 @@ export function actionRequest(item: AttentionItem, action: Action, instruction: 
   return { url: `/api/beads/${encodeURIComponent(item.beadId)}/${action === "resume" || action === "note_only" ? "decide" : action}`,
     body: action === "abort" ? {} : action === "retry" ? { expected: expectedWorkflow(item) }
       : action === "resume" ? { instruction, action, expected: expectedWorkflow(item) } : { instruction, action } };
+}
+
+/** Only explicit absolute HTTP(S) evidence without credentials or whitespace is navigable. */
+export function safeEvidenceUrl(text: string): boolean {
+  if (!/^https?:\/\//i.test(text) || /\s/.test(text)) return false;
+  try { const url = new URL(text); return !!url.hostname && !url.username && !url.password; }
+  catch { return false; }
 }

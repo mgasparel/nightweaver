@@ -474,6 +474,39 @@ public sealed class OperationalObservationSourceTests
         Assert.IsType<BeadWorkspaceResponse>(samples["workspace:task-1"].Data);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("task-3")]
+    public async Task SlowNativeValidationAllowsExternalAttentionWithinTheBrowserDeadline(string? transientTimeout)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        // The recording wrapper hides Runner from Factory's direct-runner setup.
+        var native = new Runner { TargetPath = target.Path, Rows = 5, FailCommentOnce = transientTimeout };
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            // Include Git validation, not just bd: both consume the native sweep.
+            clock.Advance(TimeSpan.FromSeconds(1.6));
+            return native.RunAsync(request, token);
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var started = clock.GetUtcNow();
+        ObservationSample? completed = null;
+        while (clock.GetUtcNow() - started < TimeSpan.FromSeconds(30))
+        {
+            var samples = await source.ReadTrackerAsync(Keys("attention"), TestContext.Current.CancellationToken);
+            if (samples.TryGetValue("attention", out var sample) && sample.Data is not null)
+            {
+                completed = sample;
+                break;
+            }
+        }
+        Assert.Equal(5, Assert.IsType<AttentionDeskItem[]>(completed?.Data).Length);
+        Assert.True(clock.GetUtcNow() - started < TimeSpan.FromSeconds(30));
+        Assert.All(native.CommentIds.GroupBy(id => id), group => Assert.Equal(group.Key == transientTimeout ? 2 : 1, group.Count()));
+    }
+
     [Fact]
     public async Task AttentionMakesProgressAlongsideAContinuouslySelectedWorkspace()
     {
