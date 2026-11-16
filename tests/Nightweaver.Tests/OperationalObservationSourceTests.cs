@@ -479,9 +479,10 @@ public sealed class OperationalObservationSourceTests
     [InlineData("task-3")]
     public async Task SlowNativeValidationAllowsExternalAttentionWithinTheBrowserDeadline(string? transientTimeout)
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var clock = new CostClock();
-        var native = new Runner { Rows = 5, FailCommentOnce = transientTimeout };
+        // The recording wrapper hides Runner from Factory's direct-runner setup.
+        var native = new Runner { TargetPath = target.Path, Rows = 5, FailCommentOnce = transientTimeout };
         var runner = new RecordingProcessRunner((request, token) =>
         {
             // Include Git validation, not just bd: both consume the native sweep.
