@@ -31,6 +31,15 @@ bounded cohort, and inactive Attention releases an interrupted cohort's history
 reservations. Shared selected comments use strict Workspace parsing whichever
 projection reads them first. At most four actual comment commands run per sweep.
 
+A Workspace source timeout retains its completed substeps and resumes the failed
+substep on the next sweep, with the original workflow identity and attempt time.
+It publishes the timeout with no partial Workspace data while waiting. A successful
+retry still requires the confirming inventory; a workflow conflict or non-timeout
+required-source error discards the cycle. Existing partial relation/environment
+states remain explicit. This avoids replaying successful detail, relation and
+history commands after each transient timeout without adding retries inside a
+sweep or extending the native command, sweep or observation deadlines.
+
 ## Finite interest and cache
 
 GET renews interest for 30 seconds. A stream holds pins and receives the same grace after disconnect. Unpinned entries expire after another 30 seconds and are LRU eviction candidates. Admission supports at most 64 keys and two active Workspaces. A single atomic memory budget caps serialized projections plus separate cached histories at 32 MiB; histories also have a 64-entry/16-MiB cap. Inventory collection is separately capped at 8 MiB. Source history reservations and resource admission cannot race past the shared byte ceiling. Failed growth retains prior data with a source-limit error. Idle source caches are released without issuing tracker commands.

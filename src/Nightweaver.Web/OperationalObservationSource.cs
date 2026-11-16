@@ -374,7 +374,11 @@ internal sealed class OperationalObservationSource(
                 if (states[sourceId].Error is not null && !sourceId.StartsWith("relations-", StringComparison.Ordinal)
                     && !(sourceId.StartsWith("environment:", StringComparison.Ordinal) && cycle.Environment is not null))
                 {
-                    workspaces.Remove(id);
+                    // Retry only the timed-out substep on the next bounded sweep.
+                    // Replaying successful reads can starve a Workspace under slow
+                    // native commands. The original identity and final confirming
+                    // inventory still guard the complete projection.
+                    if (states[sourceId].Error?.Code != "source-timeout") workspaces.Remove(id);
                     return new(null, cycle.Started, null, cycle.Sources.ToDictionary(), states[sourceId].Error);
                 }
                 cycle.Step++;

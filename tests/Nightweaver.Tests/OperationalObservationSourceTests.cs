@@ -171,6 +171,71 @@ public sealed class OperationalObservationSourceTests
         Assert.Single(runner.CommentIds, id => id == "task-2");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TransientWorkspaceTimeoutRetainsCompletedSubstepsAndConfirmsIdentity(bool confirmingInventory)
+    {
+        using var target = new ObservationTargetFixture();
+        var runner = new Runner { FailCommentOnce = confirmingInventory ? null : "task-1", FailListAt = confirmingInventory ? 2 : 0 };
+        using var factory = Factory(target.Path, runner);
+        var source = Adapter(factory);
+        var keys = Keys("workspace:task-1");
+        var token = TestContext.Current.CancellationToken;
+        var failed = await source.ReadTrackerAsync(keys, token);
+        Assert.Null(failed[keys[0].Value].Data);
+        Assert.Equal("source-timeout", failed[keys[0].Value].Error?.Code);
+        var recovered = await source.ReadTrackerAsync(keys, token);
+        Assert.IsType<BeadWorkspaceResponse>(recovered[keys[0].Value].Data);
+        Assert.Null(recovered[keys[0].Value].Error);
+        Assert.Single(runner.Commands, command => command == "show");
+        Assert.Equal(2, runner.Commands.Count(command => command == "dep"));
+        Assert.Equal(confirmingInventory ? 4 : 3, runner.Commands.Count(command => command == "list"));
+        Assert.Equal(confirmingInventory ? 1 : 2, runner.Commands.Count(command => command == "comments"));
+
+        // Retaining substeps cannot turn a changed workflow into a fresh blend.
+        runner.FailCommentOnce = "task-1";
+        runner.CommentTimeoutsRemaining = 1;
+        await source.ReadTrackerAsync(keys, token);
+        runner.Title = "External edit during timeout";
+        runner.Priority = 2;
+        var conflict = await source.ReadTrackerAsync(keys, token);
+        Assert.Null(conflict[keys[0].Value].Data);
+        Assert.Equal("source-conflict", conflict[keys[0].Value].Error?.Code);
+        var fresh = await source.ReadTrackerAsync(keys, token);
+        Assert.Equal(runner.Title, Assert.IsType<BeadWorkspaceResponse>(fresh[keys[0].Value].Data).Bead.Title);
+    }
+
+    [Fact]
+    public async Task SlowWorkspaceWithTransientHistoryTimeoutsPublishesWithinTheNativeSmokeDeadline()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner
+        {
+            Advance = () => clock.Advance(TimeSpan.FromSeconds(1.6)),
+            FailCommentOnce = "task-1", CommentTimeoutsRemaining = 4
+        };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var started = clock.GetUtcNow();
+        ObservationSample? completed = null;
+        while (clock.GetUtcNow() - started < TimeSpan.FromSeconds(45))
+        {
+            var samples = await source.ReadTrackerAsync(Keys("workspace:task-1"), TestContext.Current.CancellationToken);
+            if (samples.TryGetValue("workspace:task-1", out var sample) && sample.Data is not null)
+            {
+                completed = sample;
+                break;
+            }
+        }
+        Assert.NotNull(completed);
+        Assert.IsType<BeadWorkspaceResponse>(completed.Data);
+        Assert.True(clock.GetUtcNow() - started < TimeSpan.FromSeconds(45));
+        Assert.Equal(5, runner.CommentIds.Count);
+        Assert.Single(runner.Commands, command => command == "show");
+    }
+
     [Fact]
     public async Task InactiveAttentionReleasesAnInterruptedCohortsHistoryReservations()
     {
@@ -437,11 +502,14 @@ public sealed class OperationalObservationSourceTests
         internal ConcurrentQueue<string> Commands { get; } = new();
         internal ConcurrentQueue<string> CommentIds { get; } = new();
         internal string? FailCommentOnce { get; set; }
+        internal int CommentTimeoutsRemaining { get; set; } = 1;
+        internal int FailListAt { get; init; }
         internal Action? Advance { get; init; }
         internal bool FailRelations { get; init; }
         internal bool Ready { get; set; } = true;
         internal bool Blocked { get; set; }
         internal string Title { get; set; } = "Original title";
+        internal int Priority { get; set; } = 1;
         internal bool FailReady { get; init; }
         internal bool Conflict { get; init; }
         internal int Rows { get; set; } = 1;
@@ -471,12 +539,17 @@ public sealed class OperationalObservationSourceTests
             var args = request.Arguments;
             var command = args[2];
             Commands.Enqueue(command);
+            if (command == "list" && inventories + 1 == FailListAt)
+            {
+                inventories++;
+                throw new ToolExecutionException("bd list timed out after 2s");
+            }
             if (command == "comments")
             {
                 CommentIds.Enqueue(args[3]);
                 if (args[3] == FailCommentOnce)
                 {
-                    FailCommentOnce = null;
+                    if (--CommentTimeoutsRemaining <= 0) FailCommentOnce = null;
                     throw new ToolExecutionException("bd comments timed out after 2s");
                 }
             }
@@ -485,7 +558,7 @@ public sealed class OperationalObservationSourceTests
             var title = Conflict && inventories > 0 ? "Concurrent edit" : Title;
             object[] rows = Enumerable.Range(1, Rows).Select(index => (object)new
             {
-                id = $"task-{index}", title, issue_type = "task", priority = Conflict && inventories > 0 ? 2 : 1, status = "open", assignee = (string?)null,
+                id = $"task-{index}", title, issue_type = "task", priority = Conflict && inventories > 0 ? 2 : Priority, status = "open", assignee = (string?)null,
                 labels = (string[])["product-decision-required"], created_at = "2026-01-01T00:00:00Z", updated_at = UpdatedAt,
                 description = "Description"
             }).ToArray();
