@@ -31,6 +31,13 @@ bounded cohort, and inactive Attention releases an interrupted cohort's history
 reservations. Shared selected comments use strict Workspace parsing whichever
 projection reads them first. At most four actual comment commands run per sweep.
 
+The observer retains its repository validator across sweeps. A successful literal
+default-branch syntax check is reusable; contextual expansions and invalid branch
+names are checked again. Repository existence, Git identity and tracker metadata
+are validated on every sweep. This avoids spending repeated native process time
+on immutable syntax while Attention histories await their bounded turns. The
+two-second command and four-second sweep budgets remain unchanged.
+
 ## Finite interest and cache
 
 GET renews interest for 30 seconds. A stream holds pins and receives the same grace after disconnect. Unpinned entries expire after another 30 seconds and are LRU eviction candidates. Admission supports at most 64 keys and two active Workspaces. A single atomic memory budget caps serialized projections plus separate cached histories at 32 MiB; histories also have a 64-entry/16-MiB cap. Inventory collection is separately capped at 8 MiB. Source history reservations and resource admission cannot race past the shared byte ceiling. Failed growth retains prior data with a source-limit error. Idle source caches are released without issuing tracker commands.

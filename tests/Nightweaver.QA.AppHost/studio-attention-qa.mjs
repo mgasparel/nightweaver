@@ -25,6 +25,7 @@ const output = path.resolve(process.env.NIGHTWEAVER_QA_OUTPUT || 'TestResults/st
 fs.mkdirSync(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const errors = []; const posts = []; const checks = [];
+const attentionObservations = [];
 const mark = text => { checks.push(text); console.log(text); };
 let page;
 try {
@@ -37,6 +38,18 @@ try {
     return pending;
   };
   page.on('pageerror', error => errors.push(error.message));
+  page.on('response', async response => {
+    const url = new URL(response.url());
+    if (!url.pathname.endsWith('/resources') || url.searchParams.get('key') !== 'attention') return;
+    try {
+      const value = await response.json();
+      attentionObservations.push({ at: new Date().toISOString(), health: value.health,
+        error: value.error, sources: value.sources, observedAt: value.observedAt,
+        lastAttemptAt: value.lastAttemptAt, beadIds: value.data?.map(row => row.beadId) });
+      if (attentionObservations.length > 64) attentionObservations.shift();
+      fs.writeFileSync(path.join(output, 'attention-observations.json'), JSON.stringify(attentionObservations, null, 2));
+    } catch { /* Teardown may cancel a pending read; preserve the original failure. */ }
+  });
   page.on('request', request => { if (request.method() === 'POST') posts.push({ path: new URL(request.url()).pathname, body: request.postDataJSON() }); });
   await page.addInitScript(() => {
     const Native = window.EventSource;

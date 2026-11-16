@@ -36,6 +36,7 @@ internal sealed class OperationalObservationSource(
     private DateTimeOffset inventoryGeneratedAt;
     private ObservationSourceState? retainedInventoryState;
     private bool readyFirst;
+    private TargetRepositoryValidator? repositoryValidator;
     private double nativeMilliseconds;
     internal long CommandCount { get; private set; }
     internal double NativeMilliseconds => nativeMilliseconds;
@@ -152,7 +153,11 @@ internal sealed class OperationalObservationSource(
             attentionPresentations.Clear();
         }
         ValidatedTargetRepository? repository;
-        try { repository = await new TargetRepositoryValidator(CreateRunner()).ValidateAsync(project.TargetRepository, project.ConfigFilePath, token); }
+        try
+        {
+            repositoryValidator ??= new TargetRepositoryValidator(CreateRunner());
+            repository = await repositoryValidator.ValidateAsync(project.TargetRepository, project.ConfigFilePath, token);
+        }
         catch (Exception exception) when (IsSourceFailure(exception))
         {
             states["inventory"] = new(states.GetValueOrDefault("inventory")?.ObservedAt is null ? "unavailable" : "stale",

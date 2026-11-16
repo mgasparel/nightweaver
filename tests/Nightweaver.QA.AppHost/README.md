@@ -84,6 +84,10 @@ Screenshots at 1440/375/720 CSS pixels and JSON evidence go to
 `NIGHTWEAVER_QA_OUTPUT` or `TestResults/studio-attention`. Review the captures and
 stop the exact AppHost in `finally`, including on failure.
 
+The Attention probe also records the last 64 existing Attention resource responses
+in `attention-observations.json`, including source health and attempt times. This
+postmortem capture adds no requests and does not extend convergence deadlines.
+
 `node studio-presentation-qa.mjs` also verifies grouped Workspace relations with
 43 children and mixed kinds/directions: a hard 15-row bound per group, exact links,
 total/range, keyboard Previous/Next, independently retained pages, refresh and

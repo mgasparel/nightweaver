@@ -4,22 +4,34 @@ namespace Nightweaver.Inspection;
 
 internal sealed class TargetRepositoryValidator(IProcessRunner processRunner)
 {
+    private string? validatedLiteralBranch;
+
     internal async Task<ValidatedTargetRepository> ValidateAsync(
         TargetRepositoryConfig targetRepository,
         string configFilePath,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var path = targetRepository.Path;
-        var branchCheck = GitCommand.Create(
-            ["check-ref-format", "--branch", targetRepository.DefaultBranch],
-            Path.GetTempPath());
-        var branchResult = await processRunner.RunAsync(branchCheck, cancellationToken);
-        if (branchResult.ExitCode != 0)
+        // Branch syntax is independent of repository state. Retain only a successful
+        // check; every path, Git identity and tracker check below still runs afresh.
+        if (!string.Equals(Volatile.Read(ref validatedLiteralBranch), targetRepository.DefaultBranch, StringComparison.Ordinal))
         {
-            throw new ProjectConfigurationException(
-                $"'{targetRepository.DefaultBranch}' is not a valid Git branch name",
-                "$.target_repository.default_branch",
-                configFilePath);
+            var branchCheck = GitCommand.Create(
+                ["check-ref-format", "--branch", targetRepository.DefaultBranch],
+                Path.GetTempPath());
+            var branchResult = await processRunner.RunAsync(branchCheck, cancellationToken);
+            if (branchResult.ExitCode != 0)
+            {
+                throw new ProjectConfigurationException(
+                    $"'{targetRepository.DefaultBranch}' is not a valid Git branch name",
+                    "$.target_repository.default_branch",
+                    configFilePath);
+            }
+            // --branch can expand contextual expressions such as @{-1}; those
+            // must be checked again rather than treated as immutable names.
+            if (string.Equals(branchResult.StandardOutput.TrimEnd('\r', '\n'), targetRepository.DefaultBranch, StringComparison.Ordinal))
+                Volatile.Write(ref validatedLiteralBranch, targetRepository.DefaultBranch);
         }
 
         if (!Directory.Exists(path))

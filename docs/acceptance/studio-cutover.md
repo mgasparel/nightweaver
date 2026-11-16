@@ -62,7 +62,7 @@ Guidance is memory-only and is deliberately not retained after a full page
 reload or tab closure. No production stack or tracker is used or deployed.
 
 The complete solution command retains committed six-thread parallelism and a
-positive floor of 1,265 tests. The integrated candidate passed all 1,265 tests,
+current positive floor of 1,268 tests. The initial integrated candidate passed all 1,265 tests,
 with zero skips, in **239.285 seconds** on 2026-11-16 UTC using
 `dotnet test --solution Nightweaver.slnx --minimum-expected-tests 1265 --report-xunit-xml --report-xunit-xml-filename dispatch-cutover.xml --show-slowest-tests 20`.
 The stopwatch surrounds the entire command, including build, fixture publishing
@@ -220,3 +220,48 @@ at unchanged six-thread parallelism. Evidence: `TestResults/repair2-suite.log`,
 repair candidate based on `747ffbb`, not latest integrated-main timing. The
 post-integration measurement and prior physical-sleep/manual-pilot limitations
 remain unchanged. No deployment was performed.
+
+## Native Attention convergence repair
+
+Exact-head QA on `71250f2` failed twice before the externally created paused
+Bead appeared, with a native source timeout and healthy transport. Its complete
+1,265-test correctness run passed but took **343.315 seconds**, exceeding the
+300-second budget. Those failures supersede the earlier passing repair evidence;
+the old passing timings do not clear the performance gate.
+
+The unchanged Attention probe passed on the first fresh repair fixture. A
+controlled source regression nevertheless reproduced failed convergence: charging
+every Git and Beads command 1.6 seconds left five paused Beads unpublished at the
+existing 30-second browser bound. The observer previously recreated its validator
+and repeated immutable branch-syntax checks on every sweep. Reusing the causal
+validator change from `a0db910` makes that regression pass, including a transient
+comment timeout, without replaying completed comment reads. Only successful
+literal syntax is retained; repository identity and tracker checks stay fresh,
+and invalid/contextual branch names are rechecked. This establishes one concrete
+slow-native progress defect; it does not identify which process timed out in the
+earlier QA runs.
+
+The browser probe now preserves the last 64 existing Attention responses in
+`attention-observations.json`, with per-source health and attempt times, for
+future timeout diagnosis. No requests, wait extensions or removed assertions
+are introduced. Source and command budgets, command authority and committed
+six-thread test parallelism remain unchanged.
+
+Repair validation on 2026-11-16 UTC passed all **1,268 tests, zero failures/skips
+in 281.282 seconds**, including normal build, fixture publication and teardown
+at the unchanged six-thread cap. The command used `--minimum-expected-tests 1268`;
+log, XML and stopwatch metadata are `TestResults/repair3-suite.log`,
+`repair3-suite.xml` and `repair3-suite-timing.json`. This clears the measured
+candidate overrun; latest integrated-main timing remains Merger-owned after
+integration. No suite cases, native boundaries or parallelism were removed.
+
+The focused source/validator run passed 27 tests; frontend clean install,
+57 component tests, explicit typecheck/build, warning-as-error solution build
+and disposable Release Web publication passed. Both fresh repaired native
+Attention fixtures passed all nine groups with 14 expected POSTs and zero page
+errors (128.969 and 114.036 seconds). The first also reran shell and smoke checks;
+all three exact stacks, including the unchanged diagnostic run, stopped
+successfully. Fresh desktop/375/720 captures were reviewed for bounded layouts,
+wrapping, reachable controls and separate transport/source health. Logs and
+captures remain under `TestResults/repair3-{repro,browser,attention-repeat}`.
+Prior physical-sleep/manual-pilot limitations remain; no deployment occurred.
