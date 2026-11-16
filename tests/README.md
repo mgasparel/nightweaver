@@ -29,8 +29,13 @@ deadlines. `SystemProcessRunnerTests` uses the existing managed `flood` fixture
 for its bulk-stream boundary: both 1,100,000-byte streams and their exact contents
 must drain within the unchanged 30-second limit. This removes PowerShell startup
 from that contract while retaining a real child and pipe backpressure; the
-PowerShell output-limit, timeout and environment cases remain. The earlier hosted
-PowerShell timeout did not establish a shared production cause.
+The output-limit check also uses the native producer, retaining a 30-second
+post-output hold so the unchanged 10-second deadline must be interrupted by the
+read limit. The environment-removal check uses a native environment probe and
+first verifies inheritance in a control invocation. PowerShell timeout and
+Windows command-line launch checks remain. Hosted PowerShell timeouts in the
+bulk, output-limit and environment checks did not establish a shared production
+cause; removing that unrelated shell dependency does not diagnose its startup.
 
 Test fixtures copy settled immutable repositories into independent file trees,
 including Git objects and tracker stores. The small `GitFixture` initializes one

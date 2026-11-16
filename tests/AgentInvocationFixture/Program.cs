@@ -88,7 +88,11 @@ internal static class Program
                 Console.OpenStandardOutput().Flush();
                 return args.Length > 1 && int.TryParse(args[^1], out var exitCode) ? exitCode : 0;
             }
+            case "environment":
+                Console.Write(Environment.GetEnvironmentVariable(args[1]));
+                return 0;
             case "flood":
+            case "flood-hold":
             {
                 using var input = Console.OpenStandardInput();
                 input.CopyTo(Stream.Null);
@@ -101,6 +105,7 @@ internal static class Program
                 output.Flush();
                 error.Write(errBuffer);
                 error.Flush();
+                if (args[0] == "flood-hold") Thread.Sleep(TimeSpan.FromSeconds(30));
                 return 0;
             }
             case "exit":
