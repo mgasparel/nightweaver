@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
@@ -17,6 +18,8 @@ internal sealed class OperationalObservationSource(
     private static readonly JsonSerializerOptions RuntimeJson = ObservationJson.Create(snakeCase: true);
     private static readonly string[] InventorySource = ["inventory"];
     private readonly Dictionary<string, ObservationSourceState> states = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (byte[] Hash, object Identity)> sourceContent = new(StringComparer.Ordinal);
+    private Action<string, ObservationSourceState>? revalidate;
     private readonly Dictionary<string, History> histories = new(StringComparer.Ordinal);
     private readonly Dictionary<string, WorkspaceCycle> workspaces = new(StringComparer.Ordinal);
     private readonly HashSet<string> commentsReadThisSweep = new(StringComparer.Ordinal);
@@ -53,6 +56,7 @@ internal sealed class OperationalObservationSource(
         internal IReadOnlyList<BeadDependency> Incoming { get; set; } = [];
         internal IReadOnlyList<BeadDependency> Outgoing { get; set; } = [];
         internal IReadOnlyList<BeadsCommentSnapshot> Comments { get; set; } = [];
+        internal bool CommentsPrefetched { get; set; }
         internal string IncomingState { get; set; } = "complete";
         internal string OutgoingState { get; set; } = "complete";
         internal BeadWorkspaceEnvironment? Environment { get; set; }
@@ -99,14 +103,22 @@ internal sealed class OperationalObservationSource(
         try
         {
             var result = await read();
-            states[id] = new("fresh", clock.GetUtcNow(), attempt, null);
+            // BeadsInventory's map is internal; serializing the wrapper would
+            // produce {} and falsely treat different inventories as identical.
+            object content = result is BeadsInventory inventory ? inventory.ById : result;
+            var hash = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(content, ObservationJson.Options));
+            if (!sourceContent.TryGetValue(id, out var previousContent) || !hash.AsSpan().SequenceEqual(previousContent.Hash))
+                sourceContent[id] = (hash, new object());
+            states[id] = new("fresh", clock.GetUtcNow(), attempt, null) { ContentIdentity = sourceContent[id].Identity };
+            revalidate?.Invoke(id, states[id]);
             return result;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception exception) when (IsSourceFailure(exception))
         {
             states.TryGetValue(id, out var previous);
-            states[id] = new(previous?.ObservedAt is null ? "unavailable" : "stale", previous?.ObservedAt, attempt, Error(exception));
+            states[id] = new(previous?.ObservedAt is null ? "unavailable" : "stale", previous?.ObservedAt, attempt, Error(exception))
+                { ContentIdentity = previous?.ContentIdentity };
             return null;
         }
     }
@@ -132,7 +144,15 @@ internal sealed class OperationalObservationSource(
         return new(data, attempted, sources.Values.Min(state => state.ObservedAt), sources, error);
     }
 
-    public async Task<IReadOnlyDictionary<string, ObservationSample>> ReadTrackerAsync(IReadOnlyList<OperationKey> keys, CancellationToken token)
+    public async Task<IReadOnlyDictionary<string, ObservationSample>> ReadTrackerAsync(IReadOnlyList<OperationKey> keys, CancellationToken token,
+        Action<string, ObservationSourceState>? revalidated = null)
+    {
+        revalidate = revalidated;
+        try { return await ReadTrackerCoreAsync(keys, token); }
+        finally { revalidate = null; }
+    }
+
+    private async Task<IReadOnlyDictionary<string, ObservationSample>> ReadTrackerCoreAsync(IReadOnlyList<OperationKey> keys, CancellationToken token)
     {
         sweepNativeStarted = nativeMilliseconds;
         commentsReadThisSweep.Clear();
@@ -143,7 +163,7 @@ internal sealed class OperationalObservationSource(
         if (keys.Count == 0)
         {
             foreach (var history in histories.Values) memory.Release(history);
-            histories.Clear(); states.Clear(); workspaces.Clear(); attentionBeads = null;
+            histories.Clear(); states.Clear(); sourceContent.Clear(); workspaces.Clear(); attentionBeads = null;
             attentionPresentations.Clear(); retainedInventory = null; resumeDetails = false;
             return result;
         }
@@ -257,16 +277,43 @@ internal sealed class OperationalObservationSource(
 
         var selected = keys.Where(key => key.Kind == "workspace").ToArray();
         foreach (var id in workspaces.Keys.Where(id => !selected.Any(key => key.Argument == id)).ToArray()) workspaces.Remove(id);
+        string? failedPrefetch = null;
         async Task ReadSelectedAsync()
         {
             if (selected.Length > 0 && inventory is not null && HasBudget)
             {
                 var key = selected[workspaceCursor++ % selected.Length];
+                if (key.Argument == failedPrefetch) return;
                 var sample = await ReadWorkspaceAsync(repository, reader, inventory, key.Argument!, token);
                 if (sample is not null) result[key.Value] = sample;
             }
             else if (inventory is null)
                 foreach (var key in selected) result[key.Value] = Sample(null, started, "inventory");
+        }
+        // Read the selected cycle's shared history at a consistent position.
+        // Alternating projection priority must not move this same read from the
+        // beginning of one sweep to the end of the next and age it past budget.
+        if (selected.Length > 0 && inventory is not null && HasBudget && commentsThisSweep < 4)
+        {
+            var id = selected[workspaceCursor % selected.Length].Argument!;
+            if (!workspaces.ContainsKey(id) && inventory.ById.TryGetValue(id, out var initial))
+            {
+                var cycle = new WorkspaceCycle(initial, clock.GetUtcNow());
+                workspaces[id] = cycle;
+                commentsThisSweep++;
+                var comments = await ReadAsync("comments:" + id, () => reader.ReadDetailCommentsAsync(repository, id, token), token);
+                cycle.Sources["comments:" + id] = states["comments:" + id];
+                try
+                {
+                    if (comments is not null) { StoreHistory(id, comments); cycle.Comments = comments; }
+                    cycle.CommentsPrefetched = true;
+                }
+                catch (ToolExecutionException exception)
+                {
+                    workspaces.Remove(id); failedPrefetch = id;
+                    result["workspace:" + id] = new(null, cycle.Started, null, cycle.Sources.ToDictionary(), Error(exception));
+                }
+            }
         }
         // Alternate only on turns with detail capacity. Otherwise a slow core can
         // phase-lock the priority and continuously selected Workspaces starve history.
@@ -311,6 +358,7 @@ internal sealed class OperationalObservationSource(
             while (HasBudget)
             {
                 string sourceId;
+                ObservationSourceState? capturedState = null;
                 switch (cycle.Step)
                 {
                     case 0:
@@ -339,7 +387,12 @@ internal sealed class OperationalObservationSource(
                         break;
                     case 3:
                         sourceId = "comments:" + id;
-                        if (histories.TryGetValue(id, out var history) && commentsReadThisSweep.Contains(id)
+                        if (cycle.CommentsPrefetched)
+                        {
+                            capturedState = cycle.Sources[sourceId];
+                            cycle.CommentsPrefetched = false;
+                        }
+                        else if (histories.TryGetValue(id, out var history) && commentsReadThisSweep.Contains(id)
                             && states[sourceId].Error is null)
                             cycle.Comments = history.Comments;
                         else
@@ -387,16 +440,17 @@ internal sealed class OperationalObservationSource(
                         var sample = WorkspaceSample(cycle, id);
                         return sample;
                 }
-                cycle.Sources[sourceId] = states[sourceId];
-                if (states[sourceId].Error is not null && !sourceId.StartsWith("relations-", StringComparison.Ordinal)
+                var state = capturedState ?? states[sourceId];
+                cycle.Sources[sourceId] = state;
+                if (state.Error is not null && !sourceId.StartsWith("relations-", StringComparison.Ordinal)
                     && !(sourceId.StartsWith("environment:", StringComparison.Ordinal) && cycle.Environment is not null))
                 {
                     // Retry only the timed-out substep on the next bounded sweep.
                     // Replaying successful reads can starve a Workspace under slow
                     // native commands. The original identity and final confirming
                     // inventory still guard the complete projection.
-                    if (states[sourceId].Error?.Code != "source-timeout") workspaces.Remove(id);
-                    return new(null, cycle.Started, null, cycle.Sources.ToDictionary(), states[sourceId].Error);
+                    if (state.Error?.Code != "source-timeout") workspaces.Remove(id);
+                    return new(null, cycle.Started, null, cycle.Sources.ToDictionary(), state.Error);
                 }
                 cycle.Step++;
             }
@@ -477,7 +531,7 @@ internal sealed class OperationalObservationSource(
         var sample = Sample(items, attentionStarted, InventorySource.Concat(paused.Select(bead => "comments:" + bead.Id)).ToArray());
         var sources = sample.Sources.ToDictionary();
         sources["inventory"] = attentionInventoryState!;
-        result["attention"] = sample with { Sources = sources, ObservedAt = attentionStarted };
+        result["attention"] = sample with { Sources = sources, ObservedAt = sources.Values.Min(state => state.ObservedAt) };
         attentionBeads = null;
         attentionPresentations.Clear();
     }
@@ -502,7 +556,8 @@ internal sealed class OperationalObservationSource(
             , StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
         foreach (var id in histories.Keys.Where(id => !retained.Contains(id)).ToArray())
         { memory.Release(histories[id]); histories.Remove(id); }
-        foreach (var id in states.Keys.Where(id => id.Contains(':') && !retained.Contains(id[(id.IndexOf(':') + 1)..])).ToArray()) states.Remove(id);
+        foreach (var id in states.Keys.Where(id => id.Contains(':') && !retained.Contains(id[(id.IndexOf(':') + 1)..])).ToArray())
+        { states.Remove(id); sourceContent.Remove(id); }
     }
 
     public async Task<IReadOnlyDictionary<string, ObservationSample>> ReadRuntimeAsync(IReadOnlyList<OperationKey> keys, CancellationToken token)

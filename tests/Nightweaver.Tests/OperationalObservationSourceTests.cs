@@ -14,6 +14,80 @@ namespace Nightweaver.Tests;
 public sealed class OperationalObservationSourceTests
 {
     [Fact]
+    public async Task UnchangedSourcesStayFreshBetweenCompleteSerialCollections()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        OperationalObservationService? service = null;
+        var monitor = false;
+        var runner = new Runner { Advance = () =>
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(400));
+            if (!monitor) return;
+            Assert.Equal("fresh", service!.Read("workspace:task-1").Health);
+            Assert.Equal("fresh", service.Read("attention").Health);
+        } };
+        using var factory = Factory(target.Path, runner, clock);
+        using var observations = new OperationalObservationService("web-test", Adapter(factory), clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        service = observations;
+        service.Read("workspace:task-1"); service.Read("attention");
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        var first = service.Read("workspace:task-1");
+        Assert.Equal("fresh", first.Health);
+        monitor = true;
+        await service.CollectOnceAsync(false, token);
+        await service.CollectOnceAsync(false, token);
+        Assert.Equal(first.Revision, service.Read("workspace:task-1").Revision);
+        Assert.Equal(18, runner.Commands.Count); // Six native queries per cycle, no added reads.
+    }
+
+    [Fact]
+    public async Task SelectedHistoryCacheRefusalRemainsAnExplicitRecoverableSourceLimit()
+    {
+        using var target = new ObservationTargetFixture();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner);
+        var memory = new ObservationMemoryBudget();
+        var owner = new object();
+        Assert.True(memory.TryReplace([], [(owner, ObservationMemoryBudget.MaximumBytes)]));
+        var source = Adapter(factory, memory);
+        var keys = Keys("workspace:task-1");
+        var token = TestContext.Current.CancellationToken;
+        var failed = await source.ReadTrackerAsync(keys, token);
+        Assert.Equal("source-limit", failed[keys[0].Value].Error?.Code);
+        Assert.Single(runner.Commands, command => command == "comments");
+        memory.Release(owner);
+        var recovered = await source.ReadTrackerAsync(keys, token);
+        Assert.Null(recovered[keys[0].Value].Error);
+        Assert.IsType<BeadWorkspaceResponse>(recovered[keys[0].Value].Data);
+    }
+
+    [Fact]
+    public async Task SourceContentProvenanceChangesWithDataAndResetsAfterIdleEviction()
+    {
+        using var target = new ObservationTargetFixture();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner);
+        var source = Adapter(factory);
+        var keys = Keys("explorer:all:");
+        var token = TestContext.Current.CancellationToken;
+        var first = (await source.ReadTrackerAsync(keys, token))[keys[0].Value].Sources["inventory"].ContentIdentity;
+        var observed = new List<ObservationSourceState>();
+        await source.ReadTrackerAsync(keys, token, (_, state) => observed.Add(state));
+        Assert.Same(first, Assert.Single(observed).ContentIdentity);
+        runner.Title = "external edit";
+        observed.Clear();
+        await source.ReadTrackerAsync(keys, token, (_, state) => observed.Add(state));
+        var changed = Assert.Single(observed).ContentIdentity;
+        Assert.NotSame(first, changed);
+        await source.ReadTrackerAsync([], token);
+        var readmitted = (await source.ReadTrackerAsync(keys, token))[keys[0].Value].Sources["inventory"].ContentIdentity;
+        Assert.NotSame(changed, readmitted);
+    }
+
+    [Fact]
     public async Task ExplorerPagesShareInventoryAndReconcileExternalChangesWithBoundedResponses()
     {
         using var target = new ObservationTargetFixture();

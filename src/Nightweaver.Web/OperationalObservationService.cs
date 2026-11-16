@@ -36,6 +36,7 @@ internal sealed class OperationalObservationService(
         internal int Pins { get; set; }
         internal string Semantic { get; set; } = "";
         internal int Bytes { get; set; } = 1024;
+        internal Dictionary<string, object?> ContentIdentities { get; set; } = new(StringComparer.Ordinal);
     }
 
     internal ObservationEnvelope Read(string key)
@@ -249,7 +250,8 @@ internal sealed class OperationalObservationService(
             return;
         }
         var keys = captured.Select(entry => entry.Key).ToArray();
-        var samples = runtime ? await source.ReadRuntimeAsync(keys, token) : await source.ReadTrackerAsync(keys, token);
+        var samples = runtime ? await source.ReadRuntimeAsync(keys, token)
+            : await source.ReadTrackerAsync(keys, token, (id, state) => Revalidate(captured, id, state));
         lock (sync)
         {
             foreach (var entry in captured)
@@ -285,7 +287,39 @@ internal sealed class OperationalObservationService(
                     LastAttemptAt = sample.AttemptedAt,
                     NextAttemptAt = clock.GetUtcNow().AddMilliseconds(entry.Envelope.TargetIntervalMs)
                 };
-                Publish(entry, updated);
+                Publish(entry, updated, projection: sample.Error is null || sample.Partial || missing);
+            }
+        }
+    }
+
+    private void Revalidate(Entry[] captured, string id, ObservationSourceState state)
+    {
+        if (state.ContentIdentity is null || state.Health != "fresh" || state.Error is not null) return;
+        lock (sync)
+        {
+            foreach (var entry in captured)
+            {
+                if (stopping || !entries.TryGetValue(entry.Key.Value, out var current) || !ReferenceEquals(current, entry)) continue;
+                var envelope = entry.Envelope;
+                if (envelope.Data is null || !entry.ContentIdentities.TryGetValue(id, out var backing)
+                    || !ReferenceEquals(backing, state.ContentIdentity) || !envelope.Sources.TryGetValue(id, out var previous)
+                    || !ReferenceEquals(previous.ContentIdentity, state.ContentIdentity)) continue;
+                var sources = envelope.Sources.ToDictionary();
+                sources[id] = state;
+                var observed = sources.Values.Min(item => item.ObservedAt);
+                var coherent = sources.Count == entry.ContentIdentities.Count && sources.All(pair => pair.Value.ContentIdentity is not null
+                    && entry.ContentIdentities.TryGetValue(pair.Key, out var identity) && ReferenceEquals(identity, pair.Value.ContentIdentity));
+                var recovered = coherent && envelope.Error?.Code == "budget-exceeded"
+                    && sources.Values.All(item => item.Health == "fresh" && item.Error is null);
+                var updated = WithAge(entry, envelope with { Sources = sources,
+                    ObservedAt = coherent && observed > envelope.ObservedAt ? observed : envelope.ObservedAt,
+                    Health = recovered ? "fresh" : envelope.Health, Error = recovered ? null : envelope.Error });
+                if (updated.Health == envelope.Health && updated.Error == envelope.Error
+                    && updated.Sources.All(pair => envelope.Sources.TryGetValue(pair.Key, out var old) && pair.Value.Health == old.Health && pair.Value.Error == old.Error))
+                    // Only fixed-width sampling timestamps changed. Avoid serializing
+                    // the complete retained projection for every source read.
+                    entry.Envelope = updated with { Sources = updated.Sources.ToFrozenDictionary(StringComparer.Ordinal) };
+                else Publish(entry, updated);
             }
         }
     }
@@ -318,12 +352,13 @@ internal sealed class OperationalObservationService(
         return envelope with { Health = envelope.Data is null ? "unavailable" : "stale", Error = error, Sources = sources };
     }
 
-    private void Publish(Entry entry, ObservationEnvelope envelope)
+    private void Publish(Entry entry, ObservationEnvelope envelope, bool projection = false)
     {
         envelope = WithAge(entry, envelope);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope with { Revision = ulong.MaxValue.ToString(CultureInfo.InvariantCulture) }, Json).Length + MetadataReserve;
         if (!budget.TryReplace([], [((object)entry, bytes)]))
         {
+            projection = false;
             envelope = envelope with { Data = entry.Envelope.Data, ObservedAt = entry.Envelope.ObservedAt,
                 Health = entry.Envelope.Data is null ? "unavailable" : "stale",
                 Error = new("source-limit", "Projection exceeds the observation cache budget.") };
@@ -343,6 +378,7 @@ internal sealed class OperationalObservationService(
         if (changed) envelope = envelope with { Revision = NextRevision() };
         entry.Semantic = semantic;
         entry.Envelope = envelope with { Sources = envelope.Sources.ToFrozenDictionary(StringComparer.Ordinal) };
+        if (projection) entry.ContentIdentities = envelope.Sources.ToDictionary(pair => pair.Key, pair => pair.Value.ContentIdentity, StringComparer.Ordinal);
         entry.Bytes = bytes;
         if (changed) Changed?.Invoke(entry.Key.Value, envelope.Revision);
     }

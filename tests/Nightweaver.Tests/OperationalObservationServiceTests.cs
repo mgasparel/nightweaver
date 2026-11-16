@@ -148,6 +148,73 @@ public sealed class OperationalObservationServiceTests
     }
 
     [Fact]
+    public async Task SourceRevalidationRequiresMatchingContentAndCannotHideOtherStaleSourcesOrProjectionErrors()
+    {
+        var clock = new Clock();
+        var source = new Source(clock);
+        using var service = Service(source, clock);
+        service.Read("attention");
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        var good = service.Read("attention");
+        clock.Advance(TimeSpan.FromSeconds(4));
+        Assert.Equal("stale", service.Read("attention").Health);
+        var fresh = new ObservationSourceState("fresh", clock.GetUtcNow(), clock.GetUtcNow(), null);
+        source.Revalidate!("inventory", fresh with { ContentIdentity = new object() });
+        Assert.Equal(good.Sources["inventory"].ObservedAt, service.Read("attention").Sources["inventory"].ObservedAt);
+        source.Revalidate("inventory", fresh with { ContentIdentity = source.InventoryIdentity });
+        Assert.Equal("stale", service.Read("attention").Health); // Readiness is still overdue.
+        source.Revalidate("ready", fresh with { ContentIdentity = source.ReadyIdentity });
+        Assert.Equal("fresh", service.Read("attention").Health);
+        Assert.Equal(good.Data, service.Read("attention").Data);
+        Assert.Equal(1, source.TrackerReads);
+        Assert.DoesNotContain("contentIdentity", JsonSerializer.Serialize(service.Read("attention"), ObservationJson.Options));
+        source.Error = new("source-conflict", "Projection identity changed.");
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        source.Revalidate!("ready", fresh with { ContentIdentity = source.ReadyIdentity });
+        Assert.Equal("source-conflict", service.Read("attention").Error?.Code);
+        Assert.Equal("stale", service.Read("attention").Health);
+    }
+
+    [Fact]
+    public async Task PendingChangedSourceMetadataCannotRevalidateRetainedData()
+    {
+        var clock = new Clock();
+        var source = new Source(clock);
+        using var service = Service(source, clock);
+        service.Read("attention");
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        var original = service.Read("attention").Data;
+        source.Content = "changed but not yet published";
+        source.InventoryIdentity = new(); source.ReadyIdentity = new(); source.Pending = true;
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        clock.Advance(TimeSpan.FromSeconds(4));
+        Assert.Equal("stale", service.Read("attention").Health);
+        var fresh = new ObservationSourceState("fresh", clock.GetUtcNow(), clock.GetUtcNow(), null);
+        source.Revalidate!("inventory", fresh with { ContentIdentity = source.InventoryIdentity });
+        source.Revalidate("ready", fresh with { ContentIdentity = source.ReadyIdentity });
+        Assert.Equal(original, service.Read("attention").Data);
+        Assert.Equal("stale", service.Read("attention").Health);
+    }
+
+    [Fact]
+    public async Task RevalidationFromAnEvictedCollectionCannotRefreshItsReplacement()
+    {
+        var clock = new Clock();
+        var source = new Source(clock);
+        using var service = Service(source, clock);
+        service.Read("attention");
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        var obsolete = source.Revalidate!;
+        clock.Advance(TimeSpan.FromSeconds(61));
+        service.Read("attention");
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        var current = service.Read("attention");
+        clock.Advance(TimeSpan.FromSeconds(1));
+        obsolete("inventory", new("fresh", clock.GetUtcNow(), clock.GetUtcNow(), null) { ContentIdentity = source.InventoryIdentity });
+        Assert.Equal(current, service.Read("attention"));
+    }
+
+    [Fact]
     public async Task TtlEvictionAllocatesNewRevisionsAndDiscardsOldInFlightResults()
     {
         var clock = new Clock();
@@ -355,8 +422,14 @@ public sealed class OperationalObservationServiceTests
         internal TaskCompletionSource? Hold { get; set; }
         internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal bool WasCanceled { get; private set; }
-        public async Task<IReadOnlyDictionary<string, ObservationSample>> ReadTrackerAsync(IReadOnlyList<OperationKey> keys, CancellationToken token)
+        internal object InventoryIdentity { get; set; } = new();
+        internal object ReadyIdentity { get; set; } = new();
+        internal bool Pending { get; set; }
+        internal Action<string, ObservationSourceState>? Revalidate { get; private set; }
+        public async Task<IReadOnlyDictionary<string, ObservationSample>> ReadTrackerAsync(IReadOnlyList<OperationKey> keys, CancellationToken token,
+            Action<string, ObservationSourceState>? revalidated = null)
         {
+            Revalidate = revalidated;
             TrackerReads++;
             Entered.TrySetResult();
             if (Hold is not null)
@@ -378,9 +451,10 @@ public sealed class OperationalObservationServiceTests
                 IncludeSamplingDates ? new { content = Content, generatedAt = now, lastCaughtUpAt = Checkpoint, activityAt = Activity } : new { content = Content },
                 now, now, new Dictionary<string, ObservationSourceState>
                 {
-                    [runtime ? "runtime" : "inventory"] = new("fresh", now, now, null),
+                    [runtime ? "runtime" : "inventory"] = new("fresh", now, now, null) { ContentIdentity = InventoryIdentity },
                     [runtime ? "cleanup" : "ready"] = new(Error is null || runtime ? "fresh" : "stale", now, now, runtime ? null : Error)
-                }, runtime ? null : Error), StringComparer.Ordinal);
+                        { ContentIdentity = ReadyIdentity }
+                }, runtime ? null : Error, Pending: Pending), StringComparer.Ordinal);
         }
     }
 }

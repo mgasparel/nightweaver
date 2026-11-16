@@ -52,7 +52,12 @@ internal sealed class ObservationRequestException(int statusCode) : Exception
 
 internal sealed record ObservationError(string Code, string Message, bool Retryable = true);
 internal sealed record ObservationSourceState(string Health, DateTimeOffset? ObservedAt,
-    DateTimeOffset? LastAttemptAt, ObservationError? Error);
+    DateTimeOffset? LastAttemptAt, ObservationError? Error)
+{
+    // Host-local provenance, never part of the wire contract. Revalidation may
+    // refresh retained data only when it still represents this exact content.
+    internal object? ContentIdentity { get; init; }
+}
 internal sealed record ObservationEnvelope(string Schema, string ProjectId, string Key, string Epoch,
     string Revision, DateTimeOffset? ObservedAt, DateTimeOffset? LastAttemptAt, string Health,
     System.Text.Json.JsonElement? Data, ObservationError? Error,
@@ -62,7 +67,8 @@ internal sealed record ObservationSample(object? Data, DateTimeOffset AttemptedA
 
 internal interface IOperationalObservationSource
 {
-    Task<IReadOnlyDictionary<string, ObservationSample>> ReadTrackerAsync(IReadOnlyList<OperationKey> keys, CancellationToken token);
+    Task<IReadOnlyDictionary<string, ObservationSample>> ReadTrackerAsync(IReadOnlyList<OperationKey> keys, CancellationToken token,
+        Action<string, ObservationSourceState>? revalidated = null);
     Task<IReadOnlyDictionary<string, ObservationSample>> ReadRuntimeAsync(IReadOnlyList<OperationKey> keys, CancellationToken token);
 }
 

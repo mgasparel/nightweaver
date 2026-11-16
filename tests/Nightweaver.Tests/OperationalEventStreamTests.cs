@@ -155,7 +155,8 @@ public sealed class OperationalEventStreamTests
     private sealed class Source : IOperationalObservationSource
     {
         internal string Content { get; set; } = "initial";
-        public Task<IReadOnlyDictionary<string, ObservationSample>> ReadTrackerAsync(IReadOnlyList<OperationKey> keys, CancellationToken token)
+        public Task<IReadOnlyDictionary<string, ObservationSample>> ReadTrackerAsync(IReadOnlyList<OperationKey> keys, CancellationToken token,
+            Action<string, ObservationSourceState>? revalidated = null)
             => Read(keys);
         public Task<IReadOnlyDictionary<string, ObservationSample>> ReadRuntimeAsync(IReadOnlyList<OperationKey> keys, CancellationToken token)
             => Read(keys);

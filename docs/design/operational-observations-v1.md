@@ -158,6 +158,17 @@ stale with budget-exceeded (unavailable if never successful), even if no command
 has completed to report failure. Scheduled detail backlogs expose their actual
 nextAttemptAt. Do not label a 30-second comment rotation five-second fresh.
 
+A successful source read may refresh sampling metadata on retained projections
+before the complete serial collection finishes, only when its host-local content
+identity still matches the source content backing each retained projection.
+Changed content waits for complete projection/identity validation; metadata from
+a new source value must never make an older projection fresh. Content identities
+are not serialized, survive only with bounded source/cache entries, and callbacks
+from evicted collection entries cannot update readmissions. Revalidation adds no
+native reads and does not extend freshness limits. Read the selected Workspace's
+shared comment history once at a consistent point in its cycle so alternating
+Attention/Workspace priority cannot introduce artificial gaps between those reads.
+
 HTTP problem responses, outside the envelope: 400 invalid key/query/JSON; 403
 rejected origin on refresh/commands; 404 unknown Project or unsupported route;
 413 body limit; 415 content type; 429 resource/subscriber limits with Retry-After
