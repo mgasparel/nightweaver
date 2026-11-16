@@ -56,6 +56,8 @@ verifies an external comments-only edit reaches the selected Workspace. No respo
 or health metadata are substituted. Evidence and 1440/375/720 captures go to
 `TestResults/source-freshness` or `NIGHTWEAVER_QA_OUTPUT`. Stop the exact stack
 in `finally`, including on failure.
+The probe also navigates to Overview and watches Digest checkpoint freshness
+while the previous Workspace interest remains within its disconnect grace.
 
 `node status-stability-qa.mjs` checks the shared Studio status lifecycle against
 the exact isolated stack. It injects frequent version notifications and delays

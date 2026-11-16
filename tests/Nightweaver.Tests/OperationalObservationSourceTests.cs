@@ -26,12 +26,13 @@ public sealed class OperationalObservationSourceTests
             if (!monitor) return;
             Assert.Equal("fresh", service!.Read("workspace:task-1").Health);
             Assert.Equal("fresh", service.Read("attention").Health);
+            Assert.Equal("fresh", service.Read("digest:auto").Health);
         } };
         using var factory = Factory(target.Path, runner, clock);
         using var observations = new OperationalObservationService("web-test", Adapter(factory), clock,
             factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
         service = observations;
-        service.Read("workspace:task-1"); service.Read("attention");
+        service.Read("workspace:task-1"); service.Read("attention"); service.Read("digest:auto");
         var token = TestContext.Current.CancellationToken;
         await service.CollectOnceAsync(false, token);
         var first = service.Read("workspace:task-1");
@@ -102,11 +103,11 @@ public sealed class OperationalObservationSourceTests
         var token = TestContext.Current.CancellationToken;
         var first = (await source.ReadTrackerAsync(keys, token))[keys[0].Value].Sources["inventory"].ContentIdentity;
         var observed = new List<ObservationSourceState>();
-        await source.ReadTrackerAsync(keys, token, (_, state) => observed.Add(state));
+        await source.ReadTrackerAsync(keys, token, (id, state) => { if (id == "inventory") observed.Add(state); });
         Assert.Same(first, Assert.Single(observed).ContentIdentity);
         runner.Title = "external edit";
         observed.Clear();
-        await source.ReadTrackerAsync(keys, token, (_, state) => observed.Add(state));
+        await source.ReadTrackerAsync(keys, token, (id, state) => { if (id == "inventory") observed.Add(state); });
         var changed = Assert.Single(observed).ContentIdentity;
         Assert.NotSame(first, changed);
         await source.ReadTrackerAsync([], token);
@@ -164,6 +165,8 @@ public sealed class OperationalObservationSourceTests
         var source = Adapter(factory);
         var token = TestContext.Current.CancellationToken;
         var first = await source.ReadTrackerAsync(Keys("digest:24h"), token);
+        var originalCheckpoint = first["digest:24h"].Sources["checkpoint"].ContentIdentity;
+        Assert.NotNull(originalCheckpoint);
         var displayed = Assert.IsType<CatchUpDigestResponse>(first["digest:24h"].Data);
         Assert.Equal(cutoff, displayed.GeneratedAt);
         Assert.True(clock.GetUtcNow() > cutoff.AddSeconds(1));
@@ -173,6 +176,7 @@ public sealed class OperationalObservationSourceTests
         // though the first inventory and its projection completed after that second.
         runner.UpdatedAt = cutoff.ToString("O", CultureInfo.InvariantCulture);
         var next = await source.ReadTrackerAsync(Keys("digest:since_caught_up"), token);
+        Assert.NotSame(originalCheckpoint, next["digest:since_caught_up"].Sources["checkpoint"].ContentIdentity);
         var digest = Assert.IsType<CatchUpDigestResponse>(next["digest:since_caught_up"].Data);
         Assert.Equal(cutoff, digest.LastCaughtUpAt);
         Assert.False(digest.IsCaughtUp);
