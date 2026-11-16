@@ -66,6 +66,15 @@ The native rename buffer copies exact UTF-16 path code units. The existing deep
 case uses an unmatched surrogate plus a distinct replacement-character alias
 with a foreign sentinel, proving encoding cannot redirect the publication.
 
+The native observer's two external writes explicitly enable Dolt auto-commit,
+matching production rather than inheriting its fixture's read-probe default.
+Read/write overlap and the original cold/update observation deadlines remain.
+A balanced local comparison after identical mutations measured 5/24 reads above
+two seconds with auto-commit off and 0/24 with it on; this is performance evidence,
+not a claim that off loses SQL-committed data. Both smoke phases retain command
+and external-write timing diagnostics on failure. `BD_DISABLE_EVENT_FLUSH` controls
+the detached metrics uploader, not durable tracker journaling, and is unchanged.
+
 Test fixtures copy settled immutable repositories into independent file trees,
 including Git objects and tracker stores. The small `GitFixture` initializes one
 empty Git baseline; manual-pilot profile templates seed independent copies of

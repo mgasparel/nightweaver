@@ -387,22 +387,31 @@ public sealed class OperationalObservationSourceTests
         using var client = factory.CreateClient();
         var token = TestContext.Current.CancellationToken;
         var path = $"/api/operations/v1/projects/web-test/resources?key=workspace:{bead}";
-        var cold = Stopwatch.StartNew();
-        JsonElement first;
-        try { first = await UntilAsync(client, path, root => root.GetProperty("data").ValueKind == JsonValueKind.Object, token); }
-        catch (TimeoutException)
+        async Task<JsonElement> ReadObservedAsync(Func<JsonElement, bool> condition)
         {
-            foreach (var measurement in measured) TestContext.Current.TestOutputHelper?.WriteLine(measurement);
-            throw;
+            try { return await UntilAsync(client, path, condition, token); }
+            catch (TimeoutException)
+            {
+                foreach (var measurement in measured) TestContext.Current.TestOutputHelper?.WriteLine(measurement);
+                throw;
+            }
         }
+        var cold = Stopwatch.StartNew();
+        var first = await ReadObservedAsync(root => root.GetProperty("data").ValueKind == JsonValueKind.Object);
         var coldSeconds = cold.Elapsed.TotalSeconds;
         var count = first.GetProperty("data").GetProperty("comments").GetArrayLength();
         var revision = first.GetProperty("revision").GetString();
-        target.Run("bd", ["comments", "add", bead, "External combined observer comment marker"]);
-        target.Run("bd", ["dep", "add", bead, blocker]);
+        // The fixture's default environment is for read-only probes. Model the
+        // production write profile explicitly while retaining external overlap.
+        var mutation = Stopwatch.StartNew();
+        target.Run("bd", ["--dolt-auto-commit", "on", "comments", "add", bead, "External combined observer comment marker"]);
+        measured.Enqueue($"external comment write (auto-commit on): {mutation.Elapsed.TotalMilliseconds:F1}ms");
+        mutation.Restart();
+        target.Run("bd", ["--dolt-auto-commit", "on", "dep", "add", bead, blocker]);
+        measured.Enqueue($"external dependency write (auto-commit on): {mutation.Elapsed.TotalMilliseconds:F1}ms");
         var changed = Stopwatch.StartNew();
         const string commentMarker = "External combined observer comment marker";
-        var combined = await UntilAsync(client, path, root =>
+        var combined = await ReadObservedAsync(root =>
         {
             if (root.GetProperty("data").ValueKind != JsonValueKind.Object
                 || root.GetProperty("revision").GetString() == revision)
@@ -417,7 +426,7 @@ public sealed class OperationalObservationSourceTests
                     relation.GetProperty("id").GetString() == blocker
                     && relation.GetProperty("type").GetString() == "blocks"
                     && relation.GetProperty("direction").GetString() == "outgoing");
-        }, token);
+        });
         var combinedSeconds = changed.Elapsed.TotalSeconds;
         Assert.NotEqual(revision, combined.GetProperty("revision").GetString());
         var combinedData = combined.GetProperty("data");

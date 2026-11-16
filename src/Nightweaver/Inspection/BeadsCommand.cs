@@ -76,7 +76,7 @@ internal static class BeadsCommand
         }
         // bd metrics can create files and launch a detached flusher.
         environment["BD_DISABLE_METRICS"] = "1";
-        // Read-only inspections suppress journaling. Escalation writes retain normal journal behavior.
+        // Inspections suppress the detached metrics flusher; this is not the tracker journal switch.
         environment["BD_DISABLE_EVENT_FLUSH"] = readOnly ? "1" : null;
         environment["OTEL_SDK_DISABLED"] = "true";
         environment["BD_OTEL_STDOUT"] = "false";
