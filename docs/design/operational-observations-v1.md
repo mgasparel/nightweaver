@@ -294,8 +294,15 @@ Bootstrap/reconnect/wake sequence:
    watermarks, invalidate old requests and mark retained display stale before
    bootstrap; old data is display-only until replaced in the new epoch.
 4. Invalidation during a read schedules exactly one further coalesced GET. An
-   obsolete response cannot replace newer state; retained display stays visibly
-   stale until the authoritative response catches up. No parallel reads per key.
+   obsolete response cannot replace newer state. Routine invalidations retain the
+   last validated status while the authoritative replacement is pending, avoiding
+   stale/current flashing on every update. A fixed ten-second catch-up deadline
+   starts at the first pending invalidation; later notifications and lagging
+   responses cannot postpone it. If no response reaches the wanted revision by
+   that deadline, retained display becomes stale. Read errors/timeouts, disconnects,
+   epoch changes and authoritative source health still surface immediately.
+   Accepting a current response or ending the subscription/connection cancels the
+   deadline. No parallel reads per key.
 5. Resync refetches all active keys even at equal revision, updating freshness.
    Every 2s while visible, coalesce GETs of active cached resources to learn
    freshness-only metadata (same revision is legitimate). These GETs never start

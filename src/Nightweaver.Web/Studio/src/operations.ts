@@ -19,6 +19,7 @@ export type Transport = {
 export type Scheduler = { now(): number; later(callback: () => void, ms: number): () => void; random(): number };
 type Entry = { identity: Identity; listeners: Set<() => void>; snapshot: Snapshot; watermark: bigint;
   wanted: bigint; pending: boolean; request?: AbortController; cancelDeadline?: () => void;
+  cancelCatchup?: () => void;
   bytes: number; touched: number; refreshAttempt?: string | null; refreshOwner?: object; refreshError?: string };
 type RefreshAttempt = { promise: Promise<void>; cancel(error: Error): void };
 const id = (identity: Identity) => JSON.stringify([identity.projectId, identity.key]);
@@ -224,7 +225,16 @@ export class QueryCoordinator {
       for (const entry of this.active()) {
         const value = frame.versions?.[entry.identity.key];
         if (value && revision(value) > max(entry.wanted, entry.watermark)) {
-          entry.wanted = revision(value); this.publish(entry, { stale: true }); this.queue(entry);
+          entry.wanted = revision(value);
+          // A notification starts a replacement read, not a source failure. Keep
+          // the last validated status while catching up, with one fixed deadline
+          // that subsequent notifications cannot postpone.
+          if (!entry.cancelCatchup) entry.cancelCatchup = this.clock.later(() => {
+            entry.cancelCatchup = undefined;
+            if (entry.listeners.size && entry.wanted > entry.watermark)
+              this.publish(entry, { stale: true });
+          }, 10000);
+          this.queue(entry);
         }
       }
     }
@@ -232,6 +242,7 @@ export class QueryCoordinator {
   private resync() { for (const entry of this.active()) this.queue(entry); }
   private queue(entry: Entry) { entry.pending = true; this.schedule(); }
   private cancelRead(entry: Entry) {
+    entry.cancelCatchup?.(); entry.cancelCatchup = undefined;
     entry.cancelDeadline?.(); entry.cancelDeadline = undefined;
     const request = entry.request; entry.request = undefined;
     request?.abort();
@@ -255,11 +266,13 @@ export class QueryCoordinator {
       if (observation.projectId !== entry.identity.projectId || observation.key !== entry.identity.key || observation.schema !== "nightweaver-observation-v1") throw Error("Invalid observation identity");
       if (observation.epoch !== epoch) { this.restart(); return; }
       const version = revision(observation.revision);
-      if (version < max(entry.watermark, entry.wanted)) { this.publish(entry, { stale: true }); return; }
+      if (version < entry.watermark) { this.publish(entry, { stale: true }); return; }
+      if (version < entry.wanted) return;
       const bytes = new TextEncoder().encode(JSON.stringify(observation)).length;
       this.evict(bytes - entry.bytes, entry);
       if ([...this.entries.values()].reduce((sum, item) => sum + item.bytes, 0) - entry.bytes + bytes > 16 * 1024 * 1024) throw Error("Observation storage limit reached");
       entry.bytes = bytes; entry.watermark = version; entry.wanted = max(entry.wanted, version);
+      entry.cancelCatchup?.(); entry.cancelCatchup = undefined;
       const refreshing = entry.snapshot.refreshing && observation.lastAttemptAt === entry.refreshAttempt;
       this.publish(entry, { observation, stale: false, error: entry.refreshError, refreshing });
     }).catch(error => { if (current()) this.publish(entry, { error: String(error), stale: true }); })
