@@ -237,6 +237,35 @@ public sealed class OperationalObservationSourceTests
     }
 
     [Fact]
+    public async Task SlowNativeValidationAllowsInitialWorkspaceWithinTheNativeSmokeDeadline()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { TargetPath = target.Path };
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(1.6));
+            return native.RunAsync(request, token);
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var started = clock.GetUtcNow();
+        ObservationSample? completed = null;
+        while (clock.GetUtcNow() - started < TimeSpan.FromSeconds(45))
+        {
+            var samples = await source.ReadTrackerAsync(Keys("workspace:task-1"), TestContext.Current.CancellationToken);
+            if (samples.TryGetValue("workspace:task-1", out var sample) && sample.Data is not null)
+            {
+                completed = sample;
+                break;
+            }
+        }
+        Assert.NotNull(completed);
+        Assert.IsType<BeadWorkspaceResponse>(completed.Data);
+        Assert.True(clock.GetUtcNow() - started < TimeSpan.FromSeconds(45));
+    }
+
+    [Fact]
     public async Task InactiveAttentionReleasesAnInterruptedCohortsHistoryReservations()
     {
         using var target = new ObservationTargetFixture();

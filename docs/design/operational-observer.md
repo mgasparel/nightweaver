@@ -17,6 +17,13 @@ Tracker access releases after each observer command. Waiting guarded operations 
 
 Each tracker process has a two-second timeout and bounded stdout/stderr while receiving. Inventory and membership accept at most 8 MiB and 10,000 rows; list/ready request the 10,001-row sentinel. Detail/comments/relations accept at most 2 MiB; existing comment parsing additionally limits histories to 2,048 entries. Processes are killed and settled before their gate is released. No collection retry is hidden inside a sweep.
 
+Tracker sweeps reuse the repository validator's successful literal default-branch
+syntax check. Repository identity and tracker presence are still checked on every
+sweep. Invalid names and contextual Git expressions are never memoized. Charging
+both Git and Beads command cost in the controlled-clock Workspace regression
+prevents repeated immutable syntax checks consuming the detail budget; source,
+sweep and native-smoke deadlines are unchanged.
+
 A sweep yields after four seconds, allowing the current bounded command to settle. Ready and blocked rotate priority when the budget cannot fit both. A core sweep that leaves no detail turn yields the following sweep to pending detail work before restarting core collection. Workspace substeps resume with their original identity and a confirming inventory. At most one selected Workspace advances per sweep, rotating between two selections. Up to four comment commands run per sweep, including selected Workspace comments. Attention captures a bounded cohort and rotates its histories, sharing selected comments from the same collection. It publishes a complete projection only when all required histories have been observed; a cohort over 64 fails explicitly. Backlogs become stale rather than claiming normal freshness. Source and aggregate attempt/success clocks remain separate, and `nextAttemptAt` records the next scheduled attempt, not a successful completion promise.
 
 Runtime and cleanup sample independently every two seconds without taking the tracker gate. Factory data preserves the legacy snake-case snapshot. Missing/corrupt/stale telemetry is an observation failure; a validated stopped runtime remains a known stopped observation. Digest `generatedAt` is captured at whole-second precision before inventory collection. A strict checkpoint observation distinguishes corrupt bookmarks from absence; legacy bookmark reads retain their prior forgiving behavior. Checkpoint changes reproject Digest even when tracker content is unchanged.
