@@ -95,6 +95,11 @@ public sealed class BeadsInspectionTests
         Assert.Null(setup.Environment["BD_DISABLE_EVENT_FLUSH"]);
 
         var tail = BeadsCommand.CreateJournalTail("actual target with spaces", 27);
+        var goBudget = Environment.GetEnvironmentVariable("GOMAXPROCS")
+            ?? Math.Min(2, Environment.ProcessorCount).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal(goBudget, setup.Environment["GOMAXPROCS"]);
+        Assert.Equal(goBudget, tail.Environment["GOMAXPROCS"]);
+        Assert.Equal(goBudget, BeadsCommand.Create("actual target with spaces").Environment["GOMAXPROCS"]);
         Assert.Equal("actual target with spaces", tail.WorkingDirectory);
         Assert.Equal(Timeout.InfiniteTimeSpan, tail.Timeout);
         Assert.Equal(["--readonly", "--sandbox", "events", "tail", "--follow", "--since", "27", "--json"], tail.Arguments);

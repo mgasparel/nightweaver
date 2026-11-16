@@ -76,7 +76,7 @@ internal static class BeadsCommand
         }
         // bd metrics can create files and launch a detached flusher.
         environment["BD_DISABLE_METRICS"] = "1";
-        // Read-only inspections suppress journaling. Escalation writes retain normal journal behavior.
+        // Inspections suppress the detached metrics flusher; this is not the tracker journal switch.
         environment["BD_DISABLE_EVENT_FLUSH"] = readOnly ? "1" : null;
         environment["OTEL_SDK_DISABLED"] = "true";
         environment["BD_OTEL_STDOUT"] = "false";
@@ -84,6 +84,10 @@ internal static class BeadsCommand
         environment["BD_NO_HOOKS"] = "true";
         environment["BD_NO_DB"] = "false";
         environment["BD_DOLT_AUTO_START"] = "false";
+        // The pinned bd initializes an embedded engine per command. Bound Go's
+        // GC/worker fan-out across concurrent calls; preserve explicit user tuning.
+        environment["GOMAXPROCS"] = Environment.GetEnvironmentVariable("GOMAXPROCS")
+            ?? Math.Min(2, Environment.ProcessorCount).ToString(System.Globalization.CultureInfo.InvariantCulture);
         return environment;
     }
 }

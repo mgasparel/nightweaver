@@ -132,6 +132,8 @@ public sealed class PlanningNativeTurnTests : AgentStageIntegrationTestSupport
 
 public abstract class AgentStageIntegrationTestSupport
 {
+    internal static void PrepareTemplate() => AgentStageTargetFixture.PrepareTemplate();
+
     private protected static void AssertSuccess(AgentStageResult result, string action)
     {
         Assert.True(result.Succeeded,
@@ -188,6 +190,8 @@ public abstract class AgentStageIntegrationTestSupport
         });
 
         internal AgentStageTargetFixture() : this(initializeTemplate: false) { }
+
+        internal static void PrepareTemplate() => _ = Template.Value;
 
         private AgentStageTargetFixture(bool initializeTemplate)
         {

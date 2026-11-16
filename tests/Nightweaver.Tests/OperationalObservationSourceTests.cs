@@ -16,7 +16,7 @@ public sealed class OperationalObservationSourceTests
     [Fact]
     public async Task ExplorerPagesShareInventoryAndReconcileExternalChangesWithBoundedResponses()
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var runner = new Runner { Rows = 2000 };
         using var factory = Factory(target.Path, runner);
         var source = Adapter(factory);
@@ -52,7 +52,7 @@ public sealed class OperationalObservationSourceTests
     [Fact]
     public async Task SharedDigestCheckpointUsesPreReadWholeSecondCutoffAndRetainsBoundaryActivity()
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var clock = new CostClock();
         clock.Advance(TimeSpan.FromMilliseconds(400));
         var cutoff = DateTimeOffset.FromUnixTimeSeconds(clock.GetUtcNow().ToUnixTimeSeconds());
@@ -81,7 +81,7 @@ public sealed class OperationalObservationSourceTests
     [Fact]
     public async Task SharedInventoryProjectsAllViewsAndSelectedCommentsAreSharedWithAttention()
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var runner = new Runner();
         using var factory = Factory(target.Path, runner);
         var source = Adapter(factory);
@@ -105,7 +105,7 @@ public sealed class OperationalObservationSourceTests
     [Fact]
     public async Task AlternatingPriorityPreservesTheSharedCommentCommandBound()
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var runner = new Runner { Rows = 9 };
         using var factory = Factory(target.Path, runner);
         var source = Adapter(factory);
@@ -126,7 +126,7 @@ public sealed class OperationalObservationSourceTests
     [Fact]
     public async Task ExternalMembershipAndCommentsChangesAreReadEvenWithUnchangedInventory()
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var runner = new Runner();
         using var factory = Factory(target.Path, runner);
         var source = Adapter(factory);
@@ -143,7 +143,7 @@ public sealed class OperationalObservationSourceTests
     [Fact]
     public async Task ReadinessFailureDoesNotPoisonIndependentInventoryAndWorkspaceConflictIsRetryable()
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var runner = new Runner { FailReady = true, Conflict = true };
         using var factory = Factory(target.Path, runner);
         var source = Adapter(factory);
@@ -157,7 +157,7 @@ public sealed class OperationalObservationSourceTests
     [Fact]
     public async Task TransientHistoryFailurePreservesCompletedCohortProgress()
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var runner = new Runner { Rows = 5, FailCommentOnce = "task-3" };
         using var factory = Factory(target.Path, runner);
         var source = Adapter(factory);
@@ -171,10 +171,148 @@ public sealed class OperationalObservationSourceTests
         Assert.Single(runner.CommentIds, id => id == "task-2");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TransientWorkspaceTimeoutRetainsCompletedSubstepsAndConfirmsIdentity(bool confirmingInventory)
+    {
+        using var target = new ObservationTargetFixture();
+        var runner = new Runner { FailCommentOnce = confirmingInventory ? null : "task-1", FailListAt = confirmingInventory ? 2 : 0 };
+        using var factory = Factory(target.Path, runner);
+        var source = Adapter(factory);
+        var keys = Keys("workspace:task-1");
+        var token = TestContext.Current.CancellationToken;
+        var failed = await source.ReadTrackerAsync(keys, token);
+        Assert.Null(failed[keys[0].Value].Data);
+        Assert.Equal("source-timeout", failed[keys[0].Value].Error?.Code);
+        var recovered = await source.ReadTrackerAsync(keys, token);
+        Assert.IsType<BeadWorkspaceResponse>(recovered[keys[0].Value].Data);
+        Assert.Null(recovered[keys[0].Value].Error);
+        Assert.Single(runner.Commands, command => command == "show");
+        Assert.Equal(2, runner.Commands.Count(command => command == "dep"));
+        Assert.Equal(confirmingInventory ? 3 : 2, runner.Commands.Count(command => command == "list"));
+        Assert.Equal(confirmingInventory ? 1 : 2, runner.Commands.Count(command => command == "comments"));
+
+        // Retaining substeps cannot turn a changed workflow into a fresh blend.
+        runner.FailCommentOnce = "task-1";
+        runner.CommentTimeoutsRemaining = 1;
+        await source.ReadTrackerAsync(keys, token);
+        runner.Title = "External edit during timeout";
+        runner.Priority = 2;
+        var conflict = await source.ReadTrackerAsync(keys, token);
+        Assert.Null(conflict[keys[0].Value].Data);
+        Assert.Equal("source-conflict", conflict[keys[0].Value].Error?.Code);
+        var fresh = await source.ReadTrackerAsync(keys, token);
+        Assert.Equal(runner.Title, Assert.IsType<BeadWorkspaceResponse>(fresh[keys[0].Value].Data).Bead.Title);
+    }
+
+    [Fact]
+    public async Task WorkspaceConflictRefreshesCoreWhileAnotherWorkspaceKeepsTimingOut()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner
+        {
+            Advance = () => clock.Advance(TimeSpan.FromSeconds(1.6)),
+            FailCommentOnce = "task-1", CommentTimeoutsRemaining = 1000
+        };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("workspace:task-1");
+        var token = TestContext.Current.CancellationToken;
+        await source.ReadTrackerAsync(keys, token);
+        runner.Rows = 2;
+        keys = Keys("workspace:task-1", "workspace:task-2");
+        async Task<BeadWorkspaceResponse?> ReadHealthyAsync()
+        {
+            var samples = await source.ReadTrackerAsync(keys, token);
+            if (samples.TryGetValue(keys[0].Value, out var blocked)) Assert.Null(blocked.Data);
+            return samples.GetValueOrDefault(keys[1].Value)?.Data as BeadWorkspaceResponse;
+        }
+        BeadWorkspaceResponse? first = null;
+        for (var turn = 0; turn < 20 && first is null; turn++) first = await ReadHealthyAsync();
+        Assert.NotNull(first);
+        runner.Title = "External edit while other Workspace is pending";
+        runner.Priority = 2;
+        BeadWorkspaceResponse? changed = null;
+        for (var turn = 0; turn < 20; turn++)
+        {
+            var sample = await ReadHealthyAsync();
+            if (sample?.Bead.Title == runner.Title) { changed = sample; break; }
+        }
+        Assert.NotNull(changed);
+        Assert.Equal(2, changed.Bead.Priority);
+        Assert.True(runner.CommentTimeoutsRemaining > 0);
+        var remaining = runner.CommentTimeoutsRemaining;
+        runner.FailEveryList = true;
+        for (var turn = 0; turn < 8; turn++) await ReadHealthyAsync();
+        Assert.True(remaining - runner.CommentTimeoutsRemaining >= 2,
+            "A failed core refresh must not discard the captured inventory needed to retry pending detail work.");
+    }
+
+    [Fact]
+    public async Task SlowWorkspaceWithTransientHistoryTimeoutsPublishesWithinTheNativeSmokeDeadline()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner
+        {
+            Advance = () => clock.Advance(TimeSpan.FromSeconds(1.9)),
+            FailCommentOnce = "task-1", CommentTimeoutsRemaining = 4
+        };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var started = clock.GetUtcNow();
+        ObservationSample? completed = null;
+        while (clock.GetUtcNow() - started < TimeSpan.FromSeconds(45))
+        {
+            var samples = await source.ReadTrackerAsync(Keys("workspace:task-1"), TestContext.Current.CancellationToken);
+            if (samples.TryGetValue("workspace:task-1", out var sample) && sample.Data is not null)
+            {
+                completed = sample;
+                break;
+            }
+        }
+        Assert.NotNull(completed);
+        Assert.IsType<BeadWorkspaceResponse>(completed.Data);
+        Assert.True(clock.GetUtcNow() - started < TimeSpan.FromSeconds(45));
+        Assert.Equal(5, runner.CommentIds.Count);
+        Assert.Single(runner.Commands, command => command == "show");
+    }
+
+    [Fact]
+    public async Task SlowNativeValidationAllowsInitialWorkspaceWithinTheNativeSmokeDeadline()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { TargetPath = target.Path };
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(1.6));
+            return native.RunAsync(request, token);
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var started = clock.GetUtcNow();
+        ObservationSample? completed = null;
+        while (clock.GetUtcNow() - started < TimeSpan.FromSeconds(45))
+        {
+            var samples = await source.ReadTrackerAsync(Keys("workspace:task-1"), TestContext.Current.CancellationToken);
+            if (samples.TryGetValue("workspace:task-1", out var sample) && sample.Data is not null)
+            {
+                completed = sample;
+                break;
+            }
+        }
+        Assert.NotNull(completed);
+        Assert.IsType<BeadWorkspaceResponse>(completed.Data);
+        Assert.True(clock.GetUtcNow() - started < TimeSpan.FromSeconds(45));
+    }
+
     [Fact]
     public async Task InactiveAttentionReleasesAnInterruptedCohortsHistoryReservations()
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var runner = new Runner { Rows = 5, FailCommentOnce = "task-3" };
         using var factory = Factory(target.Path, runner);
         var memory = new ObservationMemoryBudget();
@@ -188,7 +326,7 @@ public sealed class OperationalObservationSourceTests
     [Fact]
     public async Task LargeInventoryAndAttentionHistoriesFailExplicitlyWithoutPrefixes()
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var runner = new Runner { Rows = 65 };
         using var factory = Factory(target.Path, runner);
         var source = Adapter(factory);
@@ -204,7 +342,7 @@ public sealed class OperationalObservationSourceTests
     [Fact]
     public async Task VersionedHttpReadsValidateScopeAndRefreshWithoutSynchronousTrackerReads()
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var runner = new Runner();
         using var factory = Factory(target.Path, runner);
         using var client = factory.CreateClient();
@@ -249,22 +387,31 @@ public sealed class OperationalObservationSourceTests
         using var client = factory.CreateClient();
         var token = TestContext.Current.CancellationToken;
         var path = $"/api/operations/v1/projects/web-test/resources?key=workspace:{bead}";
-        var cold = Stopwatch.StartNew();
-        JsonElement first;
-        try { first = await UntilAsync(client, path, root => root.GetProperty("data").ValueKind == JsonValueKind.Object, token); }
-        catch (TimeoutException)
+        async Task<JsonElement> ReadObservedAsync(Func<JsonElement, bool> condition)
         {
-            foreach (var measurement in measured) TestContext.Current.TestOutputHelper?.WriteLine(measurement);
-            throw;
+            try { return await UntilAsync(client, path, condition, token); }
+            catch (TimeoutException)
+            {
+                foreach (var measurement in measured) TestContext.Current.TestOutputHelper?.WriteLine(measurement);
+                throw;
+            }
         }
+        var cold = Stopwatch.StartNew();
+        var first = await ReadObservedAsync(root => root.GetProperty("data").ValueKind == JsonValueKind.Object);
         var coldSeconds = cold.Elapsed.TotalSeconds;
         var count = first.GetProperty("data").GetProperty("comments").GetArrayLength();
         var revision = first.GetProperty("revision").GetString();
-        target.Run("bd", ["comments", "add", bead, "External combined observer comment marker"]);
-        target.Run("bd", ["dep", "add", bead, blocker]);
+        // The fixture's default environment is for read-only probes. Model the
+        // production write profile explicitly while retaining external overlap.
+        var mutation = Stopwatch.StartNew();
+        target.Run("bd", ["--dolt-auto-commit", "on", "comments", "add", bead, "External combined observer comment marker"]);
+        measured.Enqueue($"external comment write (auto-commit on): {mutation.Elapsed.TotalMilliseconds:F1}ms");
+        mutation.Restart();
+        target.Run("bd", ["--dolt-auto-commit", "on", "dep", "add", bead, blocker]);
+        measured.Enqueue($"external dependency write (auto-commit on): {mutation.Elapsed.TotalMilliseconds:F1}ms");
         var changed = Stopwatch.StartNew();
         const string commentMarker = "External combined observer comment marker";
-        var combined = await UntilAsync(client, path, root =>
+        var combined = await ReadObservedAsync(root =>
         {
             if (root.GetProperty("data").ValueKind != JsonValueKind.Object
                 || root.GetProperty("revision").GetString() == revision)
@@ -279,7 +426,7 @@ public sealed class OperationalObservationSourceTests
                     relation.GetProperty("id").GetString() == blocker
                     && relation.GetProperty("type").GetString() == "blocks"
                     && relation.GetProperty("direction").GetString() == "outgoing");
-        }, token);
+        });
         var combinedSeconds = changed.Elapsed.TotalSeconds;
         Assert.NotEqual(revision, combined.GetProperty("revision").GetString());
         var combinedData = combined.GetProperty("data");
@@ -313,7 +460,7 @@ public sealed class OperationalObservationSourceTests
     [Fact]
     public async Task WaitingForMutationAccessDoesNotConsumeTheNativeWorkBudget()
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var clock = new CostClock();
         using var factory = Factory(target.Path, new Runner(), clock);
         var source = Adapter(factory);
@@ -362,7 +509,7 @@ public sealed class OperationalObservationSourceTests
     [Fact]
     public async Task AttentionMakesProgressAlongsideAContinuouslySelectedWorkspace()
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var clock = new CostClock();
         using var factory = Factory(target.Path, new Runner { Rows = 5, Advance = () => clock.Advance(TimeSpan.FromSeconds(1.4)) }, clock);
         var source = Adapter(factory);
@@ -378,7 +525,7 @@ public sealed class OperationalObservationSourceTests
     [Fact]
     public async Task PartialRelationsRemainExplicitAndSlowCoreYieldsToWorkspaceSubsteps()
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var clock = new CostClock();
         var runner = new Runner { Advance = () => clock.Advance(TimeSpan.FromSeconds(1.4)), FailRelations = true };
         using var factory = Factory(target.Path, runner, clock);
@@ -406,7 +553,7 @@ public sealed class OperationalObservationSourceTests
     [InlineData("explorer:all:")]
     public async Task UnselectedMembershipsDoNotConsumeTheObservationBudget(string key)
     {
-        using var target = new BeadsApplicationFixture();
+        using var target = new ObservationTargetFixture();
         var clock = new CostClock();
         var runner = new Runner { Advance = () => clock.Advance(TimeSpan.FromSeconds(1.4)) };
         using var factory = Factory(target.Path, runner, clock);
@@ -433,6 +580,7 @@ public sealed class OperationalObservationSourceTests
     private static OperationKey[] Keys(params string[] keys) => keys.Select(OperationKey.Parse).ToArray();
     private static NightweaverWebApplicationFactory Factory(string target, IProcessRunner runner, TimeProvider? clock = null)
     {
+        if (runner is Runner scripted) scripted.TargetPath = target;
         var factory = new NightweaverWebApplicationFactory(configureServices: services =>
         {
             services.RemoveAll<IProcessRunner>();
@@ -443,46 +591,89 @@ public sealed class OperationalObservationSourceTests
         return factory;
     }
 
+    // These component cases already script bd. Keep the filesystem/backend guards
+    // real, but do not launch Git merely to provide the same valid root identity.
+    // The native observer smoke above retains actual Git/bd and HTTP observation.
+    private sealed class ObservationTargetFixture : IDisposable
+    {
+        private readonly TempDirectory temp = new();
+        internal string Path => temp.Path;
+        internal ObservationTargetFixture()
+        {
+            temp.CreateDirectory(".git");
+            temp.CreateDirectory(".beads/embeddeddolt");
+            temp.WriteFile(".beads/metadata.json", "{\"backend\":\"dolt\",\"dolt_mode\":\"embedded\"}");
+            temp.WriteFile(".beads.gate.lock", "");
+            temp.WriteFile(".beads/embeddeddolt.gate.lock", "");
+        }
+        public void Dispose() => temp.Dispose();
+    }
+
     private sealed class Runner : IProcessRunner
     {
+        private static readonly string[] RootArguments = ["rev-parse", "--is-inside-work-tree", "--show-prefix", "--path-format=absolute", "--git-dir", "--git-common-dir"];
+        internal string? TargetPath { get; set; }
         internal ConcurrentQueue<string> Commands { get; } = new();
         internal ConcurrentQueue<string> CommentIds { get; } = new();
         internal string? FailCommentOnce { get; set; }
+        internal int CommentTimeoutsRemaining { get; set; } = 1;
+        internal int FailListAt { get; init; }
+        internal bool FailEveryList { get; set; }
         internal Action? Advance { get; init; }
         internal bool FailRelations { get; init; }
         internal bool Ready { get; set; } = true;
         internal bool Blocked { get; set; }
         internal string Title { get; set; } = "Original title";
+        internal int Priority { get; set; } = 1;
         internal bool FailReady { get; init; }
         internal bool Conflict { get; init; }
         internal int Rows { get; set; } = 1;
         internal string UpdatedAt { get; set; } = "2026-01-01T00:00:00Z";
         internal string Comment { get; set; } = "Initial comment";
         private int inventories;
-        public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
-            if (request.FileName == "git") return await new SystemProcessRunner().RunAsync(request, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.FileName == "git")
+            {
+                Assert.NotNull(TargetPath);
+                if (request.Arguments.SequenceEqual(["check-ref-format", "--branch", "main"]))
+                {
+                    Assert.Equal(Path.GetTempPath(), request.WorkingDirectory);
+                    return Task.FromResult(new ProcessResult(0, "main\n", ""));
+                }
+                Assert.Equal(TargetPath, request.WorkingDirectory);
+                Assert.Equal(RootArguments, request.Arguments);
+                var common = Path.Combine(TargetPath, ".git");
+                return Task.FromResult(new ProcessResult(0, $"true\n\n{common}\n{common}\n", ""));
+            }
+            Assert.Equal("bd", request.FileName);
             Assert.Equal(TimeSpan.FromSeconds(2), request.Timeout);
             Assert.NotNull(request.MaximumOutputBytes);
             Advance?.Invoke();
             var args = request.Arguments;
             var command = args[2];
             Commands.Enqueue(command);
+            if (command == "list" && (FailEveryList || inventories + 1 == FailListAt))
+            {
+                inventories++;
+                throw new ToolExecutionException("bd list timed out after 2s");
+            }
             if (command == "comments")
             {
                 CommentIds.Enqueue(args[3]);
                 if (args[3] == FailCommentOnce)
                 {
-                    FailCommentOnce = null;
+                    if (--CommentTimeoutsRemaining <= 0) FailCommentOnce = null;
                     throw new ToolExecutionException("bd comments timed out after 2s");
                 }
             }
             if (command == "dep" && FailRelations) throw new ToolExecutionException("Relations unavailable");
             if (command == "ready" && FailReady) throw new ToolExecutionException("bd timed out after 2s", "secret stderr");
             var title = Conflict && inventories > 0 ? "Concurrent edit" : Title;
-            object[] rows = Enumerable.Range(1, Rows).Select(index => (object)new
+            var rows = Enumerable.Range(1, Rows).Select(index => new
             {
-                id = $"task-{index}", title, issue_type = "task", priority = Conflict && inventories > 0 ? 2 : 1, status = "open", assignee = (string?)null,
+                id = $"task-{index}", title, issue_type = "task", priority = Conflict && inventories > 0 ? 2 : Priority, status = "open", assignee = (string?)null,
                 labels = (string[])["product-decision-required"], created_at = "2026-01-01T00:00:00Z", updated_at = UpdatedAt,
                 description = "Description"
             }).ToArray();
@@ -492,11 +683,11 @@ public sealed class OperationalObservationSourceTests
                 "blocked" => Blocked ? "[{\"id\":\"task-1\",\"blocked_by_count\":1,\"blocked_by\":[\"task-2\"]}]" : "[]",
                 "dep" => "[]",
                 "ready" => Ready ? "[{\"id\":\"task-1\"}]" : "[]",
-                "show" => JsonSerializer.Serialize(rows.Take(1)),
+                "show" => JsonSerializer.Serialize(rows.Where(row => row.id == args[3])),
                 "comments" => JsonSerializer.Serialize(new[] { new { id = "comment-1", issue_id = args[3], author = "human", text = Comment, created_at = "2026-01-01T00:00:00Z" } }),
                 _ => JsonSerializer.Serialize(rows)
             };
-            return new(0, json, "");
+            return Task.FromResult(new ProcessResult(0, json, ""));
         }
     }
 }

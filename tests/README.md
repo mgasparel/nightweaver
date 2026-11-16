@@ -20,6 +20,79 @@ Use `--report-xunit-xml --report-xunit-xml-filename timing.xml` to collect per-t
 
 ## Coverage pyramid
 
+The classifier timeout fixture publishes root/descendant PID handshakes by
+renaming a completed, closed same-directory temporary file. Existence cannot
+authorize forced termination while a PID writer is still empty. A cheap fixture
+case pauses before writing and checks that the public marker is absent; the
+native smoke retains actual Job termination of both processes and its original
+deadlines. `SystemProcessRunnerTests` uses the existing managed `flood` fixture
+for its bulk-stream boundary: both 1,100,000-byte streams and their exact contents
+must drain within the unchanged 30-second limit. This removes PowerShell startup
+from that contract while retaining a real child and pipe backpressure; the
+The output-limit check also uses the native producer, retaining a 30-second
+post-output hold so the unchanged 10-second deadline must be interrupted by the
+read limit. The environment-removal check uses a native environment probe and
+first verifies inheritance in a control invocation. PowerShell timeout and
+Windows command-line launch checks remain. Hosted PowerShell timeouts in the
+bulk, output-limit and environment checks did not establish a shared production
+cause; removing that unrelated shell dependency does not diagnose its startup.
+
+Workspace-only observation retries retain their captured inventory for one
+continuation turn while detail work is pending, avoiding redundant native core
+reads without indefinitely retaining a snapshot. A fresh confirming inventory still guards publication and changed identity
+fails closed. Mixed attention/explorer subscriptions keep their core cadence.
+The existing controlled timeout cases assert the reduced command counts, and
+the slow-clock case models 1.9-second reads without adding wall-clock waits.
+A cheap two-Workspace case holds one history source timed out, creates and selects
+another Workspace, then changes its identity and requires both updates to publish. Identity conflicts force
+a fresh core read so another pending cycle cannot retain the old baseline forever.
+The same case then fails all core refreshes and requires pending detail retries to
+continue against their captured baseline; failed refreshes retain visible errors
+and cannot satisfy the final confirming read. The Beads subprocess Go CPU budget
+also applies in production. A warmed balanced six-process probe measured a lower
+median (1,072ms to903ms) and CPU use with two Go workers; its tail did not improve,
+so this probe does not establish a fix for every hosted source timeout.
+Failed published classifier smoke runs retain their gates and runtime telemetry
+for hosted diagnosis; this does not extend their Agent-start or stop deadlines.
+
+Factory snapshot publication falls back from Windows move access-denied to a
+no-follow source handle rename while all destination parents stay pinned. Existing
+short/deep file-boundary cases hold a delete-sharing reader that denies writes:
+the old reader keeps old bytes and fresh readers receive the complete replacement.
+The existing hard-link case also checks that this fallback preserves foreign
+content. Read-only destinations and unsafe reparse paths still fail closed;
+there is no delete-before-move or timeout increase.
+The native rename buffer copies exact UTF-16 path code units. The existing deep
+case uses an unmatched surrogate plus a distinct replacement-character alias
+with a foreign sentinel, proving encoding cannot redirect the publication.
+
+The native observer's two external writes explicitly enable Dolt auto-commit,
+matching production rather than inheriting its fixture's read-probe default.
+Read/write overlap and the original cold/update observation deadlines remain.
+A balanced local comparison after identical mutations measured 5/24 reads above
+two seconds with auto-commit off and 0/24 with it on; this is performance evidence,
+not a claim that off loses SQL-committed data. Both smoke phases retain command
+and external-write timing diagnostics on failure. `BD_DISABLE_EVENT_FLUSH` controls
+the detached metrics uploader, not durable tracker journaling, and is unchanged.
+
+The native wait/cancellation fixture starts the held child with its required PID
+path and verifies the published PID before testing the original 50ms wait. A
+bounded readiness phase reports early fixture exit instead of accidentally testing
+startup speed. Cancellation, repeated waits and native termination bounds remain.
+
+Test fixtures copy settled immutable repositories into independent file trees,
+including Git objects and tracker stores. The small `GitFixture` initializes one
+empty Git baseline; manual-pilot profile templates seed independent copies of
+one empty Git/Beads baseline. Consumer writes must never reach a template or
+another copy. Existing isolation cases check configuration, tracker and origin
+independence. Provisioning preservation snapshots obtain HEAD, branch and status
+from one native `git status --porcelain=v2 --branch` command instead of launching
+three processes or adding concurrent native work. Index bytes, working files,
+HEAD, branch and status assertions
+remain intact; upstream ahead/behind metadata is excluded because an allowed
+fetch can update remote refs without changing the checkout. These setup changes retain all cases and native
+boundaries; only a complete timed command establishes their suite cost.
+
 Test-owned managed launches use `FixtureProcess.Start`, including shared manual
 Delivery and QA helpers. It holds `WindowsProcessLauncher.ProcessCreationGate`
 only during `Process.Start`, matching the production process runners. A native
@@ -101,7 +174,23 @@ query before settlement, and retain failure diagnostics and rejection when a
 read fails. These cases failed on the serial implementation. The complete timed
 suite, with its unchanged six-thread cap, remains the performance gate.
 
-`MergerOutcomeVerifierTests` keeps its detailed rejection-evidence, local transcript, hosted-job metadata, PR identity, count, and framing matrix on a strict scripted Git fixture. These component cases use stable valid commit identities and temporary log paths; they do not initialize/copy a Git database or start Git. The script matches the production Git arguments and working directory, returns deterministic observations, and fails immediately on an unknown command. The production Merger verifier still parses the real fixture files and makes every acceptance, rejection, identity, and guarded-publication decision; the GitHub and Beads fakes remain process-boundary responses. The current focused class run discovers 108 cases.
+The immutable native Agent-stage template is prepared alongside the existing
+independent CLI/trap publishes and Beads template, before collections start.
+Previously several of the longest first-wave collections waited on the same
+lazy template while occupying test lanes. Every prerequisite still settles on
+failure, and tests still receive separate mutable Git/Beads copies. This moves
+existing setup work; it adds no cached runtime observation or native scenario.
+
+Observer component cases script both Git root validation and tracker responses,
+with exact Git arguments and working directories and real filesystem/backend
+guards. They exercise the production projections, budgets, cohorts and HTTP
+routes without repeated native launches for an unchanged valid root. The native
+observer smoke still uses real Git/Beads and verifies external comments and
+dependencies through HTTP. All 17 cases and assertions remain. Collection weights
+now use the complete 1,297-case `ns-3i4-prepared-complete.xml` measurement, updated
+with the focused observer cost; only scheduling order changes, with six threads.
+
+`MergerOutcomeVerifierTests` keeps its detailed rejection-evidence, local transcript, hosted-job metadata, PR identity, count, and framing matrix on a strict scripted Git fixture. These component cases use stable valid commit identities and temporary log paths; they do not initialize/copy a Git database or start Git. The script matches the production Git arguments and working directory, returns deterministic observations, and fails immediately on an unknown command. The production Merger verifier still parses the real fixture files and makes every acceptance, rejection, identity, and guarded-publication decision; the GitHub and Beads fakes remain process-boundary responses. The ns-3i4 verifier class now discovers 146 cases, including full prompt/document echoes, stale failure frames after passing checks, separately attributable failed reruns, and controlled local-read overlap/settlement. These framing cases reuse the scripted fixture; no additional native journey is introduced. The compact native group below retains the real Git boundary.
 
 `WebBeadWorkspaceBoundaryIntegrationTests.WorkspaceRejectsForeignAndReparseGitAdminPointersBeforeStatusAndRechecksBeforeStatus` and `WorkspaceReportsReparsePointAncestryWithoutFollowingIt` call the production workspace observer against ordinary on-disk repository/worktree metadata and actual Windows junctions. A strict scripted Git runner supplies only the exact worktree-list and common-directory responses and fails on any unexpected command; rejected paths assert that Git status is never requested. The cases retain marker, admin-directory, foreign backlink, reparse backlink, pre-status replacement race, and managed-root ancestry hazards with target/foreign tree snapshots. This removes repeated native Beads initialization and native worktree setup from the security permutations. Native HTTP and Beads coverage remains in `WorkspaceReadsNativeChildrenAndParentWithoutTrackerMutation` and `WorkspaceScrubsHostileAmbientTrackerAndGitRoutingVariables`, preserving relation direction, configured-versus-foreign routing, and a real managed-worktree status read.
 

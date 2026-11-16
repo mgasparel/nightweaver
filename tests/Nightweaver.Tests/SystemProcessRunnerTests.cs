@@ -1,4 +1,6 @@
+using System.Globalization;
 using Nightweaver.Inspection;
+using Nightweaver.Tests.AgentInvocationFixture;
 
 namespace Nightweaver.Tests;
 
@@ -25,23 +27,21 @@ public sealed class SystemProcessRunnerTests
     {
         using var temp = new TempDirectory();
         const int size = 1_100_000;
-        var command = $"$stdout = 'x' * {size}; $stderr = 'y' * {size}; [Console]::Out.Write($stdout); [Console]::Error.Write($stderr)";
         var result = await runner.RunAsync(
-            Request("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], temp.Path, timeout: TimeSpan.FromSeconds(30)),
-            CancellationToken.None);
+            FixtureRequest(temp.Path, ["flood", size.ToString(CultureInfo.InvariantCulture)], TimeSpan.FromSeconds(30)),
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal(size, result.StandardOutput.Length);
-        Assert.Equal(size, result.StandardError.Length);
+        Assert.Equal(new string('O', size), result.StandardOutput);
+        Assert.Equal(new string('E', size), result.StandardError);
     }
 
     [Fact]
     public async Task OutputLimitKillsAndSettlesBeforeReturningAnUnusablePrefix()
     {
         using var temp = new TempDirectory();
-        var request = Request("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-            "[Console]::Out.Write('x' * 1100000); [Console]::Error.Write('y' * 1100000); Start-Sleep -Seconds 30"],
-            temp.Path, timeout: TimeSpan.FromSeconds(10)) with { MaximumOutputBytes = 2048 };
+        var request = FixtureRequest(temp.Path, ["flood-hold", "1100000"], TimeSpan.FromSeconds(10))
+            with { MaximumOutputBytes = 2048 };
         var exception = await Assert.ThrowsAsync<ToolExecutionException>(() => runner.RunAsync(request, TestContext.Current.CancellationToken));
         Assert.Contains("exceeded read limit", exception.Message, StringComparison.Ordinal);
         Assert.Null(exception.StandardError);
@@ -91,12 +91,12 @@ public sealed class SystemProcessRunnerTests
         Environment.SetEnvironmentVariable(variable, "parent-value");
         try
         {
-            var request = Request(
-                "powershell.exe",
-                ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Console]::Write([Environment]::GetEnvironmentVariable('NIGHTWEAVER_TEST_REMOVE_ME'))"],
-                temp.Path,
-                new Dictionary<string, string?> { [variable] = null });
-            var result = await runner.RunAsync(request, CancellationToken.None);
+            var request = FixtureRequest(temp.Path, ["environment", variable], TimeSpan.FromSeconds(10));
+            var inherited = await runner.RunAsync(request, TestContext.Current.CancellationToken);
+            Assert.Equal(0, inherited.ExitCode);
+            Assert.Equal("parent-value", inherited.StandardOutput);
+            var environment = new Dictionary<string, string?>(request.Environment) { [variable] = null };
+            var result = await runner.RunAsync(request with { Environment = environment }, TestContext.Current.CancellationToken);
 
             Assert.Equal(0, result.ExitCode);
             Assert.Equal(string.Empty, result.StandardOutput);
@@ -106,6 +106,15 @@ public sealed class SystemProcessRunnerTests
             Environment.SetEnvironmentVariable(variable, previous);
         }
     }
+
+    private static ProcessRequest FixtureRequest(string workingDirectory, IReadOnlyList<string> arguments, TimeSpan timeout) =>
+        Request("dotnet", [typeof(FixtureMarker).Assembly.Location, .. arguments], workingDirectory,
+            new Dictionary<string, string?>
+            {
+                ["NIGHTWEAVER_FIXTURE_ACTION"] = null,
+                ["NIGHTWEAVER_FIXTURE_CLASSIFIER_ACTION"] = null,
+                ["NIGHTWEAVER_INVOCATION_PURPOSE"] = null
+            }, timeout);
 
     private static ProcessRequest Request(
         string fileName,

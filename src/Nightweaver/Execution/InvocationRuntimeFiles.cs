@@ -15,6 +15,10 @@ namespace Nightweaver.Execution;
 internal sealed class InvocationRuntimeFiles : IDisposable
 {
     private const uint FileReadAttributes = 0x0080;
+    private const uint DeleteAccess = 0x00010000;
+    private const int FileRenameInfoEx = 22;
+    private const uint RenameReplaceIfExists = 0x1;
+    private const uint RenamePosixSemantics = 0x2;
     private const uint FileShareNone = 0;
     private const uint FileShareRead = 0x00000001;
     private const uint FileShareWrite = 0x00000002;
@@ -224,7 +228,14 @@ internal sealed class InvocationRuntimeFiles : IDisposable
 
             // The fresh temp was created under the pinned parent. Rename replaces the destination directory
             // entry atomically; it does not open or write through an existing destination reparse point.
-            File.Move(temporaryPath, path, overwrite: true);
+            try { File.Move(temporaryPath, path, overwrite: true); }
+            catch (UnauthorizedAccessException)
+            {
+                // MoveFileEx can demand write sharing on an old snapshot even when
+                // its readers permit deletion. Rename the entry through the pinned
+                // parent instead; existing readers keep the old file's contents.
+                RenameFactorySnapshot(temporaryPath, path);
+            }
             temporaryCreated = false;
         }
         finally
@@ -236,6 +247,41 @@ internal sealed class InvocationRuntimeFiles : IDisposable
             }
             guard.Dispose();
         }
+    }
+
+    private static void RenameFactorySnapshot(string temporaryPath, string path)
+    {
+        using var source = CreateFileW(ToExtendedLengthPath(temporaryPath), DeleteAccess | FileReadAttributes,
+            FileShareRead | FileShareWrite | FileShareDelete, IntPtr.Zero, OpenExisting,
+            FileFlagOpenReparsePoint, IntPtr.Zero);
+        if (source.IsInvalid) throw NativeError("Could not open factory snapshot for atomic rename", Marshal.GetLastWin32Error());
+        ValidateRegularFile(source, temporaryPath, "factory snapshot temporary file");
+        // Use the Win32 full-path form with a null root. The caller keeps every
+        // component of this validated destination pinned until publication settles.
+        // Win32 paths are UTF-16 code units, including unmatched surrogates. An
+        // encoder's replacement fallback could redirect into a different directory.
+        var name = MemoryMarshal.AsBytes(ToExtendedLengthPath(path).AsSpan()).ToArray();
+        var header = new FileRenameInformation
+        {
+            Flags = RenameReplaceIfExists | RenamePosixSemantics,
+            RootDirectory = IntPtr.Zero,
+            FileNameLength = (uint)name.Length,
+            FileName = 0
+        };
+        var offset = Marshal.OffsetOf<FileRenameInformation>(nameof(FileRenameInformation.FileName)).ToInt32();
+        var size = Math.Max(Marshal.SizeOf<FileRenameInformation>(), offset + name.Length + sizeof(ushort));
+        var information = Marshal.AllocHGlobal(size);
+        try
+        {
+            Marshal.StructureToPtr(header, information, false);
+            Marshal.Copy(name, 0, IntPtr.Add(information, offset), name.Length);
+            // Win32 resolves the full path as a terminated string even though the
+            // native rename payload also carries its byte length without the NUL.
+            Marshal.WriteInt16(information, offset + name.Length, 0);
+            if (!SetFileInformationByHandle(source, FileRenameInfoEx, information, (uint)size))
+                throw NativeError("Could not atomically rename factory snapshot", Marshal.GetLastWin32Error());
+        }
+        finally { Marshal.FreeHGlobal(information); }
     }
 
     /// <summary>Writes a small owned status file through a pinned, no-reparse parent chain.</summary>
@@ -574,6 +620,23 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         var allowedEnvironmentKeys = outcomeClassifier
             ? new HashSet<string>(["NIGHTWEAVER_BEAD_ID", "TMP", "TEMP", "TMPDIR", "NIGHTWEAVER_INVOCATION_PURPOSE"], StringComparer.Ordinal)
             : new HashSet<string>(["NIGHTWEAVER_BEAD_ID", "TMP", "TEMP", "TMPDIR"], StringComparer.Ordinal);
+        if (invocation.InvocationId.EndsWith("-merger", StringComparison.Ordinal))
+        {
+            var expectedOutput = invocation.Executable switch
+            {
+                "codex" => "terminal",
+                "claude" => "final-response",
+                _ => null
+            };
+            if (!invocation.EnvironmentOverrides.TryGetValue("NIGHTWEAVER_INVOCATION_ID", out var identity)
+                || !string.Equals(identity, invocation.InvocationId, StringComparison.Ordinal)
+                || expectedOutput is null
+                || !invocation.EnvironmentOverrides.TryGetValue("NIGHTWEAVER_LOCAL_CHECK_OUTPUT", out var output)
+                || !string.Equals(output, expectedOutput, StringComparison.Ordinal))
+                throw new InvalidDataException("Merger check evidence environment does not match its invocation identity and CLI output channel.");
+            allowedEnvironmentKeys.Add("NIGHTWEAVER_INVOCATION_ID");
+            allowedEnvironmentKeys.Add("NIGHTWEAVER_LOCAL_CHECK_OUTPUT");
+        }
         if (invocation.EnvironmentOverrides.Count != allowedEnvironmentKeys.Count
             || invocation.EnvironmentOverrides.Keys.Any(key => !allowedEnvironmentKeys.Contains(key)))
             throw new InvalidDataException("Prepared invocation may override only the runtime paths and its recognized invocation purpose.");
@@ -831,6 +894,20 @@ internal sealed class InvocationRuntimeFiles : IDisposable
             finally { directoryPins.Dispose(); }
         }
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileRenameInformation
+    {
+        internal uint Flags;
+        internal IntPtr RootDirectory;
+        internal uint FileNameLength;
+        internal ushort FileName;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetFileInformationByHandle(SafeFileHandle handle, int informationClass,
+        IntPtr information, uint size);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct ByHandleFileInformation
