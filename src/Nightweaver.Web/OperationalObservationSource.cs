@@ -277,11 +277,13 @@ internal sealed class OperationalObservationSource(
 
         var selected = keys.Where(key => key.Kind == "workspace").ToArray();
         foreach (var id in workspaces.Keys.Where(id => !selected.Any(key => key.Argument == id)).ToArray()) workspaces.Remove(id);
+        string? failedPrefetch = null;
         async Task ReadSelectedAsync()
         {
             if (selected.Length > 0 && inventory is not null && HasBudget)
             {
                 var key = selected[workspaceCursor++ % selected.Length];
+                if (key.Argument == failedPrefetch) return;
                 var sample = await ReadWorkspaceAsync(repository, reader, inventory, key.Argument!, token);
                 if (sample is not null) result[key.Value] = sample;
             }
@@ -300,9 +302,17 @@ internal sealed class OperationalObservationSource(
                 workspaces[id] = cycle;
                 commentsThisSweep++;
                 var comments = await ReadAsync("comments:" + id, () => reader.ReadDetailCommentsAsync(repository, id, token), token);
-                if (comments is not null) { StoreHistory(id, comments); cycle.Comments = comments; }
                 cycle.Sources["comments:" + id] = states["comments:" + id];
-                cycle.CommentsPrefetched = true;
+                try
+                {
+                    if (comments is not null) { StoreHistory(id, comments); cycle.Comments = comments; }
+                    cycle.CommentsPrefetched = true;
+                }
+                catch (ToolExecutionException exception)
+                {
+                    workspaces.Remove(id); failedPrefetch = id;
+                    result["workspace:" + id] = new(null, cycle.Started, null, cycle.Sources.ToDictionary(), Error(exception));
+                }
             }
         }
         // Alternate only on turns with detail capacity. Otherwise a slow core can

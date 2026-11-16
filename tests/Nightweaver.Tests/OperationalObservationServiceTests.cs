@@ -176,6 +176,27 @@ public sealed class OperationalObservationServiceTests
     }
 
     [Fact]
+    public async Task PendingChangedSourceMetadataCannotRevalidateRetainedData()
+    {
+        var clock = new Clock();
+        var source = new Source(clock);
+        using var service = Service(source, clock);
+        service.Read("attention");
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        var original = service.Read("attention").Data;
+        source.Content = "changed but not yet published";
+        source.InventoryIdentity = new(); source.ReadyIdentity = new(); source.Pending = true;
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        clock.Advance(TimeSpan.FromSeconds(4));
+        Assert.Equal("stale", service.Read("attention").Health);
+        var fresh = new ObservationSourceState("fresh", clock.GetUtcNow(), clock.GetUtcNow(), null);
+        source.Revalidate!("inventory", fresh with { ContentIdentity = source.InventoryIdentity });
+        source.Revalidate("ready", fresh with { ContentIdentity = source.ReadyIdentity });
+        Assert.Equal(original, service.Read("attention").Data);
+        Assert.Equal("stale", service.Read("attention").Health);
+    }
+
+    [Fact]
     public async Task RevalidationFromAnEvictedCollectionCannotRefreshItsReplacement()
     {
         var clock = new Clock();
@@ -401,8 +422,9 @@ public sealed class OperationalObservationServiceTests
         internal TaskCompletionSource? Hold { get; set; }
         internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal bool WasCanceled { get; private set; }
-        internal object InventoryIdentity { get; } = new();
-        internal object ReadyIdentity { get; } = new();
+        internal object InventoryIdentity { get; set; } = new();
+        internal object ReadyIdentity { get; set; } = new();
+        internal bool Pending { get; set; }
         internal Action<string, ObservationSourceState>? Revalidate { get; private set; }
         public async Task<IReadOnlyDictionary<string, ObservationSample>> ReadTrackerAsync(IReadOnlyList<OperationKey> keys, CancellationToken token,
             Action<string, ObservationSourceState>? revalidated = null)
@@ -432,7 +454,7 @@ public sealed class OperationalObservationServiceTests
                     [runtime ? "runtime" : "inventory"] = new("fresh", now, now, null) { ContentIdentity = InventoryIdentity },
                     [runtime ? "cleanup" : "ready"] = new(Error is null || runtime ? "fresh" : "stale", now, now, runtime ? null : Error)
                         { ContentIdentity = ReadyIdentity }
-                }, runtime ? null : Error), StringComparer.Ordinal);
+                }, runtime ? null : Error, Pending: Pending), StringComparer.Ordinal);
         }
     }
 }

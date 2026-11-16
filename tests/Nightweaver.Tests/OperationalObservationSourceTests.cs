@@ -44,6 +44,27 @@ public sealed class OperationalObservationSourceTests
     }
 
     [Fact]
+    public async Task SelectedHistoryCacheRefusalRemainsAnExplicitRecoverableSourceLimit()
+    {
+        using var target = new ObservationTargetFixture();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner);
+        var memory = new ObservationMemoryBudget();
+        var owner = new object();
+        Assert.True(memory.TryReplace([], [(owner, ObservationMemoryBudget.MaximumBytes)]));
+        var source = Adapter(factory, memory);
+        var keys = Keys("workspace:task-1");
+        var token = TestContext.Current.CancellationToken;
+        var failed = await source.ReadTrackerAsync(keys, token);
+        Assert.Equal("source-limit", failed[keys[0].Value].Error?.Code);
+        Assert.Single(runner.Commands, command => command == "comments");
+        memory.Release(owner);
+        var recovered = await source.ReadTrackerAsync(keys, token);
+        Assert.Null(recovered[keys[0].Value].Error);
+        Assert.IsType<BeadWorkspaceResponse>(recovered[keys[0].Value].Data);
+    }
+
+    [Fact]
     public async Task SourceContentProvenanceChangesWithDataAndResetsAfterIdleEviction()
     {
         using var target = new ObservationTargetFixture();
