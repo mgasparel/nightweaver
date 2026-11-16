@@ -84,6 +84,10 @@ internal static class BeadsCommand
         environment["BD_NO_HOOKS"] = "true";
         environment["BD_NO_DB"] = "false";
         environment["BD_DOLT_AUTO_START"] = "false";
+        // The pinned bd initializes an embedded engine per command. Bound Go's
+        // GC/worker fan-out across concurrent calls; preserve explicit user tuning.
+        environment["GOMAXPROCS"] = Environment.GetEnvironmentVariable("GOMAXPROCS")
+            ?? Math.Min(2, Environment.ProcessorCount).ToString(System.Globalization.CultureInfo.InvariantCulture);
         return environment;
     }
 }

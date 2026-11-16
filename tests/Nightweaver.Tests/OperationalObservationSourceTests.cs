@@ -243,6 +243,11 @@ public sealed class OperationalObservationSourceTests
         Assert.NotNull(changed);
         Assert.Equal(2, changed.Bead.Priority);
         Assert.True(runner.CommentTimeoutsRemaining > 0);
+        var remaining = runner.CommentTimeoutsRemaining;
+        runner.FailEveryList = true;
+        for (var turn = 0; turn < 8; turn++) await ReadHealthyAsync();
+        Assert.True(remaining - runner.CommentTimeoutsRemaining >= 2,
+            "A failed core refresh must not discard the captured inventory needed to retry pending detail work.");
     }
 
     [Fact]
@@ -572,6 +577,7 @@ public sealed class OperationalObservationSourceTests
         internal string? FailCommentOnce { get; set; }
         internal int CommentTimeoutsRemaining { get; set; } = 1;
         internal int FailListAt { get; init; }
+        internal bool FailEveryList { get; set; }
         internal Action? Advance { get; init; }
         internal bool FailRelations { get; init; }
         internal bool Ready { get; set; } = true;
@@ -607,7 +613,7 @@ public sealed class OperationalObservationSourceTests
             var args = request.Arguments;
             var command = args[2];
             Commands.Enqueue(command);
-            if (command == "list" && inventories + 1 == FailListAt)
+            if (command == "list" && (FailEveryList || inventories + 1 == FailListAt))
             {
                 inventories++;
                 throw new ToolExecutionException("bd list timed out after 2s");

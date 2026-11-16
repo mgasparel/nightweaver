@@ -196,8 +196,13 @@ internal sealed class OperationalObservationSource(
                     blocked = await ReadAsync("blocked", () => reader.ReadExplorerBlockedAsync(repository, token), token);
             }
             readyFirst = !readyFirst;
-            retainedInventory = inventory; retainedReady = ready; retainedBlocked = blocked;
-            inventoryGeneratedAt = generatedAt;
+            // A failed core cannot erase the baseline of pending Workspace steps.
+            // Keep its failure state visible and still require final confirmation.
+            if (inventory is not null || workspaces.Count == 0 || keys.Any(key => key.Kind != "workspace"))
+            {
+                retainedInventory = inventory; retainedReady = ready; retainedBlocked = blocked;
+                inventoryGeneratedAt = generatedAt;
+            }
             retainedInventoryState = states["inventory"];
         }
         var inventoryState = states["inventory"];

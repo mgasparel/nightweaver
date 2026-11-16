@@ -46,6 +46,12 @@ the slow-clock case models 1.9-second reads without adding wall-clock waits.
 A cheap two-Workspace case holds one history source timed out, creates and selects
 another Workspace, then changes its identity and requires both updates to publish. Identity conflicts force
 a fresh core read so another pending cycle cannot retain the old baseline forever.
+The same case then fails all core refreshes and requires pending detail retries to
+continue against their captured baseline; failed refreshes retain visible errors
+and cannot satisfy the final confirming read. The Beads subprocess Go CPU budget
+also applies in production. A warmed balanced six-process probe measured a lower
+median (1,072ms to903ms) and CPU use with two Go workers; its tail did not improve,
+so this probe does not establish a fix for every hosted source timeout.
 Failed published classifier smoke runs retain their gates and runtime telemetry
 for hosted diagnosis; this does not extend their Agent-start or stop deadlines.
 
