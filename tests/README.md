@@ -55,6 +55,14 @@ so this probe does not establish a fix for every hosted source timeout.
 Failed published classifier smoke runs retain their gates and runtime telemetry
 for hosted diagnosis; this does not extend their Agent-start or stop deadlines.
 
+Factory snapshot publication falls back from Windows move access-denied to a
+no-follow source handle rename while all destination parents stay pinned. Existing
+short/deep file-boundary cases hold a delete-sharing reader that denies writes:
+the old reader keeps old bytes and fresh readers receive the complete replacement.
+The existing hard-link case also checks that this fallback preserves foreign
+content. Read-only destinations and unsafe reparse paths still fail closed;
+there is no delete-before-move or timeout increase.
+
 Test fixtures copy settled immutable repositories into independent file trees,
 including Git objects and tracker stores. The small `GitFixture` initializes one
 empty Git baseline; manual-pilot profile templates seed independent copies of

@@ -88,6 +88,29 @@ public sealed class InvocationRuntimeFilesTests
         using var contents = new MemoryStream();
         await snapshot.Stream.CopyToAsync(contents, TestContext.Current.CancellationToken);
         Assert.Equal(payload, contents.ToArray());
+        // A reader can permit atomic deletion/replacement without granting writes
+        // to the old file. Publication must replace the entry, not modify that file.
+        using var readOnly = new FileStream(snapshotPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        var replacement = Encoding.UTF8.GetBytes("replacement boundary sentinel");
+        await InvocationRuntimeFiles.WriteFactorySnapshotAtomicallyAsync(
+            paths, project, runId, replacement, TestContext.Current.CancellationToken);
+        using var oldContents = new MemoryStream();
+        await readOnly.CopyToAsync(oldContents, TestContext.Current.CancellationToken);
+        Assert.Equal(payload, oldContents.ToArray());
+        Assert.Equal(replacement, await File.ReadAllBytesAsync(snapshotPath, TestContext.Current.CancellationToken));
+        using var current = InvocationRuntimeFiles.OpenExistingFactorySnapshotForRead(paths, project);
+        using var newContents = new MemoryStream();
+        await current.Stream.CopyToAsync(newContents, TestContext.Current.CancellationToken);
+        Assert.Equal(replacement, newContents.ToArray());
+        File.SetAttributes(snapshotPath, File.GetAttributes(snapshotPath) | FileAttributes.ReadOnly);
+        try
+        {
+            var denied = await Record.ExceptionAsync(() => InvocationRuntimeFiles.WriteFactorySnapshotAtomicallyAsync(
+                paths, project, runId, payload, TestContext.Current.CancellationToken));
+            Assert.True(denied is IOException or UnauthorizedAccessException, "Read-only destinations must still fail closed.");
+            Assert.Equal(replacement, await File.ReadAllBytesAsync(snapshotPath, TestContext.Current.CancellationToken));
+        }
+        finally { File.SetAttributes(snapshotPath, File.GetAttributes(snapshotPath) & ~FileAttributes.ReadOnly); }
     }
 
     [Theory]
