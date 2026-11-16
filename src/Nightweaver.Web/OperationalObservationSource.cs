@@ -174,8 +174,8 @@ internal sealed class OperationalObservationSource(
         FrozenSet<string>? ready, blocked;
         if (resumeDetails && retainedInventory is not null)
         {
-            // When the previous core exhausted the sweep, give pending detail work
-            // one bounded turn before starting another core. Source age stays visible.
+            // Resume bounded detail work against its captured inventory. A Workspace
+            // still rereads inventory before publication; source age stays visible.
             inventory = retainedInventory; ready = retainedReady; blocked = retainedBlocked;
             generatedAt = inventoryGeneratedAt;
             states["inventory"] = retainedInventoryState!;
@@ -278,8 +278,9 @@ internal sealed class OperationalObservationSource(
             }
         else if (inventory is null && keys.Any(key => key.Kind == "attention")) result["attention"] = Sample(null, started, "inventory");
         if (attentionFirst) await ReadSelectedAsync();
-        resumeDetails = !HasBudget && CommandCount == detailCommandsBefore
-            && (selected.Length > 0 || keys.Any(key => key.Kind == "attention"));
+        resumeDetails = (workspaces.Count > 0 && keys.All(key => key.Kind == "workspace"))
+            || (!HasBudget && CommandCount == detailCommandsBefore
+                && (selected.Length > 0 || keys.Any(key => key.Kind == "attention")));
         TrimSources(selected.Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal));
         return result;
     }

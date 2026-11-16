@@ -190,7 +190,7 @@ public sealed class OperationalObservationSourceTests
         Assert.Null(recovered[keys[0].Value].Error);
         Assert.Single(runner.Commands, command => command == "show");
         Assert.Equal(2, runner.Commands.Count(command => command == "dep"));
-        Assert.Equal(confirmingInventory ? 4 : 3, runner.Commands.Count(command => command == "list"));
+        Assert.Equal(confirmingInventory ? 3 : 2, runner.Commands.Count(command => command == "list"));
         Assert.Equal(confirmingInventory ? 1 : 2, runner.Commands.Count(command => command == "comments"));
 
         // Retaining substeps cannot turn a changed workflow into a fresh blend.
@@ -213,7 +213,7 @@ public sealed class OperationalObservationSourceTests
         var clock = new CostClock();
         var runner = new Runner
         {
-            Advance = () => clock.Advance(TimeSpan.FromSeconds(1.6)),
+            Advance = () => clock.Advance(TimeSpan.FromSeconds(1.9)),
             FailCommentOnce = "task-1", CommentTimeoutsRemaining = 4
         };
         using var factory = Factory(target.Path, runner, clock);

@@ -37,6 +37,15 @@ Windows command-line launch checks remain. Hosted PowerShell timeouts in the
 bulk, output-limit and environment checks did not establish a shared production
 cause; removing that unrelated shell dependency does not diagnose its startup.
 
+Workspace-only observation retries retain their captured inventory while detail
+work is pending, avoiding a redundant native core read before each unfinished
+step. A fresh confirming inventory still guards publication and changed identity
+fails closed. Mixed attention/explorer subscriptions keep their core cadence.
+The existing controlled timeout cases assert the reduced command counts, and
+the slow-clock case models 1.9-second reads without adding wall-clock waits.
+Failed published classifier smoke runs retain their gates and runtime telemetry
+for hosted diagnosis; this does not extend their Agent-start or stop deadlines.
+
 Test fixtures copy settled immutable repositories into independent file trees,
 including Git objects and tracker stores. The small `GitFixture` initializes one
 empty Git baseline; manual-pilot profile templates seed independent copies of
