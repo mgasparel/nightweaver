@@ -45,6 +45,19 @@ six-thread limit or assertion is relaxed.
 
 The retained suite keeps broad, fast decision and security checks in unit/coordinator tests and one representative set of expensive process boundaries:
 
+The duplicate-failure classifier timeout smoke uses a controlled role clock and
+a startup release file. Its former two-second real-time budget could expire
+before the managed fake CLI wrote either PID, testing startup speed instead of
+Job containment. The retained native journey now holds startup, consumes one
+second of the same two-second role budget, releases startup, waits for both
+root/descendant handshakes, then expires the remaining second. Both actual
+process termination assertions remain. Real handshake/result/cleanup bounds and
+six-thread scheduling are unchanged; failure cancels and settles the invocation
+before fixture disposal. `AgentInvocationDeadlineTests` covers startup/prompt
+delivery and time already consumed inside native launch without real processes
+or sleeps. Production uses `TimeProvider.System`, with the role deadline still
+starting before native launch; cleanup continues to use its separate real budget.
+
 | Concern | Detailed fast coverage | Retained real-tool boundary |
 | --- | --- | --- |
 | Ownership, read-only roles, failure classification, and budget precedence | `AgentPostExitVerifierTests`, `AuthorityMatrixTests`, retry and coordinator tests | One complete Delivery handoff and one Merger completion-owner/real Beads boundary |
@@ -55,7 +68,40 @@ The retained suite keeps broad, fast decision and security checks in unit/coordi
 | Bead HTTP and workspace safety | Request/authority tests and deterministic observer filesystem fixtures | Native Beads HTTP relation/routing/happy-path cases; junction and Git-admin pointer hazards use strict scripted Git |
 | Merge finalization and repository guards | Cheap finalizer and branch-ownership tests | Repeatable owned cleanup, conditional branch deletion, and expected-commit guards |
 
-`MergerOutcomeVerifierTests` keeps its detailed rejection-evidence, local transcript, hosted-job metadata, PR identity, count, and framing matrix on a strict scripted Git fixture. These component cases use stable valid commit identities and temporary log paths; they do not initialize/copy a Git database or start Git. The script matches the production Git arguments and working directory, returns deterministic observations, and fails immediately on an unknown command. The production Merger verifier still parses the real fixture files and makes every acceptance, rejection, identity, and guarded-publication decision; the GitHub and Beads fakes remain process-boundary responses. The current focused class run discovers 104 cases.
+`MergerPoolIntegrationTests.NativeMergerSynchronizesChecksAndLeavesCompletionToTheCompletionOwner`
+uses the continuous runtime's real `CompletedEnvironmentWorker` and shared environment
+reservations. Its original 90-second admission deadline covers verified merge, guarded
+task closure, cleanup enqueue and pool-capacity release. Before running the worker,
+the test requires a queued receipt, the retained ignored artifact and no worktree
+removal. It then executes one real worker batch and retains all native assertions
+for resolved worktree/tmp absence, conditional branch cleanup, unchanged workflow
+fields and retained invocation logs. Admission and worker durations are reported
+separately. The former fixture omitted the queue and synchronously ran disposal
+inside the pool-completion wait, unlike `ContinuousApplication`; retained failure
+and focused reproduction both reached housekeeping after the Agent finished.
+The native finalizer recovery case below continues to cover immediate one-shot
+housekeeping. No test, deadline or six-thread parallelism is removed or extended.
+
+The native Agent-stage GitHub fixture answers checks-only requests without unused
+branch/HEAD probes. Each PR view still obtains fresh real branch, HEAD and remote
+main values, now concurrently, and settles all three before returning. It caches
+nothing across mutations. Collection weights use the complete 1,243-case
+`implement-complete.xml` measurement, including the repaired native Merger path;
+the scripted Merger verifier and workspace security cases no longer displace the
+longer native collections at startup. These setup/scheduling changes require a
+new complete timed run; historical-duration replay is not timing acceptance.
+
+Post-exit observation overlaps its independent status, branch and HEAD reads,
+then settles every result before reading fresh tracker state. Independent Merger
+verification likewise overlaps its local branch/HEAD/index/rebase-path probes
+after the ownership read, settling all before evidence queries or acceptance.
+There is no observation cache or overlap across writes. Six controlled component
+cases hold the Git responses until every read starts, require no downstream
+query before settlement, and retain failure diagnostics and rejection when a
+read fails. These cases failed on the serial implementation. The complete timed
+suite, with its unchanged six-thread cap, remains the performance gate.
+
+`MergerOutcomeVerifierTests` keeps its detailed rejection-evidence, local transcript, hosted-job metadata, PR identity, count, and framing matrix on a strict scripted Git fixture. These component cases use stable valid commit identities and temporary log paths; they do not initialize/copy a Git database or start Git. The script matches the production Git arguments and working directory, returns deterministic observations, and fails immediately on an unknown command. The production Merger verifier still parses the real fixture files and makes every acceptance, rejection, identity, and guarded-publication decision; the GitHub and Beads fakes remain process-boundary responses. The current focused class run discovers 108 cases.
 
 `WebBeadWorkspaceBoundaryIntegrationTests.WorkspaceRejectsForeignAndReparseGitAdminPointersBeforeStatusAndRechecksBeforeStatus` and `WorkspaceReportsReparsePointAncestryWithoutFollowingIt` call the production workspace observer against ordinary on-disk repository/worktree metadata and actual Windows junctions. A strict scripted Git runner supplies only the exact worktree-list and common-directory responses and fails on any unexpected command; rejected paths assert that Git status is never requested. The cases retain marker, admin-directory, foreign backlink, reparse backlink, pre-status replacement race, and managed-root ancestry hazards with target/foreign tree snapshots. This removes repeated native Beads initialization and native worktree setup from the security permutations. Native HTTP and Beads coverage remains in `WorkspaceReadsNativeChildrenAndParentWithoutTrackerMutation` and `WorkspaceScrubsHostileAmbientTrackerAndGitRoutingVariables`, preserving relation direction, configured-versus-foreign routing, and a real managed-worktree status read.
 

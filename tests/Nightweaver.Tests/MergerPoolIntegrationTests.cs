@@ -74,15 +74,21 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
                 }), cancellationToken);
         }
 
+        var environments = new EnvironmentReservations();
+        var stopGate = new ContinuousStopGate();
+        using var cleanup = new CompletedEnvironmentWorker(target.Host, project, repository, processRunner,
+            environments, stopGate, "native-merger-owner", message => TestContext.Current.TestOutputHelper?.WriteLine(message));
+        SharedRuntimeRootValidator.EnsureUsable(target.Host.TmpRoot(project.Name));
+        await cleanup.InitializeAsync(TestContext.Current.CancellationToken);
         var stages = new AgentStageCoordinator(processRunner, prepare: Prepare, execute: Execute);
         var retries = new OperationalRetryCoordinator(processRunner, stages: stages,
-            outcomeClassifier: FixtureOutcomeClassifier.Create());
+            outcomeClassifier: FixtureOutcomeClassifier.Create(), cleanupQueue: cleanup);
         MergerRoleRunner roleRunner = (host, config, targetRepository, requestedBead, role, actor, expectedState, token, progress) =>
             retries.RunAsync(host, config, targetRepository, requestedBead, role, actor, token, progress, expectedState);
         var slot = new MergerSlotCoordinator(processRunner, roleRunner);
         using var mergerLifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var pool = new MergerPoolCoordinator(target.Host, project, repository, processRunner, runSlot: slot.RunAsync,
-            slotLifetimeToken: mergerLifetime.Token);
+            environments: environments, stopGate: stopGate, slotLifetimeToken: mergerLifetime.Token);
 
         Task[] admissionTasks = [];
         var testSucceeded = false;
@@ -94,7 +100,9 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
             admissionTasks = admissions.Select(admission => (Task)admission.Completion).ToArray();
             var admission = Assert.Single(admissions);
             Assert.Equal(beadId, admission.BeadId);
+            var admissionStarted = Stopwatch.GetTimestamp();
             var completion = await admission.Completion.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+            TestContext.Current.TestOutputHelper?.WriteLine($"Merger admission completion: {Stopwatch.GetElapsedTime(admissionStarted).TotalSeconds:F3}s");
             var resultLog = completion.Outcome?.Stage?.StageResult.LogFilePath;
             var resultLogContents = resultLog is not null && File.Exists(resultLog) ? File.ReadAllText(resultLog) : "(no stage log)";
 
@@ -105,6 +113,21 @@ public sealed class MergerPoolIntegrationTests : AgentStageIntegrationTestSuppor
                 + $"escalation={completion.Outcome?.Stage?.Escalation?.Failures.Count}; log={resultLogContents}");
             Assert.True(completion.LocalCapacityReleased);
             Assert.Empty(pool.ActiveReservations);
+            // Match ContinuousApplication: closure releases Merger capacity before the
+            // serialized housekeeping worker disposes the completed environment.
+            Assert.True(completion.Outcome!.Stage!.StageResult.MergerCompletion!.CleanupQueued);
+            Assert.False(completion.Outcome.Stage.StageResult.MergerCompletion.CleanupSucceeded);
+            Assert.True(Directory.Exists(worktree.Path));
+            Assert.Equal("retained across Merger dispatch\n", File.ReadAllText(sentinel));
+            Assert.DoesNotContain(processRunner.Requests, request => request.FileName == "git"
+                && request.Arguments.Take(2).SequenceEqual(["worktree", "remove"]));
+            var cleanupStarted = Stopwatch.GetTimestamp();
+            await cleanup.RunBatchAsync(TestContext.Current.CancellationToken);
+            TestContext.Current.TestOutputHelper?.WriteLine($"Completed environment worker: {Stopwatch.GetElapsedTime(cleanupStarted).TotalSeconds:F3}s");
+            var obligation = Assert.Single(new CompletedEnvironmentStore(target.Host, project.Name, repository).Read().Obligations);
+            Assert.Equal(CleanupStatus.Resolved, obligation.Status);
+            Assert.True(obligation.Worktree.ConfirmedAbsent);
+            Assert.True(obligation.Tmp.ConfirmedAbsent);
             var finalBead = target.ReadBead(beadId);
             var finalState = BeadWorkflowState.Parse(finalBead);
             Assert.Equal("closed", finalBead.Status);

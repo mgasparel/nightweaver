@@ -20,6 +20,7 @@ import { AttentionView, BeadWorkspace } from "./bead-views";
 import { Explorer } from "./explorer";
 import { DeliveryView, DeliveryMetric, RuntimeSummary } from "./delivery-views";
 import { CatchUpView, DigestMetric } from "./digest-views";
+import { CleanupView, ProductIntake } from "./product-views";
 
 const sections = [
   ["overview", "Overview"],
@@ -27,6 +28,7 @@ const sections = [
   ["attention", "Attention"],
   ["catch-up", "Catch up"],
   ["beads", "Beads"],
+  ["cleanup", "Housekeeping"],
 ] as const;
 const legacySection: Record<string, string> = {
   delivery: "factory",
@@ -311,7 +313,7 @@ function ProjectRoutes({
         <Route
           key={id}
           path={id}
-          element={id === "delivery" ? <DeliveryView project={context.projectId} /> : id === "attention" ? <AttentionView project={context.projectId} /> : id === "beads" ? <Explorer project={context.projectId} /> : id === "catch-up" ? <CatchUpView project={context.projectId} /> : <FeatureRoute id={id} title={title} />}
+          element={id === "delivery" ? <DeliveryView project={context.projectId} /> : id === "attention" ? <AttentionView project={context.projectId} /> : id === "beads" ? <><Explorer project={context.projectId} /><ProductIntake project={context.projectId} /></> : id === "catch-up" ? <CatchUpView project={context.projectId} /> : id === "cleanup" ? <CleanupView project={context.projectId} /> : <FeatureRoute id={id} title={title} />}
         />
       ))}
       <Route path="beads/:beadId" element={<BeadWorkspace project={context.projectId} />} />

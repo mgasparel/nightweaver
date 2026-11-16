@@ -8,6 +8,60 @@ namespace Nightweaver.Tests;
 
 public sealed class MergerOutcomeVerifierTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task WorktreeReadsOverlapAndAllSettleBeforeEvidenceQueries(bool approval, bool failBranch)
+    {
+        using var fixture = new VerifierFixture();
+        if (approval)
+        {
+            fixture.Runner.ApprovalMode = true;
+            fixture.Runner.CheckFailed = false;
+            fixture.SetMergeEvidence();
+        }
+        var started = 0;
+        var expected = approval ? 6 : 5;
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var downstream = false;
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            if (request.FileName == "git" && request.WorkingDirectory == fixture.Worktree
+                && request.Arguments[0] is "branch" or "rev-parse" or "status" or "ls-files")
+            {
+                if (Interlocked.Increment(ref started) == expected) ready.TrySetResult();
+                if (failBranch && request.Arguments[0] == "branch")
+                    throw new IOException("controlled branch read failure");
+                await release.Task.WaitAsync(token);
+            }
+            if (request.FileName == "gh") downstream = true;
+            return await fixture.Runner.RunAsync(request, token);
+        });
+        var verification = approval
+            ? CheckApprovalAsync()
+            : CheckRejectionAsync();
+        try
+        {
+            await ready.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+            Assert.False(verification.IsCompleted);
+            Assert.False(downstream);
+            release.TrySetResult();
+            Assert.Equal(!failBranch, await verification);
+            if (failBranch) Assert.False(downstream);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await verification;
+        }
+
+        async Task<bool> CheckApprovalAsync() => (await fixture.VerifyApprovalAsync(runner)).Succeeded;
+        async Task<bool> CheckRejectionAsync() => (await fixture.VerifyAsync(runner)).Succeeded;
+    }
+
     [Fact]
     public void PullRequestQueryUsesFieldsSupportedByTheInstalledGhCli()
     {
@@ -966,13 +1020,13 @@ public sealed class MergerOutcomeVerifierTests
             Comments = [new("prior", comment, DateTimeOffset.UnixEpoch), new("current", comment, DateTimeOffset.UnixEpoch.AddSeconds(1))];
         }
 
-        internal Task<MergerRejectionVerification> VerifyAsync() =>
-            new MergerOutcomeVerifier(Runner).VerifyRejectionAsync(
+        internal Task<MergerRejectionVerification> VerifyAsync(IProcessRunner? runner = null) =>
+            new MergerOutcomeVerifier(runner ?? Runner).VerifyRejectionAsync(
                 new HostPaths(Path.Combine(temp.Path, "host")), project, session, Invocation,
                 classification, Comments, Owner, CancellationToken.None);
 
-        internal Task<MergerApprovalVerification> VerifyApprovalAsync() =>
-            new MergerOutcomeVerifier(Runner).VerifyApprovalAsync(session, Invocation,
+        internal Task<MergerApprovalVerification> VerifyApprovalAsync(IProcessRunner? runner = null) =>
+            new MergerOutcomeVerifier(runner ?? Runner).VerifyApprovalAsync(session, Invocation,
                 new(AgentOutcomeChoice.Approved, "fixture", "The merged result is confirmed."),
                 Comments, Owner, CancellationToken.None);
 

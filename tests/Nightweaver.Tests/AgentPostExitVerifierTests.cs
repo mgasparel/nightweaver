@@ -7,6 +7,50 @@ namespace Nightweaver.Tests;
 
 public sealed class AgentPostExitVerifierTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GitReadsOverlapAndSettleBeforeFreshTrackerRead(bool failStatus)
+    {
+        var started = 0;
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var trackerRead = false;
+        var verification = VerifyAsync(AgentRole.Reviewer, "clean", inner =>
+            new RecordingProcessRunner(async (request, token) =>
+            {
+                if (request.FileName == "git")
+                {
+                    if (Interlocked.Increment(ref started) == 3) ready.TrySetResult();
+                    if (failStatus && request.Arguments.SequenceEqual(StatusArguments))
+                        return new ProcessResult(1, "", "controlled status failure");
+                    await release.Task.WaitAsync(token);
+                }
+                else
+                {
+                    Assert.True(release.Task.IsCompleted);
+                    trackerRead = true;
+                }
+                return await inner.RunAsync(request, token);
+            }));
+        try
+        {
+            await ready.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+            Assert.False(verification.IsCompleted);
+            Assert.False(trackerRead);
+            release.TrySetResult();
+            var result = await verification;
+            Assert.True(trackerRead);
+            if (failStatus) Assert.Contains(result.Diagnostics, diagnostic => diagnostic.StartsWith("Could not inspect worktree status:", StringComparison.Ordinal));
+            else Assert.True(result.Succeeded);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await verification;
+        }
+    }
+
     private static readonly string[] StatusArguments = ["status", "--porcelain"];
     private static readonly string[] BranchArguments = ["branch", "--show-current"];
     private static readonly string[] HeadArguments = ["rev-parse", "HEAD"];
@@ -88,7 +132,8 @@ public sealed class AgentPostExitVerifierTests
             Assert.Contains(result.Diagnostics, diagnostic => diagnostic.StartsWith("DirtyWorktree:", StringComparison.Ordinal));
     }
 
-    private static Task<AgentStageResult> VerifyAsync(AgentRole role, string scenario)
+    private static Task<AgentStageResult> VerifyAsync(AgentRole role, string scenario,
+        Func<IProcessRunner, IProcessRunner>? decorate = null)
     {
         var (type, beforeStage, legalAfterStage) = role switch
         {
@@ -139,7 +184,8 @@ public sealed class AgentPostExitVerifierTests
             scenario is "nonzero" or "all-nonzero" ? 19 : 0,
             "invocation", "agent.log");
         var before = new BeadWorkflowState("bead", type, beforeStatus, beforeStage, false, false, false, beforeCycles);
-        return new AgentPostExitVerifier(runner, new BeadsReader(runner)).VerifyAsync(
+        var effectiveRunner = decorate?.Invoke(runner) ?? runner;
+        return new AgentPostExitVerifier(effectiveRunner, new BeadsReader(effectiveRunner)).VerifyAsync(
             new("target", "main"), "worktree", role, before, beforeAssignee, new string('a', 40), execution,
             TestContext.Current.CancellationToken);
     }

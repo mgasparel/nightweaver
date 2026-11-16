@@ -1,0 +1,29 @@
+{
+  "created": "qa-jpp",
+  "posts": [
+    {
+      "type": "feature",
+      "priority": 2,
+      "title": "Studio Product intake",
+      "description": "Keep this draft while observations arrive.",
+      "acceptanceCriteria": "Explicit authorization only."
+    },
+    {
+      "type": "feature",
+      "priority": 2,
+      "title": "Studio Product intake",
+      "description": "Keep this draft while observations arrive.",
+      "acceptanceCriteria": "Explicit authorization only."
+    },
+    {
+      "type": "feature",
+      "priority": 2,
+      "title": "Studio Product intake",
+      "description": "Keep this draft while observations arrive.",
+      "acceptanceCriteria": "Explicit authorization only."
+    }
+  ],
+  "stale": 409,
+  "ready": true,
+  "errors": []
+}

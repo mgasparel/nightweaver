@@ -8,6 +8,16 @@ const envelope = (revision = '1', epoch = 'A', key = 'attention', extra = {}) =>
   lastAttemptAt: revision, observedAt: revision, sources: {}, error: null, targetIntervalMs: 1000, nextAttemptAt: null, ...extra,
 });
 const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+test('Product and readiness commands reconcile cleanup along with active tracker resources', async () => {
+  const f = fixture();
+  for (const key of ['attention', 'workspace:qa.1', 'cleanup:1:all:', 'factory']) f.coordinator.subscribe(identity(key), () => {});
+  await f.advance(); f.hello(); await f.advance();
+  await f.coordinator.invalidateAfterCommand('tracker');
+  assert.deepEqual(f.posts[0].keys.sort(), ['attention', 'workspace:qa.1', 'cleanup:1:all:'].sort());
+  await f.coordinator.invalidateAfterCommand('cleanup');
+  assert.deepEqual(f.posts[1].keys.sort(), ['cleanup:1:all:', 'factory'].sort());
+  f.coordinator.dispose();
+});
 function fixture() {
   let now = 0; let serial = 0;
   const jobs = new Map(); const streams = []; const reads = []; const posts = [];

@@ -75,33 +75,53 @@ public sealed class DuplicateFailureClassifierIntegrationTests
         var environment = fixture.Install("timeout-descendant");
         var handshake = Path.Combine(fixture.Temp.Path, "classifier job handshake");
         environment.Set("NIGHTWEAVER_FIXTURE_CLASSIFIER_HANDSHAKE", handshake);
+        environment.Set("NIGHTWEAVER_FIXTURE_CLASSIFIER_STARTUP_RELEASE", handshake + ".release");
         var project = fixture.CreateProject(AgentCli.Claude);
+        var clock = new InvocationDeadlineClock();
         var classifier = new DuplicateFailureClassifier(execute: (paths, slug, invocation, limit, token) =>
         {
             var shortTimeout = new PreparedAgentInvocation(invocation.Executable, invocation.Arguments,
                 invocation.WorkingDirectory, invocation.StandardInput, invocation.EnvironmentOverrides,
                 TimeSpan.FromSeconds(2), invocation.InvocationId, invocation.TemporaryDirectory, invocation.LogFilePath);
-            return AgentInvocationExecutor.ExecuteWithStandardOutputCaptureAsync(paths, slug, shortTimeout, limit, environment, token);
+            return AgentInvocationExecutor.ExecuteWithStandardOutputCaptureAsync(paths, slug, shortTimeout, limit, environment, clock, token);
         });
 
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var comparison = classifier.CompareAsync(fixture.Paths, project, fixture.Context, AgentRole.Implementer,
-            fixture.Worktree, fixture.Previous, fixture.Latest, TestContext.Current.CancellationToken);
-        var handshakeWait = WaitForFileAsync(handshake + ".root", TimeSpan.FromSeconds(10));
-        if (await Task.WhenAny(comparison, handshakeWait) == comparison)
+            fixture.Worktree, fixture.Previous, fixture.Latest, stop.Token);
+        try
         {
-            var earlyResult = await comparison;
-            Assert.Fail($"Classifier returned before its process handshake: {earlyResult.Verdict}/{earlyResult.Reason}: {earlyResult.Diagnostic}");
-        }
-        await handshakeWait;
-        await WaitForFileAsync(handshake + ".child", TimeSpan.FromSeconds(10));
-        var result = await comparison.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+            await clock.TimerCreated.WaitAsync(TimeSpan.FromSeconds(10), stop.Token);
+            Assert.False(File.Exists(handshake + ".root"));
+            Assert.False(File.Exists(handshake + ".child"));
+            clock.Advance(TimeSpan.FromSeconds(1));
+            Assert.False(comparison.IsCompleted);
+            await File.WriteAllTextAsync(handshake + ".release", "release startup", stop.Token);
+            var handshakeWait = WaitForFileAsync(handshake + ".root", TimeSpan.FromSeconds(10));
+            if (await Task.WhenAny(comparison, handshakeWait) == comparison)
+            {
+                var earlyResult = await comparison;
+                Assert.Fail($"Classifier returned before its process handshake: {earlyResult.Verdict}/{earlyResult.Reason}: {earlyResult.Diagnostic}");
+            }
+            await handshakeWait;
+            await WaitForFileAsync(handshake + ".child", TimeSpan.FromSeconds(10));
+            Assert.False(comparison.IsCompleted);
+            clock.Advance(TimeSpan.FromSeconds(1));
+            var result = await comparison.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
 
-        Assert.Equal(DuplicateFailureVerdict.Inconclusive, result.Verdict);
-        Assert.Equal(DuplicateFailureInconclusiveReason.TimedOut, result.Reason);
-        Assert.NotNull(result.ClassifierLogFilePath);
-        Assert.True(File.Exists(result.ClassifierLogFilePath));
-        AssertProcessExited(handshake + ".root");
-        AssertProcessExited(handshake + ".child");
+            Assert.Equal(DuplicateFailureVerdict.Inconclusive, result.Verdict);
+            Assert.Equal(DuplicateFailureInconclusiveReason.TimedOut, result.Reason);
+            Assert.NotNull(result.ClassifierLogFilePath);
+            Assert.True(File.Exists(result.ClassifierLogFilePath));
+            AssertProcessExited(handshake + ".root");
+            AssertProcessExited(handshake + ".child");
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            try { await comparison; }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        }
     }
 
     private static async Task WaitForFileAsync(string path, TimeSpan timeout)

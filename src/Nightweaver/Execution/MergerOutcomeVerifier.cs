@@ -112,18 +112,22 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                 || !string.Equals(bead.Assignee, expectedAssignee, StringComparison.Ordinal))
                 return ApprovalFailed("The current Bead workflow state or claim owner changed before merge verification.");
 
-            var branch = await RunGitAsync(["branch", "--show-current"], session.Worktree.Path, cancellationToken).ConfigureAwait(false);
-            var head = await RunGitAsync(["rev-parse", "HEAD"], session.Worktree.Path, cancellationToken).ConfigureAwait(false);
-            var status = await RunGitAsync(["status", "--porcelain"], session.Worktree.Path, cancellationToken).ConfigureAwait(false);
-            var unmerged = await RunGitAsync(["ls-files", "-u"], session.Worktree.Path, cancellationToken).ConfigureAwait(false);
+            // These fresh local observations are independent. Settle all of them,
+            // including failed reads, before querying hosted evidence or proceeding.
+            var reads = await Task.WhenAll(
+                RunGitAsync(["branch", "--show-current"], session.Worktree.Path, cancellationToken),
+                RunGitAsync(["rev-parse", "HEAD"], session.Worktree.Path, cancellationToken),
+                RunGitAsync(["status", "--porcelain"], session.Worktree.Path, cancellationToken),
+                RunGitAsync(["ls-files", "-u"], session.Worktree.Path, cancellationToken),
+                RunGitAsync(["rev-parse", "--git-path", "rebase-merge"], session.Worktree.Path, cancellationToken),
+                RunGitAsync(["rev-parse", "--git-path", "rebase-apply"], session.Worktree.Path, cancellationToken)).ConfigureAwait(false);
+            var (branch, head, status, unmerged) = (reads[0], reads[1], reads[2], reads[3]);
             if (branch.StandardOutput.Trim() != expectedBranch
                 || !string.Equals(head.StandardOutput.Trim(), verifiedHead, StringComparison.OrdinalIgnoreCase)
                 || !string.IsNullOrEmpty(status.StandardOutput) || !string.IsNullOrEmpty(unmerged.StandardOutput))
                 return ApprovalFailed("The retained branch, HEAD, index, or worktree changed during independent merge verification.");
-            foreach (var rebaseState in new[] { "rebase-merge", "rebase-apply" })
+            foreach (var gitPath in reads.Skip(4))
             {
-                var gitPath = await RunGitAsync(["rev-parse", "--git-path", rebaseState], session.Worktree.Path,
-                    cancellationToken).ConfigureAwait(false);
                 var path = gitPath.StandardOutput.Trim();
                 if (!Path.IsPathFullyQualified(path)) path = Path.GetFullPath(Path.Combine(session.Worktree.Path, path));
                 if (Directory.Exists(path) || File.Exists(path))
@@ -295,22 +299,21 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                 || !string.Equals(bead.Assignee, expectedAssignee, StringComparison.Ordinal))
                 return Failed("The current Bead state or owner no longer matches the claimed stage:merge input.");
 
-            var branch = await RunGitAsync(["branch", "--show-current"], session.Worktree.Path, cancellationToken)
-                .ConfigureAwait(false);
-            var head = await RunGitAsync(["rev-parse", "HEAD"], session.Worktree.Path, cancellationToken)
-                .ConfigureAwait(false);
+            var reads = await Task.WhenAll(
+                RunGitAsync(["branch", "--show-current"], session.Worktree.Path, cancellationToken),
+                RunGitAsync(["rev-parse", "HEAD"], session.Worktree.Path, cancellationToken),
+                RunGitAsync(["ls-files", "-u"], session.Worktree.Path, cancellationToken),
+                RunGitAsync(["rev-parse", "--git-path", "rebase-merge"], session.Worktree.Path, cancellationToken),
+                RunGitAsync(["rev-parse", "--git-path", "rebase-apply"], session.Worktree.Path, cancellationToken)).ConfigureAwait(false);
+            var (branch, head, unmerged) = (reads[0], reads[1], reads[2]);
             if (!string.Equals(branch.StandardOutput.Trim(), expectedBranch, StringComparison.Ordinal)
                 || !string.Equals(head.StandardOutput.Trim(), expectedHead, StringComparison.OrdinalIgnoreCase))
                 return Failed("The retained Merger branch or HEAD changed during outcome classification.");
 
-            var unmerged = await RunGitAsync(["ls-files", "-u"], session.Worktree.Path, cancellationToken)
-                .ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(unmerged.StandardOutput))
                 return Failed("The Merger left unresolved index entries; an actionable rejection cannot be handed to Delivery.");
-            foreach (var rebaseState in new[] { "rebase-merge", "rebase-apply" })
+            foreach (var gitPath in reads.Skip(3))
             {
-                var gitPath = await RunGitAsync(["rev-parse", "--git-path", rebaseState], session.Worktree.Path,
-                    cancellationToken).ConfigureAwait(false);
                 var path = gitPath.StandardOutput.Trim();
                 if (!Path.IsPathFullyQualified(path)) path = Path.GetFullPath(Path.Combine(session.Worktree.Path, path));
                 if (Directory.Exists(path) || File.Exists(path))

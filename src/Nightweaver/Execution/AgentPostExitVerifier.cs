@@ -81,9 +81,23 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
         BeadWorkflowState? after = null;
         AuthorityMatrixResult? transition = null;
 
+        var statusRead = RunGitAsync(["status", "--porcelain"], worktreePath, "git status --porcelain", cancellationToken);
+        var headRead = RunGitAsync(["rev-parse", "HEAD"], worktreePath, "git rev-parse HEAD", cancellationToken);
+        var branchRead = role == AgentRole.Classifier ? null
+            : RunGitAsync(["branch", "--show-current"], worktreePath, "git branch --show-current", cancellationToken);
         try
         {
-            var status = await RunGitAsync(["status", "--porcelain"], worktreePath, "git status --porcelain", cancellationToken);
+            await Task.WhenAll(branchRead is null ? [statusRead, headRead] : [statusRead, headRead, branchRead]);
+        }
+        catch (Exception)
+        {
+            // WhenAll has settled every read. The existing per-observation handlers
+            // below preserve diagnostics, cancellation and failure precedence.
+        }
+
+        try
+        {
+            var status = await statusRead;
             porcelain = status.StandardOutput;
             worktreeClean = string.IsNullOrEmpty(porcelain);
         }
@@ -101,7 +115,7 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
         {
             try
             {
-                var branch = await RunGitAsync(["branch", "--show-current"], worktreePath, "git branch --show-current", cancellationToken);
+                var branch = await branchRead!;
                 branchName = branch.StandardOutput.TrimEnd('\r', '\n');
                 if (branchName.Length == 0 && role is not (AgentRole.Planner or AgentRole.PlanChallenger)) throw new ToolExecutionException("git branch --show-current returned an empty branch name");
             }
@@ -118,7 +132,7 @@ internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsR
 
         try
         {
-            var head = await RunGitAsync(["rev-parse", "HEAD"], worktreePath, "git rev-parse HEAD", cancellationToken);
+            var head = await headRead;
             afterHead = ParseHead(head.StandardOutput, "post-exit");
         }
         catch (OperationCanceledException) { throw; }

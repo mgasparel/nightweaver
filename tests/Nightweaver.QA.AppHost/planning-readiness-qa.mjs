@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { chromium } from 'playwright';
 
+// Keep the legacy probe available while the candidate migrates behind /studio.
+if (process.argv.includes('--studio')) {
+  await import('./studio-product-qa.mjs');
+  process.exit(0);
+}
+
 const baseUrl = process.env.NIGHTWEAVER_QA_URL;
 if (!baseUrl) throw new Error('Set NIGHTWEAVER_QA_URL to the URL from aspire describe.');
 const artifacts = `../../TestResults/planning-readiness-${Date.now()}`;
