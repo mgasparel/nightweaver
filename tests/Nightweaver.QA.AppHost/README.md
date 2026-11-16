@@ -84,6 +84,13 @@ Screenshots at 1440/375/720 CSS pixels and JSON evidence go to
 `NIGHTWEAVER_QA_OUTPUT` or `TestResults/studio-attention`. Review the captures and
 stop the exact AppHost in `finally`, including on failure.
 
+`node studio-presentation-qa.mjs` also verifies grouped Workspace relations with
+43 children and mixed kinds/directions: a hard 15-row bound per group, exact links,
+total/range, keyboard Previous/Next, independently retained pages, refresh and
+shrink/removal/regrowth clamping, and focus recovery at boundaries or removed
+rows/groups. It runs in the isolated Presentation group and captures desktop,
+375px and 720 CSS-pixel layouts without external evidence requests or commands.
+
 `node refresh-timeout-qa.mjs` holds real reconciliation 202 responses while the
 operational stream and resource reads continue. It verifies deadline abort,
 visible failure at 375px, a second explicit POST, replacement deduplication after

@@ -181,8 +181,9 @@ try {
   const relations = page.locator('details').filter({ has: page.locator('summary').filter({ hasText: /^Relations ·/ }) });
   await relations.locator('summary').click();
   assert.equal(await relations.getByRole('link').count(), 15);
-  await relations.getByRole('button', { name: 'Show 15 more relations' }).click();
-  assert.equal(await relations.getByRole('link').count(), 30);
+  await relations.getByRole('button', { name: 'Next', exact: true }).click();
+  assert.equal(await relations.getByRole('link').count(), 15);
+  assert.equal(await relations.locator('[data-relation-range]').textContent(), 'Showing 16–30 of 40');
   mark('Workspace relations retain exact links and directional source state with bounded disclosure');
   await page.getByRole('link', { name: 'History', exact: true }).click();
   assert.equal(await page.locator('.bead-comment').count(), 9);

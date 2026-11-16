@@ -8,6 +8,7 @@ import type { Snapshot } from "./operations";
 import { beadPath, safeBeadId, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
 import { AttentionCommands } from "./attention-commands";
 import { PlanningAuthorization } from "./product-views";
+import { Relations } from "./workspace-relations";
 
 const commands = new AttentionCommands(window.fetch.bind(window), () => {
   // Reconciliation errors already live in coordinator snapshots and Freshness.
@@ -190,15 +191,6 @@ export function AttentionView({ project, compact = false }: { project: string; c
     </Panel>}
     </div>
   </FocusBoundary>;
-}
-
-function Relations({ data, project }: { data: WorkspaceData; project: string }) {
-  const [count, setCount] = useState(15);
-  return <details><summary>Relations · {data.relations.length}</summary>
-    <p>Incoming {data.relationObservation.incoming} · Outgoing {data.relationObservation.outgoing}</p>
-    <ul>{data.relations.slice(0, count).map(row => <li key={`${row.direction}:${row.type}:${row.id}`}><Link to={beadPath(project, row.id)}>{row.id} · {row.title ?? "Title unavailable"}</Link> · {row.type} · {row.direction} · {row.role} · Type: {row.issueType ?? "Unavailable"} · {row.status ?? "Status unavailable"}</li>)}</ul>
-    {data.relations.length > count && <button className="button" onClick={() => setCount(value => value + 15)}>Show 15 more relations</button>}
-  </details>;
 }
 
 function History({ data }: { data: WorkspaceData }) {

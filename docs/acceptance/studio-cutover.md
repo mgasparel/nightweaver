@@ -18,6 +18,7 @@ Aspire fixture; guarded commands use actual same-origin browser requests.
 | Root, dedicated routes and legacy bookmarks | `/`, `/index.html`, `/studio`; `#bead/<id>` and old section hashes | `StudioWebTests`, `studio-qa.mjs`: reload, Back/Forward, query state, dotted hierarchical IDs, keyboard focus, unknown Project, API/asset 404s |
 | Attention and human intervention | `/attention`; Save Note, Send & Resume, Reset Budget & Retry, two-step Abort & Close | `studio-attention-qa.mjs`, `attention.test.mjs`, existing mutation/authority .NET tests: external pause/comment/resolution, retained draft/focus, actual guarded requests, stale 409, uncertain receipt and no replay |
 | Full Bead Workspace | `/beads/:id?tab=summary|history|output`; sources, Markdown, facts, relations, retained environment, active evidence | `studio-attention-qa.mjs`, `studio-evidence-qa.mjs`, `StudioWebTests`, existing Workspace relation/presentation/boundary .NET tests: pinned active evidence, bounded history, sanitization, disclosure focus, missing/stale details |
+| Grouped relations | Workspace Summary → Relations; Parent/Children, Blocked by/Blocks, Discovered from/Discovered work, literal unknown kind/direction | `studio-presentation-qa.mjs`: 43 children, eight mixed groups, at most 15 rows per group, exact links, total/range, keyboard Previous/Next, independent retained pages, refresh/shrink/removal/regrowth clamping and local boundary focus; `studio-attention-qa.mjs` enforces the same page bound |
 | Factory and invocation inspection | `/delivery`, Overview preview, Workspace Output; exact runtime/slot/invocation identity and follow controls | `studio-delivery-qa.mjs` through `factory-qa.mjs`, `telemetry.mjs`, `delivery.test.mjs`, existing native telemetry tests: real reconnect cursor/completion, no retarget on replacement, UTF-8/line bounds, focus/follow and health distinctions |
 | Catch-up Digest | `/catch-up?window=...`; all six windows, lineage, summary disclosure, snapshot-bound Mark Caught Up | `digest-qa.mjs`, `digest.test.mjs`, existing digest/checkpoint .NET tests: native update and checkpoint persistence, concurrent newer activity, bounded long histories, stale data, errors and focus |
 | Explorer and header search | `/beads?view=ready|all|active|blocked|closed&q=...&page=...` | `studio-explorer-qa.mjs`, `explorer.test.mjs`, existing native Explorer tests: 81-row inventory, external titles/dependencies/readiness, bounded pages, focus/removal, URL history and retained stale results |
@@ -86,7 +87,11 @@ Merger must remeasure latest main with the complete command in `tests/README.md`
   reads the existing shared native-ready Explorer total with independent health.
 - Workspace omitted server-projected workflow/source facts and rendered all
   relations at once. It now exposes those facts in a collapsed disclosure,
-  preserves relation type/status/role and reveals 15 relations at a time.
+  preserves relation type/status/role and displays at most 15 rows per named
+  kind/direction group. Each group has a total/range and Previous/Next controls.
+  Pages survive observations independently, clamp on shrink, and recover focus
+  to an enabled local control or range; removal of a focused group returns focus
+  to the Relations summary. This restores the retired console's paging contract.
 - A forced EventSource failure reproducibly dismissed Abort confirmation and
   lost Cancel focus. The short `studio-abort-refresh-qa` probe failed before the
   fix and passed afterward. Reconnection retains the exact confirmation and
@@ -101,6 +106,12 @@ Merger must remeasure latest main with the complete command in `tests/README.md`
 
 ## Reviewed visual evidence
 
+- Grouped relations at [1440px](studio-cutover/relations-1440.png),
+  [375px](studio-cutover/relations-375.png) and
+  [720 CSS pixels](studio-cutover/relations-720.png): mixed groups have distinct
+  headings/dividers, wrapped literal tracker text, ranges and reachable paging
+  controls. Children and Blocks retain independent last pages; boundary focus
+  remains visible. These captures replace the earlier incremental relation view.
 - [1440px Overview](studio-cutover/overview-1440.png): four observed metrics,
   persistent project navigation and the Delivery/Attention hierarchy retain the
   approved Studio composition and palette. Runtime and tracker health remain
@@ -112,7 +123,8 @@ Merger must remeasure latest main with the complete command in `tests/README.md`
   mobile scroll region.
 - [Expanded Workspace](studio-cutover/workspace-375.png): native workflow/source
   facts, keyboard-scrollable bounded original metadata, literal hostile text,
-  typed relation links and explicit incremental disclosure.
+  typed relation links. The repair's grouped pagination captures above supersede
+  its earlier incremental relation disclosure.
 - [Recovered drafts](studio-cutover/recovery-375.png): the selected exact Bead and
   its guidance remain after server replacement and simulated lifecycle wake.
 - [Retained invocation](studio-cutover/output-375.png): long diagnostics wrap,
@@ -179,3 +191,32 @@ six-thread parallelism. Evidence is `TestResults/repair1-suite.log`,
 `repair1-evidence-suite.xml` and `repair1-suite-timing.json`. This measures the
 working repair candidate based on `1ce1e59`; the latest integrated main gate
 remains Merger-owned after integration.
+
+## Grouped relation parity repair
+
+The subsequent Review finding identified that incremental disclosure mixed
+relation kinds and eventually exceeded the retained 15-row bound. Studio now
+groups by exact native kind and direction, with independent Previous/Next pages,
+totals/ranges, shrink clamping and local focus recovery. Unknown kinds retain
+their literal kind/direction; incomplete observations never claim an empty graph.
+The Presentation probe covers 43 children and eight mixed groups, every child
+reachable, refresh/shrink/removal/regrowth, both keyboard boundaries, removed-row
+and removed-group focus, and 1440/375/720 reflow. Attention's former 30-row
+assertion now enforces 15 rows and the second-page range.
+
+On 2026-11-16 UTC the final Presentation layout probe passed in 17.201 seconds;
+the native evidence regression also passed (43.732 seconds). Both recorded zero
+page errors, external requests or POSTs. Attention passed all nine groups in
+112.433 seconds with 14 expected POSTs and zero page errors. Exact isolated
+AppHosts stopped successfully; final `aspire ps` returned `[]`. Logs/captures
+remain under `TestResults/repair2-{relations,layout,attention}`.
+
+Frontend clean installs, 57 tests and production typecheck/build passed, as did
+the warning-as-error solution build (zero warnings/errors) and disposable Release
+Web publish. The complete 1,265-test retained suite passed with zero failures or
+skips in **291.893 seconds**, including build, fixture publication and teardown
+at unchanged six-thread parallelism. Evidence: `TestResults/repair2-suite.log`,
+`repair2-relations-suite.xml` and `repair2-suite-timing.json`. This is the working
+repair candidate based on `747ffbb`, not latest integrated-main timing. The
+post-integration measurement and prior physical-sleep/manual-pilot limitations
+remain unchanged. No deployment was performed.

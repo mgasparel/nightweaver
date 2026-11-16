@@ -37,8 +37,16 @@ try {
     data.comments = [{ id: 'active', author: 'Fixture', createdAt: new Date().toISOString(), kind: 'ordinary', body: message.original,
       message: mode === 'fallback' ? { ...message, state: 'fallback', title: 'Inspect message', summary: 'Unsupported contract; current explanation is uncertain.', sections: [] } : message }];
     data.history.activeCommentId = 'active';
-    data.relations = Array.from({ length: 40 }, (_, i) => ({ id: `qa-related-${i}`, title: `Related <script>literal</script> ${i}`,
-      type: 'parent-child', direction: 'incoming', role: 'Outside Nightweaver lifecycle', issueType: 'chore', status: 'open' }));
+    const relation = (type, direction, i) => ({ id: `qa-${type}-${direction}-${i}`, title: `Related <script>literal</script> ${i}`,
+      type, direction, role: 'Outside Nightweaver lifecycle', issueType: 'chore', status: 'open' });
+    const childCount = mode === 'shrink' ? 16 : mode === 'tiny' ? 1 : mode === 'removed' ? 0 : 43;
+    data.relations = [
+      ...Array.from({ length: childCount }, (_, i) => relation('parent-child', 'incoming', i)),
+      relation('parent-child', 'outgoing', 0),
+      ...Array.from({ length: 17 }, (_, i) => relation('blocks', 'incoming', i)),
+      relation('blocks', 'outgoing', 0), relation('discovered-from', 'incoming', 0), relation('discovered-from', 'outgoing', 0),
+      relation('custom-kind', 'incoming', 0), relation('custom-kind', 'outgoing', 0)
+    ];
     data.relationObservation = mode === 'partial' ? { incoming: 'unavailable', outgoing: 'complete' } : { incoming: 'complete', outgoing: 'complete' };
     if (mode === 'partial') data.relations = [];
     envelope.data = data; envelope.health = 'fresh'; envelope.error = null; envelope.observedAt = new Date().toISOString();
@@ -55,9 +63,56 @@ try {
   assert(await facts.locator('summary').evaluate(n => n === document.activeElement && n.parentElement.open));
   const relations = page.locator('details').filter({ has: page.locator('summary').filter({ hasText: /^Relations ·/ }) });
   await relations.locator('summary').click();
-  assert.equal(await relations.getByRole('link').count(), 15);
-  await relations.getByRole('button', { name: 'Show 15 more relations' }).click();
-  assert.equal(await relations.getByRole('link').count(), 30);
+  const children = relations.getByRole('region', { name: 'Children', exact: true });
+  const blocks = relations.getByRole('region', { name: 'Blocks', exact: true });
+  const range = group => group.locator('[data-relation-range]');
+  const next = group => group.getByRole('button', { name: 'Next', exact: true });
+  const previous = group => group.getByRole('button', { name: 'Previous', exact: true });
+  const keyboard = async control => { await control.focus(); await page.keyboard.press('Enter'); };
+  assert.equal(await relations.getByRole('region').count(), 8);
+  for (const name of ['Parent', 'Blocked by', 'Discovered from', 'Discovered work', 'custom-kind · incoming', 'custom-kind · outgoing'])
+    assert.equal(await relations.getByRole('region', { name, exact: true }).getByRole('link').count(), 1);
+  assert.equal(await children.getByRole('link').count(), 15);
+  assert(await previous(children).isDisabled());
+  await keyboard(next(children));
+  await range(children).filter({ hasText: 'Showing 16–30 of 43' }).waitFor();
+  assert.equal(await children.getByRole('link').first().getAttribute('href'), `/projects/${encodeURIComponent(projectId)}/beads/qa-parent-child-incoming-15`);
+  await keyboard(next(blocks));
+  await range(blocks).filter({ hasText: 'Showing 16–17 of 17' }).waitFor();
+  assert(await previous(blocks).evaluate(n => n === document.activeElement), 'last-page Next moves focus to Previous');
+  await keyboard(next(children));
+  await range(children).filter({ hasText: 'Showing 31–43 of 43' }).waitFor();
+  assert(await next(children).isDisabled());
+  assert(await previous(children).evaluate(n => n === document.activeElement));
+  await page.waitForTimeout(2300);
+  assert.equal(await range(children).textContent(), 'Showing 31–43 of 43');
+  assert.equal(await range(blocks).textContent(), 'Showing 16–17 of 17');
+  assert(await previous(children).evaluate(n => n === document.activeElement), 'refresh preserves local focus and pages');
+  await children.getByRole('link').last().focus();
+  mode = 'shrink';
+  await range(children).filter({ hasText: 'Showing 16–16 of 16' }).waitFor();
+  assert(await previous(children).evaluate(n => n === document.activeElement), 'removed row restores focus inside its group');
+  mode = 'tiny';
+  await range(children).filter({ hasText: 'Showing 1–1 of 1' }).waitFor();
+  assert(await range(children).evaluate(n => n === document.activeElement), 'no enabled control falls back to range');
+  assert(await previous(children).isDisabled()); assert(await next(children).isDisabled());
+  mode = 'removed';
+  await children.waitFor({ state: 'detached' });
+  assert(await relations.locator(':scope > summary').evaluate(n => n === document.activeElement), 'removed group falls back to Relations summary');
+  mode = 'supported';
+  await range(children).filter({ hasText: 'Showing 1–15 of 43' }).waitFor();
+  assert.equal(await range(blocks).textContent(), 'Showing 16–17 of 17', 'other group page survives shrink/removal');
+  await keyboard(next(children));
+  await keyboard(previous(children));
+  assert(await previous(children).isDisabled());
+  assert(await next(children).evaluate(n => n === document.activeElement), 'first-page Previous moves focus to Next');
+  const ids = new Set();
+  for (let pageIndex = 0; pageIndex < 3; pageIndex++) {
+    for (const href of await children.getByRole('link').evaluateAll(nodes => nodes.map(n => n.getAttribute('href')))) ids.add(href);
+    assert(await children.getByRole('link').count() <= 15);
+    if (pageIndex < 2) await keyboard(next(children));
+  }
+  assert.equal(ids.size, 43, 'every child is reachable without exceeding the page bound');
   assert((await relations.innerText()).includes('Type: chore'));
   for (const width of [1440,375,720]) {
     await page.setViewportSize({ width, height: 900 });
@@ -85,7 +140,7 @@ try {
   await relations.getByText('Incoming unavailable · Outgoing complete', { exact: true }).waitFor();
   assert.equal(await relations.getByRole('link').count(), 0);
   assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.deepEqual(posts, []);
-  const result = { passed: true, checks: ['native workflow/source facts', 'bounded typed relation links', 'partial directional state', 'supported/fallback evidence', 'original source', 'safe keyboard links and focus', '1440/375/720 reflow'], errors, external, posts };
+  const result = { passed: true, checks: ['native workflow/source facts', 'eight kind/direction groups', '43 children reachable in at most 15 rows per page', 'independent retained pages', 'shrink/removal/regrowth clamping', 'keyboard first/last boundary and removed-row/group focus', 'partial directional state', 'supported/fallback evidence', 'original source', 'safe keyboard links and focus', '1440/375/720 reflow'], errors, external, posts };
   await writeFile(path.join(output, 'result.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result));
 } finally { await browser.close(); }
