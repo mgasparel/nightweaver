@@ -39,3 +39,10 @@ export function actionRequest(item: AttentionItem, action: Action, instruction: 
     body: action === "abort" ? {} : action === "retry" ? { expected: expectedWorkflow(item) }
       : action === "resume" ? { instruction, action, expected: expectedWorkflow(item) } : { instruction, action } };
 }
+
+/** Only explicit absolute HTTP(S) evidence without credentials or whitespace is navigable. */
+export function safeEvidenceUrl(text: string): boolean {
+  if (!/^https?:\/\//i.test(text) || /\s/.test(text)) return false;
+  try { const url = new URL(text); return !!url.hostname && !url.username && !url.password; }
+  catch { return false; }
+}

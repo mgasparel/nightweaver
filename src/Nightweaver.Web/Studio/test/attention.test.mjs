@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AttentionCommands } from '../src/attention-commands.ts';
-import { actionRequest, safeBeadId } from '../src/bead-model.ts';
+import { actionRequest, safeBeadId, safeEvidenceUrl } from '../src/bead-model.ts';
 const item = { beadId: 'qa.1', stage: 'stage:review', labels: ['other', 'needs-human', 'product-decision-required'], repairCycles: 3 };
 const receipt = action => new Response(JSON.stringify({ beadId: item.beadId, action, resolved: action !== 'note_only', commentRecorded: true, stateChanged: action !== 'note_only' }));
 test('Workspace admits canonical dotted identities and rejects unsafe/unbounded IDs before subscription', () => {
@@ -67,4 +67,9 @@ test('receipt decoding also has a deadline; a stalled response body is uncertain
   await Promise.resolve(); await Promise.resolve();
   t.mock.timers.tick(10000); await pending;
   assert(owner.get('qa', item.beadId).uncertain);
+});
+
+test('evidence accepts explicit HTTP(S) and rejects credentials, whitespace and unsafe references', () => {
+  for (const value of ['https://example.com/pull/53', 'HTTP://example.com/evidence?q=1#checks']) assert(safeEvidenceUrl(value), value);
+  for (const value of ['javascript:alert(1)', 'file:///H:/private', '//example.com/pr', '/api/private', 'https://user:secret@example.com/pr', 'https://user@example.com', ' https://example.com', 'https://example.com/a b', 'https://example.com/\nsecret', 'https://']) assert(!safeEvidenceUrl(value), value);
 });

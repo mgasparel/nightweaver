@@ -17,7 +17,7 @@ Aspire fixture; guarded commands use actual same-origin browser requests.
 | --- | --- | --- |
 | Root, dedicated routes and legacy bookmarks | `/`, `/index.html`, `/studio`; `#bead/<id>` and old section hashes | `StudioWebTests`, `studio-qa.mjs`: reload, Back/Forward, query state, dotted hierarchical IDs, keyboard focus, unknown Project, API/asset 404s |
 | Attention and human intervention | `/attention`; Save Note, Send & Resume, Reset Budget & Retry, two-step Abort & Close | `studio-attention-qa.mjs`, `attention.test.mjs`, existing mutation/authority .NET tests: external pause/comment/resolution, retained draft/focus, actual guarded requests, stale 409, uncertain receipt and no replay |
-| Full Bead Workspace | `/beads/:id?tab=summary|history|output`; sources, Markdown, facts, relations, retained environment, active evidence | `studio-attention-qa.mjs`, `StudioWebTests`, existing Workspace relation/presentation/boundary .NET tests: pinned active evidence, bounded history, sanitization, disclosure focus, missing/stale details |
+| Full Bead Workspace | `/beads/:id?tab=summary|history|output`; sources, Markdown, facts, relations, retained environment, active evidence | `studio-attention-qa.mjs`, `studio-evidence-qa.mjs`, `StudioWebTests`, existing Workspace relation/presentation/boundary .NET tests: pinned active evidence, bounded history, sanitization, disclosure focus, missing/stale details |
 | Factory and invocation inspection | `/delivery`, Overview preview, Workspace Output; exact runtime/slot/invocation identity and follow controls | `studio-delivery-qa.mjs` through `factory-qa.mjs`, `telemetry.mjs`, `delivery.test.mjs`, existing native telemetry tests: real reconnect cursor/completion, no retarget on replacement, UTF-8/line bounds, focus/follow and health distinctions |
 | Catch-up Digest | `/catch-up?window=...`; all six windows, lineage, summary disclosure, snapshot-bound Mark Caught Up | `digest-qa.mjs`, `digest.test.mjs`, existing digest/checkpoint .NET tests: native update and checkpoint persistence, concurrent newer activity, bounded long histories, stale data, errors and focus |
 | Explorer and header search | `/beads?view=ready|all|active|blocked|closed&q=...&page=...` | `studio-explorer-qa.mjs`, `explorer.test.mjs`, existing native Explorer tests: 81-row inventory, external titles/dependencies/readiness, bounded pages, focus/removal, URL history and retained stale results |
@@ -136,3 +136,46 @@ but not rerun; its native process/recovery boundaries remain in the complete
 stream remained connected; the unavailable state was explicit. Source/command
 budgets were not relaxed, and later fresh isolated runs passed. This evidence
 does not claim a universal external-edit freshness SLA or physical OS sleep.
+
+## Structured evidence navigation repair
+
+The review finding at `1ce1e59` identified lost structured evidence actions after
+retiring the legacy renderer. Studio now renders a section containing an absolute
+HTTP(S) URL as an explicit new-tab link, with no credentials or whitespace.
+Unsafe URLs and local paths stay literal. Markdown links share the same policy.
+A section's `commentId` links to `?tab=history&comment=<id>` in that Bead's
+Workspace. The selected source is revealed alongside the bounded recent history,
+opened and focused on keyboard activation even when older than the first eight
+comments. Repeated activation reopens it. Stable comment keys retain disclosure
+and focus through observations; unresolved references explicitly say the source
+is unavailable. Attention can navigate to the same exact Workspace source without
+loading history or requesting evidence destinations in advance.
+
+`studio-evidence-qa.mjs` seeds actual native merger rejection, verified-merge and
+host-recorded Planning approval records through the isolated fixture's `bd` CLI,
+asserts their server projections, and exercises bare links, candidate/review/source
+navigation, an older source, repeat keyboard activation, external-comment refresh,
+missing sources, unsafe/credential links and no automatic external requests or
+commands. It also captures 1440/375/720 layouts. Run the Presentation group in
+`studio-cutover.ps1`; it includes both the existing presentation smoke and this
+native evidence regression. `attention.test.mjs` covers the shared URL policy.
+
+The repaired native evidence probe and existing presentation smoke passed on
+2026-11-16 UTC against a fresh isolated stack, with zero page errors, external
+requests or POSTs; exact teardown succeeded and `aspire ps` returned `[]`.
+Reviewed captures at [1440px](studio-cutover/evidence-1440.png),
+[375px](studio-cutover/evidence-375.png) and [720 CSS pixels](studio-cutover/evidence-720.png)
+show readable wrapped source IDs/links and explicit unresolved evidence without
+horizontal overflow. Raw results and captures remain in
+`TestResults/repair1-evidence-rerun`; the first attempt's assertion timing failure
+and successful teardown are retained separately in `TestResults/repair1-evidence`.
+
+Repair validation also passed a frontend clean install, 57 component tests,
+explicit TypeScript check and production build; warning-as-error solution build;
+and disposable Release Web publish. The complete retained .NET suite passed
+**1,265 tests, zero failures/skips in 278.195 seconds**, measured around the entire
+normal command with build, fixture publishing and teardown and unchanged
+six-thread parallelism. Evidence is `TestResults/repair1-suite.log`,
+`repair1-evidence-suite.xml` and `repair1-suite-timing.json`. This measures the
+working repair candidate based on `1ce1e59`; the latest integrated main gate
+remains Merger-owned after integration.

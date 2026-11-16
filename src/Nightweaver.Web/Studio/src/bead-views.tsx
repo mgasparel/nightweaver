@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { createContext, useContext, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { Panel, Status } from "./primitives";
 import { DeliveryView } from "./delivery-views";
 import { operations, interactions } from "./operations-browser";
 import { useObservation } from "./use-observation";
 import type { Snapshot } from "./operations";
-import { beadPath, safeBeadId, type AttentionItem, type WorkspaceData, type Message } from "./bead-model";
+import { beadPath, safeBeadId, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
 import { AttentionCommands } from "./attention-commands";
 import { PlanningAuthorization } from "./product-views";
 
@@ -34,9 +34,7 @@ function Markdown({ text }: { text: string }) {
       ALLOWED_ATTR: ["href", "title"] });
     for (const link of fragment.querySelectorAll("a")) {
       const href = link.getAttribute("href") ?? "";
-      let safe = false;
-      try { const url = new URL(href); safe = /^https?:\/\//i.test(href) && !!url.hostname && !url.username && !url.password; } catch { /* Literal text fallback. */ }
-      if (!safe) link.replaceWith(...link.childNodes);
+      if (!safeEvidenceUrl(href)) link.replaceWith(...link.childNodes);
       else { link.target = "_blank"; link.rel = "noopener noreferrer"; }
     }
     const focused = node.contains(document.activeElement);
@@ -51,14 +49,28 @@ function Heading({ title, children }: { title: string; children: ReactNode }) {
     <h1 tabIndex={-1}>{title}</h1><p>{children}</p></div>;
 }
 
+// Attention can link into the Workspace without fetching history or evidence targets.
+const EvidenceHistory = createContext<{ path: string; comments?: WorkspaceData["comments"] } | null>(null);
+function EvidenceSection({ section }: { section: Message["sections"][number] }) {
+  const history = useContext(EvidenceHistory);
+  if (section.commentId) {
+    const found = history && (!history.comments || history.comments.some(row => row.id === section.commentId));
+    return <div><p>{section.text}</p>{found
+      ? <Link className="text-link" to={`${history.path}?${new URLSearchParams({ tab: "history", comment: section.commentId })}`}>View source comment {section.commentId}</Link>
+      : <p className="bead-notice" role="status">Source comment {section.commentId} is unavailable in this history.</p>}</div>;
+  }
+  return safeEvidenceUrl(section.text)
+    ? <p><a href={section.text} target="_blank" rel="noopener noreferrer">{section.text}</a></p>
+    : <Markdown text={section.text} />;
+}
 function Evidence({ message, fallback }: { message?: Message | null; fallback: string }) {
   if (!message) return <Markdown text={fallback} />;
   return <div className="bead-evidence"><h3>{message.title}</h3>
     <p className="eyebrow">Source comment {message.sourceId} · {message.role ?? "Role unavailable"} · {message.stage ?? "Stage unavailable"}</p>
     <Markdown text={message.summary} />
     {message.sections.map((section, index) => section.details
-      ? <details key={`${section.label}:${index}`}><summary>{section.label}</summary><Markdown text={section.text} /></details>
-      : <section key={`${section.label}:${index}`}><h3>{section.label}</h3><Markdown text={section.text} /></section>)}
+      ? <details key={`${section.label}:${index}`}><summary>{section.label}</summary><EvidenceSection section={section} /></details>
+      : <section key={`${section.label}:${index}`}><h3>{section.label}</h3><EvidenceSection section={section} /></section>)}
     <details><summary>Original source message</summary><pre className="bead-original" tabIndex={0} aria-label="Original source message">{message.original}</pre></details>
   </div>;
 }
@@ -171,8 +183,8 @@ export function AttentionView({ project, compact = false }: { project: string; c
     {!compact && !selected && <Panel title="Choose a paused Bead"><p>Select Review to read evidence and prepare guidance, or open its Full Bead Workspace.</p></Panel>}
     {!compact && selected && <Panel title={`Review ${selected}`}>
       <h2 ref={reviewHeading} tabIndex={-1}>{item?.title ?? `Retained draft · ${selected}`}</h2>
-      {item && <><Evidence message={item.message} fallback={item.question || item.diagnostic || "No attributable pause message is available. Review history before acting."} />
-        {item.contextNotice && <p className="bead-notice">{item.contextNotice}</p>}</>}
+      {item && <EvidenceHistory value={{ path: beadPath(project, selected) }}><Evidence message={item.message} fallback={item.question || item.diagnostic || "No attributable pause message is available. Review history before acting."} />
+        {item.contextNotice && <p className="bead-notice">{item.contextNotice}</p>}</EvidenceHistory>}
       <Link className="text-link" to={beadPath(project, selected)}>Open Full Bead Workspace and evidence</Link>
       <Guidance key={selected} project={project} id={selected} item={item} current={!snapshot.stale && snapshot.observation?.health !== "unavailable" && !!item} />
     </Panel>}
@@ -191,12 +203,26 @@ function Relations({ data, project }: { data: WorkspaceData; project: string }) 
 
 function History({ data }: { data: WorkspaceData }) {
   const [count, setCount] = useState(8);
+  const [params] = useSearchParams();
+  const selected = params.get("comment");
+  const location = useLocation();
+  const target = data.comments.find(comment => comment.id === selected);
+  const history = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!selected || !target) return;
+    const disclosure = Array.from(history.current?.querySelectorAll<HTMLDetailsElement>(".bead-comment") ?? [])
+      .find(node => node.dataset.commentId === selected);
+    if (disclosure) { disclosure.open = true; disclosure.querySelector<HTMLElement>(":scope > summary")?.focus(); }
+  }, [selected, target?.id, location.key]);
   const active = data.comments.find(comment => comment.id === data.history.activeCommentId);
   // Active evidence is always first; ordinary long history stays bounded.
   const rows = data.comments.filter(comment => comment.id !== active?.id).slice(-count).reverse();
+  const visible = [...(active ? [active] : []), ...rows];
+  if (target && !visible.some(row => row.id === target.id)) visible.push(target);
   return <Panel title="History and evidence">
     <p>{data.comments.length} comments · Showing active evidence and {Math.min(rows.length, count)} recent comments.</p>
-    <div className="bead-history">{[...(active ? [active] : []), ...rows].map(comment => <details key={comment.id} className="bead-comment">
+    {selected && !target && <p className="bead-notice" role="status">Source comment {selected} is unavailable in this history.</p>}
+    <div ref={history} className="bead-history">{visible.map(comment => <details key={comment.id} data-comment-id={comment.id} className="bead-comment">
       <summary>{comment.id === active?.id ? "Active pause evidence · " : ""}{comment.author} · {new Date(comment.createdAt).toLocaleString()} · {comment.kind}</summary>
       <Evidence message={comment.message} fallback={comment.body} />
     </details>)}</div>
@@ -232,7 +258,7 @@ function WorkspaceIdentity({ project, id }: { project: string; id: string }) {
   const missing = snapshot.observation?.error?.code === "resource-missing";
   const [hadAttention, setHadAttention] = useState(false);
   useEffect(() => { if (valid?.attention) setHadAttention(true); }, [valid?.attention]);
-  return <FocusBoundary>
+  return <EvidenceHistory value={{ path: beadPath(project, id), comments: valid?.comments }}><FocusBoundary>
     <Heading title={valid?.bead.title ?? `Bead ${id}`}>{id} · Full Bead Workspace</Heading>
     <Link className="text-link" to={`/projects/${encodeURIComponent(project)}/beads?${params}`}>Back to Explorer</Link>
     <Freshness snapshot={snapshot} project={project} resource={resource} />
@@ -280,5 +306,5 @@ function WorkspaceIdentity({ project, id }: { project: string; id: string }) {
       </Panel>}
     </>}
     {!valid && interactions.get(project, id) && <Guidance project={project} id={id} current={false} />}
-  </FocusBoundary>;
+  </FocusBoundary></EvidenceHistory>;
 }

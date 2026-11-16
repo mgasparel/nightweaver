@@ -269,6 +269,18 @@ Deterministic read fixtures then verify all four states, expired owner acknowled
 
 Representative checks and reviewed screenshots are retained in [the Housekeeping acceptance report](../../docs/acceptance/cleanup.md).
 
+## Structured evidence navigation QA
+
+Run `node studio-evidence-qa.mjs` with both the exact discovered direct URL and
+config from a fresh isolated default stack, or use the Presentation group in
+`studio-cutover.ps1`. The probe validates fixture identity, seeds native merger
+rejection/verified-merge and Planning approval records through its disposable
+tracker, checks the actual server projections and exercises safe bare evidence
+links plus keyboard navigation to old candidate/review/source comments. It also
+checks repeat activation, focus/disclosures across a real external comment,
+unresolved sources, unsafe/credential URLs, no automatic external requests or
+commands, and 1440/375/720 screenshots. Stop the exact AppHost in `finally`.
+
 ## Native relations and Type QA
 
 `node relations-qa.mjs` now delegates to the representative `studio-presentation-qa.mjs` smoke. It checks bounded typed relation links, directional unavailable state, safe literal text and 1440/375/720 reflow. Native hierarchy/blocking/lineage and partial-source semantics remain in `WorkspaceRelationsWebTests`, `WebBeadWorkspaceIntegrationTests` and presentation tests. Studio Attention additionally checks incremental relation disclosure with long history.

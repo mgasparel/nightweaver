@@ -16,7 +16,7 @@ $probes = switch ($Group) {
     Default { @('studio-qa', 'smoke', 'studio-attention-qa', 'operations-qa', 'studio-explorer-qa', 'digest-qa', 'read-timeout-qa', 'refresh-timeout-qa', 'runtime-refresh-qa') }
     Commands { @('planning-readiness-qa', 'cleanup-qa') }
     Invocation { @('factory-qa', 'planning-telemetry-qa', 'telemetry') }
-    Presentation { @('studio-presentation-qa') }
+    Presentation { @('studio-presentation-qa', 'studio-evidence-qa') }
     Recovery { @('studio-abort-refresh-qa', 'studio-recovery-qa') }
 }
 if ($Only.Count) {

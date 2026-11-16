@@ -22,4 +22,6 @@ Verbose fields use bounded excerpts and keyboard disclosures; exact comments and
 
 Presentation state never controls workflow authority. Existing fresh status, claim, stage, full pause-label and repair-count guards continue to govern explicit human actions. Neither a displayed question nor an ordinary note authorizes Resume or Retry.
 
+Studio structured comment references navigate to the exact Workspace History source via `comment`, reveal sources beyond the recent-comment bound and focus their disclosure on activation. Missing references remain explicit. Native records and refresh/focus behavior are covered by `studio-evidence-qa.mjs` in the isolated Presentation group.
+
 Verification is in `CommentPresentationTests`, the existing Web action/boundary suite, and the isolated `schema-messages` browser scenario documented in the QA AppHost README.
