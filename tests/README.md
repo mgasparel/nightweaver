@@ -75,6 +75,11 @@ not a claim that off loses SQL-committed data. Both smoke phases retain command
 and external-write timing diagnostics on failure. `BD_DISABLE_EVENT_FLUSH` controls
 the detached metrics uploader, not durable tracker journaling, and is unchanged.
 
+The native wait/cancellation fixture starts the held child with its required PID
+path and verifies the published PID before testing the original 50ms wait. A
+bounded readiness phase reports early fixture exit instead of accidentally testing
+startup speed. Cancellation, repeated waits and native termination bounds remain.
+
 Test fixtures copy settled immutable repositories into independent file trees,
 including Git objects and tracker stores. The small `GitFixture` initializes one
 empty Git baseline; manual-pilot profile templates seed independent copies of
