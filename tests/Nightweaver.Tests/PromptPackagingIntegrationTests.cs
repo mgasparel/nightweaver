@@ -65,7 +65,7 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
         Assert.Contains("nightweaver-merger-rejection-v1", merger, StringComparison.Ordinal);
         Assert.Contains("check_source: \"local\"", merger, StringComparison.Ordinal);
         Assert.Contains("local_exit_code", merger, StringComparison.Ordinal);
-        Assert.Contains("NIGHTWEAVER_LOCAL_CHECK_V1", merger, StringComparison.Ordinal);
+        Assert.Contains("NIGHTWEAVER_LOCAL_CHECK_V2", merger, StringComparison.Ordinal);
         Assert.Contains("subject` to exactly `dotnet build` or `dotnet test`", merger, StringComparison.Ordinal);
         Assert.Contains("root-level names such as `README.md` are valid", merger, StringComparison.Ordinal);
         Assert.Contains("rereads PR identity/head after the check query", merger, StringComparison.Ordinal);

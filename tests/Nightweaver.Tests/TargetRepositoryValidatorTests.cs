@@ -129,6 +129,50 @@ public sealed class TargetRepositoryValidatorTests
     }
 
     [Fact]
+    public async Task RepeatedValidationRetainsOnlySuccessfulBranchSyntaxAndRechecksRepositoryIdentity()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Path;
+        var common = temp.CreateDirectory(".git");
+        temp.CreateDirectory(".beads");
+        temp.WriteFile(".beads/metadata.json", "{}");
+        var validRepository = true;
+        var runner = new RecordingProcessRunner((request, _) =>
+        {
+            if (request.Arguments[0] == "check-ref-format")
+                return Task.FromResult(request.Arguments[2] is "main" or "@{-1}"
+                    ? new ProcessResult(0, "main\n", "")
+                    : new ProcessResult(1, "", ""));
+            Assert.Equal(RevParseArguments, request.Arguments);
+            Assert.Equal(path, request.WorkingDirectory);
+            return Task.FromResult(validRepository
+                ? new ProcessResult(0, $"true\n\n{common}\n{common}\n", "")
+                : new ProcessResult(1, "", "not a working tree"));
+        });
+        var validator = new TargetRepositoryValidator(runner);
+        var config = new TargetRepositoryConfig(path, "main");
+        var configPath = Path.Combine(path, "project.json");
+        await validator.ValidateAsync(config, configPath, CancellationToken.None);
+        await validator.ValidateAsync(config, configPath, CancellationToken.None);
+        validRepository = false;
+        await Assert.ThrowsAsync<TargetRepositoryException>(() => validator.ValidateAsync(config, configPath, CancellationToken.None));
+        Assert.Single(runner.Requests, request => request.Arguments[0] == "check-ref-format");
+        Assert.Equal(3, runner.Requests.Count(request => request.Arguments[0] == "rev-parse"));
+
+        var invalid = new TargetRepositoryConfig(path, "bad..branch");
+        for (var attempt = 0; attempt < 2; attempt++)
+            await Assert.ThrowsAsync<ProjectConfigurationException>(() => validator.ValidateAsync(invalid, configPath, CancellationToken.None));
+        Assert.Equal(2, runner.Requests.Count(request => request.Arguments.SequenceEqual(["check-ref-format", "--branch", "bad..branch"])));
+        Assert.Equal(3, runner.Requests.Count(request => request.Arguments[0] == "rev-parse"));
+
+        validRepository = true;
+        var contextual = new TargetRepositoryConfig(path, "@{-1}");
+        for (var attempt = 0; attempt < 2; attempt++)
+            await validator.ValidateAsync(contextual, configPath, CancellationToken.None);
+        Assert.Equal(2, runner.Requests.Count(request => request.Arguments.SequenceEqual(["check-ref-format", "--branch", "@{-1}"])));
+    }
+
+    [Fact]
     public async Task ValidatorRejectsUnexpectedGitOutputShapeAsAToolError()
     {
         using var fixture = new GitFixture();

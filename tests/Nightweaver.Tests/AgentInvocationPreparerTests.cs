@@ -86,6 +86,50 @@ public sealed class AgentInvocationPreparerTests
             CreateProject(AgentCli.Codex, model: null, effort: "low"), AgentRole.Merger,
             new("ns-xci.2", "task", "stage:merge", 0), worktree, TestContext.Current.CancellationToken);
         Assert.Equal(["exec", "--dangerously-bypass-approvals-and-sandbox", "--ephemeral", "-c", "model_reasoning_effort=\"low\"", "-"], codexWithoutModel.Arguments);
+        Assert.Equal(codexWithoutModel.InvocationId, codexWithoutModel.EnvironmentOverrides["NIGHTWEAVER_INVOCATION_ID"]);
+        Assert.Equal("terminal", codexWithoutModel.EnvironmentOverrides["NIGHTWEAVER_LOCAL_CHECK_OUTPUT"]);
+        var claudeMerger = await new AgentInvocationPreparer().PrepareAsync(host, claudeProject, AgentRole.Merger,
+            new("ns-xci.2", "task", "stage:merge", 0), worktree, TestContext.Current.CancellationToken);
+        Assert.Equal(claudeMerger.InvocationId, claudeMerger.EnvironmentOverrides["NIGHTWEAVER_INVOCATION_ID"]);
+        Assert.Equal("final-response", claudeMerger.EnvironmentOverrides["NIGHTWEAVER_LOCAL_CHECK_OUTPUT"]);
+    }
+
+    [Theory]
+    [InlineData("codex", null)]
+    [InlineData("claude", null)]
+    [InlineData("codex", "identity")]
+    [InlineData("codex", "channel")]
+    [InlineData("claude", "missing")]
+    [InlineData("codex", "extra")]
+    public async Task MergerEvidenceEnvironmentPassesRuntimeReservationOnlyWithExactIdentityAndChannel(
+        string cli, string? mutation)
+    {
+        using var temp = new TempDirectory();
+        var host = CreateHost(temp.Path);
+        var project = CreateProject(cli == "codex" ? AgentCli.Codex : AgentCli.Claude);
+        var worktree = CanonicalWorktree(host, project, "ns-check");
+        Directory.CreateDirectory(worktree);
+        var prepared = await new AgentInvocationPreparer().PrepareAsync(host, project, AgentRole.Merger,
+            new("ns-check", "task", "stage:merge", 0), worktree, TestContext.Current.CancellationToken);
+        var environment = new Dictionary<string, string>(prepared.EnvironmentOverrides, StringComparer.Ordinal);
+        if (mutation == "identity") environment["NIGHTWEAVER_INVOCATION_ID"] = "other-invocation";
+        if (mutation == "channel") environment["NIGHTWEAVER_LOCAL_CHECK_OUTPUT"] = "final-response";
+        if (mutation == "missing") environment.Remove("NIGHTWEAVER_INVOCATION_ID");
+        if (mutation == "extra") environment["UNRECOGNIZED"] = "value";
+        var invocation = new PreparedAgentInvocation(prepared.Executable, prepared.Arguments, worktree,
+            prepared.StandardInput, environment, prepared.Timeout, prepared.InvocationId,
+            prepared.TemporaryDirectory, prepared.LogFilePath);
+        if (mutation is null)
+        {
+            using var files = InvocationRuntimeFiles.Reserve(host, project.Name, "ns-check", invocation);
+            Assert.Equal(prepared.LogFilePath, files.LogFilePath);
+        }
+        else
+        {
+            Assert.Throws<InvalidDataException>(() => InvocationRuntimeFiles.Reserve(host, project.Name, "ns-check", invocation));
+            Assert.False(File.Exists(prepared.LogFilePath));
+            Assert.False(Directory.Exists(prepared.TemporaryDirectory));
+        }
     }
 
     [Fact]

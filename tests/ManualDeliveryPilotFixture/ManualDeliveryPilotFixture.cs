@@ -123,7 +123,7 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
                     $"Disposable manual Delivery pilot {role} prompt. Follow the task and report evidence.\n",
                     new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
 
-            if (initializeTemplate)
+            if (initializeTemplate && seedProfile == ManualPilotSeedProfile.Empty)
             {
                 Directory.CreateDirectory(fixture.Repository);
                 await fixture.InitializeGitAsync(cancellationToken).ConfigureAwait(false);
@@ -131,12 +131,18 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
             }
             else
             {
-                var key = new TemplateKey(seedProfile, includeExhaustionTask, includeForeignClaim);
+                // Profile templates share only the settled empty repository/tracker.
+                // Seed into independent copies; never mutate a published baseline.
+                var key = initializeTemplate
+                    ? new TemplateKey(ManualPilotSeedProfile.Empty, false, false)
+                    : new TemplateKey(seedProfile, includeExhaustionTask, includeForeignClaim);
                 var template = await GetTemplateAsync(key).ConfigureAwait(false);
                 CopyTemplateDirectory(template.Repository, fixture.Repository);
                 CopyTemplateDirectory(template.Origin, fixture.Origin);
                 fixture.CopyBeadIds(template);
                 fixture.RewriteGitOriginPath(template.Origin);
+                if (initializeTemplate)
+                    await fixture.SeedBeadsAsync(seedProfile, includeExhaustionTask, includeForeignClaim, cancellationToken).ConfigureAwait(false);
             }
             fixture.CopyAgentAliases(agentInvocationFixturePath ?? Path.Combine(AppContext.BaseDirectory, "AgentInvocationFixture.exe"));
             await fixture.WriteConfigurationAsync(cancellationToken).ConfigureAwait(false);
@@ -602,6 +608,12 @@ public sealed class ManualDeliveryPilotFixture : IAsyncDisposable
         await RunToolAsync("bd", ["init", "--prefix", "qa", "--non-interactive", "--skip-agents", "--skip-hooks"],
             Repository, CreateEnvironment(), TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
         await RunToolAsync("bd", ["config", "set", "events-journal", "true"], Repository, CreateEnvironment(), TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+        await SeedBeadsAsync(seedProfile, includeExhaustionTask, includeForeignClaim, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task SeedBeadsAsync(ManualPilotSeedProfile seedProfile, bool includeExhaustionTask,
+        bool includeForeignClaim, CancellationToken cancellationToken)
+    {
         if (seedProfile == ManualPilotSeedProfile.Empty)
             return;
 

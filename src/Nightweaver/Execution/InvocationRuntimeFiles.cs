@@ -574,6 +574,23 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         var allowedEnvironmentKeys = outcomeClassifier
             ? new HashSet<string>(["NIGHTWEAVER_BEAD_ID", "TMP", "TEMP", "TMPDIR", "NIGHTWEAVER_INVOCATION_PURPOSE"], StringComparer.Ordinal)
             : new HashSet<string>(["NIGHTWEAVER_BEAD_ID", "TMP", "TEMP", "TMPDIR"], StringComparer.Ordinal);
+        if (invocation.InvocationId.EndsWith("-merger", StringComparison.Ordinal))
+        {
+            var expectedOutput = invocation.Executable switch
+            {
+                "codex" => "terminal",
+                "claude" => "final-response",
+                _ => null
+            };
+            if (!invocation.EnvironmentOverrides.TryGetValue("NIGHTWEAVER_INVOCATION_ID", out var identity)
+                || !string.Equals(identity, invocation.InvocationId, StringComparison.Ordinal)
+                || expectedOutput is null
+                || !invocation.EnvironmentOverrides.TryGetValue("NIGHTWEAVER_LOCAL_CHECK_OUTPUT", out var output)
+                || !string.Equals(output, expectedOutput, StringComparison.Ordinal))
+                throw new InvalidDataException("Merger check evidence environment does not match its invocation identity and CLI output channel.");
+            allowedEnvironmentKeys.Add("NIGHTWEAVER_INVOCATION_ID");
+            allowedEnvironmentKeys.Add("NIGHTWEAVER_LOCAL_CHECK_OUTPUT");
+        }
         if (invocation.EnvironmentOverrides.Count != allowedEnvironmentKeys.Count
             || invocation.EnvironmentOverrides.Keys.Any(key => !allowedEnvironmentKeys.Contains(key)))
             throw new InvalidDataException("Prepared invocation may override only the runtime paths and its recognized invocation purpose.");

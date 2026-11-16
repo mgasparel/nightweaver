@@ -130,11 +130,24 @@ internal sealed class RecordingProcessRunner(Func<ProcessRequest, CancellationTo
 
 internal sealed class GitFixture : IDisposable
 {
+    private static readonly Lazy<GitFixture> Template = new(() =>
+    {
+        var fixture = new GitFixture("repo", initializeTemplate: true);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => fixture.Dispose();
+        return fixture;
+    });
     private readonly TempDirectory tempDirectory = new();
 
-    internal GitFixture(string relativePath = "repo")
+    internal GitFixture(string relativePath = "repo") : this(relativePath, initializeTemplate: false) { }
+
+    private GitFixture(string relativePath, bool initializeTemplate)
     {
         Path = tempDirectory.CreateDirectory(relativePath);
+        if (!initializeTemplate)
+        {
+            TestDirectoryTemplate.Copy(Template.Value.Path, Path);
+            return;
+        }
         RunGit(Path, ["init", "-b", "main"]);
         Directory.CreateDirectory(System.IO.Path.Combine(Path, ".beads"));
         File.WriteAllText(System.IO.Path.Combine(Path, ".beads", "metadata.json"), "{\"backend\":\"dolt\"}");

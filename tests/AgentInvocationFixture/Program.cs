@@ -1838,12 +1838,14 @@ internal static class Program
                     subject = command;
                     localExitCode = build.ExitCode;
                     summary = $"Local dotnet build failed for synchronized HEAD {head} with exit code {build.ExitCode}.";
-                    var localEvidenceMetadata = JsonSerializer.Serialize(new { command, checked_head = head, exit_code = build.ExitCode });
-                    Console.WriteLine($"NIGHTWEAVER_LOCAL_CHECK_V1 {localEvidenceMetadata}");
+                    var localEvidenceMetadata = JsonSerializer.Serialize(new { command, checked_head = head, exit_code = build.ExitCode, pull_request = pullRequest });
+                    var invocationId = Environment.GetEnvironmentVariable("NIGHTWEAVER_INVOCATION_ID")
+                        ?? throw new InvalidOperationException("Missing Merger invocation identity.");
+                    Console.WriteLine($"NIGHTWEAVER_LOCAL_CHECK_V2 {invocationId} {localEvidenceMetadata}");
                     Console.WriteLine(output);
                     Console.WriteLine(summary);
                     Console.WriteLine(details);
-                    Console.WriteLine("END_NIGHTWEAVER_LOCAL_CHECK_V1");
+                    Console.WriteLine($"END_NIGHTWEAVER_LOCAL_CHECK_V2 {invocationId}");
                 }
                 else if (checkSource == "remote")
                 {
