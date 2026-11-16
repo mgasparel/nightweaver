@@ -73,6 +73,68 @@ test('pre-hello invalidations are bounded to active keys and survive handshake s
   assert.equal(f.snapshot().observation.revision, '5'); f.coordinator.dispose();
 });
 
+test('healthy status stays current through successive invalidations and deferred replacement reads', async () => {
+  const f = fixture(); const states = [];
+  f.coordinator.subscribe(identity(), () => states.push(f.snapshot().stale));
+  await f.advance(); f.hello(); await f.advance();
+  f.reads[0].resolve(envelope()); await f.advance(); states.length = 0;
+  for (let version = 2; version <= 5; version++) {
+    f.send('invalidation', { versions: { attention: String(version) } }); await f.advance();
+    await f.advance(500);
+    f.reads.at(-1).resolve(envelope(String(version))); await f.advance();
+    await f.advance(500);
+  }
+  assert.ok(states.length > 0);
+  assert.ok(states.every(stale => !stale), 'Routine live updates must not flash a healthy observation to stale');
+  f.coordinator.dispose();
+});
+
+test('notifications cannot postpone stale status when replacement reads keep lagging', async () => {
+  const f = fixture(); f.coordinator.subscribe(identity(), () => {});
+  await f.advance(); f.hello(); await f.advance();
+  f.reads[0].resolve(envelope()); await f.advance();
+  for (let version = 2; version <= 11; version++) {
+    f.send('invalidation', { versions: { attention: String(version) } }); await f.advance();
+    f.reads.at(-1).resolve(envelope()); await f.advance();
+    assert.equal(f.snapshot().stale, false);
+    await f.advance(1000);
+  }
+  assert.equal(f.snapshot().stale, true);
+  assert.equal(f.snapshot().observation.revision, '1', 'Lagging responses cannot replace validated data');
+  f.reads.at(-1).resolve(envelope('11')); await f.advance();
+  assert.equal(f.snapshot().stale, false);
+  f.coordinator.dispose(); assert.equal(f.jobs.size, 0);
+});
+
+test('replacement responses preserve authoritative source health and cancel the catch-up deadline', async () => {
+  for (const health of ['fresh', 'stale', 'unavailable']) {
+    const f = fixture(); f.coordinator.subscribe(identity(), () => {});
+    await f.advance(); f.hello(); await f.advance();
+    f.reads[0].resolve(envelope()); await f.advance();
+    f.send('invalidation', { versions: { attention: '2' } }); await f.advance();
+    f.reads.at(-1).resolve(envelope('2', 'A', 'attention', { health })); await f.advance();
+    assert.equal(f.snapshot().observation.health, health);
+    assert.equal(f.jobs.size, 1, 'Only the polling timer remains');
+    f.coordinator.dispose(); assert.equal(f.jobs.size, 0);
+  }
+});
+
+test('pending catch-up deadlines end with the subscription or connection lifetime', async () => {
+  for (const action of ['unsubscribe', 'suspend', 'dispose']) {
+    const f = fixture(); const off = f.coordinator.subscribe(identity(), () => {});
+    await f.advance(); f.hello(); await f.advance();
+    f.reads[0].resolve(envelope()); await f.advance();
+    f.send('invalidation', { versions: { attention: '2' } }); await f.advance();
+    assert.equal(f.jobs.size, 3, 'Poll, read deadline and fixed catch-up deadline');
+    if (action === 'unsubscribe') off();
+    if (action === 'suspend') f.coordinator.suspend();
+    if (action === 'dispose') f.coordinator.dispose();
+    await f.advance();
+    assert.equal(f.jobs.size, action === 'dispose' ? 0 : 1, action);
+    f.coordinator.dispose(); assert.equal(f.jobs.size, 0);
+  }
+});
+
 test('multiple subscribers, repeated mounts and rapid selections share one stream and discard old lifetimes', async () => {
   const f = fixture(); const first = f.coordinator.subscribe(identity(), () => {});
   const second = f.coordinator.subscribe(identity(), () => {}); await f.advance();
