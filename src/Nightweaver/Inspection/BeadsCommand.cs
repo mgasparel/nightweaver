@@ -44,10 +44,15 @@ internal static class BeadsCommand
     internal static ProcessRequest CreateJournalSetup(string workingDirectory)
         => CreateWrite(workingDirectory, ["config", "set", "events-journal", "true"]);
 
-    internal static ProcessRequest CreateJournalTail(string workingDirectory, long afterSequence)
-        => new("bd", ["--readonly", "--sandbox", "events", "tail", "--follow", "--since",
-                afterSequence.ToString(System.Globalization.CultureInfo.InvariantCulture), "--json"],
-            workingDirectory, CreateEnvironment(workingDirectory, readOnly: true), Timeout.InfiniteTimeSpan);
+    internal static ProcessRequest CreateJournalBatch(string workingDirectory, long afterSequence, int maxRecords)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(afterSequence);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxRecords, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maxRecords, Application.BeadsJournalWatcher.MaximumBatchRecords);
+        return Create(workingDirectory, ["--readonly", "--sandbox", "events", "tail", "--since",
+            afterSequence.ToString(System.Globalization.CultureInfo.InvariantCulture), "--limit",
+            maxRecords.ToString(System.Globalization.CultureInfo.InvariantCulture), "--json"]);
+    }
 
     internal static ProcessRequest CreateWrite(string workingDirectory, IReadOnlyList<string> arguments, string? actor = null)
     {

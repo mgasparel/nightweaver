@@ -20,6 +20,18 @@ Use `--report-xunit-xml --report-xunit-xml-filename timing.xml` to collect per-t
 
 ## Coverage pyramid
 
+Journal hint tests use fake batches and delay callbacks for pagination, atomic cursor
+commit, failure backoff, truncation, session replacement and cancellation. In-memory
+parser cases cover multiline JSON, invalid suffixes, UTF-8 byte and record limits,
+and aggregate output including whitespace. The existing native tracker journeys
+now read finite batches, retain native truncation, scrub a decoy target and prove
+that an unjournaled write is discovered by the independent timer during a batch
+failure. Shared managed fixture pipes cover stderr flood, malformed-output termination,
+and actual child settlement on cancellation or a controlled 30-second deadline;
+no real 30-second timeout is added to the suite. Journal hints now have a 30-second
+cadence plus command execution, with one page per tick even under retained backlog.
+This change reduces recurring journal work without asserting whole-suite causality.
+
 The classifier timeout fixture publishes root/descendant PID handshakes by
 renaming a completed, closed same-directory temporary file. Existence cannot
 authorize forced termination while a PID writer is still empty. A cheap fixture

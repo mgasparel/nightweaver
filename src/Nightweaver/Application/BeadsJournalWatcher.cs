@@ -6,12 +6,15 @@ internal interface IBeadsJournalClient
 {
     Task EnableAsync(ValidatedTargetRepository repository, CancellationToken cancellationToken);
 
-    Task FollowAsync(
+    Task<IReadOnlyList<long>> ReadBatchAsync(
         ValidatedTargetRepository repository,
         long afterSequence,
-        Action<long> onEvent,
+        int maxRecords,
         CancellationToken cancellationToken);
 }
+
+internal sealed class BeadsJournalSettlementException(string message, Exception innerException)
+    : Exception(message, innerException);
 
 internal sealed class BeadsJournalTruncatedException(long head)
     : Exception($"The Beads events journal was truncated at head {head}.")
@@ -28,6 +31,8 @@ internal sealed class BeadsJournalWatcher(
     TextWriter error,
     Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
 {
+    internal const int MaximumBatchRecords = 256;
+    internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan InitialReconnectDelay = TimeSpan.FromSeconds(1);
     internal static readonly TimeSpan MaximumReconnectDelay = TimeSpan.FromSeconds(30);
 
@@ -43,54 +48,55 @@ internal sealed class BeadsJournalWatcher(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!journalEnabled)
+            var nextDelay = reconnectDelay;
+            try
             {
-                try
+                if (!journalEnabled)
                 {
                     await client.EnableAsync(repository, cancellationToken).ConfigureAwait(false);
                     journalEnabled = true;
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception exception)
-                {
-                    requestDiscovery();
-                    error.WriteLine($"nightweaver: could not enable the Target Repository events journal; ordinary discovery remains active: {exception.Message}");
-                }
-            }
 
-            try
-            {
-                await client.FollowAsync(repository, cursor, sequence =>
+                var batch = await client.ReadBatchAsync(repository, cursor, MaximumBatchRecords,
+                    cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                // Validate the entire bounded result before committing any cursor progress.
+                if (batch.Count > MaximumBatchRecords || batch.Any(sequence => sequence < 0))
+                    throw new InvalidDataException("Invalid Beads journal batch.");
+                if (batch.Count > 0)
                 {
-                    if (sequence > cursor) cursor = sequence;
-                    reconnectDelay = InitialReconnectDelay;
+                    cursor = Math.Max(cursor, batch.Max());
                     requestDiscovery();
-                }, cancellationToken).ConfigureAwait(false);
-
-                requestDiscovery();
-                error.WriteLine("nightweaver: Target Repository events tail ended unexpectedly; reconnecting.");
+                }
+                reconnectDelay = InitialReconnectDelay;
+                nextDelay = PollInterval;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                throw;
+            }
+            catch (BeadsJournalSettlementException)
+            {
+                // Uncertain children must never be replaced. The coordinator keeps ordinary discovery active.
+                requestDiscovery();
                 throw;
             }
             catch (BeadsJournalTruncatedException exception)
             {
                 requestDiscovery();
                 cursor = exception.Head;
+                nextDelay = PollInterval;
+                reconnectDelay = InitialReconnectDelay;
                 error.WriteLine($"nightweaver: Target Repository events journal was truncated; resuming after reported head {cursor}.");
             }
             catch (Exception exception)
             {
                 requestDiscovery();
-                error.WriteLine($"nightweaver: Target Repository events tail failed; reconnecting: {exception.Message}");
+                error.WriteLine($"nightweaver: Target Repository events batch failed; retrying: {exception.Message}");
             }
 
-            await wait(reconnectDelay, cancellationToken).ConfigureAwait(false);
-            reconnectDelay = TimeSpan.FromSeconds(Math.Min(
+            await wait(nextDelay, cancellationToken).ConfigureAwait(false);
+            if (nextDelay != PollInterval) reconnectDelay = TimeSpan.FromSeconds(Math.Min(
                 reconnectDelay.TotalSeconds * 2,
                 MaximumReconnectDelay.TotalSeconds));
         }
