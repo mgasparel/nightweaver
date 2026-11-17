@@ -19,7 +19,13 @@ function Get-TestSuiteAssessment {
         if ($Baseline.command -cne $expectedCommand) { $reasons.Add('Baseline command is not the complete normal suite') }
         if (!$Result.production -or $Result.production.state -in @('unknown','unobserved') -or
             !$Baseline.production -or $Baseline.production.state -in @('unknown','unobserved')) { $reasons.Add('Production state unavailable') }
-        if (!$Baseline.elapsedSeconds -or ![double]::IsFinite([double]$Baseline.elapsedSeconds) -or $Baseline.elapsedSeconds -le 0) { $reasons.Add('Baseline elapsed time unavailable') }
+        # JSON strings, arrays and objects are not numeric measurements. Never let optional
+        # baseline conversion prevent retention of the candidate's original test result.
+        $baselineSeconds = 0.0
+        $numeric = $Baseline.elapsedSeconds -is [ValueType] -and $Baseline.elapsedSeconds -isnot [bool] -and
+            [double]::TryParse([string]$Baseline.elapsedSeconds, [Globalization.NumberStyles]::Float,
+                [Globalization.CultureInfo]::InvariantCulture, [ref]$baselineSeconds)
+        if (!$numeric -or ![double]::IsFinite($baselineSeconds) -or $baselineSeconds -le 0) { $reasons.Add('Baseline elapsed time unavailable or invalid') }
     }
     $comparable = $reasons.Count -eq 0
     [ordered]@{
@@ -27,9 +33,9 @@ function Get-TestSuiteAssessment {
         operatingTarget = $(if ($Result.elapsedSeconds -lt 240) { 'met' } else { 'missed-cost-review-required' })
         hardBudget = $(if ($Result.elapsedSeconds -lt 300) { 'met' } else { 'violated' })
         comparisonAvailable = $comparable; comparisonReasons = @($reasons)
-        deltaSeconds = $(if ($comparable) { $Result.elapsedSeconds - $Baseline.elapsedSeconds } else { $null })
-        ratio = $(if ($comparable) { $Result.elapsedSeconds / $Baseline.elapsedSeconds } else { $null })
-        captureRequired = $comparable -and $Result.elapsedSeconds -ge 1.5 * $Baseline.elapsedSeconds
+        deltaSeconds = $(if ($comparable) { $Result.elapsedSeconds - $baselineSeconds } else { $null })
+        ratio = $(if ($comparable) { $Result.elapsedSeconds / $baselineSeconds } else { $null })
+        captureRequired = $comparable -and $Result.elapsedSeconds -ge 1.5 * $baselineSeconds
     }
 }
 

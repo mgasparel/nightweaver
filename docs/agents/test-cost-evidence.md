@@ -133,6 +133,18 @@ reader. Ordinary nonzero build/test and remote Actions contracts remain unchange
 Soft target misses and qualitative cost findings use Review/QA findings, never
 this hard-limit schema.
 
+For this rejection path, run the measurement entry point with `-EvidenceRoot`
+equal to the current invocation's `TEMP` directory. Keep its original
+`result.json`, `suite.log` and copied `report-1.xml` under `<EvidenceRoot>/<evidence_id>/`.
+The result records `NIGHTWEAVER_INVOCATION_ID` as `invocationId`; old or foreign
+measurements cannot authorize a current rejection. The verifier opens only these
+canonical current-invocation files with pinned, read-only, no-reparse handles.
+It requires unique JSON keys, clean exact head, full command, six threads, no
+measurement errors, matching passing counts/exit and finite elapsed time equal
+to the frame. It cross-checks the raw complete passing terminal summary and
+xUnit assembly counts, errors and not-run counts. Missing or contradictory
+artifacts retain the diagnostic pause and cannot consume repair budget.
+
 Construct `NIGHTWEAVER_PERFORMANCE_CHECK_V1 ` plus the launched
 `NIGHTWEAVER_INVOCATION_ID` at runtime. Emit exactly one opening line consisting
 of that marker, a space and compact JSON identical to the entire rejection comment;
@@ -140,7 +152,10 @@ emit `END_` plus the same marker on the next line. Use the existing
 `NIGHTWEAVER_LOCAL_CHECK_OUTPUT` channel selection (terminal for Codex, single
 final-response for Claude). Do not echo a literal current marker in tool commands.
 Emit only after all checks settle, and run no more checks after it. Passing MTP
-output before this frame is expected correctness evidence, not a contradiction.
+output before this frame is required complete correctness evidence. A missing,
+failed or incomplete terminal summary cannot be replaced by matching JSON claims.
+For the final-response channel, include the actual retained `suite.log` terminal
+summary immediately before the frame so it is also visible in the settled log.
 
 Independent verification uses the pinned settled log (8 MiB maximum), one
 unquoted current-ID frame (32 KiB maximum), strict UTF-8, unique JSON keys, exact

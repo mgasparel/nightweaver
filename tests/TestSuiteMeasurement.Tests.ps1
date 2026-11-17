@@ -23,6 +23,19 @@ function Invoke-FixtureMeasurement($Base=$baseline) {
     Invoke-TestSuiteMeasurement $context $Base (Join-Path $directory ([guid]::NewGuid().ToString('N')+'.json')) $runner { $script:seconds } $capture
 }
 $cases=0
+foreach ($invalid in @('not-a-number', '100', $true, @{}, @(1,2), $null, [double]::NaN, [double]::PositiveInfinity, -1, 0)) {
+    foreach ($testExit in @(0,17)) {
+        $baseline.elapsedSeconds=$invalid; $script:exit=$testExit; $script:failed=$(if ($testExit) { 1 } else { 0 })
+        $path=Join-Path $directory ([guid]::NewGuid().ToString('N')+'.json')
+        $r=Invoke-TestSuiteMeasurement $context $baseline $path $runner { 150.0 } $capture
+        $retained=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        Check ($retained.testExitCode -eq $testExit -and $retained.failed -eq $script:failed -and $retained.total -eq 1325) 'Malformed baseline lost original candidate result'
+        Check (!$retained.assessment.comparisonAvailable -and $null -eq $retained.assessment.deltaSeconds -and $null -eq $retained.assessment.ratio -and !$retained.assessment.captureRequired) 'Malformed elapsed baseline compared'
+        Check ($retained.assessment.comparisonReasons -contains 'Baseline elapsed time unavailable or invalid') 'Malformed elapsed baseline has no explanation'
+        $cases++
+    }
+}
+$baseline.elapsedSeconds=100; $script:exit=0; $script:failed=0
 foreach ($seconds in @(239.999,240.0,299.999,300.0)) {
     $script:seconds=$seconds; $r=Invoke-FixtureMeasurement
     Check ($r.testExitCode -eq 0 -and $r.failed -eq 0 -and $r.assessment.correctness -eq 'passed') 'Performance fabricated correctness failure'

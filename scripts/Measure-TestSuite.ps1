@@ -26,6 +26,7 @@ if ((Get-Content -LiteralPath (Join-Path $Checkout 'tests/Nightweaver.Tests/Test
 $baselineValue = if ($Baseline) { Get-Content -LiteralPath $Baseline -Raw | ConvertFrom-Json -AsHashtable } else { $null }
 $context = [ordered]@{
     schema = 'nightweaver-suite-measurement-v1'; evidenceId = $id; measuredUtc = [datetime]::UtcNow.ToString('o')
+    invocationId = $env:NIGHTWEAVER_INVOCATION_ID
     checkout = $Checkout; baseRevision = (GitValue @('rev-parse',"$BaseRevision^{commit}")); baseTree = (GitValue @('rev-parse',"$BaseRevision^{tree}"))
     candidateRevision = (GitValue @('rev-parse','HEAD')); candidateTree = (GitValue @('rev-parse','HEAD^{tree}'))
     dirty = [bool](GitValue @('status','--porcelain')); commandPolicy = 'nightweaver-full-suite-local-v1'

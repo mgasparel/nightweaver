@@ -8,6 +8,73 @@ namespace Nightweaver.Tests;
 
 public sealed class MergerOutcomeVerifierTests
 {
+    [Theory]
+    [InlineData("absent-terminal")]
+    [InlineData("failed-terminal")]
+    [InlineData("incomplete-terminal")]
+    [InlineData("absent-result")]
+    [InlineData("foreign-invocation")]
+    [InlineData("foreign-evidence")]
+    [InlineData("foreign-head")]
+    [InlineData("filtered-command")]
+    [InlineData("failed-result")]
+    [InlineData("incomplete-result")]
+    [InlineData("wrong-elapsed")]
+    [InlineData("dirty-result")]
+    [InlineData("duplicate-result")]
+    [InlineData("oversized-result")]
+    [InlineData("invalid-utf8-result")]
+    [InlineData("absent-suite-log")]
+    [InlineData("failed-suite-log")]
+    [InlineData("incomplete-suite-log")]
+    [InlineData("absent-xml")]
+    [InlineData("failed-xml")]
+    [InlineData("incomplete-xml")]
+    [InlineData("invalid-xml")]
+    public async Task MatchingClaimsCannotReplaceActualCompleteMeasurement(string mode)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetPerformanceFinding();
+        var resultPath = Path.Combine(fixture.MeasurementDirectory, "result.json");
+        var result = File.ReadAllText(resultPath);
+        var originalResult = result;
+        var log = File.ReadAllText(fixture.Invocation.LogFilePath);
+        var terminalEnd = log.IndexOf("NIGHTWEAVER_PERFORMANCE_CHECK_V1", StringComparison.Ordinal);
+        switch (mode)
+        {
+            case "absent-terminal": File.WriteAllText(fixture.Invocation.LogFilePath, log[terminalEnd..]); break;
+            case "failed-terminal": File.WriteAllText(fixture.Invocation.LogFilePath, "Test run summary: Failed!\ntotal: 1325\nfailed: 1\n" + log[terminalEnd..]); break;
+            case "incomplete-terminal": File.WriteAllText(fixture.Invocation.LogFilePath, "Test run summary: Passed!\ntotal: 1325\n" + log[terminalEnd..]); break;
+            case "absent-result": File.Delete(resultPath); break;
+            case "foreign-invocation": result = result.Replace(fixture.Invocation.InvocationId, "old-invocation", StringComparison.Ordinal); break;
+            case "foreign-evidence": result = result.Replace("0123456789abcdef0123456789abcdef", new string('d', 32), StringComparison.Ordinal); break;
+            case "foreign-head": result = result.Replace(fixture.Head, new string('d', 40), StringComparison.Ordinal); break;
+            case "filtered-command": result = result.Replace("--show-slowest-tests 20", "--filter-class X", StringComparison.Ordinal); break;
+            case "failed-result": result = result.Replace("\"testExitCode\":0", "\"testExitCode\":1", StringComparison.Ordinal); break;
+            case "incomplete-result": result = result.Replace("\"passed\":1325", "\"passed\":1324", StringComparison.Ordinal); break;
+            case "wrong-elapsed": result = result.Replace("300.5", "301.5", StringComparison.Ordinal); break;
+            case "dirty-result": result = result.Replace("\"dirty\":false", "\"dirty\":true", StringComparison.Ordinal); break;
+            case "duplicate-result": result = result.Replace("\"failed\":0", "\"failed\":1,\"failed\":0", StringComparison.Ordinal); break;
+            case "oversized-result": result += new string(' ', MergerLocalCheckReader.MaximumEvidenceBytes); break;
+            case "invalid-utf8-result": File.WriteAllBytes(resultPath, [0xff]); break;
+            case "absent-suite-log": File.Delete(Path.Combine(fixture.MeasurementDirectory, "suite.log")); break;
+            case "failed-suite-log": File.WriteAllText(Path.Combine(fixture.MeasurementDirectory, "suite.log"), "Test run summary: Failed!\n"); break;
+            case "incomplete-suite-log": File.WriteAllText(Path.Combine(fixture.MeasurementDirectory, "suite.log"), "Test run summary: Passed!\ntotal: 1325\n"); break;
+            case "absent-xml": File.Delete(Path.Combine(fixture.MeasurementDirectory, "report-1.xml")); break;
+            case "failed-xml":
+            case "incomplete-xml":
+            case "invalid-xml":
+                var xmlPath = Path.Combine(fixture.MeasurementDirectory, "report-1.xml");
+                var xml = File.ReadAllText(xmlPath);
+                File.WriteAllText(xmlPath, mode == "invalid-xml" ? "<broken" : xml.Replace(
+                    mode == "failed-xml" ? "failed=\"0\"" : "not-run=\"0\"",
+                    mode == "failed-xml" ? "failed=\"1\"" : "not-run=\"1\"", StringComparison.Ordinal));
+                break;
+        }
+        if (result != originalResult) File.WriteAllText(resultPath, result);
+        Assert.False((await fixture.VerifyAsync()).Succeeded);
+    }
+
     [Fact]
     public async Task AllPassingHardLimitUsesOrdinaryGuardedRepairWithoutInventingFailures()
     {
@@ -1279,6 +1346,8 @@ public sealed class MergerOutcomeVerifierTests
         internal VerifierProcessRunner Runner { get; }
         internal AgentStageResult Invocation { get; set; }
         internal IReadOnlyList<BeadCommentSnapshot> Comments { get; set; } = [];
+        internal string MeasurementDirectory => Path.Combine(session.HostPaths.TmpRoot(project.Name), BeadId,
+            invocationId, "0123456789abcdef0123456789abcdef");
         private string LogText { get; set; } = string.Empty;
 
         internal void SetPromptExample()
@@ -1346,7 +1415,20 @@ public sealed class MergerOutcomeVerifierTests
                 check_source = "local", local_exit_code = 0, performance = payload
             });
             Comments = [new("current", json, DateTimeOffset.UtcNow)];
-            File.WriteAllText(Invocation.LogFilePath, $"Test run summary: Passed!\ntotal: 1325\nfailed: 0\nsucceeded: 1325\nskipped: 0\nNIGHTWEAVER_PERFORMANCE_CHECK_V1 {invocationId} {json}\nEND_NIGHTWEAVER_PERFORMANCE_CHECK_V1 {invocationId}\n");
+            const string terminal = "Test run summary: Passed!\ntotal: 1325\nfailed: 0\nsucceeded: 1325\nskipped: 0\n";
+            File.WriteAllText(Invocation.LogFilePath, $"{terminal}NIGHTWEAVER_PERFORMANCE_CHECK_V1 {invocationId} {json}\nEND_NIGHTWEAVER_PERFORMANCE_CHECK_V1 {invocationId}\n");
+            Directory.CreateDirectory(MeasurementDirectory);
+            File.WriteAllText(Path.Combine(MeasurementDirectory, "suite.log"), terminal);
+            File.WriteAllText(Path.Combine(MeasurementDirectory, "report-1.xml"),
+                "<assemblies><assembly total=\"1325\" passed=\"1325\" failed=\"0\" skipped=\"0\" errors=\"0\" not-run=\"0\" environment=\".NET 10.0.8, 6 threads\" /></assemblies>");
+            File.WriteAllText(Path.Combine(MeasurementDirectory, "result.json"), JsonSerializer.Serialize(new
+            {
+                schema = "nightweaver-suite-measurement-v1", invocationId, evidenceId = id,
+                candidateRevision = Head, candidateTree = new string('b', 40), dirty = false,
+                commandPolicy = PerformanceCheckEvidence.Subject, command = PerformanceCheckEvidence.CommandFor(id),
+                threads = 6, testExitCode = 0, total = 1325, passed = 1325, failed = 0, skipped = 0,
+                elapsedSeconds = 300.5, measurementErrors = Array.Empty<string>()
+            }));
         }
 
         internal void PinRemoteFinding()
