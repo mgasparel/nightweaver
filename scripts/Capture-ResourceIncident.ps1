@@ -68,6 +68,6 @@ for ($index = 0; $index -lt $Samples; $index++) {
     } | ConvertTo-Json -Depth 7 | Set-Content (Join-Path $destination ('sample-{0:D2}.json' -f $index))
     if ($index + 1 -lt $Samples) { Start-Sleep -Seconds $IntervalSeconds }
 }
-$captureErrors | ConvertTo-Json -AsArray | Set-Content (Join-Path $destination 'capture-errors.json')
+ConvertTo-Json -InputObject ($captureErrors.ToArray()) | Set-Content (Join-Path $destination 'capture-errors.json')
 [ordered]@{directory=$destination;samples=$Samples;errors=$captureErrors.Count;applicationMutationsRequested=$false} | ConvertTo-Json
 

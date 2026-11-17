@@ -5,7 +5,7 @@ function Get-TestSuiteAssessment {
     $reasons = [Collections.Generic.List[string]]::new()
     if ($null -eq $Baseline) { $reasons.Add('No explicit retained baseline supplied') }
     else {
-        foreach ($key in @('schema','commandPolicy','threads','preparation','dotnetVersion','bdVersion','logicalProcessors','tempRoot','TEMP','TMP','productionContext','machine','bootUtc','schedulingHash')) {
+        foreach ($key in @('schema','commandPolicy','threads','preparation','dotnetVersion','runtimeVersion','bdVersion','logicalProcessors','tempRoot','TEMP','TMP','productionContext','machine','bootUtc','schedulingHash')) {
             if (!$Baseline.Contains($key) -or !$Result.Contains($key) -or $null -eq $Baseline[$key] -or $Baseline[$key] -cne $Result[$key]) { $reasons.Add("Missing or mismatched $key") }
         }
         foreach ($key in @('candidateRevision','candidateTree','evidenceId','command','elapsedSeconds','total','passed','failed','skipped','testExitCode','dirty','accepted')) {

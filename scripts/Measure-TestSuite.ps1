@@ -31,7 +31,7 @@ $context = [ordered]@{
     dirty = [bool](GitValue @('status','--porcelain')); commandPolicy = 'nightweaver-full-suite-local-v1'
     command = "dotnet test --solution Nightweaver.slnx --minimum-expected-tests 995 --report-xunit-xml --report-xunit-xml-filename $id.xml --show-slowest-tests 20"
     threads = 6; schedulingHash = (Get-FileHash (Join-Path $Checkout 'tests/Nightweaver.Tests/TestScheduling.cs')).Hash
-    preparation = $Preparation; dotnetVersion = (& dotnet --version | Out-String).Trim(); bdVersion = (& bd --version | Out-String).Trim()
+    preparation = $Preparation; dotnetVersion = (& dotnet --version | Out-String).Trim(); runtimeVersion = $null; bdVersion = (& bd --version | Out-String).Trim()
     logicalProcessors = [Environment]::ProcessorCount; machine = [Environment]::MachineName
     tempRoot = [IO.Path]::GetTempPath(); TEMP = $env:TEMP; TMP = $env:TMP
     bootUtc = (Get-CimInstance Win32_OperatingSystem -OperationTimeoutSec 10).LastBootUpTime.ToUniversalTime().ToString('o')
@@ -58,6 +58,8 @@ try {
                 $reader = [Xml.XmlReader]::Create($report.FullName, $settings)
                 try { $xml = [Xml.XmlDocument]::new(); $xml.Load($reader) } finally { $reader.Dispose() }
                 foreach ($assembly in $xml.SelectNodes('/assemblies/assembly')) {
+                    if ($assembly.GetAttribute('environment') -match '\.NET ([0-9.]+)') { $context.runtimeVersion = $Matches[1] }
+                    else { $context.measurementErrors += 'Test runtime identity unavailable' }
                     if ($assembly.GetAttribute('environment') -notmatch '6 threads' -or [int]$assembly.GetAttribute('errors') -ne 0 -or [int]$assembly.GetAttribute('not-run') -ne 0) { $context.measurementErrors += 'Unexpected scheduling, assembly errors or incomplete discovery' }
                     foreach ($pair in @(@('total','total'),@('passed','passed'),@('failed','failed'),@('skipped','skipped'))) { $counts[$pair[0]] += [int]$assembly.GetAttribute($pair[1]) }
                 }

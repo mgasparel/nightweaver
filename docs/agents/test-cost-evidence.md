@@ -38,7 +38,7 @@ teardown settle; XML retention, metadata and incident capture are outside it.
 Each unique evidence directory contains `result.json`, raw `suite.log`, and copied
 xUnit reports. The v1 result records full base/candidate SHA and tree, dirty state,
 command, actual total/pass/fail/skip and test exit, outer seconds, six-thread
-source hash, preparation, .NET/bd versions, CPU count, machine/boot identity,
+source hash, preparation, .NET SDK/runtime and bd versions, CPU count, machine/boot identity,
 actual temp path/TEMP/TMP and production state/build/runtime/configuration hash.
 The baseline path and SHA256 identify the exact retained comparison. No generic
 environment, command-line or configuration-content dumps are collected.

@@ -4,7 +4,7 @@ Import-Module (Join-Path $PSScriptRoot '../scripts/TestSuiteMeasurement.psm1') -
 function Check($Condition, [string]$Message) { if (!$Condition) { throw $Message } }
 $context = [ordered]@{
     schema='nightweaver-suite-measurement-v1'; commandPolicy='nightweaver-full-suite-local-v1'; threads=6
-    preparation='normal'; dotnetVersion='10.0.8'; bdVersion='1.3.1'; logicalProcessors=12
+    preparation='normal'; dotnetVersion='10.0.300'; runtimeVersion='10.0.8'; bdVersion='1.3.1'; logicalProcessors=12
     tempRoot='C:/temp'; TEMP='C:/temp'; TMP='C:/temp'; productionContext='running:build:runtime:hash'
     machine='fixture'; bootUtc='fixture-boot'; schedulingHash='six'; dirty=$false
     production=@{state='running'}

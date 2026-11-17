@@ -60,9 +60,19 @@ public sealed class HostedWorkflowContractTests
         Assert.DoesNotContain("--filter", workflow, StringComparison.Ordinal);
         Assert.Contains("$timer.Elapsed", workflow, StringComparison.Ordinal);
         var local = Read("tests", "README.md");
-        Assert.Contains("TotalSeconds -ge 300", local, StringComparison.Ordinal);
-        Assert.Contains("local latest-main performance requirement", local, StringComparison.Ordinal);
+        Assert.Contains("scripts/Measure-TestSuite.ps1", local, StringComparison.Ordinal);
+        Assert.Contains("below 240 seconds", local, StringComparison.Ordinal);
+        Assert.Contains("below 300-second hard limit", local, StringComparison.Ordinal);
+        Assert.Contains("post-integration", local, StringComparison.Ordinal);
         Assert.Contains("six-thread parallelism", local, StringComparison.Ordinal);
+        var policy = Read("scripts", "TestSuiteMeasurement.psm1");
+        Assert.Contains("$Result.elapsedSeconds -lt 240", policy, StringComparison.Ordinal);
+        Assert.Contains("$Result.elapsedSeconds -lt 300", policy, StringComparison.Ordinal);
+        Assert.Contains("$Result.elapsedSeconds -ge 1.5 * $Baseline.elapsedSeconds", policy, StringComparison.Ordinal);
+        var entry = Read("scripts", "Measure-TestSuite.ps1");
+        Assert.Contains("& dotnet test --solution Nightweaver.slnx --minimum-expected-tests 995", entry, StringComparison.Ordinal);
+        Assert.DoesNotContain("--no-build", entry, StringComparison.Ordinal);
+        Assert.DoesNotContain("--filter", entry, StringComparison.Ordinal);
     }
 
     private static string Read(params string[] parts)
