@@ -26,8 +26,8 @@ const bd = args => execFileSync('bd', ['--sandbox', ...args], { cwd: repo, env, 
 const paused = JSON.parse(bd(['--readonly', 'list', '--limit', '0', '--json']))
   .filter(row => !['closed', 'tombstone'].includes(row.status) && row.labels?.some(label => ['needs-human', 'product-decision-required'].includes(label)));
 assert(paused.length);
-const selected = paused[0].id;
-for (const row of paused.slice(1)) bd(['update', row.id, '--remove-label', 'needs-human', '--remove-label', 'product-decision-required']);
+const selected = (paused.find(row => row.labels.includes('product-decision-required')) ?? paused[0]).id;
+for (const row of paused.filter(row => row.id !== selected)) bd(['update', row.id, '--remove-label', 'needs-human', '--remove-label', 'product-decision-required']);
 const output = path.resolve(process.env.NIGHTWEAVER_QA_OUTPUT || 'TestResults/source-freshness');
 fs.mkdirSync(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
@@ -47,6 +47,9 @@ try {
   await page.goto(`${base}/projects/qa/beads/${selected}?tab=history`);
   await page.waitForFunction(() => document.querySelector('.synchronization [role=status]')?.textContent === 'Live connection · Current'
     && [...document.querySelectorAll('.status')].some(element => element.textContent === 'Current'));
+  const guidance = page.getByRole('textbox', { name: `Guidance for ${selected}` });
+  await guidance.fill('Retained event-cache guidance draft');
+  const originalGuidance = await guidance.elementHandle();
   responses.length = 0;
   await page.evaluate(() => {
     window.sourceStates = [];
@@ -80,6 +83,25 @@ try {
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     await page.screenshot({path:path.join(output,`history-${width}.png`),fullPage:true});
   }
+  assert.equal(await guidance.inputValue(), 'Retained event-cache guidance draft');
+  assert(await originalGuidance.evaluate(element => element.isConnected), 'Source updates preserve the guidance input node');
+  await guidance.focus();
+  const hiddenAt = Date.now();
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForTimeout(31000); // Real interest grace; outside normal tests.
+  const woke = page.waitForResponse(response => response.url().endsWith('/refresh') && response.request().method() === 'POST' && response.status() === 202);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await woke;
+  await page.waitForFunction(() => document.querySelector('.synchronization [role=status]')?.textContent === 'Live connection · Current');
+  assert.equal(await guidance.inputValue(), 'Retained event-cache guidance draft');
+  assert(await originalGuidance.evaluate(element => element.isConnected && document.activeElement === element), 'Wake preserves draft control and focus');
+  assert(responses.some(value => value.key === 'attention' && Date.parse(value.observedAt) >= hiddenAt), 'Wake revalidates authoritative sources');
   // Workspace interests survive navigation briefly. Digest must remain fresh
   // while its checkpoint and the serial Workspace sources are both active.
   const digestReady = page.waitForResponse(async response => response.url().includes('/resources?')
@@ -93,7 +115,7 @@ try {
   assert(digest.length >= 3, 'Observe Digest during retained Workspace interest');
   assert(digest.every(value => value.health === 'fresh'), 'Successful checkpoint reads must revalidate retained Digest data');
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({checks:{stableNativeCollections:true,externalCommentVisible:true,digestOverlapFresh:true}, responses:responses.length, states}));
+  console.log(JSON.stringify({checks:{stableNativeCollections:true,externalCommentVisible:true,digestOverlapFresh:true,draftFocusAndWake:true}, responses:responses.length, states}));
 } finally {
   fs.writeFileSync(path.join(output,'evidence.json'),JSON.stringify({steady,responses,errors,states:page ? await page.evaluate(() => window.sourceStates).catch(() => null) : null},null,2));
   await browser.close();

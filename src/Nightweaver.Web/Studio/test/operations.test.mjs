@@ -22,7 +22,7 @@ test('Product and readiness commands reconcile cleanup along with active tracker
 });
 function fixture() {
   let now = 0; let serial = 0;
-  const jobs = new Map(); const streams = []; const reads = []; const posts = [];
+  const jobs = new Map(); const streams = []; const reads = []; const posts = []; const wakes = [];
   const clock = { now: () => now, random: () => 1,
     later(callback, ms) { const id = ++serial; jobs.set(id, { at: now + ms, callback }); return () => jobs.delete(id); } };
   const transport = {
@@ -33,6 +33,7 @@ function fixture() {
     },
     read(identity, signal) { return new Promise((resolve, reject) => reads.push({ identity, signal, resolve, reject })); },
     async refresh(project, keys) { posts.push({ project, keys }); },
+    async wake(project, keys) { wakes.push({ project, keys }); },
   };
   const coordinator = new QueryCoordinator(transport, clock);
   const advance = async (ms = 0) => {
@@ -49,7 +50,7 @@ function fixture() {
     schema: 'nightweaver-operations-v1', projectId: 'qa', epoch: 'A', ...fields,
   });
   const hello = (fields = {}) => send('hello', { versions: Object.fromEntries(streams.at(-1).keys.map(key => [key, '1'])), ...fields });
-  return { coordinator, transport, streams, reads, posts, jobs, advance, send, hello, snapshot: (key) => coordinator.getSnapshot(identity(key)) };
+  return { coordinator, transport, streams, reads, posts, wakes, jobs, advance, send, hello, snapshot: (key) => coordinator.getSnapshot(identity(key)) };
 }
 
 test('bootstrap waits for hello and coalesces a notification during the initial deferred read', async () => {
@@ -243,6 +244,7 @@ test('hidden tabs release the stream, retain data and reconcile on wake', async 
   assert.equal(f.snapshot().observation.health, 'stale');
   f.coordinator.setVisible(true); f.hello(); await f.advance();
   assert.equal(f.streams.length, 2); assert.equal(f.reads.length, 2);
+  assert.deepEqual(f.wakes, [{ project: 'qa', keys: ['attention'] }]);
   assert.equal(f.snapshot().synchronized, false);
   f.reads[1].resolve(envelope()); await f.advance();
   assert.equal(f.snapshot().synchronized, true); assert.equal(f.snapshot().stale, false);

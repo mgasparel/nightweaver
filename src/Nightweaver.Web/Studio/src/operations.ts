@@ -20,6 +20,7 @@ export type Transport = {
   connect(project: string, keys: string[], event: (name: string, data: Frame) => void, failed: () => void): () => void;
   read(identity: Identity, signal: AbortSignal): Promise<Envelope>;
   refresh(project: string, keys: string[], signal: AbortSignal): Promise<void>;
+  wake?(project: string, keys: string[], signal: AbortSignal): Promise<void>;
 };
 export type Scheduler = { now(): number; later(callback: () => void, ms: number): () => void; random(): number };
 type Entry = { identity: Identity; listeners: Set<() => void>; snapshot: Snapshot; watermark: bigint;
@@ -49,6 +50,7 @@ export class QueryCoordinator {
   private disposed = false;
   private hello = false;
   private signature = "";
+  private wakeAttempt?: AbortController;
   private buffered = new Map<string, { epoch: string; revision: bigint }>();
   private refreshes = new Map<string, RefreshAttempt>();
   constructor(private transport: Transport, private clock: Scheduler) { this.timer(); }
@@ -142,16 +144,27 @@ export class QueryCoordinator {
     else { this.retry?.(); this.retry = undefined; this.disconnect(); }
   }
   suspend() {
-    this.retry?.(); this.retry = undefined; this.disconnect();
+    this.retry?.(); this.retry = undefined; this.disconnect(); this.wakeAttempt?.abort();
     this.cancelRefreshes("Page suspended; reconciliation outcome unknown");
   }
   wake() {
     if (this.disposed || !this.visible) return;
     for (const entry of this.active()) { entry.needsRead = true; this.publish(entry, { synchronized: false }); }
     if (!this.hello) this.restart(); else this.resync();
+    // Wake is a new read-reconciliation hint, never a replay of a guarded
+    // tracker command. The server also checks the journal immediately.
+    const active = this.active();
+    if (active.length && this.transport.wake) {
+      this.wakeAttempt?.abort();
+      const request = new AbortController(); this.wakeAttempt = request;
+      const cancel = this.clock.later(() => request.abort(), 10000);
+      void this.transport.wake(active[0].identity.projectId, active.map(entry => entry.identity.key), request.signal)
+        .catch(() => {}).finally(() => { cancel(); if (this.wakeAttempt === request) this.wakeAttempt = undefined; });
+    }
   }
   dispose() {
     this.disposed = true; this.scheduled?.(); this.retry?.(); this.tick?.(); this.disconnect();
+    this.wakeAttempt?.abort();
     this.cancelRefreshes("Coordinator disposed; reconciliation outcome unknown");
     this.entries.clear();
   }
