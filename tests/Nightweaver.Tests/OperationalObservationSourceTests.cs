@@ -768,6 +768,13 @@ public sealed class OperationalObservationSourceTests
         using var client = factory.CreateClient();
         var token = TestContext.Current.CancellationToken;
         var path = $"/api/operations/v1/projects/web-test/resources?key=workspace:{bead}";
+        var source = Assert.IsType<OperationalObservationSource>(factory.Services.GetRequiredService<IOperationalObservationSource>());
+        var reads = new ConcurrentQueue<(string Id, string Reason, bool CommentHint, bool DependencyHint)>();
+        source.ReadStarted += (id, reason) =>
+        {
+            var hints = journal.SelectMany(page => page.Hints).Where(hint => hint.IssueId == bead).ToArray();
+            reads.Enqueue((id, reason, hints.Any(hint => hint.Operation == "comment"), hints.Any(hint => hint.Operation == "dep_add")));
+        };
         async Task<JsonElement> ReadObservedAsync(Func<JsonElement, bool> condition)
         {
             try { return await UntilAsync(client, path, condition, token); }
@@ -782,6 +789,8 @@ public sealed class OperationalObservationSourceTests
             && root.GetProperty("synchronization").GetProperty("journal").GetString() == "current"
             && !root.GetProperty("synchronization").GetProperty("pending").GetBoolean());
         var beforeMutation = journal.Count;
+        var readsBeforeMutation = reads.Count;
+        var commandsBeforeMutation = measured.Count;
         var coldSeconds = cold.Elapsed.TotalSeconds;
         var count = first.GetProperty("data").GetProperty("comments").GetArrayLength();
         var revision = first.GetProperty("revision").GetString();
@@ -812,10 +821,19 @@ public sealed class OperationalObservationSourceTests
                     && relation.GetProperty("direction").GetString() == "outgoing");
         });
         var combinedSeconds = changed.Elapsed.TotalSeconds;
+        var mutationReads = reads.Skip(readsBeforeMutation).ToArray();
+        // Keep diagnostics even if a causal assertion fails on a slower host.
+        foreach (var measurement in measured) TestContext.Current.TestOutputHelper?.WriteLine(measurement);
+        foreach (var read in mutationReads) TestContext.Current.TestOutputHelper?.WriteLine($"Source {read.Id}: {read.Reason}; comment hint {read.CommentHint}; dependency hint {read.DependencyHint}");
         Assert.Contains(journal.Skip(beforeMutation).SelectMany(page => page.Hints), hint => hint.IssueId == bead && hint.Operation == "comment");
         Assert.Contains(journal.Skip(beforeMutation).SelectMany(page => page.Hints), hint => hint.IssueId == bead && hint.Operation == "dep_add");
-        Assert.True(cold.Elapsed.TotalSeconds < 30, "All visibility precedes the first scheduled source audit.");
-        TestContext.Current.TestOutputHelper?.WriteLine($"Journal pages {journal.Count}; consumed mutation hints before audit; body reads {measured.Count}");
+        // Environment keeps its independent two-second policy. Tracker visibility
+        // must precede an actual 60-second source audit, regardless of host speed.
+        Assert.DoesNotContain(mutationReads, read => read.Reason == "audit" && !read.Id.StartsWith("environment:", StringComparison.Ordinal));
+        Assert.Contains(mutationReads, read => read.Id == "comments:" + bead && read.Reason == "dirty" && read.CommentHint);
+        Assert.Contains(mutationReads, read => read.Id == "relations-down:" + bead && read.Reason == "dirty" && read.DependencyHint);
+        Assert.Contains(mutationReads, read => read.Id == "inventory" && read.Reason == "dirty" && read.DependencyHint);
+        TestContext.Current.TestOutputHelper?.WriteLine($"Journal pages {journal.Count} ({journal.Count - beforeMutation} after baseline); source reads {reads.Count} ({mutationReads.Length} after baseline); native commands {measured.Count} ({measured.Count - commandsBeforeMutation} after baseline)");
         Assert.NotEqual(revision, combined.GetProperty("revision").GetString());
         var combinedData = combined.GetProperty("data");
         Assert.Equal(count + 1, combinedData.GetProperty("comments").GetArrayLength());
@@ -825,7 +843,6 @@ public sealed class OperationalObservationSourceTests
             relation.GetProperty("id").GetString() == blocker
             && relation.GetProperty("type").GetString() == "blocks"
             && relation.GetProperty("direction").GetString() == "outgoing");
-        var source = Assert.IsType<OperationalObservationSource>(factory.Services.GetRequiredService<IOperationalObservationSource>());
         TestContext.Current.TestOutputHelper?.WriteLine($"Native observer: cold Workspace {coldSeconds:F3}s; combined comments+dependency visibility {combinedSeconds:F3}s; commands {source.CommandCount}; native ms {source.NativeMilliseconds:F1}");
         // Performance targets are measured evidence; parallel-suite load can exceed them.
         // UntilAsync still enforces the functional observation bound.

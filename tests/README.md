@@ -85,6 +85,12 @@ with a foreign sentinel, proving encoding cannot redirect the publication.
 The native observer's two external writes explicitly enable Dolt auto-commit,
 matching production rather than inheriting its fixture's read-probe default.
 Read/write overlap and the original cold/update observation deadlines remain.
+After a settled baseline, test-side source-read recording requires dirty inventory,
+comment and dependency reads after their journal hints and excludes tracker audits
+until combined visibility. The independent two-second environment audit remains
+allowed. This observes the actual event path instead of treating total elapsed
+time below 30 seconds as proof of the 60-second tracker audit boundary. Command
+timings, source causes and exact page/read counts survive assertion failures.
 A balanced local comparison after identical mutations measured 5/24 reads above
 two seconds with auto-commit off and 0/24 with it on; this is performance evidence,
 not a claim that off loses SQL-committed data. Both smoke phases retain command
