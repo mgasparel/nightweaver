@@ -1,0 +1,596 @@
+{
+  "version": "bd version 1.3.1 (c1c4b642a: HEAD@c1c4b642ac1c)",
+  "fixture": "C:\\Users\\mgasp\\AppData\\Local\\Temp\\ns-dkq-spike-20261117\\run3\\fixture",
+  "cases": [
+    {
+      "name": "title",
+      "events": [
+        {
+          "seq": 3,
+          "ts": "2026-11-17T00:24:56Z",
+          "op": "update",
+          "issue_id": "probe-c4c",
+          "actor": "Isolated spike",
+          "issue": {
+            "id": "probe-c4c",
+            "title": "A revised",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "owner": "spike@example.invalid",
+            "created_at": "2026-11-17T00:24:55Z",
+            "created_by": "Isolated spike",
+            "updated_at": "2026-11-17T00:24:56Z"
+          }
+        }
+      ]
+    },
+    {
+      "name": "label",
+      "events": [
+        {
+          "seq": 4,
+          "ts": "2026-11-17T00:24:56Z",
+          "op": "update",
+          "issue_id": "probe-c4c",
+          "actor": "Isolated spike",
+          "issue": {
+            "id": "probe-c4c",
+            "title": "A revised",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "owner": "spike@example.invalid",
+            "created_at": "2026-11-17T00:24:55Z",
+            "created_by": "Isolated spike",
+            "updated_at": "2026-11-17T00:24:56Z",
+            "labels": [
+              "needs-human"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "comment",
+      "events": [
+        {
+          "seq": 5,
+          "ts": "2026-11-17T00:24:57Z",
+          "op": "comment",
+          "issue_id": "probe-c4c",
+          "actor": "Isolated spike",
+          "issue": {
+            "id": "probe-c4c",
+            "title": "A revised",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "owner": "spike@example.invalid",
+            "created_at": "2026-11-17T00:24:55Z",
+            "created_by": "Isolated spike",
+            "updated_at": "2026-11-17T00:24:56Z",
+            "labels": [
+              "needs-human"
+            ]
+          },
+          "comment": {
+            "id": "9185cc31-5c49-569c-b07f-7dd3159aa07a",
+            "author": "Isolated spike",
+            "text": "isolated evidence",
+            "created_at": "2026-11-17T00:24:57Z",
+            "source": "structured"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dependency-add",
+      "events": [
+        {
+          "seq": 6,
+          "ts": "2026-11-17T00:24:58Z",
+          "op": "dep_add",
+          "issue_id": "probe-c4c",
+          "actor": "Isolated spike",
+          "issue": {
+            "id": "probe-c4c",
+            "title": "A revised",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "is_blocked": true,
+            "owner": "spike@example.invalid",
+            "created_at": "2026-11-17T00:24:55Z",
+            "created_by": "Isolated spike",
+            "updated_at": "2026-11-17T00:24:56Z",
+            "labels": [
+              "needs-human"
+            ]
+          },
+          "dep": {
+            "kind": "blocks",
+            "target": "probe-p2x",
+            "metadata": "{}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dependency-duplicate",
+      "events": [
+        {
+          "seq": 7,
+          "ts": "2026-11-17T00:24:59Z",
+          "op": "dep_add",
+          "issue_id": "probe-c4c",
+          "actor": "Isolated spike",
+          "issue": {
+            "id": "probe-c4c",
+            "title": "A revised",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "is_blocked": true,
+            "owner": "spike@example.invalid",
+            "created_at": "2026-11-17T00:24:55Z",
+            "created_by": "Isolated spike",
+            "updated_at": "2026-11-17T00:24:56Z",
+            "labels": [
+              "needs-human"
+            ]
+          },
+          "dep": {
+            "kind": "blocks",
+            "target": "probe-p2x",
+            "metadata": "{}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "blocker-close",
+      "events": [
+        {
+          "seq": 8,
+          "ts": "2026-11-17T00:25:00Z",
+          "op": "update",
+          "issue_id": "probe-c4c",
+          "issue": {
+            "id": "probe-c4c",
+            "title": "A revised",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "owner": "spike@example.invalid",
+            "created_at": "2026-11-17T00:24:55Z",
+            "created_by": "Isolated spike",
+            "updated_at": "2026-11-17T00:24:56Z",
+            "labels": [
+              "needs-human"
+            ]
+          }
+        },
+        {
+          "seq": 9,
+          "ts": "2026-11-17T00:25:00Z",
+          "op": "close",
+          "issue_id": "probe-p2x",
+          "actor": "Isolated spike",
+          "issue": {
+            "id": "probe-p2x",
+            "title": "B",
+            "status": "closed",
+            "priority": 2,
+            "issue_type": "task",
+            "owner": "spike@example.invalid",
+            "created_at": "2026-11-17T00:24:55Z",
+            "created_by": "Isolated spike",
+            "updated_at": "2026-11-17T00:24:59Z",
+            "closed_at": "2026-11-17T00:24:59Z",
+            "close_reason": "Closed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "blocker-reopen",
+      "events": [
+        {
+          "seq": 10,
+          "ts": "2026-11-17T00:25:01Z",
+          "op": "update",
+          "issue_id": "probe-c4c",
+          "issue": {
+            "id": "probe-c4c",
+            "title": "A revised",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "is_blocked": true,
+            "owner": "spike@example.invalid",
+            "created_at": "2026-11-17T00:24:55Z",
+            "created_by": "Isolated spike",
+            "updated_at": "2026-11-17T00:24:56Z",
+            "labels": [
+              "needs-human"
+            ]
+          }
+        },
+        {
+          "seq": 11,
+          "ts": "2026-11-17T00:25:01Z",
+          "op": "update",
+          "issue_id": "probe-p2x",
+          "actor": "Isolated spike",
+          "issue": {
+            "id": "probe-p2x",
+            "title": "B",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "owner": "spike@example.invalid",
+            "created_at": "2026-11-17T00:24:55Z",
+            "created_by": "Isolated spike",
+            "updated_at": "2026-11-17T00:25:01Z"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dependency-remove",
+      "events": [
+        {
+          "seq": 12,
+          "ts": "2026-11-17T00:25:01Z",
+          "op": "update",
+          "issue_id": "probe-c4c",
+          "issue": {
+            "id": "probe-c4c",
+            "title": "A revised",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "owner": "spike@example.invalid",
+            "created_at": "2026-11-17T00:24:55Z",
+            "created_by": "Isolated spike",
+            "updated_at": "2026-11-17T00:24:56Z",
+            "labels": [
+              "needs-human"
+            ]
+          }
+        },
+        {
+          "seq": 13,
+          "ts": "2026-11-17T00:25:01Z",
+          "op": "dep_remove",
+          "issue_id": "probe-c4c",
+          "actor": "Isolated spike",
+          "issue": {
+            "id": "probe-c4c",
+            "title": "A revised",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "task",
+            "owner": "spike@example.invalid",
+            "created_at": "2026-11-17T00:24:55Z",
+            "created_by": "Isolated spike",
+            "updated_at": "2026-11-17T00:24:56Z",
+            "labels": [
+              "needs-human"
+            ]
+          },
+          "dep": {
+            "kind": "blocks",
+            "target": "probe-p2x",
+            "metadata": "{}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dependency-remove-missing",
+      "events": []
+    },
+    {
+      "name": "claim",
+      "events": [
+        {
+          "seq": 14,
+          "ts": "2026-11-17T00:25:03Z",
+          "op": "update",
+          "issue_id": "probe-c4c",
+          "actor": "probe-actor",
+          "issue": {
+            "id": "probe-c4c",
+            "title": "A revised",
+            "status": "in_progress",
+            "priority": 2,
+            "issue_type": "task",
+            "assignee": "probe-actor",
+            "owner": "spike@example.invalid",
+            "created_at": "2026-11-17T00:24:55Z",
+            "created_by": "Isolated spike",
+            "updated_at": "2026-11-17T00:25:03Z",
+            "started_at": "2026-11-17T00:25:03Z",
+            "lease_expires_at": "2026-11-17T00:30:03Z",
+            "heartbeat_at": "2026-11-17T00:25:03Z",
+            "labels": [
+              "needs-human"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "label-remove",
+      "events": [
+        {
+          "seq": 15,
+          "ts": "2026-11-17T00:25:03Z",
+          "op": "update",
+          "issue_id": "probe-c4c",
+          "actor": "Isolated spike",
+          "issue": {
+            "id": "probe-c4c",
+            "title": "A revised",
+            "status": "in_progress",
+            "priority": 2,
+            "issue_type": "task",
+            "assignee": "probe-actor",
+            "owner": "spike@example.invalid",
+            "created_at": "2026-11-17T00:24:55Z",
+            "created_by": "Isolated spike",
+            "updated_at": "2026-11-17T00:25:03Z",
+            "started_at": "2026-11-17T00:25:03Z",
+            "lease_expires_at": "2026-11-17T00:30:03Z",
+            "heartbeat_at": "2026-11-17T00:25:03Z"
+          }
+        }
+      ]
+    },
+    {
+      "name": "delete",
+      "events": [
+        {
+          "seq": 18,
+          "ts": "2026-11-17T00:25:07Z",
+          "op": "delete",
+          "issue_id": "probe-p2x",
+          "actor": "Isolated spike",
+          "issue": null
+        }
+      ]
+    }
+  ],
+  "ready_blocked": [
+    "probe-p2x"
+  ],
+  "ready_unblocked": [
+    "probe-c4c"
+  ],
+  "ordered_events": 17,
+  "reconnect": [
+    {
+      "seq": 16,
+      "ts": "2026-11-17T00:25:04Z",
+      "op": "comment",
+      "issue_id": "probe-c4c",
+      "actor": "Isolated spike",
+      "issue": {
+        "id": "probe-c4c",
+        "title": "A revised",
+        "status": "in_progress",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "probe-actor",
+        "owner": "spike@example.invalid",
+        "created_at": "2026-11-17T00:24:55Z",
+        "created_by": "Isolated spike",
+        "updated_at": "2026-11-17T00:25:03Z",
+        "started_at": "2026-11-17T00:25:03Z",
+        "lease_expires_at": "2026-11-17T00:30:03Z",
+        "heartbeat_at": "2026-11-17T00:25:03Z"
+      },
+      "comment": {
+        "id": "ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7",
+        "author": "Isolated spike",
+        "text": "written while disconnected",
+        "created_at": "2026-11-17T00:25:04Z",
+        "source": "structured"
+      }
+    },
+    {
+      "seq": 17,
+      "ts": "2026-11-17T00:25:04Z",
+      "op": "update",
+      "issue_id": "probe-p2x",
+      "actor": "Isolated spike",
+      "issue": {
+        "id": "probe-p2x",
+        "title": "B",
+        "status": "open",
+        "priority": 1,
+        "issue_type": "task",
+        "owner": "spike@example.invalid",
+        "created_at": "2026-11-17T00:24:55Z",
+        "created_by": "Isolated spike",
+        "updated_at": "2026-11-17T00:25:04Z"
+      }
+    }
+  ],
+  "invalidation": [
+    "blocked",
+    "comments:probe-c4c",
+    "inventory",
+    "ready",
+    "relations:probe-c4c",
+    "relations:probe-p2x"
+  ],
+  "burst_records": 39,
+  "coalesced_flushes": 1,
+  "idle_follower": {
+    "seconds": 10.00024239999766,
+    "delta": {
+      "reads": 990,
+      "writes": 90,
+      "other": 5600,
+      "read_bytes": 24815900,
+      "write_bytes": 1102330,
+      "other_bytes": 43710,
+      "cpu_seconds": 0.09375
+    },
+    "alive": true
+  },
+  "live_events": [
+    {
+      "seq": 19,
+      "ts": "2026-11-17T00:25:20Z",
+      "op": "comment",
+      "issue_id": "probe-c4c",
+      "actor": "Isolated spike",
+      "issue": {
+        "id": "probe-c4c",
+        "title": "A revised",
+        "status": "in_progress",
+        "priority": 2,
+        "issue_type": "task",
+        "assignee": "probe-actor",
+        "owner": "spike@example.invalid",
+        "created_at": "2026-11-17T00:24:55Z",
+        "created_by": "Isolated spike",
+        "updated_at": "2026-11-17T00:25:03Z",
+        "started_at": "2026-11-17T00:25:03Z",
+        "lease_expires_at": "2026-11-17T00:30:03Z",
+        "heartbeat_at": "2026-11-17T00:25:03Z"
+      },
+      "comment": {
+        "id": "d523110b-5635-5197-a7d8-f406276e2637",
+        "author": "Isolated spike",
+        "text": "live follower delivery",
+        "created_at": "2026-11-17T00:25:19Z",
+        "source": "structured"
+      }
+    }
+  ],
+  "costs": {
+    "inventory": [
+      {
+        "ms": 390.2609999968263,
+        "bytes": 534
+      },
+      {
+        "ms": 347.9667999999947,
+        "bytes": 534
+      },
+      {
+        "ms": 403.60579999833135,
+        "bytes": 534
+      },
+      {
+        "ms": 425.6915999976627,
+        "bytes": 534
+      },
+      {
+        "ms": 425.48059999899124,
+        "bytes": 534
+      }
+    ],
+    "comments": [
+      {
+        "ms": 225.73560000091675,
+        "bytes": 599
+      },
+      {
+        "ms": 225.11200000008103,
+        "bytes": 599
+      },
+      {
+        "ms": 642.161899999337,
+        "bytes": 599
+      },
+      {
+        "ms": 255.70710000101826,
+        "bytes": 599
+      },
+      {
+        "ms": 348.34500000215485,
+        "bytes": 599
+      }
+    ],
+    "ready": [
+      {
+        "ms": 216.56240000083926,
+        "bytes": 3
+      },
+      {
+        "ms": 262.8895999987435,
+        "bytes": 3
+      },
+      {
+        "ms": 268.70099999723607,
+        "bytes": 3
+      },
+      {
+        "ms": 316.8158000007679,
+        "bytes": 3
+      },
+      {
+        "ms": 370.7068000003346,
+        "bytes": 3
+      }
+    ],
+    "empty-tail": [
+      {
+        "ms": 192.60059999942314,
+        "bytes": 0
+      },
+      {
+        "ms": 186.97259999680682,
+        "bytes": 0
+      },
+      {
+        "ms": 187.56850000136183,
+        "bytes": 0
+      },
+      {
+        "ms": 233.74970000077155,
+        "bytes": 0
+      },
+      {
+        "ms": 196.66309999956866,
+        "bytes": 0
+      }
+    ]
+  },
+  "gap": {
+    "code": "events_journal_truncated",
+    "error": "events journal truncated: checkpoint 1 is below the retained window [18..19]; records 2..17 were pruned",
+    "floor": 18,
+    "head": 19,
+    "schema_version": 1,
+    "since": 1
+  },
+  "sql_limitation": "Error: 'bd sql' is not yet supported in embedded mode\n",
+  "disabled_tail": {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "17",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 202.16760000039358,
+    "stdout": "",
+    "stderr": "note: the events journal is disabled for this workspace (enable with 'bd config set events-journal true'); any records shown were written while it was enabled, and new mutations are not being recorded\n"
+  },
+  "recovery_ids": [
+    "probe-c4c"
+  ],
+  "assertions": "passed",
+  "note": "Synthetic tiny fixture; OS logical IO, not physical disk bytes"
+}
