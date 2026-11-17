@@ -322,13 +322,25 @@ public sealed class OperationalObservationServiceTests
         source.InventoryIdentity = new(); source.ReadyIdentity = new(); source.Pending = true;
         await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
         using var agePin = service.Pin(["attention"]);
-        clock.Advance(TimeSpan.FromSeconds(121));
+        var changedSource = new ObservationSourceState("fresh", clock.GetUtcNow(), clock.GetUtcNow(), null)
+            { ContentIdentity = source.InventoryIdentity };
+        source.Revalidate!("inventory", changedSource);
+        clock.Advance(TimeSpan.FromSeconds(6));
+        Assert.Equal(6000d, service.Read("attention").PendingAgeMs);
+        Assert.True(service.Read("attention").Synchronization!.Delayed);
+        source.Revalidate("inventory", changedSource);
+        Assert.Equal(6000d, service.Read("attention").PendingAgeMs);
+        clock.Advance(TimeSpan.FromSeconds(115));
         Assert.Equal("stale", service.Read("attention").Health);
         var fresh = new ObservationSourceState("fresh", clock.GetUtcNow(), clock.GetUtcNow(), null);
         source.Revalidate!("inventory", fresh with { ContentIdentity = source.InventoryIdentity });
         source.Revalidate("ready", fresh with { ContentIdentity = source.ReadyIdentity });
         Assert.Equal(original, service.Read("attention").Data);
         Assert.Equal("stale", service.Read("attention").Health);
+        source.Pending = false;
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        Assert.Null(service.Read("attention").PendingAgeMs);
+        Assert.Equal("fresh", service.Read("attention").Health);
     }
 
     [Fact]

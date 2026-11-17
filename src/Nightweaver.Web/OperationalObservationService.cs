@@ -452,8 +452,15 @@ internal sealed class OperationalObservationService(
                 if (stopping || !entries.TryGetValue(entry.Key.Value, out var current) || !ReferenceEquals(current, entry)) continue;
                 var envelope = entry.Envelope;
                 if (envelope.Data is null || !entry.ContentIdentities.TryGetValue(id, out var backing)
-                    || !ReferenceEquals(backing, state.ContentIdentity) || !envelope.Sources.TryGetValue(id, out var previous)
-                    || !ReferenceEquals(previous.ContentIdentity, state.ContentIdentity)) continue;
+                    || !envelope.Sources.TryGetValue(id, out var previous)) continue;
+                if (!ReferenceEquals(backing, state.ContentIdentity))
+                {
+                    // Audits can discover unjournaled changes too. Start the known
+                    // replacement obligation without lending its age to the old body.
+                    entry.PendingTimestamp ??= clock.GetTimestamp();
+                    continue;
+                }
+                if (!ReferenceEquals(previous.ContentIdentity, state.ContentIdentity)) continue;
                 var sources = envelope.Sources.ToDictionary();
                 sources[id] = state;
                 var observed = sources.Values.Min(item => item.ObservedAt);
