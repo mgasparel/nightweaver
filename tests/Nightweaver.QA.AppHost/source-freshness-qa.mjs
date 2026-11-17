@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
+import { assertSustained, isSettled } from './source-freshness-assertions.mjs';
 
 const base = process.env.NIGHTWEAVER_QA_URL;
 const configPath = process.env.NIGHTWEAVER_QA_CONFIG;
@@ -28,11 +29,14 @@ const paused = JSON.parse(bd(['--readonly', 'list', '--limit', '0', '--json']))
 assert(paused.length);
 const selected = (paused.find(row => row.labels.includes('product-decision-required')) ?? paused[0]).id;
 for (const row of paused.filter(row => row.id !== selected)) bd(['update', row.id, '--remove-label', 'needs-human', '--remove-label', 'product-decision-required']);
+const fixtureMutationsCompletedAt = Date.now();
+const workspaceKey = `workspace:${selected}`;
 const output = path.resolve(process.env.NIGHTWEAVER_QA_OUTPUT || 'TestResults/source-freshness');
 fs.mkdirSync(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const responses = [], errors = [];
 let steady;
+let baseline;
 let page;
 try {
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -42,7 +46,7 @@ try {
     const value = await response.json().catch(() => null);
     if (value) responses.push({ at: Date.now(), key: value.key, health: value.health, revision: value.revision,
       observedAt: value.observedAt, sources: value.sources, error: value.error?.code,
-      validatedAgeMs: value.validatedAgeMs, pendingAgeMs: value.pendingAgeMs, synchronization: value.synchronization });
+      validatedAgeMs: value.validatedAgeMs, pendingAgeMs: value.pendingAgeMs, synchronization: value.synchronization, policy: value.policy });
   });
   await page.goto(`${base}/projects/qa/beads/${selected}?tab=history`);
   await page.waitForFunction(() => document.querySelector('.synchronization [role=status]')?.textContent === 'Live connection · Current'
@@ -50,15 +54,44 @@ try {
   const guidance = page.getByRole('textbox', { name: `Guidance for ${selected}` });
   await guidance.fill('Retained event-cache guidance draft');
   const originalGuidance = await guidance.elementHandle();
+  // A transient Current DOM is not a barrier: fixture writes may still be
+  // awaiting journal ingestion or authoritative projection. Refresh both keys,
+  // then require successful post-write provenance and drained current catch-up.
+  assert.equal(await page.evaluate(async keys => (await fetch('/api/operations/v1/projects/qa/refresh', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys })
+  })).status, ['attention', workspaceKey]), 202);
+  await new Promise((resolve, reject) => {
+    const deadline = Date.now() + 30000;
+    const check = () => {
+      const latest = ['attention', workspaceKey].map(key => responses.findLast(value => value.key === key));
+      if (latest.every(value => value && isSettled(value, fixtureMutationsCompletedAt))) {
+        baseline = { fixtureMutationsCompletedAt, settledAt: Date.now(), responses: latest };
+        resolve();
+      } else if (Date.now() >= deadline) reject(Error('Attention/Workspace did not establish a settled post-mutation baseline'));
+      else setTimeout(check, 50);
+    };
+    check();
+  });
+  await page.waitForFunction(() => document.querySelector('.synchronization [role=status]')?.textContent === 'Live connection · Current'
+    && document.querySelector('.bead-freshness [role=status] .status')?.textContent === 'Current');
   responses.length = 0;
   await page.evaluate(() => {
     window.sourceStates = [];
-    const capture = () => {
+    let previous;
+    const capture = (force = false) => {
       const state = { header: document.querySelector('.synchronization [role=status]')?.textContent,
-        badges: [...document.querySelectorAll('.status')].map(element => element.textContent) };
-      if (JSON.stringify(window.sourceStates.at(-1)) !== JSON.stringify(state)) window.sourceStates.push(state);
+        workspace: document.querySelector('.bead-freshness [role=status] .status')?.textContent,
+        navigationStale: document.querySelector('#attention-navigation-count')?.textContent.includes('stale') ?? true,
+        alerts: [...document.querySelectorAll('.synchronization [role=alert], .bead-freshness [role=alert]')].map(element => element.textContent) };
+      const signature = JSON.stringify(state);
+      if (force || previous !== signature) window.sourceStates.push({ at: Date.now(), ...state });
+      previous = signature;
     };
-    capture(); new MutationObserver(capture).observe(document.body, {subtree:true,childList:true,attributes:true,characterData:true});
+    window.captureSourceState = capture;
+    capture();
+    // Sampling also detects locally aged statuses without relying on response events.
+    window.sourceStateTimer = setInterval(() => capture(), 100);
+    new MutationObserver(() => capture()).observe(document.body, {subtree:true,childList:true,attributes:true,characterData:true});
   });
   let states;
   if (process.env.NIGHTWEAVER_QA_REUSE_STEADY) {
@@ -71,16 +104,10 @@ try {
   } else {
   const sustainedStart = Date.now();
   await page.waitForTimeout(130000);
+  await page.evaluate(() => { window.captureSourceState(true); clearInterval(window.sourceStateTimer); });
   states = await page.evaluate(() => window.sourceStates);
-  assert(Date.now() - sustainedStart >= 130000, 'Cross two real audits and the 120-second age boundary');
-  assert(responses.length >= 100, 'Observe sustained HTTP receipt ageing');
-  const trackerResponses = responses.filter(value => value.key === 'attention' || value.key.startsWith('workspace:'));
-  assert(trackerResponses.every(value => value.validatedAgeMs <= 120000), 'Accepted sources remain within the age allowance');
-  const attentionTimes = [...new Set(trackerResponses.filter(value => value.key === 'attention').map(value => value.observedAt))];
-  assert(attentionTimes.length >= 3, 'Bootstrap and two real authoritative audits must validate Attention');
-  assert(trackerResponses.every(value => value.health === 'fresh'), 'Successful unchanged source reads must not age-flash stale between collections');
-  assert(states.every(state => state.header === 'Live connection · Current' && !state.badges.includes('stale')));
-  steady = { wallSeconds: (Date.now() - sustainedStart) / 1000, attentionValidations: attentionTimes, responses: responses.slice(), states };
+  steady = { wallSeconds: (Date.now() - sustainedStart) / 1000, responses: responses.slice(), states };
+  steady.attentionValidations = assertSustained(steady, workspaceKey);
   }
   const comment = 'Source freshness external edit ' + Date.now();
   bd(['comments', 'add', selected, comment]);
@@ -136,6 +163,6 @@ try {
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({checks:{stableNativeCollections:true,externalCommentVisible:true,digestOverlapFresh:true,draftFocusAndWake:true}, responses:responses.length, states}));
 } finally {
-  fs.writeFileSync(path.join(output,'evidence.json'),JSON.stringify({steady,responses,errors,states:page ? await page.evaluate(() => window.sourceStates).catch(() => null) : null},null,2));
+  fs.writeFileSync(path.join(output,'evidence.json'),JSON.stringify({revision: execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim(), baseline, steady,responses,errors,states:page ? await page.evaluate(() => window.sourceStates).catch(() => null) : null},null,2));
   await browser.close();
 }

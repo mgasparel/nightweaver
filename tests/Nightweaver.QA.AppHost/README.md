@@ -57,6 +57,21 @@ verifies an external comments-only edit reaches the selected Workspace. No respo
 or health metadata are substituted. Evidence and 1440/375/720 captures go to
 `TestResults/source-freshness` or `NIGHTWEAVER_QA_OUTPUT`. Stop the exact stack
 in `finally`, including on failure.
+Before the sustained window, the probe explicitly refreshes Attention and the
+selected Workspace and waits up to 30 seconds for both to report fresh post-write
+source validation, drained pending work and current journal catch-up. A transient
+Current rendering alone does not establish this baseline. The window rejects
+source/read errors, stale, unavailable, delayed or disconnected states and ages
+over 120 seconds. Refreshing is allowed only with corroborating pending response
+metadata within the configured five-second allowance and a return to Current.
+Timestamped rendered transitions, response policy/source metadata and the settled
+baseline are retained even on assertion failure. Unrelated runtime/environment
+availability badges are not tracker freshness states.
+Run the cheap offline acceptance assertions with
+`node --test source-freshness-assertions.test.mjs`; these include rejected stale,
+delayed, disconnected, source-failure, missing-audit and stuck-pending traces.
+`NIGHTWEAVER_QA_REUSE_STEADY` is only for explicitly qualified follow-up phases;
+it cannot replace a required fresh sustained acceptance run.
 The probe also navigates to Overview and watches Digest checkpoint freshness
 while the previous Workspace interest remains within its disconnect grace.
 Wake acceptance waits for a fresh, nonpending Attention response validated after
