@@ -377,9 +377,10 @@ export function queryKey(kind: "explorer" | "cleanup", filter: string, search = 
 }
 
 export function observationStatus(snapshot: Snapshot): string {
-  if (snapshot.observation?.synchronization?.error) return snapshot.observation.synchronization.error.message;
-  if (snapshot.observation?.synchronization?.journal === "catching-up") return "Catching up";
-  if (snapshot.observation?.error) return `Source error · ${snapshot.observation.error.message}`;
-  return ({ loading: "Loading", unavailable: "Unavailable", current: "Current", refreshing: "Refreshing",
-    delayed: "Updates delayed", stale: "Snapshot stale" } as const)[snapshot.dataState ?? "loading"];
+  const body = snapshot.observation?.error ? `Source error · ${snapshot.observation.error.message}`
+    : ({ loading: "Loading", unavailable: "Unavailable", current: "Current", refreshing: "Refreshing",
+      delayed: "Updates delayed", stale: "Snapshot stale" } as const)[snapshot.dataState ?? "loading"];
+  const channel = snapshot.observation?.synchronization?.error?.message
+    ?? (snapshot.observation?.synchronization?.journal === "catching-up" ? "Catching up" : undefined);
+  return channel ? `${body} · ${channel}` : body;
 }

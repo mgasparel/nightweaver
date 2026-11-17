@@ -458,10 +458,18 @@ test('valid HTTP proves backend reachability during channel recovery; hello alon
 test('journal backlog and permanent reader failure are visible independently of a recent accepted snapshot', async () => {
   const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
   f.reads[0].resolve(envelope('1', 'A', 'attention', { synchronization: { journal: 'catching-up', pending: false } })); await f.advance();
-  assert.equal(observationStatus(f.snapshot()), 'Catching up'); assert.equal(f.snapshot().stale, false);
+  assert.match(observationStatus(f.snapshot()), /Catching up/); assert.equal(f.snapshot().stale, false);
   await f.advance(2000);
   f.reads[1].resolve(envelope('2', 'A', 'attention', { synchronization: { journal: 'degraded', pending: false,
     error: { code: 'journal-settlement', message: 'Inspect Web host diagnostics before restarting it.', retryable: false } } })); await f.advance();
   assert.match(observationStatus(f.snapshot()), /Inspect Web host/); assert.equal(f.snapshot().connectionState, 'connected');
   f.coordinator.dispose();
+});
+
+test('backlog never masks source failure, pending delay or accepted-body expiry', () => {
+  const base = { connectionState: 'connected', refreshing: false, stale: false,
+    observation: envelope('1', 'A', 'attention', { synchronization: { journal: 'catching-up', pending: true } }) };
+  assert.match(observationStatus({ ...base, dataState: 'delayed' }), /Updates delayed.*Catching up/);
+  assert.match(observationStatus({ ...base, stale: true, dataState: 'stale' }), /Snapshot stale.*Catching up/);
+  assert.match(observationStatus({ ...base, observation: { ...base.observation, error: { message: 'Tracker read failed' } } }), /Tracker read failed.*Catching up/);
 });
