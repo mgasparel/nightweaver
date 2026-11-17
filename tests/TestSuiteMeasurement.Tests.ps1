@@ -23,6 +23,37 @@ function Invoke-FixtureMeasurement($Base=$baseline) {
     Invoke-TestSuiteMeasurement $context $Base (Join-Path $directory ([guid]::NewGuid().ToString('N')+'.json')) $runner { $script:seconds } $capture
 }
 $cases=0
+# Malformed optional metadata must never hide settled candidate evidence. Exercise
+# real JSON loading for every typed field, including the QA total:{} reproduction.
+$stringFields=@('schema','commandPolicy','preparation','dotnetVersion','runtimeVersion','bdVersion','tempRoot','TEMP','TMP','productionContext','machine','schedulingHash','candidateRevision','candidateTree','evidenceId','command')
+$integerFields=@('threads','logicalProcessors','total','passed','failed','skipped','testExitCode')
+foreach ($key in $stringFields + $integerFields + @('bootUtc','dirty','accepted','production')) {
+    $invalidValues=@('{}','[]','null','true','"1325"','-1','1.5','2147483648')
+    if ($key -in $stringFields -or $key -eq 'bootUtc') { $invalidValues=@('{}','[]','null','true','1325','""') }
+    if ($key -in @('dirty','accepted')) { $invalidValues=@('{}','[]','null','"true"','1') }
+    if ($key -eq 'production') { $invalidValues=@('{}','[]','null','true','"running"','{"state":{}}','{"state":[]}','{"state":true}','{"state":"foreign"}') }
+    foreach ($invalidJson in $invalidValues + @('MISSING')) {
+        foreach ($testExit in @(0,17)) {
+            $malformed=ConvertFrom-Json -InputObject ($baseline | ConvertTo-Json -Depth 12) -AsHashtable -NoEnumerate
+            if ($invalidJson -eq 'MISSING') { $malformed.Remove($key) } else { $malformed[$key]=ConvertFrom-Json -InputObject $invalidJson -AsHashtable -NoEnumerate }
+            $baselinePath=Join-Path $directory ([guid]::NewGuid().ToString('N')+'-baseline.json')
+            $malformed | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $baselinePath -Encoding utf8
+            $loaded=ConvertFrom-Json -InputObject (Get-Content -LiteralPath $baselinePath -Raw) -AsHashtable -NoEnumerate
+            $script:exit=$testExit; $script:failed=$(if ($testExit) { 1 } else { 0 })
+            $path=Join-Path $directory ([guid]::NewGuid().ToString('N')+'.json')
+            $before=$script:captures; $beforeRuns=$script:runs
+            $r=Invoke-TestSuiteMeasurement $context $loaded $path $runner { 150.0 } $capture
+            $retained=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            Check ($script:runs -eq $beforeRuns+1 -and $retained.testExitCode -eq $testExit -and $retained.failed -eq $script:failed -and $retained.total -eq 1325 -and $retained.passed -eq (1325-$script:failed)) "Invalid $key ($invalidJson) lost original candidate result"
+            Check (!$retained.assessment.comparisonAvailable -and $null -eq $retained.assessment.deltaSeconds -and $null -eq $retained.assessment.ratio -and !$retained.assessment.captureRequired) "Invalid $key ($invalidJson) compared"
+            Check ($retained.assessment.comparisonReasons -contains "Baseline missing or invalid $key metadata") "Invalid $key ($invalidJson) has no explanation"
+            Check ($script:captures -eq $before -and $retained.capture.state -eq 'not-triggered') "Invalid $key triggered capture"
+            Check (($retained.assessment.correctness -eq 'passed') -eq ($testExit -eq 0)) "Invalid $key changed correctness"
+            $cases++
+        }
+    }
+}
+$script:exit=0; $script:failed=0
 # Exercise the entry point's serialized baseline loading with an actual boot identity.
 $context.bootUtc='2026-11-16T18:40:45.5000000Z'; $baseline.bootUtc=$context.bootUtc
 foreach ($scenario in @(

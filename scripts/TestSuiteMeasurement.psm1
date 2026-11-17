@@ -6,35 +6,59 @@ function Get-TestSuiteAssessment {
     if ($null -eq $Baseline) { $reasons.Add('No explicit retained baseline supplied') }
     elseif ($Baseline -isnot [System.Collections.IDictionary]) { $reasons.Add('Baseline root must be a JSON object') }
     else {
-        foreach ($key in @('schema','commandPolicy','threads','preparation','dotnetVersion','runtimeVersion','bdVersion','logicalProcessors','tempRoot','TEMP','TMP','productionContext','machine','bootUtc','schedulingHash')) {
-            $baselineValue = $Baseline[$key]; $candidateValue = $Result[$key]
-            # ConvertFrom-Json can materialize ISO timestamps as DateTime objects.
-            # Restore the UTC round-trip representation emitted by the measurement
-            # entry point before comparing boot identities; preserve all other fields.
-            if ($key -eq 'bootUtc') {
-                if ($baselineValue -is [datetime] -or $baselineValue -is [datetimeoffset]) { $baselineValue = ([datetimeoffset]$baselineValue).UtcDateTime.ToString('o') }
-                if ($candidateValue -is [datetime] -or $candidateValue -is [datetimeoffset]) { $candidateValue = ([datetimeoffset]$candidateValue).UtcDateTime.ToString('o') }
+        # Optional JSON is untrusted metadata. Validate every field before any
+        # comparison, interpolation or property access can coerce its value.
+        $invalidMetadata = $false
+        $stringFields = @('schema','commandPolicy','preparation','dotnetVersion','runtimeVersion','bdVersion','tempRoot','TEMP','TMP','productionContext','machine','schedulingHash','candidateRevision','candidateTree','evidenceId','command')
+        $integerFields = @('threads','logicalProcessors','total','passed','failed','skipped','testExitCode')
+        foreach ($key in $stringFields + $integerFields + @('bootUtc','dirty','accepted','production')) {
+            $value = $Baseline[$key]
+            $valid = $Baseline.Contains($key)
+            if ($key -in $stringFields) { $valid = $valid -and $value -is [string] -and $value.Length -gt 0 }
+            elseif ($key -in $integerFields) {
+                $isNumber = $value -is [int] -or $value -is [long] -or $value -is [double] -or $value -is [decimal]
+                $valid = $valid -and $isNumber
+                if ($valid) { $valid = [double]::IsFinite([double]$value) -and $value -ge 0 -and $value -le [int]::MaxValue -and [Math]::Truncate([double]$value) -eq $value }
             }
-            if (!$Baseline.Contains($key) -or !$Result.Contains($key) -or $null -eq $baselineValue -or $baselineValue -cne $candidateValue) { $reasons.Add("Missing or mismatched $key") }
+            elseif ($key -eq 'bootUtc') { $valid = $valid -and (($value -is [string] -and $value.Length -gt 0) -or $value -is [datetime] -or $value -is [datetimeoffset]) }
+            elseif ($key -eq 'production') {
+                $valid = $valid -and $value -is [System.Collections.IDictionary]
+                if ($valid) { $valid = $value.Contains('state') -and $value['state'] -is [string] -and $value['state'] -in @('running','stopped','unknown','unobserved') }
+            }
+            else { $valid = $valid -and $value -is [bool] }
+            if (!$valid) { $invalidMetadata = $true; $reasons.Add("Baseline missing or invalid $key metadata") }
         }
-        foreach ($key in @('candidateRevision','candidateTree','evidenceId','command','elapsedSeconds','total','passed','failed','skipped','testExitCode','dirty','accepted')) {
-            if (!$Baseline.Contains($key)) { $reasons.Add("Baseline missing $key") }
+        if (!$invalidMetadata) {
+            foreach ($key in @('schema','commandPolicy','threads','preparation','dotnetVersion','runtimeVersion','bdVersion','logicalProcessors','tempRoot','TEMP','TMP','productionContext','machine','bootUtc','schedulingHash')) {
+                $baselineValue = $Baseline[$key]; $candidateValue = $Result[$key]
+                # ConvertFrom-Json can materialize ISO timestamps as DateTime objects.
+                # Restore the UTC round-trip representation emitted by the measurement
+                # entry point before comparing boot identities; preserve all other fields.
+                if ($key -eq 'bootUtc') {
+                    if ($baselineValue -is [datetime] -or $baselineValue -is [datetimeoffset]) { $baselineValue = ([datetimeoffset]$baselineValue).UtcDateTime.ToString('o') }
+                    if ($candidateValue -is [datetime] -or $candidateValue -is [datetimeoffset]) { $candidateValue = ([datetimeoffset]$candidateValue).UtcDateTime.ToString('o') }
+                }
+                if (!$Baseline.Contains($key) -or !$Result.Contains($key) -or $null -eq $baselineValue -or $baselineValue -cne $candidateValue) { $reasons.Add("Missing or mismatched $key") }
+            }
+            foreach ($key in @('candidateRevision','candidateTree','evidenceId','command','elapsedSeconds','total','passed','failed','skipped','testExitCode','dirty','accepted')) {
+                if (!$Baseline.Contains($key)) { $reasons.Add("Baseline missing $key") }
+            }
+            if ($Baseline.dirty -ne $false -or $Baseline.accepted -ne $true -or $Baseline.testExitCode -ne 0 -or $Baseline.failed -ne 0 -or $Baseline.skipped -ne 0 -or $Baseline.total -lt 995 -or $Baseline.passed -ne $Baseline.total) { $reasons.Add('Baseline is not an accepted clean complete passing measurement') }
+            if ($Result.dirty) { $reasons.Add('Candidate worktree is dirty') }
+            if ($Baseline.candidateRevision -notmatch '^[0-9a-fA-F]{40}$' -or $Baseline.candidateTree -notmatch '^[0-9a-fA-F]{40}$' -or
+                $Baseline.evidenceId -notmatch '^[0-9a-fA-F]{32}$') { $reasons.Add('Baseline identity invalid') }
+            $expectedCommand = "dotnet test --solution Nightweaver.slnx --minimum-expected-tests 995 --report-xunit-xml --report-xunit-xml-filename $($Baseline.evidenceId).xml --show-slowest-tests 20"
+            if ($Baseline.command -cne $expectedCommand) { $reasons.Add('Baseline command is not the complete normal suite') }
+            if (!$Result.production -or $Result.production.state -in @('unknown','unobserved') -or
+                !$Baseline.production -or $Baseline.production.state -in @('unknown','unobserved')) { $reasons.Add('Production state unavailable') }
+            # JSON strings, arrays and objects are not numeric measurements. Never let optional
+            # baseline conversion prevent retention of the candidate's original test result.
+            $baselineSeconds = 0.0
+            $numeric = $Baseline.elapsedSeconds -is [ValueType] -and $Baseline.elapsedSeconds -isnot [bool] -and
+                [double]::TryParse([string]$Baseline.elapsedSeconds, [Globalization.NumberStyles]::Float,
+                    [Globalization.CultureInfo]::InvariantCulture, [ref]$baselineSeconds)
+            if (!$numeric -or ![double]::IsFinite($baselineSeconds) -or $baselineSeconds -le 0) { $reasons.Add('Baseline elapsed time unavailable or invalid') }
         }
-        if ($Baseline.dirty -ne $false -or $Baseline.accepted -ne $true -or $Baseline.testExitCode -ne 0 -or $Baseline.failed -ne 0 -or $Baseline.skipped -ne 0 -or $Baseline.total -lt 995 -or $Baseline.passed -ne $Baseline.total) { $reasons.Add('Baseline is not an accepted clean complete passing measurement') }
-        if ($Result.dirty) { $reasons.Add('Candidate worktree is dirty') }
-        if ($Baseline.candidateRevision -notmatch '^[0-9a-fA-F]{40}$' -or $Baseline.candidateTree -notmatch '^[0-9a-fA-F]{40}$' -or
-            $Baseline.evidenceId -notmatch '^[0-9a-fA-F]{32}$') { $reasons.Add('Baseline identity invalid') }
-        $expectedCommand = "dotnet test --solution Nightweaver.slnx --minimum-expected-tests 995 --report-xunit-xml --report-xunit-xml-filename $($Baseline.evidenceId).xml --show-slowest-tests 20"
-        if ($Baseline.command -cne $expectedCommand) { $reasons.Add('Baseline command is not the complete normal suite') }
-        if (!$Result.production -or $Result.production.state -in @('unknown','unobserved') -or
-            !$Baseline.production -or $Baseline.production.state -in @('unknown','unobserved')) { $reasons.Add('Production state unavailable') }
-        # JSON strings, arrays and objects are not numeric measurements. Never let optional
-        # baseline conversion prevent retention of the candidate's original test result.
-        $baselineSeconds = 0.0
-        $numeric = $Baseline.elapsedSeconds -is [ValueType] -and $Baseline.elapsedSeconds -isnot [bool] -and
-            [double]::TryParse([string]$Baseline.elapsedSeconds, [Globalization.NumberStyles]::Float,
-                [Globalization.CultureInfo]::InvariantCulture, [ref]$baselineSeconds)
-        if (!$numeric -or ![double]::IsFinite($baselineSeconds) -or $baselineSeconds -le 0) { $reasons.Add('Baseline elapsed time unavailable or invalid') }
     }
     $comparable = $reasons.Count -eq 0
     [ordered]@{

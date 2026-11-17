@@ -32,6 +32,12 @@ and why. Never manufacture a zero delta or silently choose the newest file.
 The baseline JSON root must be an object. Scalar and array roots make comparison
 unavailable with an explicit reason; candidate counts and the original test exit
 are still retained. JSON null is treated as no supplied baseline.
+All consumed baseline metadata is type-checked before comparison: counts and
+exit codes must be nonnegative bounded integers, acceptance/dirty flags must be
+booleans, identities and environment fields must have their documented scalar
+types, and production must contain a recognized state. Malformed or missing
+metadata records an explicit unavailable-comparison reason, retains original
+candidate counts/exit, leaves delta/ratio null and cannot trigger capture.
 Parsed boot timestamp objects are normalized to the measurement's UTC round-trip
 string before comparison, so JSON date conversion preserves identical boot
 identities. A different boot identity still makes comparison unavailable.
