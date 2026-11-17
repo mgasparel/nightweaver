@@ -135,8 +135,10 @@ public sealed class MergerSlotCoordinatorTests
         Assert.Equal(1, runner.ReleaseReconciliationReadCount);
     }
 
-    [Fact]
-    public async Task SemanticRejectionAtBudgetBoundaryReleasesExactlyOnceAndPreservesMetadata()
+    [Theory]
+    [InlineData("Merger found a conflict in src/Feature.cs that needs implementation repair.")]
+    [InlineData("Merger verified all-passing hard-limit performance evidence requiring implementation repair.")]
+    public async Task SemanticRejectionAtBudgetBoundaryReleasesExactlyOnceAndPreservesMetadata(string finding)
     {
         var runner = new MergerSlotProcessRunner(initialRepairCycles: 2);
         var requestCountAtReceipt = -1;
@@ -145,7 +147,7 @@ public sealed class MergerSlotCoordinatorTests
             runner.Bead.Labels.Remove("stage:merge");
             runner.Bead.Labels.Add("stage:implement");
             runner.Bead.RepairCycles++;
-            runner.Bead.Comments.Add("Merger found a conflict in src/Feature.cs that needs implementation repair.");
+            runner.Bead.Comments.Add(finding);
             runner.Bead.Status = "open";
             runner.Bead.Assignee = null;
             var published = runner.ReadState();
@@ -170,7 +172,7 @@ public sealed class MergerSlotCoordinatorTests
         Assert.Equal("preserve-me", runner.Bead.KeepMetadata);
         Assert.Equal(requestCountAtReceipt, runner.RequestCount);
         Assert.Single(runner.ClaimWrites("candidate"));
-        Assert.Contains("Merger found a conflict", Assert.Single(runner.Bead.Comments), StringComparison.Ordinal);
+        Assert.Equal(finding, Assert.Single(runner.Bead.Comments));
     }
 
     [Fact]

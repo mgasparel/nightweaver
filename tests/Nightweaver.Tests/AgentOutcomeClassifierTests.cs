@@ -16,6 +16,9 @@ public sealed class AgentOutcomeClassifierTests
     [InlineData("Reviewer", "stage:review", "reviewer_outcome", "approved")]
     [InlineData("Qa", "stage:qa", "qa_outcome", "approved")]
     [InlineData("Merger", "stage:merge", "merger_outcome", "approved")]
+    [InlineData("Reviewer", "stage:review", "reviewer_outcome", "changes_required")]
+    [InlineData("Qa", "stage:qa", "qa_outcome", "changes_required")]
+    [InlineData("Merger", "stage:merge", "merger_outcome", "changes_required")]
     public async Task OpenRouterUsesConfiguredEndpointModelAndNamedQuestionsForEveryRole(
         string roleName, string stage, string questionName, string choice)
     {
@@ -46,6 +49,9 @@ public sealed class AgentOutcomeClassifierTests
             Assert.Equal("choice", question.GetProperty("type").GetString());
             Assert.False(string.IsNullOrWhiteSpace(question.GetProperty("instructions").GetString()));
             Assert.True(question.GetProperty("criteria").TryGetProperty(choice, out _));
+            if (choice == "changes_required")
+                Assert.Contains(role == AgentRole.Merger ? "hard-limit performance" : "test-cost regressions",
+                    question.GetProperty("instructions").GetString(), StringComparison.Ordinal);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(JsonSerializer.Serialize(new
@@ -70,6 +76,7 @@ public sealed class AgentOutcomeClassifierTests
             TestContext.Current.CancellationToken);
 
         Assert.NotNull(result.Outcome);
+        if (choice == "changes_required") Assert.Equal(AgentOutcomeChoice.ChangesRequired, result.Outcome);
         Assert.Equal("openrouter-decisions", result.Provider);
         Assert.Equal(1, calls);
         Assert.DoesNotContain("fixture-secret", result.ToString(), StringComparison.Ordinal);

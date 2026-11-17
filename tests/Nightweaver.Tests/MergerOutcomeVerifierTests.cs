@@ -8,6 +8,95 @@ namespace Nightweaver.Tests;
 
 public sealed class MergerOutcomeVerifierTests
 {
+    [Fact]
+    public async Task AllPassingHardLimitUsesOrdinaryGuardedRepairWithoutInventingFailures()
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetPerformanceFinding();
+        var verified = await fixture.VerifyAsync();
+        Assert.True(verified.Succeeded, verified.Diagnostic);
+        Assert.Equal(0, verified.Finding!.LocalExitCode);
+        Assert.Equal(1325, verified.Finding.Performance!.Passed);
+        Assert.Equal(0, fixture.Runner.NativeGitCommandCount);
+        fixture.Runner.Status = "open";
+        fixture.Runner.Assignee = null;
+        var result = await fixture.RunSlotAsync();
+        Assert.Equal(MergerSlotDisposition.RepairHandedOff, result.Disposition);
+        Assert.True(result.ClaimHandoffCompleted, result.Diagnostic);
+        Assert.Equal(1, fixture.Runner.RepairCycles);
+        Assert.Single(fixture.Runner.PublicationWrites);
+        var duplicate = await fixture.RunSlotAsync();
+        Assert.False(duplicate.RepairHandoffCompleted);
+        Assert.Equal(1, fixture.Runner.RepairCycles);
+        Assert.Single(fixture.Runner.PublicationWrites);
+    }
+
+    [Theory]
+    [InlineData("elapsed_seconds", "299.999")]
+    [InlineData("elapsed_seconds", "-1")]
+    [InlineData("elapsed_seconds", "1e999")]
+    [InlineData("failed", "1")]
+    [InlineData("skipped", "1")]
+    [InlineData("total", "0")]
+    [InlineData("passed", "1324")]
+    [InlineData("test_exit_code", "1")]
+    [InlineData("hard_limit_seconds", "240")]
+    [InlineData("command", "\"dotnet test --filter-class X\"")]
+    [InlineData("evidence_id", "\"old\"")]
+    public async Task RejectsInvalidPerformancePolicyEvenWhenFrameAndCommentAgree(string key, string json)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetPerformanceFinding(key, json);
+        Assert.False((await fixture.VerifyAsync()).Succeeded);
+    }
+
+    [Theory]
+    [InlineData("duplicate")]
+    [InlineData("quoted")]
+    [InlineData("foreign")]
+    [InlineData("head")]
+    [InlineData("pr")]
+    [InlineData("mismatch")]
+    [InlineData("later")]
+    [InlineData("oversized")]
+    [InlineData("oversized-frame")]
+    [InlineData("owner")]
+    [InlineData("dirty")]
+    [InlineData("incomplete")]
+    [InlineData("utf8")]
+    [InlineData("duplicate-json")]
+    [InlineData("historical-comment")]
+    public async Task RejectsAmbiguousForeignOrContradictoryPerformanceEvidence(string mode)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetPerformanceFinding();
+        var path = fixture.Invocation.LogFilePath;
+        var log = File.ReadAllText(path);
+        switch (mode)
+        {
+            case "duplicate": log += log; break;
+            case "quoted": log = log.Replace("\nNIGHTWEAVER_PERFORMANCE_CHECK_V1", "\n> NIGHTWEAVER_PERFORMANCE_CHECK_V1", StringComparison.Ordinal); break;
+            case "foreign": log = log.Replace(fixture.Invocation.InvocationId, "old-invocation", StringComparison.Ordinal); break;
+            case "head": log = log.Replace(fixture.Head, new string('d', 40), StringComparison.Ordinal); break;
+            case "pr": fixture.Runner.ReportedPullRequestUrl = "https://github.com/attacker/other/pull/123"; break;
+            case "mismatch": log = log.Replace("300.5", "301.5", StringComparison.Ordinal); break;
+            case "later": log += "Test run summary: Passed!\n"; break;
+            case "oversized": log = new string('x', MergerLocalCheckReader.MaximumLogBytes) + log; break;
+            case "oversized-frame": log = log.Replace("All tests passed;", new string('x', MergerLocalCheckReader.MaximumEvidenceBytes), StringComparison.Ordinal); break;
+            case "owner": fixture.Runner.Assignee = "human:competitor"; break;
+            case "dirty": fixture.Invocation = fixture.Invocation with { Observations = fixture.Invocation.Observations! with { WorktreeClean = false } }; break;
+            case "incomplete": log = log[..log.IndexOf("END_", StringComparison.Ordinal)]; break;
+            case "utf8":
+                File.WriteAllBytes(path, System.Text.Encoding.UTF8.GetBytes(log).SelectMany(b => b == (byte)'{' ? new byte[] { b, 0xff } : new[] { b }).ToArray());
+                Assert.False((await fixture.VerifyAsync()).Succeeded);
+                return;
+            case "duplicate-json": log = log.Replace("\"total\":1325", "\"total\":1325,\"total\":1325", StringComparison.Ordinal); break;
+            case "historical-comment": fixture.Invocation = fixture.Invocation with { PreInvocationCommentIds = new HashSet<string>(["current"]) }; break;
+        }
+        File.WriteAllText(path, log);
+        Assert.False((await fixture.VerifyAsync()).Succeeded);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
@@ -1236,6 +1325,28 @@ public sealed class MergerOutcomeVerifierTests
                 : "Build FAILED.\n1 Error(s)";
             var transcript = $"NIGHTWEAVER_LOCAL_CHECK_V2 {invocationId} {envelope}\n{summary}\n{details}\n{terminal}\n{trailingOutput}\nEND_NIGHTWEAVER_LOCAL_CHECK_V2 {invocationId}\n";
             SetFinding("checks", command, summary, details, "local", exitCode, transcript);
+        }
+
+        internal void SetPerformanceFinding(string? field = null, string? value = null)
+        {
+            const string id = "0123456789abcdef0123456789abcdef";
+            var payload = new Dictionary<string, object?>
+            {
+                ["reason"] = "hard-limit", ["evidence_id"] = id, ["command"] = PerformanceCheckEvidence.CommandFor(id),
+                ["total"] = 1325, ["passed"] = 1325, ["failed"] = 0, ["skipped"] = 0,
+                ["elapsed_seconds"] = 300.5, ["hard_limit_seconds"] = 300, ["test_exit_code"] = 0
+            };
+            if (field is not null) payload[field] = JsonSerializer.Deserialize<JsonElement>(value!);
+            var json = JsonSerializer.Serialize(new
+            {
+                schema = "nightweaver-merger-rejection-v1", kind = "performance", pull_request = PullRequest,
+                checked_head = Head, subject = PerformanceCheckEvidence.Subject,
+                summary = "Complete suite exceeded the local hard limit.",
+                details = "All tests passed; repair the measured suite cost in the originating Bead.",
+                check_source = "local", local_exit_code = 0, performance = payload
+            });
+            Comments = [new("current", json, DateTimeOffset.UtcNow)];
+            File.WriteAllText(Invocation.LogFilePath, $"Test run summary: Passed!\ntotal: 1325\nfailed: 0\nsucceeded: 1325\nskipped: 0\nNIGHTWEAVER_PERFORMANCE_CHECK_V1 {invocationId} {json}\nEND_NIGHTWEAVER_PERFORMANCE_CHECK_V1 {invocationId}\n");
         }
 
         internal void PinRemoteFinding()
