@@ -939,6 +939,77 @@ public sealed class OperationalObservationSourceTests
     }
 
     [Fact]
+    public async Task PendingWorkspaceRelationFailureIsVisibleWithoutReplacingAcceptedProvenance()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var commandCost = TimeSpan.Zero;
+        var runner = new Runner { TargetPath = target.Path };
+        var timedRunner = new RecordingProcessRunner((request, cancellation) =>
+        {
+            if (request.FileName == "bd" && request.Arguments[2] != "comments") clock.Advance(commandCost);
+            return runner.RunAsync(request, cancellation);
+        });
+        using var factory = Factory(target.Path, timedRunner, clock);
+        var source = Adapter(factory);
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        const string key = "workspace:task-1";
+        using var pin = service.Pin([key]);
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        var accepted = service.Read(key);
+        Assert.Equal("fresh", accepted.Health);
+        Assert.NotNull(accepted.Data);
+
+        clock.Advance(TimeSpan.FromSeconds(10));
+        runner.Title = "Replacement title";
+        runner.Comment = "Replacement comment";
+        runner.UpdatedAt = "2026-01-01T00:01:00Z";
+        runner.FailRelations = true;
+        commandCost = TimeSpan.FromSeconds(1.4);
+        source.Invalidate();
+        var commandsBefore = runner.Commands.Count;
+        await service.CollectOnceAsync(false, token);
+        // Inventory + detail + failed incoming relations exhaust the native turn.
+        // Confirmation/environment and the replacement body are still pending.
+        Assert.Equal(["list", "comments", "show", "dep"], runner.Commands.Skip(commandsBefore));
+        var pending = service.Read(key);
+        Assert.Equal("source-failed", pending.Sources["relations-up:task-1"].Error?.Code);
+        Assert.Equal("stale", pending.Sources["relations-up:task-1"].Health);
+        Assert.Equal("source-failed", pending.Error?.Code);
+        Assert.Equal("stale", pending.Health);
+        Assert.NotEqual(accepted.Revision, pending.Revision);
+        Assert.Equal(accepted.Data?.GetRawText(), pending.Data?.GetRawText());
+        Assert.Equal(accepted.ObservedAt, pending.ObservedAt);
+        Assert.Equal(14200d, pending.ValidatedAgeMs);
+        foreach (var (id, previous) in accepted.Sources)
+        {
+            var retained = pending.Sources[id];
+            Assert.Same(previous.ContentIdentity, retained.ContentIdentity);
+            Assert.Equal(previous.ObservedAt, retained.ObservedAt);
+            Assert.Equal(previous.ValidatedTimestamp, retained.ValidatedTimestamp);
+            Assert.Equal(previous.SourceGeneration, retained.SourceGeneration);
+        }
+        Assert.True(pending.Sources["relations-up:task-1"].LastAttemptAt > accepted.Sources["relations-up:task-1"].LastAttemptAt);
+        clock.Advance(TimeSpan.FromSeconds(6));
+        Assert.Equal("source-failed", service.Read(key).Error?.Code);
+        Assert.Equal(20200d, service.Read(key).ValidatedAgeMs);
+
+        runner.FailRelations = false;
+        commandCost = TimeSpan.Zero;
+        source.Invalidate();
+        for (var turn = 0; turn < 4 && service.Read(key).Health != "fresh"; turn++)
+            await service.CollectOnceAsync(false, token);
+        var recovered = service.Read(key);
+        Assert.Equal("fresh", recovered.Health);
+        Assert.Null(recovered.Error);
+        Assert.All(recovered.Sources.Values, state => Assert.Null(state.Error));
+        Assert.Contains("Replacement title", recovered.Data?.GetRawText());
+        Assert.Equal(0d, recovered.ValidatedAgeMs);
+    }
+
+    [Fact]
     public async Task PartialRelationsRemainExplicitAndSlowCoreYieldsToWorkspaceSubsteps()
     {
         using var target = new ObservationTargetFixture();
@@ -1038,7 +1109,7 @@ public sealed class OperationalObservationSourceTests
         internal int FailListAt { get; init; }
         internal bool FailEveryList { get; set; }
         internal Action? Advance { get; init; }
-        internal bool FailRelations { get; init; }
+        internal bool FailRelations { get; set; }
         internal bool Ready { get; set; } = true;
         internal bool Blocked { get; set; }
         internal string Title { get; set; } = "Original title";

@@ -310,6 +310,38 @@ public sealed class OperationalObservationServiceTests
     }
 
     [Fact]
+    public async Task PendingFirstLoadFailurePublishesDiagnosticsWithoutUnacceptedProvenance()
+    {
+        var clock = new Clock();
+        var source = new Source(clock) { Pending = true, Error = new("source-failed", "Relation read failed.") };
+        using var service = Service(source, clock);
+        service.Read("workspace:task-1");
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        var failed = service.Read("workspace:task-1");
+        Assert.Equal("unavailable", failed.Health);
+        Assert.Equal("source-failed", failed.Error?.Code);
+        Assert.Null(failed.Data);
+        Assert.Null(failed.ObservedAt);
+        Assert.Null(failed.ValidatedAgeMs);
+        var state = failed.Sources["ready"];
+        Assert.Equal("unavailable", state.Health);
+        Assert.Equal(source.Error, state.Error);
+        Assert.Equal(clock.GetUtcNow(), state.LastAttemptAt);
+        Assert.Null(state.ObservedAt);
+        Assert.Null(state.ContentIdentity);
+        Assert.Null(state.ValidatedTimestamp);
+        Assert.Null(state.SourceGeneration);
+        Assert.Null(failed.Sources["inventory"].ObservedAt);
+        Assert.Null(failed.Sources["inventory"].ContentIdentity);
+        source.Pending = false;
+        source.Error = null;
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        Assert.Equal("fresh", service.Read("workspace:task-1").Health);
+        Assert.Null(service.Read("workspace:task-1").Error);
+        Assert.NotNull(service.Read("workspace:task-1").Data);
+    }
+
+    [Fact]
     public async Task PendingChangedSourceMetadataCannotRevalidateRetainedData()
     {
         var clock = new Clock();

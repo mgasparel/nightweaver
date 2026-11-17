@@ -12,6 +12,11 @@ accepted data), `pendingAgeMs` (null when clean), and `synchronization: {journal
 metadata, excluded from semantic revisions. Actual delayed/stale/source-status
 transitions notify subscribers. Successful validation of the exact accepted
 source content resets age; pending replacement provenance cannot refresh old data.
+Pending cohorts publish known source failures immediately, including an envelope
+warning. Failure health, error and attempt time overlay the accepted source state;
+its content identity and successful validation clocks still describe the retained
+body. Successful pending reads cannot lend replacement provenance to that body.
+Without an accepted body, failed sources have no successful validation provenance.
 Server deadlines and browser receipt ageing use monotonic clocks. On wake, retained
 data requires reconciliation; browser wall-clock skew cannot confer freshness.
 

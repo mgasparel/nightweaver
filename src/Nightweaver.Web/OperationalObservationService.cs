@@ -415,12 +415,27 @@ internal sealed class OperationalObservationService(
                 foreach (var (id, observed) in sample.Sources)
                 {
                     var previous = entry.Envelope.Sources.GetValueOrDefault(id);
+                    if (sample.Pending)
+                    {
+                        // Pending successes belong to a replacement body. Only
+                        // failure diagnostics may overlay the accepted provenance.
+                        if (observed.Error is not null)
+                            sources[id] = (previous ?? new ObservationSourceState("unavailable", null, null, null)) with
+                            {
+                                Health = previous?.ObservedAt is null ? "unavailable" : "stale",
+                                LastAttemptAt = observed.LastAttemptAt, Error = observed.Error
+                            };
+                        continue;
+                    }
                     sources[id] = observed.Error is not null && observed.ObservedAt is null && previous?.ObservedAt is not null
                         ? observed with { Health = "stale", ObservedAt = previous.ObservedAt } : observed;
                 }
                 if (sample.Pending)
                 {
-                    Publish(entry, entry.Envelope with { LastAttemptAt = sample.AttemptedAt,
+                    var failure = sample.Error ?? sample.Sources.Values.FirstOrDefault(state => state.Error is not null)?.Error;
+                    Publish(entry, entry.Envelope with { Sources = sources,
+                        Health = failure is null ? entry.Envelope.Health : entry.Envelope.Data is null ? "unavailable" : "stale",
+                        Error = failure ?? entry.Envelope.Error, LastAttemptAt = sample.AttemptedAt,
                         NextAttemptAt = clock.GetUtcNow().AddMilliseconds(entry.Envelope.TargetIntervalMs) });
                     Age(entry);
                     continue;

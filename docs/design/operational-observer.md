@@ -30,7 +30,10 @@ filters are subscribed. Digest, Attention, Workspace and All inventory views do
 not spend the shared native-work budget on unused memberships. When both filters
 are selected their existing rotating priority and independent health remain.
 
-Tracker access releases after each observer command. Waiting guarded operations take priority, with one due observer admitted after eight consecutive guarded operations. Guarded mutations keep uninterrupted fresh reads, expected-workflow checks and confirming reads. Successful and ambiguous outcomes request reconciliation only after releasing the gate. Checkpoint and cleanup POST completion also requests reconciliation, including uncertain failures. Cached observations never authorize writes.
+Tracker source access releases after each observer command. The console journal
+attempt is one composite admission covering identity validation, optional setup
+and the bounded page, under its shared two-second deadline after gate admission.
+Waiting guarded operations take priority, with one due observer admitted after eight consecutive guarded operations. Guarded mutations keep uninterrupted fresh reads, expected-workflow checks and confirming reads. Successful and ambiguous outcomes request reconciliation only after releasing the gate. Checkpoint and cleanup POST completion also requests reconciliation, including uncertain failures. Cached observations never authorize writes.
 
 Each tracker process has a two-second timeout and bounded stdout/stderr while receiving. Inventory and membership accept at most 8 MiB and 10,000 rows; list/ready request the 10,001-row sentinel. Detail/comments/relations accept at most 2 MiB; existing comment parsing additionally limits histories to 2,048 entries. Processes are killed and settled before their gate is released. No collection retry is hidden inside a sweep.
 
