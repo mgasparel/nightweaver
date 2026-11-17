@@ -23,6 +23,24 @@ function Invoke-FixtureMeasurement($Base=$baseline) {
     Invoke-TestSuiteMeasurement $context $Base (Join-Path $directory ([guid]::NewGuid().ToString('N')+'.json')) $runner { $script:seconds } $capture
 }
 $cases=0
+# Preserve JSON root shape as the entry point's optional baseline input.
+foreach ($json in @('42', 'true', 'false', '"baseline"', '[1,2]', '[]', '[{}]', 'null')) {
+    foreach ($testExit in @(0,17)) {
+        $invalidRoot=ConvertFrom-Json -InputObject $json -AsHashtable -NoEnumerate
+        $script:exit=$testExit; $script:failed=$(if ($testExit) { 1 } else { 0 })
+        $path=Join-Path $directory ([guid]::NewGuid().ToString('N')+'.json')
+        $before=$script:captures
+        $r=Invoke-TestSuiteMeasurement $context $invalidRoot $path $runner { 150.0 } $capture
+        $retained=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        Check ($retained.testExitCode -eq $testExit -and $retained.failed -eq $script:failed -and $retained.total -eq 1325 -and $retained.passed -eq (1325-$script:failed)) 'Invalid baseline root lost original candidate result'
+        Check (!$retained.assessment.comparisonAvailable -and $null -eq $retained.assessment.deltaSeconds -and $null -eq $retained.assessment.ratio -and !$retained.assessment.captureRequired) 'Invalid baseline root compared'
+        $reason=if ($null -eq $invalidRoot) { 'No explicit retained baseline supplied' } else { 'Baseline root must be a JSON object' }
+        Check ($retained.assessment.comparisonReasons -contains $reason) 'Invalid baseline root has no explanation'
+        Check ($script:captures -eq $before -and $retained.capture.state -eq 'not-triggered') 'Invalid baseline root triggered capture'
+        Check (($retained.assessment.correctness -eq 'passed') -eq ($testExit -eq 0)) 'Invalid baseline root changed correctness'
+        $cases++
+    }
+}
 foreach ($invalid in @('not-a-number', '100', $true, @{}, @(1,2), $null, [double]::NaN, [double]::PositiveInfinity, -1, 0)) {
     foreach ($testExit in @(0,17)) {
         $baseline.elapsedSeconds=$invalid; $script:exit=$testExit; $script:failed=$(if ($testExit) { 1 } else { 0 })

@@ -29,6 +29,9 @@ pwsh -NoProfile -File scripts/Measure-TestSuite.ps1 `
 
 Omit `-Baseline` when no compatible artifact exists; report comparison unavailable
 and why. Never manufacture a zero delta or silently choose the newest file.
+The baseline JSON root must be an object. Scalar and array roots make comparison
+unavailable with an explicit reason; candidate counts and the original test exit
+are still retained. JSON null is treated as no supplied baseline.
 `-Preparation` describes any separate restore/first-build preparation (default:
 none). Use the same preparation for a comparable pair. The script runs the normal
 complete command with a unique report filename, without `--no-build`, filters or

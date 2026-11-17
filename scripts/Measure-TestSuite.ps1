@@ -23,7 +23,10 @@ function GitValue([string[]]$Arguments) {
 }
 $production = Get-ProductionObservation $ProductionInstallation $Project
 if ((Get-Content -LiteralPath (Join-Path $Checkout 'tests/Nightweaver.Tests/TestScheduling.cs') -Raw) -notmatch '\[assembly: Parallelization\(MaxThreads = 6\)\]') { throw 'Expected committed six-thread scheduling' }
-$baselineValue = if ($Baseline) { Get-Content -LiteralPath $Baseline -Raw | ConvertFrom-Json -AsHashtable } else { $null }
+$baselineValue = $null
+if ($Baseline) {
+    $baselineValue = ConvertFrom-Json -InputObject (Get-Content -LiteralPath $Baseline -Raw) -AsHashtable -NoEnumerate
+}
 $context = [ordered]@{
     schema = 'nightweaver-suite-measurement-v1'; evidenceId = $id; measuredUtc = [datetime]::UtcNow.ToString('o')
     invocationId = $env:NIGHTWEAVER_INVOCATION_ID

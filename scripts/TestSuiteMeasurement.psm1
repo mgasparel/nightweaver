@@ -4,6 +4,7 @@ function Get-TestSuiteAssessment {
     $correct = $Result.testExitCode -eq 0 -and $Result.total -ge 995 -and $Result.failed -eq 0 -and $Result.skipped -eq 0 -and $Result.passed -eq $Result.total
     $reasons = [Collections.Generic.List[string]]::new()
     if ($null -eq $Baseline) { $reasons.Add('No explicit retained baseline supplied') }
+    elseif ($Baseline -isnot [System.Collections.IDictionary]) { $reasons.Add('Baseline root must be a JSON object') }
     else {
         foreach ($key in @('schema','commandPolicy','threads','preparation','dotnetVersion','runtimeVersion','bdVersion','logicalProcessors','tempRoot','TEMP','TMP','productionContext','machine','bootUtc','schedulingHash')) {
             if (!$Baseline.Contains($key) -or !$Result.Contains($key) -or $null -eq $Baseline[$key] -or $Baseline[$key] -cne $Result[$key]) { $reasons.Add("Missing or mismatched $key") }
