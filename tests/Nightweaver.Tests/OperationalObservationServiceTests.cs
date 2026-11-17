@@ -7,6 +7,30 @@ namespace Nightweaver.Tests;
 public sealed class OperationalObservationServiceTests
 {
     [Fact]
+    public async Task IdentityReplacementRebaselinesAndNoProgressPageDegradesWithoutLosingCursor()
+    {
+        var clock = new Clock();
+        var journal = new Journal { Page = new("first", [new(42, "update", "task-1", null)]) };
+        using var service = new OperationalObservationService("test", new Source(clock), clock, new Lifetime(), journal: journal);
+        using var pin = service.Pin(["attention"]);
+        var token = TestContext.Current.CancellationToken;
+        await service.PollJournalOnceAsync(token);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        journal.Page = new("replacement", [new(1, "update", "task-1", null)]);
+        await service.PollJournalOnceAsync(token);
+        Assert.Equal("catching-up", service.Read("attention").Synchronization!.Journal);
+        Assert.NotNull(service.Read("attention").PendingAgeMs);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        journal.Page = new("replacement", Enumerable.Repeat(new Nightweaver.Inspection.BeadsInvalidation(1, "update", "task-1", null), 256).ToArray());
+        await service.PollJournalOnceAsync(token);
+        Assert.Equal("degraded", service.Read("attention").Synchronization!.Journal);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        journal.Page = new("replacement", []);
+        await service.PollJournalOnceAsync(token);
+        Assert.Equal([0L, 42L, 1L, 1L], journal.Cursors);
+    }
+
+    [Fact]
     public async Task OneJournalReaderSharesInterestUsesFiveSecondCadenceAndStopsAfterGrace()
     {
         var clock = new Clock();

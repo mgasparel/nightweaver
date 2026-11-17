@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { QueryCoordinator, InteractionStore, queryKey } from '../src/operations.ts';
+import { QueryCoordinator, InteractionStore, queryKey, observationStatus } from '../src/operations.ts';
 
 const identity = (key = 'attention') => ({ projectId: 'qa', key });
 const envelope = (revision = '1', epoch = 'A', key = 'attention', extra = {}) => ({
@@ -452,5 +452,16 @@ test('valid HTTP proves backend reachability during channel recovery; hello alon
   assert.equal(f.snapshot().connectionState, 'recovering'); assert.equal(f.snapshot().synchronized, false);
   await f.advance(2000); f.reads.at(-1).resolve(envelope()); await f.advance();
   assert.equal(f.snapshot().connectionState, 'connected'); assert.equal(f.posts.length, 0);
+  f.coordinator.dispose();
+});
+
+test('journal backlog and permanent reader failure are visible independently of a recent accepted snapshot', async () => {
+  const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
+  f.reads[0].resolve(envelope('1', 'A', 'attention', { synchronization: { journal: 'catching-up', pending: false } })); await f.advance();
+  assert.equal(observationStatus(f.snapshot()), 'Catching up'); assert.equal(f.snapshot().stale, false);
+  await f.advance(2000);
+  f.reads[1].resolve(envelope('2', 'A', 'attention', { synchronization: { journal: 'degraded', pending: false,
+    error: { code: 'journal-settlement', message: 'Inspect Web host diagnostics before restarting it.', retryable: false } } })); await f.advance();
+  assert.match(observationStatus(f.snapshot()), /Inspect Web host/); assert.equal(f.snapshot().connectionState, 'connected');
   f.coordinator.dispose();
 });

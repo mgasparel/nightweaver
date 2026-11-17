@@ -258,6 +258,8 @@ internal sealed class OperationalObservationService(
                     hints.Add(hint); cursor = hint.Sequence;
                 }
                 if (page.Hints.Count > 256) throw new InvalidDataException("Console journal page exceeded its limit.");
+                if (page.Hints.Count == 256 && hints.Count == 0)
+                    throw new InvalidDataException("Console journal returned a full page without cursor progress.");
                 lock (sync)
                 {
                     journalIdentity = page.Identity; journalCursor = cursor;

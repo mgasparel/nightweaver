@@ -187,7 +187,7 @@ export class QueryCoordinator {
     snapshot.dataState = !envelope?.data ? envelope?.error ? "unavailable" : "loading"
       : snapshot.stale ? "stale"
       : (pendingAge ?? 0) > (envelope.policy?.maxPendingAgeMs ?? 5000) || (catchupAge ?? 0) > 5000 ? "delayed"
-      : envelope.synchronization?.pending || entry.needsRead || entry.wanted > entry.watermark || snapshot.refreshing ? "refreshing" : "current";
+      : envelope.synchronization?.pending || envelope.synchronization?.journal === "catching-up" || entry.needsRead || entry.wanted > entry.watermark || snapshot.refreshing ? "refreshing" : "current";
     entry.snapshot = snapshot;
     for (const listener of entry.listeners) listener();
   }
@@ -378,6 +378,7 @@ export function queryKey(kind: "explorer" | "cleanup", filter: string, search = 
 
 export function observationStatus(snapshot: Snapshot): string {
   if (snapshot.observation?.synchronization?.error) return snapshot.observation.synchronization.error.message;
+  if (snapshot.observation?.synchronization?.journal === "catching-up") return "Catching up";
   if (snapshot.observation?.error) return `Source error · ${snapshot.observation.error.message}`;
   return ({ loading: "Loading", unavailable: "Unavailable", current: "Current", refreshing: "Refreshing",
     delayed: "Updates delayed", stale: "Snapshot stale" } as const)[snapshot.dataState ?? "loading"];
