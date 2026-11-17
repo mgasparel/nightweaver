@@ -207,6 +207,10 @@ public sealed class OperationalObservationServiceTests
         Assert.Equal(good.ObservedAt, stale.ObservedAt);
         Assert.Equal("stale", stale.Health);
         Assert.Equal("fresh", service.Read("factory").Health);
+        Assert.Null(service.Read("factory").Policy);
+        Assert.Equal(0d, service.Read("factory").ValidatedAgeMs);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        Assert.Equal(5000d, service.Read("factory").ValidatedAgeMs);
         Assert.Equal("source-timeout", stale.Sources["ready"].Error?.Code);
         Assert.Equal("fresh", stale.Sources["inventory"].Health);
         source.Error = null;

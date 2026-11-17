@@ -347,7 +347,7 @@ completion cessation and effective 200% zoom. Stop the exact AppHost in `finally
 Run the actual Web cache module with recording source/journal adapters:
 
 ```powershell
-dotnet run --project tests/Nightweaver.QA.CacheProbe -- --scale --output=TestResults/event-cache-scale.json
+dotnet run --project tests/Nightweaver.QA.CacheProbe -- --scale --revision=$(git rev-parse HEAD) --output=TestResults/event-cache-scale.json
 ```
 
 Run from the repository root. This separate executable is deliberately absent

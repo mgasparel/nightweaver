@@ -225,7 +225,7 @@ internal sealed class OperationalObservationService(
             ? clock.GetElapsedTime(validated).TotalMilliseconds
             : Math.Max(0, (clock.GetUtcNow() - state.ObservedAt!.Value).TotalMilliseconds));
     }
-    private ObservationEnvelope Response(Entry entry) => entry.Envelope.Policy is null ? entry.Envelope : entry.Envelope with
+    private ObservationEnvelope Response(Entry entry) => entry.Envelope with
     {
         ValidatedAgeMs = ValidatedAge(entry),
         PendingAgeMs = PendingAge(entry)

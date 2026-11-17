@@ -10,6 +10,20 @@ const envelope = (revision = '1', epoch = 'A', key = 'attention', extra = {}) =>
   validatedAgeMs: 0, pendingAgeMs: null, synchronization: { journal: 'current', pending: false }, sources: {}, error: null, targetIntervalMs: 1000, nextAttemptAt: null, ...extra,
 });
 const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+test('retained runtime observations expire on their own allowance while tracker data stays recent', async () => {
+  const f = fixture();
+  for (const key of ['factory', 'attention']) f.coordinator.subscribe(identity(key), () => {});
+  await f.advance(); f.hello(); await f.advance();
+  for (const read of f.reads) read.resolve(envelope('1', 'A', read.identity.key,
+    read.identity.key === 'factory' ? { policy: null, targetIntervalMs: 2000 } : {}));
+  await settle();
+  assert.equal(f.coordinator.getSnapshot(identity('factory')).stale, false);
+  f.coordinator.suspend();
+  await f.advance(5000);
+  assert.equal(f.coordinator.getSnapshot(identity('factory')).stale, true);
+  assert.equal(f.coordinator.getSnapshot(identity('attention')).stale, false);
+  f.coordinator.dispose();
+});
 test('Product and readiness commands reconcile cleanup along with active tracker resources', async () => {
   const f = fixture();
   for (const key of ['attention', 'workspace:qa.1', 'cleanup:1:all:', 'factory']) f.coordinator.subscribe(identity(key), () => {});

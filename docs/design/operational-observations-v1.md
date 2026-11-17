@@ -56,6 +56,11 @@ Normal supported changes take five-second detection plus bounded read/render
 work; backlog/startup/failure and unjournaled-write audit recovery are exceptional.
 Large scale and 130-second browser acceptance remain opt-in, outside normal tests.
 
+`validatedAgeMs` also accompanies runtime/cleanup responses so retained data can
+age while disconnected without comparing browser and server wall clocks. Those
+resources retain their own `targetIntervalMs + 2000` allowance; they do not adopt
+the tracker 60/120-second policy.
+
 # Operational observations v1
 
 Contract owner: ns-mbd.8; backend consumer: ns-mbd.2; stream/coordinator consumer:

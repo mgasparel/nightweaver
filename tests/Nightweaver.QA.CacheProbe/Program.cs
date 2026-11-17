@@ -14,6 +14,9 @@ using Nightweaver.Web;
 // the actual Web module with recording adapters, without a production endpoint.
 var output = Path.GetFullPath(args.Single(arg => arg.StartsWith("--output=", StringComparison.Ordinal))[9..]);
 var scale = args.Contains("--scale");
+var revision = args.SingleOrDefault(arg => arg.StartsWith("--revision=", StringComparison.Ordinal))?[11..];
+if (revision is null || revision.Length != 40 || !revision.All(Uri.IsHexDigit))
+    throw new ArgumentException("Supply the exact tested --revision=<40-character Git commit>.");
 var sourceIdentity = new
 {
     webAssembly = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(Nightweaver.Web.Program).Assembly.Location))),
@@ -117,6 +120,7 @@ try
     var settledSeconds = timer.Elapsed.TotalSeconds - referenceSeconds;
     Console.WriteLine($"Actual cache settled: {settledSeconds:F3}s");
     var idleStart = runner.Reads.Count;
+    var idleCauseStart = causes.Count;
     var pageStart = journal!.Pages;
     var idle = Stopwatch.StartNew();
     while (idle.Elapsed.TotalSeconds < 130)
@@ -129,6 +133,9 @@ try
     }
     var idleSeconds = idle.Elapsed.TotalSeconds;
     var idleReads = runner.Reads.Skip(idleStart).ToArray();
+    var idleCauses = causes.Skip(idleCauseStart).ToArray();
+    if (idleCauses.Any(read => read.Reason != "audit"))
+        throw new InvalidOperationException("Settled idle issued a source read outside the audit schedule.");
     var idlePages = journal.Pages - pageStart;
     if (idlePages > 27) throw new InvalidOperationException("Journal exceeded one page per five seconds while settled.");
     // A supported local comment must reach the actual Workspace body.
@@ -143,8 +150,22 @@ try
     var commentCauses = causes.Skip(beforeCauses).ToArray();
     if (commentCauses.Any(read => read.Id.StartsWith("comments:", StringComparison.Ordinal) && read.Id != "comments:probe-00000" && read.Reason != "audit"))
         throw new InvalidOperationException("Unrelated history was invalidated for comment.");
+    var burstStart = runner.Reads.Count;
+    var burstCauseStart = causes.Count;
+    var burst = Stopwatch.StartNew();
+    for (var index = 0; index < 3; index++)
+        await WriteAsync("comments", "add", "probe-00000", $"Coalesced burst marker {index}");
+    var burstWriteSeconds = burst.Elapsed.TotalSeconds;
+    await UntilAsync(() => observer.Read("workspace:probe-00000").Data?.GetRawText().Contains("Coalesced burst marker 2", StringComparison.Ordinal) == true);
+    var burstVisibleSeconds = burst.Elapsed.TotalSeconds;
+    var burstReads = runner.Reads.Skip(burstStart).ToArray();
+    var burstCauses = causes.Skip(burstCauseStart).ToArray();
+    if (burstCauses.Any(read => read.Id.StartsWith("comments:", StringComparison.Ordinal) && read.Id != "comments:probe-00000" && read.Reason != "audit"))
+        throw new InvalidOperationException("Burst invalidated unrelated histories.");
     await WriteAsync("dep", "add", "probe-00001", "probe-00002");
     await UntilAsync(() => observer.Read("explorer:blocked:").Data?.GetRawText().Contains("probe-00001", StringComparison.Ordinal) == true);
+    await WriteAsync("close", "probe-00002");
+    await UntilAsync(() => observer.Read("explorer:ready:").Data?.GetRawText().Contains("probe-00001", StringComparison.Ordinal) == true);
     // Disabled-journal writes are outside the event contract; prove audit fallback.
     await WriteAsync("config", "set", "events-journal", "false");
     await WriteAsync("update", "probe-00003", "--title", "Unjournaled audit marker");
@@ -154,10 +175,11 @@ try
     await WriteAsync("config", "set", "events-journal", "true");
     await File.WriteAllTextAsync(output, JsonSerializer.Serialize(new
     {
-        schema = "nightweaver-cache-probe-v1", scale, fixture = root, sourceIdentity,
+        schema = "nightweaver-cache-probe-v1", revision, scale, fixture = root, sourceIdentity,
         fixtureConfigHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(configPath))),
-        referenceSeconds, referenceReads, bootstrapSeconds, settledSeconds, idleSeconds, idlePages, idleReads,
+        referenceSeconds, referenceReads, bootstrapSeconds, settledSeconds, idleSeconds, idlePages, idleReads, idleCauses,
         comment = new { writeSeconds, visibleSeconds, commentReads, commentCauses }, auditFallbackSeconds = audit.Elapsed.TotalSeconds,
+        coalescedBurst = new { burstWriteSeconds, burstVisibleSeconds, burstReads, burstCauses },
         journalPages = journal.Pages, journal.Hints, samples,
         source.CommandCount, source.NativeMilliseconds, causes,
         processMetricsScope = "host samples; short-lived child CPU and logical IO are not included", productionTouched = false

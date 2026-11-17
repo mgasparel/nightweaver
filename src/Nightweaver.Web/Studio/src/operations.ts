@@ -182,7 +182,8 @@ export class QueryCoordinator {
     // Runtime retains its own policy. Tracker age is supplied by the server,
     // never computed by subtracting unrelated browser/server wall clocks.
     const tracker = envelope && envelope.key !== "factory" && !envelope.key.startsWith("cleanup:");
-    const expired = envelope?.policy ? age === undefined || age > envelope.policy.maxSnapshotAgeMs : !!tracker;
+    const expired = envelope?.policy ? age === undefined || age > envelope.policy.maxSnapshotAgeMs
+      : tracker ? true : !!envelope && age !== undefined && age > envelope.targetIntervalMs + 2000;
     snapshot.stale = expired || envelope?.health === "stale";
     snapshot.dataState = !envelope?.data ? envelope?.error ? "unavailable" : "loading"
       : snapshot.stale ? "stale"
