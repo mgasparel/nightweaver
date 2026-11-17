@@ -58,7 +58,7 @@ try {
   // awaiting journal ingestion or authoritative projection. Refresh both keys,
   // then require successful post-write provenance and drained current catch-up.
   assert.equal(await page.evaluate(async keys => (await fetch('/api/operations/v1/projects/qa/refresh', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys })
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Nightweaver-Request': 'console-v1' }, body: JSON.stringify({ keys })
   })).status, ['attention', workspaceKey]), 202);
   await new Promise((resolve, reject) => {
     const deadline = Date.now() + 30000;
