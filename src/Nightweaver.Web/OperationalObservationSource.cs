@@ -22,6 +22,7 @@ internal sealed class OperationalObservationSource(
     internal event Action<string, string>? ReadStarted;
     private bool scheduled;
     private bool continuation;
+    private int reconciliationRequested;
     private readonly HashSet<string> outstandingKeys = new(StringComparer.Ordinal);
     private string interest = "";
     private HashSet<string> selectedIds = new(StringComparer.Ordinal);
@@ -36,6 +37,7 @@ internal sealed class OperationalObservationSource(
         }
     }
     public double? PendingAge(IEnumerable<string> sources) => schedule.PendingAge(sources);
+    public void Reconcile() => Interlocked.Exchange(ref reconciliationRequested, 1);
     public async Task<IReadOnlyDictionary<string, ObservationSample>> ReadScheduledAsync(
         IReadOnlyList<OperationKey> keys, Action<string, ObservationSourceState> revalidated, CancellationToken token)
     {
@@ -43,11 +45,12 @@ internal sealed class OperationalObservationSource(
         var changed = signature != interest;
         interest = signature;
         selectedIds = keys.Where(key => key.Kind == "workspace").Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal);
-        if (!changed && !continuation && !schedule.HasDue) return new Dictionary<string, ObservationSample>();
+        var reconcile = Interlocked.Exchange(ref reconciliationRequested, 0) != 0;
+        if (!changed && !continuation && !reconcile && !schedule.HasDue) return new Dictionary<string, ObservationSample>();
         // One bounded turn may publish only one selected Workspace. Remember
         // completed projections for this round instead of reopening them merely
         // because another projection was published on the next turn.
-        if (changed || !continuation)
+        if (changed || !continuation || reconcile)
         {
             outstandingKeys.Clear();
             outstandingKeys.UnionWith(keys.Select(key => key.Value));

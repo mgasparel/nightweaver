@@ -112,5 +112,6 @@ internal interface IScheduledTrackerObservationSource
     Task<IReadOnlyDictionary<string, ObservationSample>> ReadScheduledAsync(IReadOnlyList<OperationKey> keys,
         Action<string, ObservationSourceState> revalidated, CancellationToken token);
     void Invalidate(IReadOnlyList<BeadsInvalidation>? hints = null);
+    void Reconcile();
     double? PendingAge(IEnumerable<string> sources);
 }

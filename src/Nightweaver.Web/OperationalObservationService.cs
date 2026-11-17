@@ -461,8 +461,10 @@ internal sealed class OperationalObservationService(
             }
             // A wake can precede the source read but follow our generation capture.
             // The source may already be clean while the newer publication obligation
-            // remains. Give it an authoritative turn instead of waiting for an audit.
-            if (reconcileAgain) (source as IScheduledTrackerObservationSource)?.Invalidate();
+            // remains. Reproject current source generations on another turn;
+            // actual outstanding hints retain their selective source dirtiness.
+            // Broad invalidation here would turn a named comment into full reads.
+            if (reconcileAgain) (source as IScheduledTrackerObservationSource)?.Reconcile();
         }
     }
 

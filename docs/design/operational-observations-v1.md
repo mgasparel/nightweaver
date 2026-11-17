@@ -41,8 +41,11 @@ Dirty generations coalesce for at most 250ms from the first hint, with at most
 512 retained source identities and broad invalidation on overflow. New hints
 cannot erase an older outstanding five-second obligation or a newer revision.
 If a new reconciliation generation races publication after collection begins,
-retain its pending obligation and request another authoritative turn even when
-the source cache has already consumed the wake. It must not wait idle for an audit.
+retain its pending obligation and request another projection turn even when
+the source cache has already consumed the wake. This request does not invalidate
+clean sources: reuse current authoritative generations, read only sources still
+dirty or due, and preserve unrelated cached histories. A request arriving during
+collection survives for the next turn. It must not wait idle for an audit.
 
 Each interested source also receives an authoritative audit every 60 seconds,
 spread after bootstrap, sharing inventory/readiness through continuation turns.

@@ -123,6 +123,76 @@ public sealed class OperationalObservationSourceTests
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CommentRacingPublicationReconcilesWithoutDirtyingUnrelatedHistories(bool beforeSourceCapture)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        Action? duringCommand = null;
+        var runner = new Runner { Rows = 5, Advance = () => duringCommand?.Invoke() };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var journal = new CommentJournal();
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>(), journal: journal);
+        using var pin = service.Pin(["attention", "workspace:task-1", "explorer:ready:"]);
+        var token = TestContext.Current.CancellationToken;
+        for (var turn = 0; turn < 4; turn++) await service.CollectOnceAsync(false, token);
+        Assert.NotNull(service.Read("attention").Data);
+        var historiesBefore = runner.CommentIds.Count;
+        var reads = new List<string>();
+        var raced = false;
+        source.ReadStarted += (id, _) =>
+        {
+            reads.Add(id);
+            if (id != "inventory" || raced) return;
+            raced = true;
+            clock.Advance(TimeSpan.FromSeconds(5)); // Make the next journal page due before native work starts.
+            if (beforeSourceCapture) AddCommentHint();
+            else duringCommand = AddCommentHint;
+        };
+        void AddCommentHint()
+        {
+            duringCommand = null;
+            // Race on either side of source-generation capture: a consumed hint
+            // needs reprojection; an outstanding hint still needs another read.
+            journal.Sequence = 2;
+            runner.CommentOverrides["task-1"] = "Newest burst comment";
+            service.PollJournalOnceAsync(token).GetAwaiter().GetResult();
+        }
+        journal.Sequence = 1;
+        await service.PollJournalOnceAsync(token);
+        clock.Advance(TimeSpan.FromMilliseconds(250));
+        for (var turn = 0; turn < 6; turn++)
+        {
+            await service.CollectOnceAsync(false, token);
+            clock.Advance(TimeSpan.FromMilliseconds(250));
+        }
+        Assert.True(raced);
+        Assert.NotEmpty(runner.CommentIds.Skip(historiesBefore));
+        Assert.All(runner.CommentIds.Skip(historiesBefore), id => Assert.Equal("task-1", id));
+        Assert.DoesNotContain("ready", reads);
+        foreach (var key in Keys("attention", "workspace:task-1", "explorer:ready:"))
+        {
+            var observation = service.Read(key.Value);
+            Assert.True(observation.PendingAgeMs is null, key.Value + ": " + JsonSerializer.Serialize(observation));
+            Assert.False(observation.Synchronization!.Pending);
+        }
+        Assert.Contains("Newest burst comment", service.Read("workspace:task-1").Data!.Value.GetRawText());
+        var commands = runner.Commands.Count;
+        await service.CollectOnceAsync(false, token);
+        Assert.Equal(commands, runner.Commands.Count);
+    }
+
+    private sealed class CommentJournal : IConsoleJournalReader
+    {
+        internal long Sequence { get; set; }
+        public Task<ConsoleJournalPage> ReadAsync(long cursor, CancellationToken token)
+            => Task.FromResult(new ConsoleJournalPage("same", [new(Sequence, "comment", "task-1", null)]));
+    }
+
     [Fact]
     public async Task RefreshBeforeSourceReadCannotStrandTheNewerPendingGeneration()
     {
