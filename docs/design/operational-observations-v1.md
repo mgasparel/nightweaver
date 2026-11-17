@@ -22,9 +22,12 @@ data requires reconciliation; browser wall-clock skew cannot confer freshness.
 
 One Web-owned bounded journal reader serves interested tracker resources, including
 standalone Web. It checks at five-second start-to-start cadence, at most one
-256-record/8-MiB page, with a linked two-second deadline, no overlap or catch-up
+256-record/8-MiB page, with a linked two-second command deadline, no overlap or catch-up
 spin (minimum 250ms after overruns). Failed pages do not advance the cursor;
 retry is 5/10/20/30 seconds. Uncertain child settlement stops replacements.
+Identity/setup commands have their own two-second bounds; all native commands
+share a four-second turn budget and release mutation admission between commands.
+Successful preparation is not a healthy journal receipt or cursor progress.
 No interested tracker resources means no journal process after the 30-second
 interest grace. Hidden/suspended browser consumers release tracker interest;
 wake requests immediate reconciliation and journal checking.

@@ -9,7 +9,14 @@ namespace Nightweaver.Inspection;
 
 internal sealed record BeadsInvalidation(long Sequence, string? Operation, string? IssueId, string? DependencyTarget);
 
-internal sealed class BeadsJournalClient : IBeadsJournalClient
+internal interface IBeadsInvalidationClient
+{
+    Task EnableAsync(ValidatedTargetRepository repository, CancellationToken cancellationToken);
+    Task<IReadOnlyList<BeadsInvalidation>> ReadInvalidationsAsync(
+        ValidatedTargetRepository repository, long afterSequence, int maxRecords, CancellationToken cancellationToken);
+}
+
+internal sealed class BeadsJournalClient : IBeadsJournalClient, IBeadsInvalidationClient
 {
     private const int MaximumStandardErrorCharacters = 8 * 1024;
     internal const int MaximumBatchBytes = 8 * 1024 * 1024;
@@ -44,7 +51,7 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
         => (await ReadInvalidationsAsync(repository, afterSequence, maxRecords, cancellationToken).ConfigureAwait(false))
             .Select(item => item.Sequence).ToArray();
 
-    internal async Task<IReadOnlyList<BeadsInvalidation>> ReadInvalidationsAsync(
+    public async Task<IReadOnlyList<BeadsInvalidation>> ReadInvalidationsAsync(
         ValidatedTargetRepository repository, long afterSequence, int maxRecords, CancellationToken cancellationToken)
     {
         var request = BeadsCommand.CreateJournalBatch(repository.Path, afterSequence, maxRecords);

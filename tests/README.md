@@ -102,6 +102,16 @@ path and verifies the published PID before testing the original 50ms wait. A
 bounded readiness phase reports early fixture exit instead of accidentally testing
 startup speed. Cancellation, repeated waits and native termination bounds remain.
 
+The Web journal's clock-driven regressions exercise slow successful preparation,
+per-command two-second cancellation, the four-second cumulative native-work cap,
+and cursor reset after a failed first page. They add no native journey or sleeps.
+The retained timer/journal native journey serializes setup, finite pages, inventory
+and raw SQL against its single embedded store, including the journal-head check
+inside the SQL write section. Its one timer tick, unjournaled visibility, failed
+batch and exact-target cursor assertions and original deadlines remain intact.
+This removes fixture overlap; it does not claim every hosted read timeout has
+the same cause. Discovery diagnostics are retained on failure.
+
 Test fixtures copy settled immutable repositories into independent file trees,
 including Git objects and tracker stores. The small `GitFixture` initializes one
 empty Git baseline; manual-pilot profile templates seed independent copies of
