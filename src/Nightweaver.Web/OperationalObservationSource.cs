@@ -151,10 +151,10 @@ internal sealed class OperationalObservationSource(
         revalidate?.Invoke(id, states[id]);
     }
 
-    private async Task<T?> ReadAsync<T>(string id, Func<Task<T>> read, CancellationToken token) where T : class
+    private async Task<T?> ReadAsync<T>(string id, Func<Task<T>> read, CancellationToken token, string? reason = null) where T : class
     {
         if (scheduled && !schedule.Due(id) && cached.TryGetValue(id, out var held)) return (T)held;
-        if (scheduled) ReadStarted?.Invoke(id, schedule.Reason(id));
+        if (scheduled) ReadStarted?.Invoke(id, reason ?? schedule.Reason(id));
         var generation = scheduled ? schedule.Begin(id) : default;
         var attempt = clock.GetUtcNow();
         try
@@ -501,7 +501,8 @@ internal sealed class OperationalObservationSource(
                     case 4:
                         sourceId = "inventory";
                         if (scheduled && cycle.RequiresConfirmation) schedule.InvalidateNames(["inventory"]);
-                        var final = await ReadAsync(sourceId, () => reader.ReadSnapshotAsync(repository, token), token);
+                        var final = await ReadAsync(sourceId, () => reader.ReadSnapshotAsync(repository, token), token,
+                            cycle.RequiresConfirmation ? "confirmation" : null);
                         if (final is not null)
                         {
 

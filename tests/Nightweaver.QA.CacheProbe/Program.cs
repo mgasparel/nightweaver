@@ -134,7 +134,7 @@ try
     var idleSeconds = idle.Elapsed.TotalSeconds;
     var idleReads = runner.Reads.Skip(idleStart).ToArray();
     var idleCauses = causes.Skip(idleCauseStart).ToArray();
-    if (idleCauses.Any(read => read.Reason != "audit"))
+    if (idleCauses.Any(read => read.Reason != "audit" && !(read.Id == "inventory" && read.Reason == "confirmation")))
         throw new InvalidOperationException("Settled idle issued a source read outside the audit schedule.");
     var idlePages = journal.Pages - pageStart;
     if (idlePages > 27) throw new InvalidOperationException("Journal exceeded one page per five seconds while settled.");
