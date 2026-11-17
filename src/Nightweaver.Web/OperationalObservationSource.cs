@@ -279,11 +279,13 @@ internal sealed class OperationalObservationSource(
         var reader = CreateReader();
         BeadsInventory? inventory;
         FrozenSet<string>? ready, blocked;
-        var resumedDetails = !scheduled && resumeDetails && retainedInventory is not null;
+        var resumedDetails = resumeDetails && retainedInventory is not null;
         if (resumedDetails)
         {
-            // Resume bounded detail work against its captured inventory. A Workspace
-            // still rereads inventory before publication; source age stays visible.
+            // Reserve one bounded detail turn when core work exhausted the last
+            // turn. New core invalidations must not starve due histories. Captured
+            // provenance and scheduled generation checks still guard publication;
+            // a Workspace additionally confirms inventory after native detail reads.
             inventory = retainedInventory; ready = retainedReady; blocked = retainedBlocked;
             generatedAt = inventoryGeneratedAt;
             states["inventory"] = retainedInventoryState!;

@@ -353,6 +353,73 @@ public sealed class OperationalObservationSourceTests
         Assert.Equal(3, runner.Commands.Count(command => command == "list"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ScheduledHistoriesProgressUnderContinuousCoreInvalidation(bool selectWorkspace)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { Rows = 5, TargetPath = target.Path };
+        OperationalObservationSource? source = null;
+        var busy = false;
+        long sequence = 0;
+        var runner = new RecordingProcessRunner((request, cancellation) =>
+        {
+            if (busy && request.FileName == "bd")
+            {
+                clock.Advance(TimeSpan.FromSeconds(1.8));
+                if (request.Arguments[2] is "list" or "ready" or "blocked")
+                    source!.Invalidate([new BeadsInvalidation(++sequence, "dep_add", "other-task", "another-task")]);
+            }
+            return native.RunAsync(request, cancellation);
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        source = Adapter(factory);
+        var keys = Keys(selectWorkspace
+            ? ["attention", "explorer:ready:", "explorer:blocked:", "workspace:task-1"]
+            : ["attention", "explorer:ready:", "explorer:blocked:"]);
+        var token = TestContext.Current.CancellationToken;
+
+        // Cold bootstrap must drain even though every successful core read is
+        // invalidated before it returns. Repeat for the independent due audit.
+        busy = true;
+        for (var round = 0; round < 2; round++)
+        {
+            var historyStart = native.CommentIds.Count;
+            var listsBefore = native.Commands.Count(command => command == "list");
+            var samples = new List<ObservationSample>();
+            for (var turn = 0; turn < 16; turn++)
+            {
+                var result = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+                if (result.TryGetValue("attention", out var attention)) samples.Add(attention);
+                if (native.CommentIds.Skip(historyStart).Distinct().Count() == 5) break;
+            }
+            Assert.Equal(Enumerable.Range(1, 5).Select(index => $"task-{index}").Order(),
+                native.CommentIds.Skip(historyStart).Distinct().Order());
+            Assert.True(native.Commands.Count(command => command == "list") > listsBefore);
+            Assert.Contains("ready", native.Commands);
+            Assert.Contains("blocked", native.Commands);
+            Assert.NotNull(source.PendingAge(["inventory"]));
+            var complete = Assert.Single(samples, sample => sample.Data is not null);
+            Assert.Equal(5, Assert.IsType<AttentionDeskItem[]>(complete.Data).Length);
+            Assert.True(complete.Pending); // History progress cannot certify the dirty core.
+            Assert.All(complete.Sources.Values, state => Assert.NotNull(state.ObservedAt));
+            clock.Advance(TimeSpan.FromSeconds(60));
+        }
+        busy = false;
+        ObservationSample? recovered = null;
+        for (var turn = 0; turn < 8; turn++)
+        {
+            var result = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+            if (result.TryGetValue("attention", out recovered) && recovered.Data is not null && !recovered.Pending) break;
+        }
+        Assert.NotNull(recovered?.Data);
+        Assert.False(recovered.Pending);
+        Assert.Null(recovered.Error);
+        Assert.Null(source.PendingAge(["inventory"]));
+    }
+
     [Fact]
     public async Task UnchangedSourcesStayFreshBetweenCompleteSerialCollections()
     {

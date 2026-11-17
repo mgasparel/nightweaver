@@ -6,7 +6,12 @@ bounded batches to Git/Dolt branch and host/repository identity and shares the
 observer gate. `TrackerSourceSchedule` owns bounded source generations and
 independent audit deadlines; `OperationalObservationSource.ReadScheduledAsync`
 reuses clean authoritative values and drains unfinished cohorts. Cohort source
-generations must still be current at publication. Resource pending generations
+reads receive a reserved continuation turn if core reads exhaust the previous
+turn's budget. This applies to scheduled mixed interests as well as Workspace-only
+collections, so continuous core invalidation cannot starve history audits. The
+captured inventory is reused for at most one consecutive turn; its provenance is
+retained and any outstanding generation still marks the projection pending.
+Cohort source generations must still be current at publication. Resource pending generations
 remain owned by `OperationalObservationService` until accepted-body publication.
 Shared memory reservations cover source values, histories and projections.
 Workspace confirming inventory remains authoritative after native detail reads;

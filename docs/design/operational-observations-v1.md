@@ -55,8 +55,15 @@ spread after bootstrap, sharing inventory/readiness through continuation turns.
 Four-history and four-second native-work limits, two-second native-command bound,
 mutation fairness, two selected Workspaces and memory limits remain unchanged.
 Unfinished Attention/Workspace cohorts drain without another event. Idle turns
-issue no list/ready/comments commands before audit. Explicit refresh and local
-writes wake reconciliation immediately, even after uncertain command outcomes.
+issue no list/ready/comments commands before audit. If core work consumes a turn
+before detail work can run, the next turn reserves capacity for those details
+against the captured authoritative inventory, even if core hints keep arriving.
+At most one consecutive turn reuses that baseline before returning to core
+validation. Original source provenance and dirty-generation checks still prevent
+a pending cohort from certifying a newer inventory; Workspace confirmation remains
+required. This protects due histories from continuous core invalidation.
+Explicit refresh and local writes wake reconciliation immediately, even after
+uncertain command outcomes.
 Ready/Blocked source values and audit slots retire when their Explorer keys lose
 interest; returning to those views requires authoritative readiness validation.
 Continuation tracks outstanding projections across bounded turns, so a completed

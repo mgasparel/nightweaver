@@ -56,7 +56,12 @@ cause; removing that unrelated shell dependency does not diagnose its startup.
 Workspace-only observation retries retain their captured inventory for one
 continuation turn while detail work is pending, avoiding redundant native core
 reads without indefinitely retaining a snapshot. A fresh confirming inventory still guards publication and changed identity
-fails closed. Mixed attention/explorer subscriptions keep their core cadence.
+fails closed. Scheduled mixed Attention/Explorer subscriptions also reserve one
+detail continuation when core reads leave no detail capacity, then return to core
+validation. A clock-driven regression invalidates every slow inventory/readiness
+read with both Ready and Blocked interested, with and without a selected Workspace.
+Cold histories and their later audits must progress without a quiet core turn;
+the dirty inventory keeps the projection pending until authoritative recovery.
 The existing controlled timeout cases assert the reduced command counts, and
 the slow-clock case models 1.9-second reads without adding wall-clock waits.
 A cheap two-Workspace case holds one history source timed out, creates and selects
