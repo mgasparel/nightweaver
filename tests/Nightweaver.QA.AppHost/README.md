@@ -59,6 +59,9 @@ or health metadata are substituted. Evidence and 1440/375/720 captures go to
 in `finally`, including on failure.
 The probe also navigates to Overview and watches Digest checkpoint freshness
 while the previous Workspace interest remains within its disconnect grace.
+Wake acceptance waits for a fresh, nonpending Attention response validated after
+the wake, since handshake/read recovery can display recent retained data before
+the queued authoritative Refresh completes.
 
 `node status-stability-qa.mjs` checks the shared Studio status lifecycle against
 the exact isolated stack. It injects frequent version notifications and delays

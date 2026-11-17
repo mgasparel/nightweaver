@@ -97,22 +97,30 @@ try {
   assert.equal(await guidance.inputValue(), 'Retained event-cache guidance draft');
   assert(await originalGuidance.evaluate(element => element.isConnected), 'Source updates preserve the guidance input node');
   await guidance.focus();
-  const hiddenAt = Date.now();
   await page.evaluate(() => {
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
     document.dispatchEvent(new Event('visibilitychange'));
   });
   await page.waitForTimeout(31000); // Real interest grace; outside normal tests.
+  const wakingAt = Date.now();
+  const revalidated = page.waitForResponse(async response => {
+    if (!response.url().includes('/resources?') || new URL(response.url()).searchParams.get('key') !== 'attention') return false;
+    const value = await response.json();
+    return value.health === 'fresh' && value.pendingAgeMs == null && Date.parse(value.observedAt) >= wakingAt;
+  });
   const woke = page.waitForResponse(response => response.url().endsWith('/refresh') && response.request().method() === 'POST' && response.status() === 202);
   await page.evaluate(() => {
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
     document.dispatchEvent(new Event('visibilitychange'));
   });
   await woke;
+  // A handshake/read of recent retained data may correctly show Current before
+  // the queued Refresh completes. Await actual authoritative wake validation.
+  await revalidated;
   await page.waitForFunction(() => document.querySelector('.synchronization [role=status]')?.textContent === 'Live connection · Current');
   assert.equal(await guidance.inputValue(), 'Retained event-cache guidance draft');
   assert(await originalGuidance.evaluate(element => element.isConnected && document.activeElement === element), 'Wake preserves draft control and focus');
-  assert(responses.some(value => value.key === 'attention' && Date.parse(value.observedAt) >= hiddenAt), 'Wake revalidates authoritative sources');
+  assert(responses.some(value => value.key === 'attention' && Date.parse(value.observedAt) >= wakingAt), 'Wake revalidates authoritative sources');
   // Workspace interests survive navigation briefly. Digest must remain fresh
   // while its checkpoint and the serial Workspace sources are both active.
   const digestReady = page.waitForResponse(async response => response.url().includes('/resources?')
