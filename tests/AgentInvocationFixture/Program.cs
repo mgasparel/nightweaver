@@ -88,6 +88,20 @@ internal static class Program
                 Console.OpenStandardOutput().Flush();
                 return args.Length > 1 && int.TryParse(args[^1], out var exitCode) ? exitCode : 0;
             }
+            case "journal-output":
+            {
+                var output = Console.OpenStandardOutput();
+                File.OpenRead(args[1]).CopyTo(output);
+                output.Flush();
+                Console.Error.Write(new string('E', int.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture)));
+                Console.Error.Flush();
+                if (args.Length > 3)
+                {
+                    File.WriteAllText(args[3], Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    Thread.Sleep(TimeSpan.FromSeconds(30));
+                }
+                return 0;
+            }
             case "environment":
                 Console.Write(Environment.GetEnvironmentVariable(args[1]));
                 return 0;

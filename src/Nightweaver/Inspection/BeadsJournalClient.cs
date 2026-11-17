@@ -10,13 +10,16 @@ namespace Nightweaver.Inspection;
 internal sealed class BeadsJournalClient : IBeadsJournalClient
 {
     private const int MaximumStandardErrorCharacters = 8 * 1024;
-    private const int MaximumRecordCharacters = 1024 * 1024;
+    internal const int MaximumBatchBytes = 8 * 1024 * 1024;
+    private const int MaximumRecordBytes = 1024 * 1024;
     private readonly IProcessRunner processRunner;
     private readonly Func<ProcessRequest, Process> startProcess;
+    private readonly TimeProvider timeProvider;
 
-    internal BeadsJournalClient(IProcessRunner processRunner, Func<ProcessRequest, Process>? startProcess = null)
+    internal BeadsJournalClient(IProcessRunner processRunner, Func<ProcessRequest, Process>? startProcess = null, TimeProvider? timeProvider = null)
     {
         this.processRunner = processRunner;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.startProcess = startProcess ?? Start;
     }
 
@@ -31,39 +34,29 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
         }
     }
 
-    public async Task FollowAsync(
+    public async Task<IReadOnlyList<long>> ReadBatchAsync(
         ValidatedTargetRepository repository,
         long afterSequence,
-        Action<long> onEvent,
+        int maxRecords,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(onEvent);
-        var request = BeadsCommand.CreateJournalTail(repository.Path, afterSequence);
+        var request = BeadsCommand.CreateJournalBatch(repository.Path, afterSequence, maxRecords);
+        cancellationToken.ThrowIfCancellationRequested();
+        using var timeout = new CancellationTokenSource(request.Timeout, timeProvider);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         using var process = startProcess(request);
-        var standardError = ReadBoundedAsync(process.StandardError, MaximumStandardErrorCharacters);
+        var standardError = ReadBoundedAsync(process.StandardError, MaximumStandardErrorCharacters, linked.Token);
 
         try
         {
-            await foreach (var record in ReadJsonRecordsAsync(process.StandardOutput, cancellationToken).ConfigureAwait(false))
-            {
-                using var document = JsonDocument.Parse(record);
-                var root = document.RootElement;
-                if (TryReadTruncation(root, out var head))
-                    throw new BeadsJournalTruncatedException(head);
-                if (root.ValueKind != JsonValueKind.Object
-                    || !root.TryGetProperty("seq", out var sequenceValue)
-                    || !sequenceValue.TryGetInt64(out var sequence)
-                    || sequence < 0)
-                {
-                    throw new InvalidDataException("bd events tail emitted a record without a nonnegative int64 seq.");
-                }
-
-                // Event payloads are intentionally ignored. Current tracker reads still decide eligibility.
-                onEvent(sequence);
-            }
-
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<long> sequences = [];
+            long? truncatedHead = null;
+            try { sequences = await ParseBatchAsync(process.StandardOutput, maxRecords, linked.Token).ConfigureAwait(false); }
+            catch (BeadsJournalTruncatedException exception) { truncatedHead = exception.Head; }
+            await process.WaitForExitAsync(linked.Token).ConfigureAwait(false);
             var diagnostic = await standardError.ConfigureAwait(false);
+            linked.Token.ThrowIfCancellationRequested();
+            if (truncatedHead is { } reportedHead) throw new BeadsJournalTruncatedException(reportedHead);
             if (process.ExitCode != 0)
             {
                 if (TryReadTruncation(diagnostic, out var head))
@@ -71,13 +64,50 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
                 throw new InvalidOperationException(BoundDiagnostic(
                     $"bd events tail exited with code {process.ExitCode}", diagnostic));
             }
+            return sequences;
         }
         catch
         {
             await StopProcessAsync(process).ConfigureAwait(false);
-            _ = await standardError.ConfigureAwait(false);
+            try { _ = await standardError.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+            catch (TimeoutException exception)
+            {
+                throw new BeadsJournalSettlementException("Beads journal stderr did not settle; watcher stopped.", exception);
+            }
+            if (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                throw new TimeoutException("bd events batch exceeded its 30-second command budget.");
             throw;
         }
+    }
+
+    internal static async Task<IReadOnlyList<long>> ParseBatchAsync(
+        StreamReader reader, int maxRecords, CancellationToken cancellationToken)
+    {
+        var sequences = new List<long>();
+        long? truncatedHead = null;
+        var count = 0;
+        await foreach (var record in ReadJsonRecordsAsync(reader, cancellationToken).ConfigureAwait(false))
+        {
+            if (++count > maxRecords)
+                throw new InvalidDataException("bd events batch exceeded its record limit.");
+            using var document = JsonDocument.Parse(record);
+            var root = document.RootElement;
+            if (TryReadTruncation(root, out var head))
+            {
+                truncatedHead = head;
+                continue;
+            }
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("seq", out var value)
+                || value.ValueKind != JsonValueKind.Number
+                || !value.TryGetInt64(out var sequence) || sequence < 0)
+                throw new InvalidDataException("bd events tail emitted a record without a nonnegative int64 seq.");
+            // Payloads never establish eligibility.
+            sequences.Add(sequence);
+        }
+        if (truncatedHead is { } reportedHead) throw new BeadsJournalTruncatedException(reportedHead);
+        return sequences;
     }
 
     private static Process Start(ProcessRequest request)
@@ -91,8 +121,8 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)
+            StandardOutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
+            StandardErrorEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
         };
 
         foreach (var argument in request.Arguments)
@@ -134,6 +164,7 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
     {
         var chunk = new char[4096];
         var line = new StringBuilder();
+        var totalBytes = 0;
         while (true)
         {
             var count = await reader.ReadAsync(chunk.AsMemory(), cancellationToken).ConfigureAwait(false);
@@ -143,6 +174,9 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
                 yield break;
             }
 
+            totalBytes += Encoding.UTF8.GetByteCount(chunk.AsSpan(0, count));
+            if (totalBytes > MaximumBatchBytes)
+                throw new InvalidDataException("bd events batch exceeded its 8 MiB output limit.");
             for (var index = 0; index < count; index++)
             {
                 if (chunk[index] == '\n')
@@ -152,8 +186,8 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
                     continue;
                 }
 
-                if (line.Length >= MaximumRecordCharacters)
-                    throw new InvalidDataException($"bd events tail record exceeded {MaximumRecordCharacters} characters.");
+                if (line.Length >= MaximumRecordBytes)
+                    throw new InvalidDataException($"bd events tail record exceeded {MaximumRecordBytes} bytes.");
                 line.Append(chunk[index]);
             }
         }
@@ -164,6 +198,7 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var record = new StringBuilder();
+        var recordBytes = 0;
         var depth = 0;
         var inString = false;
         var escaped = false;
@@ -180,8 +215,12 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
             else
             {
                 record.Append('\n');
+                recordBytes++;
             }
 
+            recordBytes += Encoding.UTF8.GetByteCount(line);
+            if (recordBytes > MaximumRecordBytes)
+                throw new InvalidDataException($"bd events tail record exceeded {MaximumRecordBytes} bytes.");
             record.Append(line);
             foreach (var character in line)
             {
@@ -201,12 +240,11 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
                     throw new InvalidDataException("bd events tail emitted unbalanced JSON delimiters.");
             }
 
-            if (record.Length > MaximumRecordCharacters)
-                throw new InvalidDataException($"bd events tail record exceeded {MaximumRecordCharacters} characters.");
             if (depth == 0 && !inString)
             {
                 yield return record.ToString();
                 record.Clear();
+                recordBytes = 0;
                 escaped = false;
             }
         }
@@ -215,13 +253,13 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
             throw new InvalidDataException("bd events tail ended with an incomplete JSON record.");
     }
 
-    private static async Task<string> ReadBoundedAsync(TextReader reader, int maximumCharacters)
+    private static async Task<string> ReadBoundedAsync(TextReader reader, int maximumCharacters, CancellationToken cancellationToken)
     {
         var chunk = new char[2048];
         var retained = new StringBuilder(maximumCharacters);
         while (true)
         {
-            var count = await reader.ReadAsync(chunk.AsMemory(), CancellationToken.None).ConfigureAwait(false);
+            var count = await reader.ReadAsync(chunk.AsMemory(), cancellationToken).ConfigureAwait(false);
             if (count == 0) return retained.ToString();
 
             if (count >= maximumCharacters)
@@ -291,6 +329,10 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
         {
             // The child exited while cancellation or parser failure was being handled.
         }
+        catch (Win32Exception exception)
+        {
+            throw new BeadsJournalSettlementException("Could not terminate Beads journal child; watcher stopped.", exception);
+        }
 
         try
         {
@@ -298,7 +340,7 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
         }
         catch (Exception exception) when (exception is InvalidOperationException or TimeoutException)
         {
-            // The process has either exited already or will be retried by the next connection cycle.
+            throw new BeadsJournalSettlementException("Beads journal child settlement is uncertain; watcher stopped without replacement.", exception);
         }
     }
 }

@@ -11,55 +11,26 @@ namespace Nightweaver.Tests;
 public sealed class BeadsJournalClientIntegrationTests
 {
     [Fact]
-    public async Task NativeJournalEnablementStreamsAnOrchestratorAuthoredWriteWhileTheTailRemainsOpen()
+    public async Task NativeJournalBatchRequestsFreshDiscoveryAfterAnOrchestratorAuthoredWrite()
     {
         using var fixture = new BeadsFixture();
-        using var lifetime = new CancellationTokenSource();
         var repository = new ValidatedTargetRepository(fixture.Path, "main");
-        var processRunner = new SystemProcessRunner();
-        var client = new BeadsJournalClient(processRunner);
-
+        var runner = new SystemProcessRunner();
+        var client = new BeadsJournalClient(runner);
         await client.EnableAsync(repository, TestContext.Current.CancellationToken);
-
-        var tailEnvironment = BeadsCommand.CreateJournalTail(fixture.Path, 0).Environment;
-        var config = await processRunner.RunAsync(new ProcessRequest("bd",
-            ["--readonly", "--sandbox", "config", "get", "events-journal"], fixture.Path,
-            tailEnvironment, TimeSpan.FromSeconds(30)), TestContext.Current.CancellationToken);
-        Assert.Equal(0, config.ExitCode);
-        Assert.Equal("true", config.StandardOutput.Trim());
-
-        var sequences = Channel.CreateUnbounded<long>();
-        var follow = client.FollowAsync(repository, 0,
-            sequence => sequences.Writer.TryWrite(sequence), lifetime.Token);
-        try
-        {
-            var title = "native write while journal tail is open";
-            var write = await processRunner.RunAsync(BeadsCommand.CreateWrite(fixture.Path,
-                ["create", "--title", title, "--type", "task", "--priority", "2", "--json"],
-                "nightweaver:orchestrator"), TestContext.Current.CancellationToken);
-
-            Assert.Equal(0, write.ExitCode);
-            var sequence = await sequences.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
-                .WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
-            Assert.True(sequence > 0);
-            Assert.False(follow.IsCompleted, "The native follow process must remain open after a write.");
-
-            var records = await processRunner.RunAsync(new ProcessRequest("bd",
-                ["--readonly", "--sandbox", "events", "tail", "--json"], fixture.Path,
-                tailEnvironment, TimeSpan.FromSeconds(30)), TestContext.Current.CancellationToken);
-            Assert.Equal(0, records.ExitCode);
-            var eventRows = records.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-                .Select(line => JsonDocument.Parse(line).RootElement.Clone()).ToArray();
-            var authoredRecord = Assert.Single(eventRows, row => row.GetProperty("seq").GetInt64() == sequence);
-            Assert.Equal("nightweaver:orchestrator", authoredRecord.GetProperty("actor").GetString());
-            Assert.Equal(title, authoredRecord.GetProperty("issue").GetProperty("title").GetString());
-        }
-        finally
-        {
-            lifetime.Cancel();
-            try { await follow; }
-            catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
-        }
+        var id = await CreateBeadAsync(runner, fixture.Path, "native finite batch write",
+            "nightweaver:orchestrator", TestContext.Current.CancellationToken);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var requests = 0;
+        var watcher = new BeadsJournalWatcher(client, () => requests++, TextWriter.Null,
+            (delay, _) => { Assert.Equal(BeadsJournalWatcher.PollInterval, delay); lifetime.Cancel(); return Task.CompletedTask; });
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => watcher.RunAsync(repository, lifetime.Token));
+        Assert.Equal(1, requests);
+        var inventory = await new BeadsReader(runner).ReadSnapshotAsync(repository, TestContext.Current.CancellationToken);
+        Assert.Contains(id, inventory.ById.Keys);
+        var batch = await client.ReadBatchAsync(repository, 0, 256, TestContext.Current.CancellationToken);
+        Assert.NotEmpty(batch);
+        Assert.Empty(await client.ReadBatchAsync(repository, batch.Max(), 256, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -79,7 +50,7 @@ public sealed class BeadsJournalClientIntegrationTests
             Assert.Equal(0, write.ExitCode);
         }
 
-        var readEnvironment = BeadsCommand.CreateJournalTail(fixture.Path, 0).Environment;
+        var readEnvironment = BeadsCommand.CreateJournalBatch(fixture.Path, 0, 256).Environment;
         var existing = await processRunner.RunAsync(new ProcessRequest("bd",
             ["--readonly", "--sandbox", "events", "tail", "--json"], fixture.Path,
             readEnvironment, TimeSpan.FromSeconds(30)), TestContext.Current.CancellationToken);
@@ -101,156 +72,93 @@ public sealed class BeadsJournalClientIntegrationTests
         }
 
         var truncated = await Assert.ThrowsAsync<BeadsJournalTruncatedException>(() =>
-            client.FollowAsync(repository, 0, static _ => { }, TestContext.Current.CancellationToken));
+            client.ReadBatchAsync(repository, 0, 256, TestContext.Current.CancellationToken));
         Assert.Equal(head, truncated.Head);
     }
 
     [Fact]
-    public async Task NativeReconnectKeepsTimerDiscoveryActiveAndResumesTargetTrackerWakeups()
+    public async Task NativeBatchFailureKeepsTimerDiscoveryActiveAndResumesTheExactTargetCursor()
     {
         using var target = new BeadsFixture("target");
         using var decoy = new BeadsFixture("decoy");
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var repository = new ValidatedTargetRepository(target.Path, "main");
-        var processRunner = new SystemProcessRunner();
-        var enableClient = new BeadsJournalClient(processRunner);
-        await enableClient.EnableAsync(repository, TestContext.Current.CancellationToken);
-        await enableClient.EnableAsync(
-            new ValidatedTargetRepository(decoy.Path, "main"), TestContext.Current.CancellationToken);
-
-        var seedId = target.Create("target tracker seed");
-        var decoyOnlyId = decoy.Create("decoy tracker seed");
-        var firstHead = await ReadJournalHeadAsync(processRunner, target.Path, TestContext.Current.CancellationToken);
-        Assert.True(firstHead > 0);
-
-        var tailProcesses = Channel.CreateUnbounded<Process>();
-        var tailRequests = Channel.CreateUnbounded<ProcessRequest>();
-        var client = new BeadsJournalClient(processRunner, request =>
+        var runner = new SystemProcessRunner();
+        var requests = new List<ProcessRequest>();
+        var client = new BeadsJournalClient(runner, request =>
         {
-            tailRequests.Writer.TryWrite(request);
-            var process = StartTailWithDecoySelectors(request, decoy.Path);
-            tailProcesses.Writer.TryWrite(process);
-            return process;
+            requests.Add(request);
+            if (requests.Count == 2) throw new IOException("controlled batch launch failure");
+            return StartTailWithDecoySelectors(request, decoy.Path);
         });
-        var recordingClient = new RecordingJournalClient(client);
-
-        var reconnectDelayEntered = NewSignal();
-        var allowReconnect = NewSignal();
-        var discoveryTicks = Channel.CreateUnbounded<bool>();
+        await client.EnableAsync(repository, lifetime.Token);
+        var seed = target.Create("target seed");
+        var foreign = decoy.Create("foreign seed");
+        var firstHead = await ReadJournalHeadAsync(runner, target.Path, lifetime.Token);
+        var ticks = Channel.CreateUnbounded<bool>();
+        var delays = Channel.CreateUnbounded<TimeSpan>();
+        var releases = Channel.CreateUnbounded<bool>();
         var inventories = Channel.CreateUnbounded<BeadsInventory>();
         var completions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
         var error = new StringWriter();
-        var reader = new BeadsReader(processRunner);
         using var trackerAccess = new SemaphoreSlim(1, 1);
-        var runtime = new ContinuousDiscoveryCoordinator(
-            [new ContinuousPoolRegistration(
-                ContinuousPoolKind.Delivery,
-                async cancellationToken =>
-                {
-                    await trackerAccess.WaitAsync(cancellationToken);
-                    try
-                    {
-                        var inventory = await reader.ReadSnapshotAsync(repository, cancellationToken);
-                        inventories.Writer.TryWrite(inventory);
-                        return Array.Empty<DeliveryPoolDiagnostic>();
-                    }
-                    finally { trackerAccess.Release(); }
-                },
-                completions.Reader,
-                static () => { },
-                static _ => Task.CompletedTask)],
-            static _ => Task.CompletedTask,
-            TextWriter.Null,
-            error,
-            token => ReadTicksAsync(discoveryTicks.Reader, token),
-            (requestDiscovery, token) => new BeadsJournalWatcher(
-                recordingClient,
-                requestDiscovery,
-                error,
-                (_, delayToken) =>
-                {
-                    reconnectDelayEntered.TrySetResult(true);
-                    return allowReconnect.Task.WaitAsync(delayToken);
-                }).RunAsync(repository, token));
-
-        var runtimeTask = runtime.RunAsync(lifetime.Token);
+        var coordinator = new ContinuousDiscoveryCoordinator(
+            [new ContinuousPoolRegistration(ContinuousPoolKind.Delivery, async token =>
+            {
+                await trackerAccess.WaitAsync(token);
+                try { inventories.Writer.TryWrite(await new BeadsReader(runner).ReadSnapshotAsync(repository, token)); }
+                finally { trackerAccess.Release(); }
+                return Array.Empty<DeliveryPoolDiagnostic>();
+            }, completions.Reader, static () => { }, static _ => Task.CompletedTask)],
+            static _ => Task.CompletedTask, TextWriter.Null, error,
+            token => ReadTicksAsync(ticks.Reader, token),
+            (requestDiscovery, token) => new BeadsJournalWatcher(client, requestDiscovery, error,
+                async (delay, ct) => { delays.Writer.TryWrite(delay); await releases.Reader.ReadAsync(ct); })
+                .RunAsync(repository, token));
+        var runtime = coordinator.RunAsync(lifetime.Token);
         try
         {
-            var initial = await WaitForInventoryAsync(inventories.Reader,
-                inventory => inventory.ById.ContainsKey(seedId), lifetime.Token)
+            await WaitForInventoryAsync(inventories.Reader, inventory => inventory.ById.ContainsKey(seed), lifetime.Token)
                 .WaitAsync(TimeSpan.FromSeconds(20), lifetime.Token);
-            Assert.DoesNotContain(decoyOnlyId, initial.ById.Keys);
-
-            var firstTail = await tailProcesses.Reader.ReadAsync(lifetime.Token).AsTask()
-                .WaitAsync(TimeSpan.FromSeconds(20), lifetime.Token);
-            var firstRequest = await tailRequests.Reader.ReadAsync(lifetime.Token).AsTask()
-                .WaitAsync(TimeSpan.FromSeconds(5), lifetime.Token);
-            var deliveredCursor = await recordingClient.FirstDeliveredSequence
-                .WaitAsync(TimeSpan.FromSeconds(20), lifetime.Token);
-            Assert.Equal(target.Path, firstRequest.WorkingDirectory);
-            Assert.Null(firstRequest.Environment["BEADS_DIR"]);
-            Assert.Null(firstRequest.Environment["BEADS_DB"]);
-            Assert.Null(firstRequest.Environment["BD_DB"]);
-            Assert.Equal("0", ReadSinceArgument(firstRequest));
-            Assert.True(deliveredCursor > 0, "The native tail must deliver an event before it is interrupted.");
-            Assert.False(firstTail.HasExited, "The initial native journal tail should remain open.");
-            var firstTailProcessId = firstTail.Id;
-            using (var processToStop = Process.GetProcessById(firstTailProcessId))
-                processToStop.Kill(entireProcessTree: true);
-
-            await reconnectDelayEntered.Task.WaitAsync(TimeSpan.FromSeconds(20), lifetime.Token);
-
-            string unjournaledId;
-            // The standalone Dolt writer does not participate in bd's tracker gate.
-            // Drain in-flight discovery reads after tail termination before opening
-            // the embedded store for a write; otherwise Dolt can open it read-only.
+            Assert.Equal(BeadsJournalWatcher.PollInterval, await delays.Reader.ReadAsync(lifetime.Token));
+            releases.Writer.TryWrite(true);
+            Assert.Equal(TimeSpan.FromSeconds(1), await delays.Reader.ReadAsync(lifetime.Token));
+            string unjournaled;
             await trackerAccess.WaitAsync(lifetime.Token);
-            try
-            {
-                unjournaledId = await InsertUnjournaledBeadAsync(processRunner, target.Path, lifetime.Token);
-            }
+            try { unjournaled = await InsertUnjournaledBeadAsync(runner, target.Path, lifetime.Token); }
             finally { trackerAccess.Release(); }
-            Assert.Equal(firstHead,
-                await ReadJournalHeadAsync(processRunner, target.Path, lifetime.Token));
-
-            discoveryTicks.Writer.TryWrite(true);
-            var timerInventory = await WaitForInventoryAsync(inventories.Reader,
-                inventory => inventory.ById.ContainsKey(unjournaledId), lifetime.Token)
+            Assert.Equal(firstHead, await ReadJournalHeadAsync(runner, target.Path, lifetime.Token));
+            ticks.Writer.TryWrite(true);
+            var inventory = await WaitForInventoryAsync(inventories.Reader,
+                snapshot => snapshot.ById.ContainsKey(unjournaled), lifetime.Token)
                 .WaitAsync(TimeSpan.FromSeconds(20), lifetime.Token);
-            Assert.DoesNotContain(decoyOnlyId, timerInventory.ById.Keys);
-            Assert.False(allowReconnect.Task.IsCompleted,
-                "The timer must discover the unjournaled write while the journal client is reconnecting.");
-
-            allowReconnect.TrySetResult(true);
-            var secondTail = await tailProcesses.Reader.ReadAsync(lifetime.Token).AsTask()
+            Assert.DoesNotContain(foreign, inventory.ById.Keys);
+            string authored;
+            await trackerAccess.WaitAsync(lifetime.Token);
+            try { authored = await CreateBeadAsync(runner, target.Path, "later journal write", "nightweaver:orchestrator", lifetime.Token); }
+            finally { trackerAccess.Release(); }
+            releases.Writer.TryWrite(true);
+            Assert.Equal(BeadsJournalWatcher.PollInterval, await delays.Reader.ReadAsync(lifetime.Token));
+            await WaitForInventoryAsync(inventories.Reader, snapshot => snapshot.ById.ContainsKey(authored), lifetime.Token)
                 .WaitAsync(TimeSpan.FromSeconds(20), lifetime.Token);
-            Assert.False(secondTail.HasExited, "The reconnected native tail should remain open for new writes.");
-            var secondRequest = await tailRequests.Reader.ReadAsync(lifetime.Token).AsTask()
-                .WaitAsync(TimeSpan.FromSeconds(5), lifetime.Token);
-            Assert.Equal(target.Path, secondRequest.WorkingDirectory);
-            Assert.True(long.Parse(ReadSinceArgument(secondRequest),
-                System.Globalization.CultureInfo.InvariantCulture) >= deliveredCursor,
-                "Reconnect should resume at or after the event cursor observed before termination.");
-
-            var burstIds = new[]
+            Assert.Equal(3, requests.Count);
+            Assert.Equal("0", ReadSinceArgument(requests[0]));
+            Assert.Equal(firstHead.ToString(System.Globalization.CultureInfo.InvariantCulture), ReadSinceArgument(requests[1]));
+            Assert.Equal(ReadSinceArgument(requests[1]), ReadSinceArgument(requests[2]));
+            Assert.All(requests, request =>
             {
-                await CreateBeadAsync(processRunner, target.Path, "orchestrator burst one", "nightweaver:orchestrator",
-                    lifetime.Token),
-                await CreateBeadAsync(processRunner, target.Path, "orchestrator burst two", "nightweaver:orchestrator",
-                    lifetime.Token)
-            };
-            var burstInventory = await WaitForInventoryAsync(inventories.Reader,
-                inventory => burstIds.All(inventory.ById.ContainsKey), lifetime.Token)
-                .WaitAsync(TimeSpan.FromSeconds(20), lifetime.Token);
-            Assert.All(burstIds, id => Assert.Contains(id, burstInventory.ById.Keys));
-            Assert.DoesNotContain(decoyOnlyId, burstInventory.ById.Keys);
-            Assert.Contains("Target Repository events tail failed; reconnecting", error.ToString(), StringComparison.Ordinal);
+                Assert.Equal(target.Path, request.WorkingDirectory);
+                Assert.Null(request.Environment["BEADS_DIR"]);
+                Assert.Null(request.Environment["BEADS_DB"]);
+                Assert.Null(request.Environment["BD_DB"]);
+                Assert.DoesNotContain("--follow", request.Arguments);
+            });
+            Assert.Contains("events batch failed; retrying", error.ToString(), StringComparison.Ordinal);
         }
         finally
         {
-            allowReconnect.TrySetResult(true);
             lifetime.Cancel();
-            await runtimeTask.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+            await runtime.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
         }
     }
 
@@ -315,7 +223,7 @@ public sealed class BeadsJournalClientIntegrationTests
         var title = "target row without journal event";
         var query = $"INSERT INTO issues (id,title,description,design,acceptance_criteria,notes,status,priority,issue_type,created_by) "
             + $"VALUES ('{id}','{title}','','','','','open',2,'task','fixture')";
-        var environment = BeadsCommand.CreateJournalTail(repositoryPath, 0).Environment;
+        var environment = BeadsCommand.CreateJournalBatch(repositoryPath, 0, 256).Environment;
         var request = new ProcessRequest("dolt",
             ["--data-dir", Path.Combine(repositoryPath, ".beads", "embeddeddolt"), "sql", "-q", query],
             repositoryPath, environment, TimeSpan.FromSeconds(30));
@@ -330,7 +238,7 @@ public sealed class BeadsJournalClientIntegrationTests
         string repositoryPath,
         CancellationToken cancellationToken)
     {
-        var environment = BeadsCommand.CreateJournalTail(repositoryPath, 0).Environment;
+        var environment = BeadsCommand.CreateJournalBatch(repositoryPath, 0, 256).Environment;
         var result = await processRunner.RunAsync(new ProcessRequest("bd",
             ["--readonly", "--sandbox", "events", "tail", "--json"],
             repositoryPath, environment, TimeSpan.FromSeconds(30)), cancellationToken);
@@ -376,22 +284,4 @@ public sealed class BeadsJournalClientIntegrationTests
     private static TaskCompletionSource<bool> NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private sealed class RecordingJournalClient(IBeadsJournalClient inner) : IBeadsJournalClient
-    {
-        private readonly TaskCompletionSource<long> firstDeliveredSequence =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        internal Task<long> FirstDeliveredSequence => firstDeliveredSequence.Task;
-
-        public Task EnableAsync(ValidatedTargetRepository repository, CancellationToken cancellationToken) =>
-            inner.EnableAsync(repository, cancellationToken);
-
-        public Task FollowAsync(ValidatedTargetRepository repository, long afterSequence,
-            Action<long> onEvent, CancellationToken cancellationToken) =>
-            inner.FollowAsync(repository, afterSequence, sequence =>
-            {
-                onEvent(sequence);
-                firstDeliveredSequence.TrySetResult(sequence);
-            }, cancellationToken);
-    }
 }

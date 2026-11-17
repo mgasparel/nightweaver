@@ -94,15 +94,15 @@ public sealed class BeadsInspectionTests
         Assert.Equal(["--sandbox", "--dolt-auto-commit", "on", "config", "set", "events-journal", "true"], setup.Arguments);
         Assert.Null(setup.Environment["BD_DISABLE_EVENT_FLUSH"]);
 
-        var tail = BeadsCommand.CreateJournalTail("actual target with spaces", 27);
+        var tail = BeadsCommand.CreateJournalBatch("actual target with spaces", 27, 256);
         var goBudget = Environment.GetEnvironmentVariable("GOMAXPROCS")
             ?? Math.Min(2, Environment.ProcessorCount).ToString(System.Globalization.CultureInfo.InvariantCulture);
         Assert.Equal(goBudget, setup.Environment["GOMAXPROCS"]);
         Assert.Equal(goBudget, tail.Environment["GOMAXPROCS"]);
         Assert.Equal(goBudget, BeadsCommand.Create("actual target with spaces").Environment["GOMAXPROCS"]);
         Assert.Equal("actual target with spaces", tail.WorkingDirectory);
-        Assert.Equal(Timeout.InfiniteTimeSpan, tail.Timeout);
-        Assert.Equal(["--readonly", "--sandbox", "events", "tail", "--follow", "--since", "27", "--json"], tail.Arguments);
+        Assert.Equal(TimeSpan.FromSeconds(30), tail.Timeout);
+        Assert.Equal(["--readonly", "--sandbox", "events", "tail", "--since", "27", "--limit", "256", "--json"], tail.Arguments);
         foreach (var selector in new[]
         {
             "BEADS_DIR", "BEADS_DB", "BD_DB", "BEADS_DOLT_SERVER_DATABASE", "BEADS_DOLT_DATA_DIR",
