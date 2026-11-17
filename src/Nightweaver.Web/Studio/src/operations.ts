@@ -45,6 +45,7 @@ export class QueryCoordinator {
   private retries = 0;
   private lastFrame = 0;
   private lastBackend?: number;
+  private firstConnectionAttempt?: number;
   private lastPoll = 0;
   private visible = true;
   private disposed = false;
@@ -210,8 +211,9 @@ export class QueryCoordinator {
     }, 0);
   }
   private connection(): Snapshot["connectionState"] {
+    const evidenceSince = this.lastBackend ?? this.firstConnectionAttempt;
+    if (evidenceSince !== undefined && this.clock.now() - evidenceSince >= 25000) return "disconnected";
     if (this.lastBackend === undefined) return this.retries ? "recovering" : "connecting";
-    if (this.clock.now() - this.lastBackend >= 25000) return "disconnected";
     return this.hello && this.active().every(entry => !entry.needsRead) ? "connected" : "recovering";
   }
   private disconnect() {
@@ -226,10 +228,12 @@ export class QueryCoordinator {
   private restart() {
     this.retry?.(); this.retry = undefined; this.disconnect();
     const active = this.active();
+    if (!active.length) this.firstConnectionAttempt = undefined;
     if (!active.length || this.disposed || !this.visible) return;
     const generation = this.generation;
+    this.firstConnectionAttempt ??= this.clock.now();
     this.lastFrame = this.clock.now();
-    for (const entry of active) this.publish(entry, { connectionState: this.lastBackend === undefined ? "connecting" : this.connection() });
+    for (const entry of active) this.publish(entry, { connectionState: this.connection() });
     this.close = this.transport.connect(active[0].identity.projectId, active.map(entry => entry.identity.key),
       (name, frame) => {
         if (generation !== this.generation) return;

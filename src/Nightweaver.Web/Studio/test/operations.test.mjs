@@ -10,6 +10,26 @@ const envelope = (revision = '1', epoch = 'A', key = 'attention', extra = {}) =>
   validatedAgeMs: 0, pendingAgeMs: null, synchronization: { journal: 'current', pending: false }, sources: {}, error: null, targetIntervalMs: 1000, nextAttemptAt: null, ...extra,
 });
 const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+test('cold-start outage expires across retries and recovers only on backend evidence', async () => {
+  const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance();
+  assert.equal(f.snapshot().connectionState, 'connecting');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    f.streams.at(-1).failed();
+    await f.advance(10000);
+  }
+  assert.equal(f.snapshot().connectionState, 'disconnected');
+  assert.equal(f.snapshot().observation, undefined);
+  await f.advance(15000);
+  assert.equal(f.snapshot().connectionState, 'disconnected', 'retry cannot restore connection evidence');
+  f.hello(); await f.advance();
+  assert.equal(f.snapshot().connectionState, 'recovering');
+  assert.equal(f.snapshot().synchronized, false);
+  f.reads.at(-1).resolve(envelope()); await f.advance();
+  assert.equal(f.snapshot().connectionState, 'connected');
+  assert.equal(f.snapshot().synchronized, true);
+  f.coordinator.dispose();
+});
+
 test('retained runtime observations expire on their own allowance while tracker data stays recent', async () => {
   const f = fixture();
   for (const key of ['factory', 'attention']) f.coordinator.subscribe(identity(key), () => {});

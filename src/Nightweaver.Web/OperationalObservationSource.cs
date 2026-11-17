@@ -429,7 +429,7 @@ internal sealed class OperationalObservationSource(
         // A new cycle must not repeatedly compare an external edit against the
         // old core while a different Workspace remains pending indefinitely.
         if (result.Values.Any(sample => sample.Error?.Code == "source-conflict")) resumeDetails = false;
-        TrimSources(selected.Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal));
+        TrimSources(selected.Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal), keys);
         return result;
     }
 
@@ -656,14 +656,17 @@ internal sealed class OperationalObservationSource(
         commentsReadThisSweep.Add(id);
     }
 
-    private void TrimSources(HashSet<string> selected)
+    private void TrimSources(HashSet<string> selected, IReadOnlyList<OperationKey> keys)
     {
         var retained = selected.Union(attentionBeads?.Select(bead => bead.Id)
             ?? (scheduled ? retainedInventory?.ById.Values.Where(AttentionDeskProjector.IsPaused).Select(bead => bead.Id) : null) ?? []
             , StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
         foreach (var id in histories.Keys.Where(id => !retained.Contains(id)).ToArray())
         { memory.Release(histories[id]); histories.Remove(id); }
-        foreach (var id in states.Keys.Where(id => id.Contains(':') && !retained.Contains(id[(id.IndexOf(':') + 1)..])).ToArray())
+        // Readiness sets have no colon-qualified identity. Retire them with the
+        // consuming Explorer view so an unreadable due slot cannot wake every turn.
+        foreach (var id in states.Keys.Where(id => id.Contains(':') && !retained.Contains(id[(id.IndexOf(':') + 1)..])
+            || id is "ready" or "blocked" && !keys.Any(key => key.Kind == "explorer" && key.Argument == id)).ToArray())
         {
             states.Remove(id); sourceContent.Remove(id); cached.Remove(id); historyGenerations.Remove(id);
             if (cacheReservations.Remove(id, out var owner)) memory.Release(owner);

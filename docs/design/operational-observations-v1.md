@@ -35,6 +35,9 @@ host/session-bound and discarded when repository/branch identity is uncertain.
 Dirty generations coalesce for at most 250ms from the first hint, with at most
 512 retained source identities and broad invalidation on overflow. New hints
 cannot erase an older outstanding five-second obligation or a newer revision.
+If a new reconciliation generation races publication after collection begins,
+retain its pending obligation and request another authoritative turn even when
+the source cache has already consumed the wake. It must not wait idle for an audit.
 
 Each interested source also receives an authoritative audit every 60 seconds,
 spread after bootstrap, sharing inventory/readiness through continuation turns.
@@ -43,11 +46,15 @@ mutation fairness, two selected Workspaces and memory limits remain unchanged.
 Unfinished Attention/Workspace cohorts drain without another event. Idle turns
 issue no list/ready/comments commands before audit. Explicit refresh and local
 writes wake reconciliation immediately, even after uncertain command outcomes.
+Ready/Blocked source values and audit slots retire when their Explorer keys lose
+interest; returning to those views requires authoritative readiness validation.
 
 Connection evidence, source failure, snapshot age and pending delay are separate.
 Transport heartbeat remains 10 seconds; 25 seconds without valid backend evidence
-means disconnected. Stream errors mean recovering; valid HTTP reads still prove
-backend reachability. A failed request retains data and is a read error. A retry
+means disconnected. Stream errors mean recovering until that deadline; valid HTTP
+reads still prove backend reachability. Before any valid evidence, the silence
+interval starts at the first active connection attempt and is not reset by retries.
+A failed request retains data and is a read error. A retry
 start never proves recovery. A valid identity handshake and resource read are
 required for synchronization recovery. Snapshot states are loading/unavailable,
 current/refreshing/delayed/stale, with source errors immediately visible. Age

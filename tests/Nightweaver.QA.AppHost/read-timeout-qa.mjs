@@ -14,8 +14,24 @@ try {
   const errors = []; const posts = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (request.method() === 'POST') posts.push(new URL(request.url()).pathname); });
+  // A cold backend outage must expire even though no handshake/read ever succeeded.
+  let outageRequests = 0;
+  await page.route('**/api/operations/**', route => {
+    outageRequests++;
+    return route.fulfill({ status: 503, body: 'Disposable QA cold-start outage' });
+  });
+  const outageStarted = performance.now();
   await page.goto(base + '/studio');
+  await page.locator('.synchronization [role="status"]').filter({ hasText: /^(Connecting|Recovering updates channel) · / }).waitFor();
+  await page.locator('.synchronization [role="status"]').filter({ hasText: /^Disconnected · / }).waitFor({ timeout: 35000 });
+  const outageElapsedMs = performance.now() - outageStarted;
+  assert(outageElapsedMs >= 25000 && outageRequests > 1, 'Retries must not reset the no-evidence deadline');
+  await page.screenshot({ path: path.join(output, 'cold-disconnected-375.png'), fullPage: true });
+  await page.unroute('**/api/operations/**');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.waitForFunction(() => /^\d+/.test(document.querySelector('#attention-navigation-count')?.textContent.trim() ?? ''), null, { timeout: 90000 });
+  await page.locator('.synchronization [role="status"]').filter({ hasText: /^Live connection · / }).waitFor();
+  await page.screenshot({ path: path.join(output, 'cold-recovered-375.png'), fullPage: true });
   await page.evaluate(() => {
     const nativeFetch = window.fetch.bind(window);
     window.readProbe = { started: 0, aborted: false, releases: [] };
@@ -45,7 +61,16 @@ try {
   await page.screenshot({ path: path.join(output, 'timeout-375.png'), fullPage: true });
   await page.evaluate(() => window.readProbe.releases[1]());
   await page.locator('.synchronization [role="alert"]').waitFor({ state: 'hidden' });
-  await page.waitForFunction(() => document.querySelector('.synchronization [role="status"]')?.textContent.includes('Current'));
+  try {
+    await page.waitForFunction(() => document.querySelector('.synchronization [role="status"]')?.textContent.includes('Current'));
+  } catch (error) {
+    const response = await page.request.get(base + '/api/operations/v1/projects/qa/resources?key=attention');
+    const { health, error: sourceError, pendingAgeMs, synchronization, sources } = await response.json();
+    console.log(JSON.stringify({ recoveryFailure: { status: await page.locator('.synchronization').innerText(),
+      health, sourceError, pendingAgeMs, synchronization, sources } }));
+    await page.screenshot({ path: path.join(output, 'recovery-failed-375.png'), fullPage: true });
+    throw error;
+  }
   const recovered = await page.locator('#attention-navigation-count').innerText();
   await page.evaluate(() => window.readProbe.releases[0]());
   await page.locator('.synchronization').getByRole('button', { name: /^Refresh/ }).waitFor();
@@ -54,5 +79,5 @@ try {
   assert(posts.length >= 1 && posts.every(value => value === '/api/operations/v1/projects/qa/refresh'),
     'Explicit refresh and focus/wake only reconcile reads; no guarded mutation is replayed');
   await page.screenshot({ path: path.join(output, 'recovered-375.png'), fullPage: true });
-  console.log(JSON.stringify({ timeoutAborted: true, recovered, posts, errors }));
+  console.log(JSON.stringify({ coldOutage: { outageElapsedMs, outageRequests, recovered: true }, timeoutAborted: true, recovered, posts, errors }));
 } finally { await browser.close(); }

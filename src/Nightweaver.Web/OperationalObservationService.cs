@@ -401,6 +401,7 @@ internal sealed class OperationalObservationService(
                 : await source.ReadTrackerAsync(keys, token, (id, state) => Revalidate(captured, id, state));
         lock (sync)
         {
+            var reconcileAgain = false;
             foreach (var entry in captured)
             {
                 if (stopping || !entries.TryGetValue(entry.Key.Value, out var current) || !ReferenceEquals(current, entry)) continue;
@@ -435,10 +436,18 @@ internal sealed class OperationalObservationService(
                     NextAttemptAt = clock.GetUtcNow().AddMilliseconds(entry.Envelope.TargetIntervalMs)
                 };
                 var previousPending = entry.PendingTimestamp;
-                if (sample.Error is null && generations[entry] == entry.DirtyGeneration) entry.PendingTimestamp = null;
+                if (sample.Error is null)
+                {
+                    if (generations[entry] == entry.DirtyGeneration) entry.PendingTimestamp = null;
+                    else reconcileAgain = true;
+                }
                 var accepted = Publish(entry, updated, projection: sample.Error is null || sample.Partial || missing);
                 if (!accepted) entry.PendingTimestamp = previousPending;
             }
+            // A wake can precede the source read but follow our generation capture.
+            // The source may already be clean while the newer publication obligation
+            // remains. Give it an authoritative turn instead of waiting for an audit.
+            if (reconcileAgain) (source as IScheduledTrackerObservationSource)?.Invalidate();
         }
     }
 

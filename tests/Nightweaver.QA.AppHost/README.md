@@ -123,8 +123,10 @@ late settlement, and no automatic replay or page errors. Screenshots go to
 start, direct endpoint discovery and finally-stop lifecycle below.
 
 After discovering the exact isolated direct endpoint, `node read-timeout-qa.mjs`
-holds a real resource response while the operational SSE remains live. It checks
-the ten-second abort, retained stale/error display at 375px, a successful explicit
+first blocks operational responses through the 25-second cold-start silence
+deadline, verifies Disconnected across retries, then restores real handshake/read
+recovery. It holds a real resource response while the operational SSE remains live
+and checks the ten-second abort, retained recent data/read error at 375px, a successful explicit
 Refresh, wake recovery, a replacement read and rejection of the late held response.
 The probe never replays commands. Screenshots go to `NIGHTWEAVER_QA_OUTPUT` or
 `TestResults/read-timeout`. Stop the same AppHost in `finally` after all probes.
