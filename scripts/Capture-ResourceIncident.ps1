@@ -70,4 +70,3 @@ for ($index = 0; $index -lt $Samples; $index++) {
 }
 ConvertTo-Json -InputObject ($captureErrors.ToArray()) | Set-Content (Join-Path $destination 'capture-errors.json')
 [ordered]@{directory=$destination;samples=$Samples;errors=$captureErrors.Count;applicationMutationsRequested=$false} | ConvertTo-Json
-
