@@ -23,6 +23,31 @@ function Invoke-FixtureMeasurement($Base=$baseline) {
     Invoke-TestSuiteMeasurement $context $Base (Join-Path $directory ([guid]::NewGuid().ToString('N')+'.json')) $runner { $script:seconds } $capture
 }
 $cases=0
+# Exercise the entry point's serialized baseline loading with an actual boot identity.
+$context.bootUtc='2026-11-16T18:40:45.5000000Z'; $baseline.bootUtc=$context.bootUtc
+foreach ($scenario in @(
+    @{seconds=149.999; boot=$context.bootUtc; comparable=$true; captures=0},
+    @{seconds=150.0; boot=$context.bootUtc; comparable=$true; captures=1},
+    @{seconds=150.0; boot='2026-11-15T18:40:45.5000000Z'; comparable=$false; captures=0}
+)) {
+    $baseline.bootUtc=$scenario.boot
+    $baselinePath=Join-Path $directory ([guid]::NewGuid().ToString('N')+'-baseline.json')
+    $baseline | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $baselinePath -Encoding utf8
+    $loaded=ConvertFrom-Json -InputObject (Get-Content -LiteralPath $baselinePath -Raw) -AsHashtable -NoEnumerate
+    $path=Join-Path $directory ([guid]::NewGuid().ToString('N')+'.json')
+    $before=$script:captures
+    $r=Invoke-TestSuiteMeasurement $context $loaded $path $runner { $scenario.seconds } $capture
+    $retained=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    Check ($retained.assessment.comparisonAvailable -eq $scenario.comparable) 'Serialized boot identity comparability incorrect'
+    Check ($script:captures -eq $before+$scenario.captures) 'Serialized baseline capture count incorrect'
+    if ($scenario.comparable) {
+        Check ($retained.assessment.deltaSeconds -eq ($scenario.seconds-100) -and $retained.assessment.ratio -eq ($scenario.seconds/100)) 'Serialized baseline delta/ratio incorrect'
+    } else {
+        Check ($retained.assessment.comparisonReasons -contains 'Missing or mismatched bootUtc' -and $null -eq $retained.assessment.deltaSeconds -and $null -eq $retained.assessment.ratio) 'Different boot identity compared'
+    }
+    $cases++
+}
+$baseline.bootUtc=$context.bootUtc
 # Preserve JSON root shape as the entry point's optional baseline input.
 foreach ($json in @('42', 'true', 'false', '"baseline"', '[1,2]', '[]', '[{}]', 'null')) {
     foreach ($testExit in @(0,17)) {

@@ -7,7 +7,15 @@ function Get-TestSuiteAssessment {
     elseif ($Baseline -isnot [System.Collections.IDictionary]) { $reasons.Add('Baseline root must be a JSON object') }
     else {
         foreach ($key in @('schema','commandPolicy','threads','preparation','dotnetVersion','runtimeVersion','bdVersion','logicalProcessors','tempRoot','TEMP','TMP','productionContext','machine','bootUtc','schedulingHash')) {
-            if (!$Baseline.Contains($key) -or !$Result.Contains($key) -or $null -eq $Baseline[$key] -or $Baseline[$key] -cne $Result[$key]) { $reasons.Add("Missing or mismatched $key") }
+            $baselineValue = $Baseline[$key]; $candidateValue = $Result[$key]
+            # ConvertFrom-Json can materialize ISO timestamps as DateTime objects.
+            # Restore the UTC round-trip representation emitted by the measurement
+            # entry point before comparing boot identities; preserve all other fields.
+            if ($key -eq 'bootUtc') {
+                if ($baselineValue -is [datetime] -or $baselineValue -is [datetimeoffset]) { $baselineValue = ([datetimeoffset]$baselineValue).UtcDateTime.ToString('o') }
+                if ($candidateValue -is [datetime] -or $candidateValue -is [datetimeoffset]) { $candidateValue = ([datetimeoffset]$candidateValue).UtcDateTime.ToString('o') }
+            }
+            if (!$Baseline.Contains($key) -or !$Result.Contains($key) -or $null -eq $baselineValue -or $baselineValue -cne $candidateValue) { $reasons.Add("Missing or mismatched $key") }
         }
         foreach ($key in @('candidateRevision','candidateTree','evidenceId','command','elapsedSeconds','total','passed','failed','skipped','testExitCode','dirty','accepted')) {
             if (!$Baseline.Contains($key)) { $reasons.Add("Baseline missing $key") }

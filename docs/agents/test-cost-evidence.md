@@ -32,6 +32,9 @@ and why. Never manufacture a zero delta or silently choose the newest file.
 The baseline JSON root must be an object. Scalar and array roots make comparison
 unavailable with an explicit reason; candidate counts and the original test exit
 are still retained. JSON null is treated as no supplied baseline.
+Parsed boot timestamp objects are normalized to the measurement's UTC round-trip
+string before comparison, so JSON date conversion preserves identical boot
+identities. A different boot identity still makes comparison unavailable.
 `-Preparation` describes any separate restore/first-build preparation (default:
 none). Use the same preparation for a comparable pair. The script runs the normal
 complete command with a unique report filename, without `--no-build`, filters or
