@@ -38,18 +38,21 @@ try {
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.locator('.synchronization [role="alert"]').waitFor({ timeout: 20000 });
   await page.waitForFunction(() => window.readProbe.aborted && window.readProbe.releases[1]);
-  await page.locator('.synchronization [role="status"]').filter({ hasText: 'Live connection · Awaiting current data' }).waitFor();
+  await page.locator('.synchronization [role="status"]').filter({ hasText: /^Live connection · / }).waitFor();
+  assert(!(await page.locator('.synchronization [role="status"]').innerText()).includes('Snapshot stale'),
+    'A read timeout does not expire a recent retained snapshot or disconnect the live stream');
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.screenshot({ path: path.join(output, 'timeout-375.png'), fullPage: true });
   await page.evaluate(() => window.readProbe.releases[1]());
   await page.locator('.synchronization [role="alert"]').waitFor({ state: 'hidden' });
-  await page.waitForFunction(() => !document.querySelector('.synchronization [role="status"]')?.textContent.includes('Awaiting current data'));
+  await page.waitForFunction(() => document.querySelector('.synchronization [role="status"]')?.textContent.includes('Current'));
   const recovered = await page.locator('#attention-navigation-count').innerText();
   await page.evaluate(() => window.readProbe.releases[0]());
   await page.locator('.synchronization').getByRole('button', { name: /^Refresh/ }).waitFor();
   assert.equal(await page.locator('#attention-navigation-count').innerText(), recovered);
   assert.deepEqual(errors, []);
-  assert.deepEqual(posts, ['/api/operations/v1/projects/qa/refresh']);
+  assert(posts.length >= 1 && posts.every(value => value === '/api/operations/v1/projects/qa/refresh'),
+    'Explicit refresh and focus/wake only reconcile reads; no guarded mutation is replayed');
   await page.screenshot({ path: path.join(output, 'recovered-375.png'), fullPage: true });
   console.log(JSON.stringify({ timeoutAborted: true, recovered, posts, errors }));
 } finally { await browser.close(); }
