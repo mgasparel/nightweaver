@@ -1,3 +1,4 @@
+import { observationStatus } from "./operations";
 import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -246,9 +247,9 @@ function AttentionCount({ projectId }: { projectId: string }) {
 function SynchronizationStatus({ projectId }: { projectId: string }) {
   const snapshot = useObservation(projectId, "attention");
   const [error, setError] = useState<string>();
-  const health = snapshot.stale ? "Awaiting current data" : `Tracker ${snapshot.observation?.health ?? "unavailable"}`;
+  const health = observationStatus(snapshot);
   return <div className="synchronization">
-    <span role="status">{snapshot.connectionState === "connected" ? "Live connection" : snapshot.connectionState === "connecting" ? "Connecting" : "Disconnected"} · {health}</span>
+    <span role="status">{snapshot.connectionState === "connected" ? "Live connection" : snapshot.connectionState === "connecting" ? "Connecting" : snapshot.connectionState === "recovering" ? "Recovering updates channel" : "Disconnected"} · {health}</span>
     <button className="text-link" onClick={() => {
       setError(undefined);
       operations.refresh([{ projectId, key: "attention" }]).catch(reason => setError(
@@ -262,7 +263,7 @@ function SynchronizationStatus({ projectId }: { projectId: string }) {
 function AttentionMetric({ projectId }: { projectId: string }) {
   const snapshot = useObservation(projectId, "attention");
   const data = snapshot.observation?.data;
-  const health = snapshot.stale ? "retained" : snapshot.observation?.health ?? "unavailable";
+  const health = observationStatus(snapshot);
   return <div className="metric">
     <span className="eyebrow">Attention</span>
     <strong aria-label={Array.isArray(data) ? `${data.length} paused Beads` : "Unavailable"}>{Array.isArray(data) ? data.length : "—"}</strong>
@@ -275,7 +276,7 @@ function ReadyMetric({ projectId }: { projectId: string }) {
   const data = snapshot.observation?.data;
   return <div className="metric"><span className="eyebrow">Ready</span>
     <strong>{data?.total ?? "—"}</strong>
-    <small>{data ? `Native readiness · ${snapshot.stale ? "retained" : snapshot.observation?.health}` : "Readiness unavailable"}</small>
+    <small>{data ? `Native readiness · ${observationStatus(snapshot)}` : "Readiness unavailable"}</small>
   </div>;
 }
 

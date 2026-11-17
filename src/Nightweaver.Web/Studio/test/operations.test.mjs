@@ -1,13 +1,49 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { QueryCoordinator, InteractionStore, queryKey } from '../src/operations.ts';
+import { QueryCoordinator, InteractionStore, queryKey, observationStatus } from '../src/operations.ts';
 
 const identity = (key = 'attention') => ({ projectId: 'qa', key });
 const envelope = (revision = '1', epoch = 'A', key = 'attention', extra = {}) => ({
   schema: 'nightweaver-observation-v1', ...identity(key), epoch, revision, health: 'fresh', data: [revision],
-  lastAttemptAt: revision, observedAt: revision, sources: {}, error: null, targetIntervalMs: 1000, nextAttemptAt: null, ...extra,
+  lastAttemptAt: revision, observedAt: revision,
+  policy: { expectedValidationIntervalMs: 60000, maxSnapshotAgeMs: 120000, maxPendingAgeMs: 5000 },
+  validatedAgeMs: 0, pendingAgeMs: null, synchronization: { journal: 'current', pending: false }, sources: {}, error: null, targetIntervalMs: 1000, nextAttemptAt: null, ...extra,
 });
 const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+test('cold-start outage expires across retries and recovers only on backend evidence', async () => {
+  const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance();
+  assert.equal(f.snapshot().connectionState, 'connecting');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    f.streams.at(-1).failed();
+    await f.advance(10000);
+  }
+  assert.equal(f.snapshot().connectionState, 'disconnected');
+  assert.equal(f.snapshot().observation, undefined);
+  await f.advance(15000);
+  assert.equal(f.snapshot().connectionState, 'disconnected', 'retry cannot restore connection evidence');
+  f.hello(); await f.advance();
+  assert.equal(f.snapshot().connectionState, 'recovering');
+  assert.equal(f.snapshot().synchronized, false);
+  f.reads.at(-1).resolve(envelope()); await f.advance();
+  assert.equal(f.snapshot().connectionState, 'connected');
+  assert.equal(f.snapshot().synchronized, true);
+  f.coordinator.dispose();
+});
+
+test('retained runtime observations expire on their own allowance while tracker data stays recent', async () => {
+  const f = fixture();
+  for (const key of ['factory', 'attention']) f.coordinator.subscribe(identity(key), () => {});
+  await f.advance(); f.hello(); await f.advance();
+  for (const read of f.reads) read.resolve(envelope('1', 'A', read.identity.key,
+    read.identity.key === 'factory' ? { policy: null, targetIntervalMs: 2000 } : {}));
+  await settle();
+  assert.equal(f.coordinator.getSnapshot(identity('factory')).stale, false);
+  f.coordinator.suspend();
+  await f.advance(5000);
+  assert.equal(f.coordinator.getSnapshot(identity('factory')).stale, true);
+  assert.equal(f.coordinator.getSnapshot(identity('attention')).stale, false);
+  f.coordinator.dispose();
+});
 test('Product and readiness commands reconcile cleanup along with active tracker resources', async () => {
   const f = fixture();
   for (const key of ['attention', 'workspace:qa.1', 'cleanup:1:all:', 'factory']) f.coordinator.subscribe(identity(key), () => {});
@@ -20,7 +56,7 @@ test('Product and readiness commands reconcile cleanup along with active tracker
 });
 function fixture() {
   let now = 0; let serial = 0;
-  const jobs = new Map(); const streams = []; const reads = []; const posts = [];
+  const jobs = new Map(); const streams = []; const reads = []; const posts = []; const wakes = [];
   const clock = { now: () => now, random: () => 1,
     later(callback, ms) { const id = ++serial; jobs.set(id, { at: now + ms, callback }); return () => jobs.delete(id); } };
   const transport = {
@@ -31,6 +67,7 @@ function fixture() {
     },
     read(identity, signal) { return new Promise((resolve, reject) => reads.push({ identity, signal, resolve, reject })); },
     async refresh(project, keys) { posts.push({ project, keys }); },
+    async wake(project, keys) { wakes.push({ project, keys }); },
   };
   const coordinator = new QueryCoordinator(transport, clock);
   const advance = async (ms = 0) => {
@@ -47,7 +84,7 @@ function fixture() {
     schema: 'nightweaver-operations-v1', projectId: 'qa', epoch: 'A', ...fields,
   });
   const hello = (fields = {}) => send('hello', { versions: Object.fromEntries(streams.at(-1).keys.map(key => [key, '1'])), ...fields });
-  return { coordinator, transport, streams, reads, posts, jobs, advance, send, hello, snapshot: (key) => coordinator.getSnapshot(identity(key)) };
+  return { coordinator, transport, streams, reads, posts, wakes, jobs, advance, send, hello, snapshot: (key) => coordinator.getSnapshot(identity(key)) };
 }
 
 test('bootstrap waits for hello and coalesces a notification during the initial deferred read', async () => {
@@ -89,7 +126,7 @@ test('healthy status stays current through successive invalidations and deferred
   f.coordinator.dispose();
 });
 
-test('notifications cannot postpone stale status when replacement reads keep lagging', async () => {
+test('notifications cannot postpone delayed status when replacement reads keep lagging', async () => {
   const f = fixture(); f.coordinator.subscribe(identity(), () => {});
   await f.advance(); f.hello(); await f.advance();
   f.reads[0].resolve(envelope()); await f.advance();
@@ -99,7 +136,8 @@ test('notifications cannot postpone stale status when replacement reads keep lag
     assert.equal(f.snapshot().stale, false);
     await f.advance(1000);
   }
-  assert.equal(f.snapshot().stale, true);
+  assert.equal(f.snapshot().stale, false);
+  assert.equal(f.snapshot().dataState, 'delayed');
   assert.equal(f.snapshot().observation.revision, '1', 'Lagging responses cannot replace validated data');
   f.reads.at(-1).resolve(envelope('11')); await f.advance();
   assert.equal(f.snapshot().stale, false);
@@ -153,20 +191,20 @@ test('reconnect gap resync retains same-epoch watermark and rejects late old res
   const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
   f.reads[0].resolve(envelope('9007199254740994')); await f.advance();
   await f.advance(2000); assert.equal(f.reads.length, 2);
-  f.streams[0].failed(); assert.equal(f.snapshot().connectionState, 'disconnected');
+  f.streams[0].failed(); assert.equal(f.snapshot().connectionState, 'recovering');
   await f.advance(1000); f.hello(); await f.advance();
   f.reads[1].resolve(envelope('9007199254740999')); f.reads[2].resolve(envelope('2')); await f.advance();
-  assert.equal(f.snapshot().observation.revision, '9007199254740994'); assert.equal(f.snapshot().stale, true);
+  assert.equal(f.snapshot().observation.revision, '9007199254740994'); assert.equal(f.snapshot().stale, false);
   f.send('invalidation', { versions: { attention: '9007199254740995' } }); await f.advance();
   f.reads.at(-1).resolve(envelope('9007199254740995')); await f.advance();
   assert.equal(f.snapshot().observation.revision, '9007199254740995'); f.coordinator.dispose();
 });
 
-test('new epoch marks retained display stale, resets watermarks and rejects superseded epoch HTTP', async () => {
+test('new epoch marks retained display unsynchronized, resets watermarks and rejects superseded epoch HTTP', async () => {
   const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
   f.reads[0].resolve(envelope('900')); await f.advance(); await f.advance(2000);
   f.send('heartbeat', { epoch: 'B' }); f.hello({ epoch: 'B' }); await f.advance();
-  assert.equal(f.snapshot().stale, true); assert.equal(f.snapshot().observation.epoch, 'A');
+  assert.equal(f.snapshot().synchronized, false); assert.equal(f.snapshot().dataState, 'refreshing'); assert.equal(f.snapshot().observation.epoch, 'A');
   f.reads[1].resolve(envelope('999')); f.reads[2].resolve(envelope('1', 'B')); await f.advance();
   assert.equal(f.snapshot().observation.epoch, 'B'); assert.equal(f.snapshot().observation.revision, '1');
   f.coordinator.dispose();
@@ -184,7 +222,7 @@ test('overflow and equal-version resync refetch freshness, transient HTTP errors
   const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
   f.reads[0].resolve(envelope()); await f.advance();
   f.send('resync', { reason: 'overflow' }); await f.advance(); f.reads[1].reject(Error('temporary')); await f.advance();
-  assert.equal(f.snapshot().stale, true); assert.match(f.snapshot().error, /temporary/);
+  assert.equal(f.snapshot().stale, false); assert.match(f.snapshot().error, /temporary/);
   await f.advance(2000); f.reads[2].resolve(envelope('1', 'A', 'attention', { observedAt: 'later' })); await f.advance();
   assert.equal(f.snapshot().observation.observedAt, 'later'); assert.equal(f.snapshot().error, undefined);
   assert.equal(f.posts.length, 0); f.coordinator.dispose();
@@ -199,18 +237,19 @@ test('stalled reads expire under healthy heartbeats and recovery rejects late co
     assert.equal(stalled.signal.aborted, false);
     if (trigger === 'invalidation') f.send('invalidation', { versions: { attention: '2' } });
     if (trigger === 'refresh') await f.coordinator.refresh([identity()]);
-    if (trigger === 'wake') { f.coordinator.setVisible(false); f.coordinator.setVisible(true); }
+    if (trigger === 'wake') { f.coordinator.setVisible(false); f.coordinator.setVisible(true); f.hello(); }
     f.send('heartbeat'); await f.advance(2000);
     assert.equal(stalled.signal.aborted, true, trigger);
-    assert.equal(f.snapshot().connectionState, 'connected');
-    assert.equal(f.snapshot().stale, true); assert.match(f.snapshot().error, /timed out/i);
+    assert.equal(f.snapshot().connectionState, trigger === 'wake' ? 'recovering' : 'connected');
+    assert.equal(f.snapshot().stale, false);
+    if (trigger !== 'wake') assert.match(f.snapshot().error, /timed out/i);
     assert.equal(f.snapshot().observation.revision, '1'); assert.equal(f.reads.length, 3);
     f.reads[2].resolve(envelope('2')); await f.advance();
     assert.equal(f.snapshot().stale, false); assert.equal(f.snapshot().error, undefined);
     stalled.resolve(envelope('999')); await f.advance();
     assert.equal(f.snapshot().observation.revision, '2');
     assert.equal(f.posts.length, trigger === 'refresh' ? 1 : 0);
-    assert.equal(f.streams.length, 1); f.coordinator.dispose(); assert.equal(f.jobs.size, 0);
+    assert.equal(f.streams.length, trigger === 'wake' ? 2 : 1); f.coordinator.dispose(); assert.equal(f.jobs.size, 0);
   }
 });
 
@@ -231,17 +270,19 @@ test('read deadlines are canceled on settlement, unsubscribe, suspension and dis
   }
 });
 
-test('hidden tabs pause freshness reads; wake and heartbeat silence recover without marking sources fresh', async () => {
+test('hidden tabs release the stream, retain data and reconcile on wake', async () => {
   const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
   f.reads[0].resolve(envelope('1', 'A', 'attention', { health: 'stale' })); await f.advance();
-  f.coordinator.setVisible(false); await f.advance(10000); f.send('heartbeat'); await f.advance(10000);
-  assert.equal(f.reads.length, 1); assert.equal(f.snapshot().observation.health, 'stale');
-  f.coordinator.setVisible(true); await f.advance(); assert.equal(f.reads.length, 2);
-  await f.advance(15000); assert.equal(f.snapshot().connectionState, 'disconnected');
-  f.coordinator.wake(); assert.equal(f.streams.length, 2);
-  f.coordinator.suspend(); await f.advance(15000); assert.equal(f.streams.length, 2);
-  assert.ok(f.streams.every(stream => stream.closed));
-  f.coordinator.wake(); assert.equal(f.streams.length, 3); f.coordinator.dispose();
+  f.coordinator.setVisible(false); await f.advance(30000);
+  assert.equal(f.reads.length, 1); assert.equal(f.streams[0].closed, true);
+  assert.equal(f.snapshot().observation.health, 'stale');
+  f.coordinator.setVisible(true); f.hello(); await f.advance();
+  assert.equal(f.streams.length, 2); assert.equal(f.reads.length, 2);
+  assert.deepEqual(f.wakes, [{ project: 'qa', keys: ['attention'] }]);
+  assert.equal(f.snapshot().synchronized, false);
+  f.reads[1].resolve(envelope()); await f.advance();
+  assert.equal(f.snapshot().synchronized, true); assert.equal(f.snapshot().stale, false);
+  f.coordinator.dispose(); assert.equal(f.jobs.size, 0);
 });
 
 test('manual recovery coalesces refresh POST, clears only after later attempt, commands invalidate observations only', async () => {
@@ -363,7 +404,7 @@ test('equal-revision reconnect accepts refreshed metadata, stale stream callback
   f.reads[1].resolve(envelope('8', 'A', 'attention', { observedAt: 'later' })); await f.advance();
   assert.equal(f.snapshot().observation.observedAt, 'later'); assert.equal(f.snapshot().stale, false);
   await f.advance(2000); f.reads[2].resolve(envelope('7')); await f.advance();
-  assert.equal(f.snapshot().observation.revision, '8'); assert.equal(f.snapshot().stale, true);
+  assert.equal(f.snapshot().observation.revision, '8'); assert.equal(f.snapshot().stale, false);
   f.coordinator.dispose();
 });
 
@@ -381,7 +422,7 @@ test('pinned byte limit retains prior display with a visible error', async () =>
   f.reads[0].resolve(envelope()); await f.advance(); await f.advance(2000);
   f.reads[1].resolve(envelope('2', 'A', 'attention', { data: 'x'.repeat(16 * 1024 * 1024) })); await f.advance();
   assert.equal(f.snapshot().observation.revision, '1'); assert.match(f.snapshot().error, /storage limit/);
-  assert.equal(f.snapshot().stale, true); f.coordinator.dispose();
+  assert.equal(f.snapshot().stale, false); f.coordinator.dispose();
 });
 
 test('refresh before initial observation stays pending until a real attempt', async () => {
@@ -409,4 +450,60 @@ test('LRU eviction removes only inactive responses and a refresh rejection remai
   f.transport.refresh = refresh;
   await f.coordinator.refresh([identity('workspace:qa-64')]);
   assert.equal(f.snapshot('workspace:qa-64').error, undefined); f.coordinator.dispose();
+});
+
+test('tracker age uses receipt elapsed time, retained data expires while disconnected and recovers on validation', async () => {
+  const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
+  f.reads[0].resolve(envelope('1', 'A', 'attention', { observedAt: '2099-01-01', validatedAgeMs: 119000 })); await f.advance();
+  assert.equal(f.snapshot().stale, false);
+  f.coordinator.setVisible(false); await f.advance(2000);
+  assert.equal(f.snapshot().dataState, 'stale'); assert.equal(f.snapshot().observation.data[0], '1');
+  f.coordinator.setVisible(true); f.hello(); await f.advance();
+  assert.equal(f.snapshot().synchronized, false);
+  f.reads.at(-1).resolve(envelope('1', 'A', 'attention', { observedAt: '1900-01-01', validatedAgeMs: 0 })); await f.advance();
+  assert.equal(f.snapshot().dataState, 'current'); assert.equal(f.snapshot().synchronized, true);
+  f.coordinator.dispose();
+});
+
+test('pending response receipts cannot postpone five-second warning or imply accepted-body validation', async () => {
+  const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
+  f.reads[0].resolve(envelope('1', 'A', 'attention', { validatedAgeMs: 100000, pendingAgeMs: 4000,
+    synchronization: { journal: 'current', pending: true } })); await f.advance();
+  assert.equal(f.snapshot().dataState, 'refreshing');
+  await f.advance(2000); assert.equal(f.snapshot().dataState, 'delayed');
+  f.reads.at(-1).resolve(envelope('1', 'A', 'attention', { validatedAgeMs: 102000, pendingAgeMs: 6000,
+    synchronization: { journal: 'current', pending: true } })); await f.advance();
+  assert.equal(f.snapshot().dataState, 'delayed');
+  f.coordinator.dispose();
+});
+
+test('valid HTTP proves backend reachability during channel recovery; hello alone does not complete recovery', async () => {
+  const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
+  f.reads[0].resolve(envelope()); await f.advance(); f.streams[0].failed();
+  assert.equal(f.snapshot().connectionState, 'recovering'); assert.equal(f.snapshot().stale, false);
+  await f.advance(1000); f.hello(); await f.advance();
+  f.reads.at(-1).reject(Error('read failed')); await f.advance();
+  assert.equal(f.snapshot().connectionState, 'recovering'); assert.equal(f.snapshot().synchronized, false);
+  await f.advance(2000); f.reads.at(-1).resolve(envelope()); await f.advance();
+  assert.equal(f.snapshot().connectionState, 'connected'); assert.equal(f.posts.length, 0);
+  f.coordinator.dispose();
+});
+
+test('journal backlog and permanent reader failure are visible independently of a recent accepted snapshot', async () => {
+  const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
+  f.reads[0].resolve(envelope('1', 'A', 'attention', { synchronization: { journal: 'catching-up', pending: false } })); await f.advance();
+  assert.match(observationStatus(f.snapshot()), /Catching up/); assert.equal(f.snapshot().stale, false);
+  await f.advance(2000);
+  f.reads[1].resolve(envelope('2', 'A', 'attention', { synchronization: { journal: 'degraded', pending: false,
+    error: { code: 'journal-settlement', message: 'Inspect Web host diagnostics before restarting it.', retryable: false } } })); await f.advance();
+  assert.match(observationStatus(f.snapshot()), /Inspect Web host/); assert.equal(f.snapshot().connectionState, 'connected');
+  f.coordinator.dispose();
+});
+
+test('backlog never masks source failure, pending delay or accepted-body expiry', () => {
+  const base = { connectionState: 'connected', refreshing: false, stale: false,
+    observation: envelope('1', 'A', 'attention', { synchronization: { journal: 'catching-up', pending: true } }) };
+  assert.match(observationStatus({ ...base, dataState: 'delayed' }), /Updates delayed.*Catching up/);
+  assert.match(observationStatus({ ...base, stale: true, dataState: 'stale' }), /Snapshot stale.*Catching up/);
+  assert.match(observationStatus({ ...base, observation: { ...base.observation, error: { message: 'Tracker read failed' } } }), /Tracker read failed.*Catching up/);
 });

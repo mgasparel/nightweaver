@@ -1,3 +1,25 @@
+## Event-driven scheduling amendment (ns-sib.1)
+
+The v1.2 contract amendment in `operational-observations-v1.md` supersedes the
+original one-second tracker schedule below. `ConsoleJournalReader` binds public
+bounded batches to Git/Dolt branch and host/repository identity and shares the
+observer gate. `TrackerSourceSchedule` owns bounded source generations and
+independent audit deadlines; `OperationalObservationSource.ReadScheduledAsync`
+reuses clean authoritative values and drains unfinished cohorts. Cohort source
+reads receive a reserved continuation turn if core reads exhaust the previous
+turn's budget. This applies to scheduled mixed interests as well as Workspace-only
+collections, so continuous core invalidation cannot starve history audits. The
+captured inventory is reused for at most one consecutive turn; its provenance is
+retained and any outstanding generation still marks the projection pending.
+Cohort source generations must still be current at publication. Resource pending generations
+remain owned by `OperationalObservationService` until accepted-body publication.
+Shared memory reservations cover source values, histories and projections.
+Workspace confirming inventory remains authoritative after native detail reads;
+a confirming read is a correctness guard, not an idle polling sweep. Environment
+inputs retain a separate two-second fallback. Journal failures leave audits active
+and carry an independent actionable diagnostic. The Orchestrator still uses its
+unchanged sequence-only projection and thirty-second cadence.
+
 # Shared operational observations
 
 The wire contract is [Operational observations v1, amendment v1.1](operational-observations-v1.md). `ns-mbd.2` implements the shared backend and read/refresh routes. `ns-mbd.3` owns SSE transport and browser coordination. Existing console routes retain their payloads and guarded commands.
@@ -13,7 +35,14 @@ filters are subscribed. Digest, Attention, Workspace and All inventory views do
 not spend the shared native-work budget on unused memberships. When both filters
 are selected their existing rotating priority and independent health remain.
 
-Tracker access releases after each observer command. Waiting guarded operations take priority, with one due observer admitted after eight consecutive guarded operations. Guarded mutations keep uninterrupted fresh reads, expected-workflow checks and confirming reads. Successful and ambiguous outcomes request reconciliation only after releasing the gate. Checkpoint and cleanup POST completion also requests reconciliation, including uncertain failures. Cached observations never authorize writes.
+Tracker source and console journal access release after each observer command.
+Journal identity validation, optional setup and the bounded page each retain a
+two-second command deadline after admission, sharing a four-second native-work
+budget for the turn. Gate waits consume neither budget. Preparation cannot consume
+the page's entire deadline merely because several individually valid commands
+together exceed two seconds. Successful setup survives a later page timeout;
+session cursor reset remains obligatory until a valid page is returned.
+Waiting guarded operations take priority, with one due observer admitted after eight consecutive guarded operations. Guarded mutations keep uninterrupted fresh reads, expected-workflow checks and confirming reads. Successful and ambiguous outcomes request reconciliation only after releasing the gate. Checkpoint and cleanup POST completion also requests reconciliation, including uncertain failures. Cached observations never authorize writes.
 
 Each tracker process has a two-second timeout and bounded stdout/stderr while receiving. Inventory and membership accept at most 8 MiB and 10,000 rows; list/ready request the 10,001-row sentinel. Detail/comments/relations accept at most 2 MiB; existing comment parsing additionally limits histories to 2,048 entries. Processes are killed and settled before their gate is released. No collection retry is hidden inside a sweep.
 

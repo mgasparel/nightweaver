@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using Nightweaver.Execution;
+using Nightweaver.Inspection;
 
 namespace Nightweaver.Web;
 
@@ -57,11 +58,25 @@ internal sealed record ObservationSourceState(string Health, DateTimeOffset? Obs
     // Host-local provenance, never part of the wire contract. Revalidation may
     // refresh retained data only when it still represents this exact content.
     internal object? ContentIdentity { get; init; }
+    internal long? ValidatedTimestamp { get; init; }
+    internal long? SourceGeneration { get; init; }
 }
 internal sealed record ObservationEnvelope(string Schema, string ProjectId, string Key, string Epoch,
     string Revision, DateTimeOffset? ObservedAt, DateTimeOffset? LastAttemptAt, string Health,
     System.Text.Json.JsonElement? Data, ObservationError? Error,
-    IReadOnlyDictionary<string, ObservationSourceState> Sources, int TargetIntervalMs, DateTimeOffset? NextAttemptAt);
+    IReadOnlyDictionary<string, ObservationSourceState> Sources, int TargetIntervalMs, DateTimeOffset? NextAttemptAt)
+{
+    public ObservationPolicy? Policy { get; init; }
+    public double? ValidatedAgeMs { get; init; }
+    public double? PendingAgeMs { get; init; }
+    public ObservationSynchronization? Synchronization { get; init; }
+}
+internal sealed record ObservationPolicy(int ExpectedValidationIntervalMs = 60000, int MaxSnapshotAgeMs = 120000, int MaxPendingAgeMs = 5000);
+internal sealed record ObservationSynchronization(string Journal, bool Pending)
+{
+    public bool Delayed { get; init; }
+    public ObservationError? Error { get; init; }
+}
 internal sealed record ObservationSample(object? Data, DateTimeOffset AttemptedAt, DateTimeOffset? ObservedAt,
     IReadOnlyDictionary<string, ObservationSourceState> Sources, ObservationError? Error = null, bool Partial = false, bool Pending = false);
 
@@ -90,4 +105,13 @@ internal static class ObservationJson
             System.Text.Json.JsonSerializerOptions options)
             => writer.WriteStringValue(value.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
     }
+}
+
+internal interface IScheduledTrackerObservationSource
+{
+    Task<IReadOnlyDictionary<string, ObservationSample>> ReadScheduledAsync(IReadOnlyList<OperationKey> keys,
+        Action<string, ObservationSourceState> revalidated, CancellationToken token);
+    void Invalidate(IReadOnlyList<BeadsInvalidation>? hints = null);
+    void Reconcile();
+    double? PendingAge(IEnumerable<string> sources);
 }

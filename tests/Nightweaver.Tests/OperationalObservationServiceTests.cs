@@ -6,6 +6,134 @@ namespace Nightweaver.Tests;
 
 public sealed class OperationalObservationServiceTests
 {
+    [Fact]
+    public async Task IdentityReplacementRebaselinesAndNoProgressPageDegradesWithoutLosingCursor()
+    {
+        var clock = new Clock();
+        var journal = new Journal { Page = new("first", [new(42, "update", "task-1", null)]) };
+        using var service = new OperationalObservationService("test", new Source(clock), clock, new Lifetime(), journal: journal);
+        using var pin = service.Pin(["attention"]);
+        var token = TestContext.Current.CancellationToken;
+        await service.PollJournalOnceAsync(token);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        journal.Page = new("replacement", [new(1, "update", "task-1", null)]);
+        await service.PollJournalOnceAsync(token);
+        Assert.Equal("catching-up", service.Read("attention").Synchronization!.Journal);
+        Assert.NotNull(service.Read("attention").PendingAgeMs);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        journal.Page = new("replacement", Enumerable.Repeat(new Nightweaver.Inspection.BeadsInvalidation(1, "update", "task-1", null), 256).ToArray());
+        await service.PollJournalOnceAsync(token);
+        Assert.Equal("degraded", service.Read("attention").Synchronization!.Journal);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        journal.Page = new("replacement", []);
+        await service.PollJournalOnceAsync(token);
+        Assert.Equal([0L, 42L, 1L, 1L], journal.Cursors);
+    }
+
+    [Fact]
+    public async Task OneJournalReaderSharesInterestUsesFiveSecondCadenceAndStopsAfterGrace()
+    {
+        var clock = new Clock();
+        var source = new Source(clock);
+        var journal = new Journal();
+        using var service = new OperationalObservationService("test", source, clock, new Lifetime(), journal: journal);
+        var pins = Enumerable.Range(0, 100).Select(_ => service.Pin(["attention"])).ToArray();
+        var token = TestContext.Current.CancellationToken;
+        await service.PollJournalOnceAsync(token);
+        Assert.Single(journal.Cursors);
+        clock.Advance(TimeSpan.FromSeconds(4));
+        await service.PollJournalOnceAsync(token);
+        Assert.Single(journal.Cursors);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        journal.Page = new("same", [new(1, "comment", "task-1", null)]);
+        await service.PollJournalOnceAsync(token);
+        Assert.Equal(2, journal.Cursors.Count);
+        await service.CollectOnceAsync(false, token);
+        var current = service.Read("attention");
+        Assert.Null(current.PendingAgeMs);
+        journal.Page = new("same", [new(2, "update", "task-1", null)]);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        await service.PollJournalOnceAsync(token);
+        clock.Advance(TimeSpan.FromMilliseconds(5001));
+        var delayed = service.Read("attention");
+        Assert.True(delayed.Synchronization!.Delayed);
+        Assert.NotEqual(current.Revision, delayed.Revision);
+        Assert.Equal("fresh", delayed.Health);
+        foreach (var pin in pins) pin.Dispose();
+        clock.Advance(TimeSpan.FromSeconds(31));
+        var before = journal.Cursors.Count;
+        await service.PollJournalOnceAsync(token);
+        Assert.Equal(before, journal.Cursors.Count);
+        Assert.Equal("inactive", service.Read("attention").Synchronization!.Journal);
+    }
+
+    [Fact]
+    public async Task InvalidJournalPageCannotCommitCursorAndSettlementFailureStopsReplacement()
+    {
+        var clock = new Clock();
+        var journal = new Journal { Page = new("same", [new(1, "update", "task-1", null)]) };
+        using var service = new OperationalObservationService("test", new Source(clock), clock, new Lifetime(), journal: journal);
+        using var pin = service.Pin(["attention"]);
+        var token = TestContext.Current.CancellationToken;
+        await service.PollJournalOnceAsync(token);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        journal.Page = new("same", [new(3, "update", "task-1", null), new(2, "update", "task-1", null)]);
+        await service.PollJournalOnceAsync(token);
+        Assert.Equal("degraded", service.Read("attention").Synchronization!.Journal);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        journal.Page = new("same", []);
+        await service.PollJournalOnceAsync(token);
+        Assert.Equal([0L, 1L, 1L], journal.Cursors);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        journal.Error = new Nightweaver.Application.BeadsJournalSettlementException("uncertain child", new IOException());
+        await service.PollJournalOnceAsync(token);
+        var before = journal.Cursors.Count;
+        clock.Advance(TimeSpan.FromSeconds(120));
+        await service.PollJournalOnceAsync(token);
+        Assert.Equal(before, journal.Cursors.Count);
+        var stopped = service.Read("attention").Synchronization!;
+        Assert.Equal("degraded", stopped.Journal);
+        Assert.Equal("journal-settlement", stopped.Error!.Code);
+        Assert.False(stopped.Error.Retryable);
+    }
+
+    [Fact]
+    public async Task ReadCompletionCannotClearNewerDirtyGenerationAndReceiptsDoNotRefreshAge()
+    {
+        var clock = new Clock();
+        var source = new Source(clock);
+        using var service = Service(source, clock);
+        using var pin = service.Pin(["attention"]);
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        source.Hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.RequestReconciliation();
+        var read = service.CollectOnceAsync(false, token);
+        clock.Advance(TimeSpan.FromSeconds(6));
+        service.RequestReconciliation();
+        source.Hold.SetResult(); await read;
+        Assert.True(service.Read("attention").Synchronization!.Delayed);
+        Assert.NotNull(service.Read("attention").PendingAgeMs);
+        var accepted = service.Read("attention").ValidatedAgeMs;
+        clock.Advance(TimeSpan.FromSeconds(10));
+        Assert.True(service.Read("attention").ValidatedAgeMs > accepted + 9999);
+        source.Hold = null;
+        await service.CollectOnceAsync(false, token);
+        Assert.Null(service.Read("attention").PendingAgeMs);
+    }
+
+    private sealed class Journal : IConsoleJournalReader
+    {
+        internal List<long> Cursors { get; } = [];
+        internal ConsoleJournalPage Page { get; set; } = new("same", []);
+        internal Exception? Error { get; set; }
+        public Task<ConsoleJournalPage> ReadAsync(long cursor, CancellationToken token)
+        {
+            Cursors.Add(cursor);
+            return Error is null ? Task.FromResult(Page) : Task.FromException<ConsoleJournalPage>(Error);
+        }
+    }
+
     [Theory]
     [InlineData("explorer:all:YWJj", "abc")]
     [InlineData("explorer:ready:", "")]
@@ -79,6 +207,10 @@ public sealed class OperationalObservationServiceTests
         Assert.Equal(good.ObservedAt, stale.ObservedAt);
         Assert.Equal("stale", stale.Health);
         Assert.Equal("fresh", service.Read("factory").Health);
+        Assert.Null(service.Read("factory").Policy);
+        Assert.Equal(0d, service.Read("factory").ValidatedAgeMs);
+        clock.Advance(TimeSpan.FromSeconds(5));
+        Assert.Equal(5000d, service.Read("factory").ValidatedAgeMs);
         Assert.Equal("source-timeout", stale.Sources["ready"].Error?.Code);
         Assert.Equal("fresh", stale.Sources["inventory"].Health);
         source.Error = null;
@@ -139,7 +271,8 @@ public sealed class OperationalObservationServiceTests
         var good = service.Read("attention");
         source.Hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var pending = service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
-        clock.Advance(TimeSpan.FromSeconds(4));
+        using var agePin = service.Pin(["attention"]);
+        clock.Advance(TimeSpan.FromSeconds(121));
         var stale = service.Read("attention");
         Assert.Equal("budget-exceeded", stale.Error?.Code);
         Assert.Equal(good.Data?.GetRawText(), stale.Data?.GetRawText());
@@ -156,7 +289,8 @@ public sealed class OperationalObservationServiceTests
         service.Read("attention");
         await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
         var good = service.Read("attention");
-        clock.Advance(TimeSpan.FromSeconds(4));
+        using var agePin = service.Pin(["attention"]);
+        clock.Advance(TimeSpan.FromSeconds(121));
         Assert.Equal("stale", service.Read("attention").Health);
         var fresh = new ObservationSourceState("fresh", clock.GetUtcNow(), clock.GetUtcNow(), null);
         source.Revalidate!("inventory", fresh with { ContentIdentity = new object() });
@@ -176,6 +310,38 @@ public sealed class OperationalObservationServiceTests
     }
 
     [Fact]
+    public async Task PendingFirstLoadFailurePublishesDiagnosticsWithoutUnacceptedProvenance()
+    {
+        var clock = new Clock();
+        var source = new Source(clock) { Pending = true, Error = new("source-failed", "Relation read failed.") };
+        using var service = Service(source, clock);
+        service.Read("workspace:task-1");
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        var failed = service.Read("workspace:task-1");
+        Assert.Equal("unavailable", failed.Health);
+        Assert.Equal("source-failed", failed.Error?.Code);
+        Assert.Null(failed.Data);
+        Assert.Null(failed.ObservedAt);
+        Assert.Null(failed.ValidatedAgeMs);
+        var state = failed.Sources["ready"];
+        Assert.Equal("unavailable", state.Health);
+        Assert.Equal(source.Error, state.Error);
+        Assert.Equal(clock.GetUtcNow(), state.LastAttemptAt);
+        Assert.Null(state.ObservedAt);
+        Assert.Null(state.ContentIdentity);
+        Assert.Null(state.ValidatedTimestamp);
+        Assert.Null(state.SourceGeneration);
+        Assert.Null(failed.Sources["inventory"].ObservedAt);
+        Assert.Null(failed.Sources["inventory"].ContentIdentity);
+        source.Pending = false;
+        source.Error = null;
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        Assert.Equal("fresh", service.Read("workspace:task-1").Health);
+        Assert.Null(service.Read("workspace:task-1").Error);
+        Assert.NotNull(service.Read("workspace:task-1").Data);
+    }
+
+    [Fact]
     public async Task PendingChangedSourceMetadataCannotRevalidateRetainedData()
     {
         var clock = new Clock();
@@ -187,13 +353,26 @@ public sealed class OperationalObservationServiceTests
         source.Content = "changed but not yet published";
         source.InventoryIdentity = new(); source.ReadyIdentity = new(); source.Pending = true;
         await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
-        clock.Advance(TimeSpan.FromSeconds(4));
+        using var agePin = service.Pin(["attention"]);
+        var changedSource = new ObservationSourceState("fresh", clock.GetUtcNow(), clock.GetUtcNow(), null)
+            { ContentIdentity = source.InventoryIdentity };
+        source.Revalidate!("inventory", changedSource);
+        clock.Advance(TimeSpan.FromSeconds(6));
+        Assert.Equal(6000d, service.Read("attention").PendingAgeMs);
+        Assert.True(service.Read("attention").Synchronization!.Delayed);
+        source.Revalidate("inventory", changedSource);
+        Assert.Equal(6000d, service.Read("attention").PendingAgeMs);
+        clock.Advance(TimeSpan.FromSeconds(115));
         Assert.Equal("stale", service.Read("attention").Health);
         var fresh = new ObservationSourceState("fresh", clock.GetUtcNow(), clock.GetUtcNow(), null);
         source.Revalidate!("inventory", fresh with { ContentIdentity = source.InventoryIdentity });
         source.Revalidate("ready", fresh with { ContentIdentity = source.ReadyIdentity });
         Assert.Equal(original, service.Read("attention").Data);
         Assert.Equal("stale", service.Read("attention").Health);
+        source.Pending = false;
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        Assert.Null(service.Read("attention").PendingAgeMs);
+        Assert.Equal("fresh", service.Read("attention").Health);
     }
 
     [Fact]
@@ -211,7 +390,8 @@ public sealed class OperationalObservationServiceTests
         var current = service.Read("attention");
         clock.Advance(TimeSpan.FromSeconds(1));
         obsolete("inventory", new("fresh", clock.GetUtcNow(), clock.GetUtcNow(), null) { ContentIdentity = source.InventoryIdentity });
-        Assert.Equal(current, service.Read("attention"));
+        Assert.Equal(current.Revision, service.Read("attention").Revision);
+        Assert.Equal(current.ObservedAt, service.Read("attention").ObservedAt);
     }
 
     [Fact]
@@ -274,7 +454,8 @@ public sealed class OperationalObservationServiceTests
         Assert.Equal(429, Assert.Throws<ObservationRequestException>(() => service.Read("workspace:task-3")).StatusCode);
         clock.Advance(TimeSpan.FromSeconds(2));
         service.Read("workspace:task-3");
-        Assert.Equal("budget-exceeded", service.Read("workspace:task-1").Error?.Code);
+        Assert.Null(service.Read("workspace:task-1").Error);
+        Assert.Null(service.Read("workspace:task-1").Data); // Initial loading has no accepted age.
         using var full = Service(new Source(clock), clock);
         for (var index = 0; index < 64; index++) full.Read($"explorer:all:{Encode(index.ToString(System.Globalization.CultureInfo.InvariantCulture))}");
         Assert.Equal(429, Assert.Throws<ObservationRequestException>(() => full.RequestRefresh(["attention", "digest:auto"])).StatusCode);
@@ -408,6 +589,8 @@ public sealed class OperationalObservationServiceTests
     {
         private DateTimeOffset now = new(2026, 11, 14, 0, 0, 0, TimeSpan.Zero);
         public override DateTimeOffset GetUtcNow() => now;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => now.UtcTicks;
         internal void Advance(TimeSpan delta) => now += delta;
     }
     private sealed class Source(Clock clock) : IOperationalObservationSource

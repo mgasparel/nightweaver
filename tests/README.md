@@ -56,7 +56,12 @@ cause; removing that unrelated shell dependency does not diagnose its startup.
 Workspace-only observation retries retain their captured inventory for one
 continuation turn while detail work is pending, avoiding redundant native core
 reads without indefinitely retaining a snapshot. A fresh confirming inventory still guards publication and changed identity
-fails closed. Mixed attention/explorer subscriptions keep their core cadence.
+fails closed. Scheduled mixed Attention/Explorer subscriptions also reserve one
+detail continuation when core reads leave no detail capacity, then return to core
+validation. A clock-driven regression invalidates every slow inventory/readiness
+read with both Ready and Blocked interested, with and without a selected Workspace.
+Cold histories and their later audits must progress without a quiet core turn;
+the dirty inventory keeps the projection pending until authoritative recovery.
 The existing controlled timeout cases assert the reduced command counts, and
 the slow-clock case models 1.9-second reads without adding wall-clock waits.
 A cheap two-Workspace case holds one history source timed out, creates and selects
@@ -85,6 +90,12 @@ with a foreign sentinel, proving encoding cannot redirect the publication.
 The native observer's two external writes explicitly enable Dolt auto-commit,
 matching production rather than inheriting its fixture's read-probe default.
 Read/write overlap and the original cold/update observation deadlines remain.
+After a settled baseline, test-side source-read recording requires dirty inventory,
+comment and dependency reads after their journal hints and excludes tracker audits
+until combined visibility. The independent two-second environment audit remains
+allowed. This observes the actual event path instead of treating total elapsed
+time below 30 seconds as proof of the 60-second tracker audit boundary. Command
+timings, source causes and exact page/read counts survive assertion failures.
 A balanced local comparison after identical mutations measured 5/24 reads above
 two seconds with auto-commit off and 0/24 with it on; this is performance evidence,
 not a claim that off loses SQL-committed data. Both smoke phases retain command
@@ -95,6 +106,16 @@ The native wait/cancellation fixture starts the held child with its required PID
 path and verifies the published PID before testing the original 50ms wait. A
 bounded readiness phase reports early fixture exit instead of accidentally testing
 startup speed. Cancellation, repeated waits and native termination bounds remain.
+
+The Web journal's clock-driven regressions exercise slow successful preparation,
+per-command two-second cancellation, the four-second cumulative native-work cap,
+and cursor reset after a failed first page. They add no native journey or sleeps.
+The retained timer/journal native journey serializes setup, finite pages, inventory
+and raw SQL against its single embedded store, including the journal-head check
+inside the SQL write section. Its one timer tick, unjournaled visibility, failed
+batch and exact-target cursor assertions and original deadlines remain intact.
+This removes fixture overlap; it does not claim every hosted read timeout has
+the same cause. Discovery diagnostics are retained on failure.
 
 Test fixtures copy settled immutable repositories into independent file trees,
 including Git objects and tracker stores. The small `GitFixture` initializes one

@@ -7,7 +7,16 @@ using Nightweaver.Execution;
 
 namespace Nightweaver.Inspection;
 
-internal sealed class BeadsJournalClient : IBeadsJournalClient
+internal sealed record BeadsInvalidation(long Sequence, string? Operation, string? IssueId, string? DependencyTarget);
+
+internal interface IBeadsInvalidationClient
+{
+    Task EnableAsync(ValidatedTargetRepository repository, CancellationToken cancellationToken);
+    Task<IReadOnlyList<BeadsInvalidation>> ReadInvalidationsAsync(
+        ValidatedTargetRepository repository, long afterSequence, int maxRecords, CancellationToken cancellationToken);
+}
+
+internal sealed class BeadsJournalClient : IBeadsJournalClient, IBeadsInvalidationClient
 {
     private const int MaximumStandardErrorCharacters = 8 * 1024;
     internal const int MaximumBatchBytes = 8 * 1024 * 1024;
@@ -39,6 +48,11 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
         long afterSequence,
         int maxRecords,
         CancellationToken cancellationToken)
+        => (await ReadInvalidationsAsync(repository, afterSequence, maxRecords, cancellationToken).ConfigureAwait(false))
+            .Select(item => item.Sequence).ToArray();
+
+    public async Task<IReadOnlyList<BeadsInvalidation>> ReadInvalidationsAsync(
+        ValidatedTargetRepository repository, long afterSequence, int maxRecords, CancellationToken cancellationToken)
     {
         var request = BeadsCommand.CreateJournalBatch(repository.Path, afterSequence, maxRecords);
         cancellationToken.ThrowIfCancellationRequested();
@@ -49,9 +63,9 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
 
         try
         {
-            IReadOnlyList<long> sequences = [];
+            IReadOnlyList<BeadsInvalidation> sequences = [];
             long? truncatedHead = null;
-            try { sequences = await ParseBatchAsync(process.StandardOutput, maxRecords, linked.Token).ConfigureAwait(false); }
+            try { sequences = await ParseInvalidationsAsync(process.StandardOutput, maxRecords, linked.Token).ConfigureAwait(false); }
             catch (BeadsJournalTruncatedException exception) { truncatedHead = exception.Head; }
             await process.WaitForExitAsync(linked.Token).ConfigureAwait(false);
             var diagnostic = await standardError.ConfigureAwait(false);
@@ -83,8 +97,13 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
 
     internal static async Task<IReadOnlyList<long>> ParseBatchAsync(
         StreamReader reader, int maxRecords, CancellationToken cancellationToken)
+        => (await ParseInvalidationsAsync(reader, maxRecords, cancellationToken).ConfigureAwait(false))
+            .Select(item => item.Sequence).ToArray();
+
+    internal static async Task<IReadOnlyList<BeadsInvalidation>> ParseInvalidationsAsync(
+        StreamReader reader, int maxRecords, CancellationToken cancellationToken)
     {
-        var sequences = new List<long>();
+        var sequences = new List<BeadsInvalidation>();
         long? truncatedHead = null;
         var count = 0;
         await foreach (var record in ReadJsonRecordsAsync(reader, cancellationToken).ConfigureAwait(false))
@@ -103,8 +122,14 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient
                 || value.ValueKind != JsonValueKind.Number
                 || !value.TryGetInt64(out var sequence) || sequence < 0)
                 throw new InvalidDataException("bd events tail emitted a record without a nonnegative int64 seq.");
-            // Payloads never establish eligibility.
-            sequences.Add(sequence);
+            // Retain only bounded invalidation identity; never issue/comment payloads.
+            string? Text(string name) => root.TryGetProperty(name, out var field) && field.ValueKind == JsonValueKind.String
+                && field.GetString() is { Length: <= 128 } text ? text : null;
+            static string? Safe(string? value) => value is not null && BeadIdSafety.IsSafe(value) ? value : null;
+            var target = root.TryGetProperty("dep", out var dependency) && dependency.ValueKind == JsonValueKind.Object
+                && dependency.TryGetProperty("target", out var targetValue) && targetValue.ValueKind == JsonValueKind.String
+                && targetValue.GetString() is { Length: <= 128 } dependencyId ? Safe(dependencyId) : null;
+            sequences.Add(new(sequence, Text("op"), Safe(Text("issue_id")), target));
         }
         if (truncatedHead is { } reportedHead) throw new BeadsJournalTruncatedException(reportedHead);
         return sequences;

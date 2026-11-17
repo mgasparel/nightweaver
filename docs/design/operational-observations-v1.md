@@ -1,3 +1,100 @@
+## Amendment v1.2 — event-driven tracker observations (ns-sib.1)
+
+This amendment supersedes the one-second tracker command schedule and its
+three-second overdue rule. Runtime and cleanup retain their existing policies.
+The URL, schema identifier, HTTP/SSE topology and guarded commands are unchanged;
+backend and Studio assets ship together.
+
+Tracker envelopes add `policy: {expectedValidationIntervalMs: 60000,
+maxSnapshotAgeMs: 120000, maxPendingAgeMs: 5000}`, `validatedAgeMs` (null before
+accepted data), `pendingAgeMs` (null when clean), and `synchronization: {journal:
+"catching-up"|"current"|"degraded"|"inactive", pending: boolean}`. Ages are response
+metadata, excluded from semantic revisions. Actual delayed/stale/source-status
+transitions notify subscribers. Successful validation of the exact accepted
+source content resets age; pending replacement provenance cannot refresh old data.
+Pending cohorts publish known source failures immediately, including an envelope
+warning. Failure health, error and attempt time overlay the accepted source state;
+its content identity and successful validation clocks still describe the retained
+body. Successful pending reads cannot lend replacement provenance to that body.
+Without an accepted body, failed sources have no successful validation provenance.
+Server deadlines and browser receipt ageing use monotonic clocks. On wake, retained
+data requires reconciliation; browser wall-clock skew cannot confer freshness.
+
+One Web-owned bounded journal reader serves interested tracker resources, including
+standalone Web. It checks at five-second start-to-start cadence, at most one
+256-record/8-MiB page, with a linked two-second command deadline, no overlap or catch-up
+spin (minimum 250ms after overruns). Failed pages do not advance the cursor;
+retry is 5/10/20/30 seconds. Uncertain child settlement stops replacements.
+Identity/setup commands have their own two-second bounds; all native commands
+share a four-second turn budget and release mutation admission between commands.
+Successful preparation is not a healthy journal receipt or cursor progress.
+No interested tracker resources means no journal process after the 30-second
+interest grace. Hidden/suspended browser consumers release tracker interest;
+wake requests immediate reconciliation and journal checking.
+
+Hints invalidate sources, never supply authoritative bodies or authorize actions.
+Create/update/close/delete and dependency changes invalidate inventory, interested
+native ready/blocked sets and selected Workspace inputs. Comment invalidates
+inventory and only the named cached history plus dependent presentations.
+Unknown operations, gaps and identity ambiguity request full reconciliation.
+Cold replay starts at zero in bounded pages with explicit catching-up; truncation
+head is only a resume hint and requires an authoritative baseline. Cursors are
+host/session-bound and discarded when repository/branch identity is uncertain.
+Dirty generations coalesce for at most 250ms from the first hint, with at most
+512 retained source identities and broad invalidation on overflow. New hints
+cannot erase an older outstanding five-second obligation or a newer revision.
+If a new reconciliation generation races publication after collection begins,
+retain its pending obligation and request another projection turn even when
+the source cache has already consumed the wake. This request does not invalidate
+clean sources: reuse current authoritative generations, read only sources still
+dirty or due, and preserve unrelated cached histories. A request arriving during
+collection survives for the next turn. It must not wait idle for an audit.
+
+Each interested source also receives an authoritative audit every 60 seconds,
+spread after bootstrap, sharing inventory/readiness through continuation turns.
+Four-history and four-second native-work limits, two-second native-command bound,
+mutation fairness, two selected Workspaces and memory limits remain unchanged.
+Unfinished Attention/Workspace cohorts drain without another event. Idle turns
+issue no list/ready/comments commands before audit. If core work consumes a turn
+before detail work can run, the next turn reserves capacity for those details
+against the captured authoritative inventory, even if core hints keep arriving.
+At most one consecutive turn reuses that baseline before returning to core
+validation. Original source provenance and dirty-generation checks still prevent
+a pending cohort from certifying a newer inventory; Workspace confirmation remains
+required. This protects due histories from continuous core invalidation.
+Explicit refresh and local writes wake reconciliation immediately, even after
+uncertain command outcomes.
+Ready/Blocked source values and audit slots retire when their Explorer keys lose
+interest; returning to those views requires authoritative readiness validation.
+Continuation tracks outstanding projections across bounded turns, so a completed
+Workspace omitted from another Workspace's turn does not keep idle collection
+active. Histories remain cached for selected Workspaces and, only while Attention
+is interested, its paused cohort. Workspace detail, relation and environment
+sources retire when deselected even if Attention still consumes the same history.
+Retirement releases values, provenance, memory reservations and audit slots;
+renewed interest establishes a new authoritative baseline for retired inputs.
+A broad refresh clears once every retained source has incorporated its dirty
+generation; retired sources cannot strand that pending obligation.
+
+Connection evidence, source failure, snapshot age and pending delay are separate.
+Transport heartbeat remains 10 seconds; 25 seconds without valid backend evidence
+means disconnected. Stream errors mean recovering until that deadline; valid HTTP
+reads still prove backend reachability. Before any valid evidence, the silence
+interval starts at the first active connection attempt and is not reset by retries.
+A failed request retains data and is a read error. A retry
+start never proves recovery. A valid identity handshake and resource read are
+required for synchronization recovery. Snapshot states are loading/unavailable,
+current/refreshing/delayed/stale, with source errors immediately visible. Age
+continues locally during disconnection, and drafts/focus survive resynchronization.
+Normal supported changes take five-second detection plus bounded read/render
+work; backlog/startup/failure and unjournaled-write audit recovery are exceptional.
+Large scale and 130-second browser acceptance remain opt-in, outside normal tests.
+
+`validatedAgeMs` also accompanies runtime/cleanup responses so retained data can
+age while disconnected without comparing browser and server wall clocks. Those
+resources retain their own `targetIntervalMs + 2000` allowance; they do not adopt
+the tracker 60/120-second policy.
+
 # Operational observations v1
 
 Contract owner: ns-mbd.8; backend consumer: ns-mbd.2; stream/coordinator consumer:

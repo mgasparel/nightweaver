@@ -84,13 +84,17 @@ public sealed class BeadsJournalClientIntegrationTests
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var repository = new ValidatedTargetRepository(target.Path, "main");
         var runner = new SystemProcessRunner();
+        // The fixture has one embedded store. Serialize its journal commands,
+        // discovery and direct SQL writes just as the host serializes tracker
+        // access; independent discovery does not require overlapping engines.
+        using var trackerAccess = new SemaphoreSlim(1, 1);
         var requests = new List<ProcessRequest>();
-        var client = new BeadsJournalClient(runner, request =>
+        var client = new SerializedJournalClient(new BeadsJournalClient(runner, request =>
         {
             requests.Add(request);
             if (requests.Count == 2) throw new IOException("controlled batch launch failure");
             return StartTailWithDecoySelectors(request, decoy.Path);
-        });
+        }), trackerAccess);
         await client.EnableAsync(repository, lifetime.Token);
         var seed = target.Create("target seed");
         var foreign = decoy.Create("foreign seed");
@@ -101,7 +105,6 @@ public sealed class BeadsJournalClientIntegrationTests
         var inventories = Channel.CreateUnbounded<BeadsInventory>();
         var completions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
         var error = new StringWriter();
-        using var trackerAccess = new SemaphoreSlim(1, 1);
         var coordinator = new ContinuousDiscoveryCoordinator(
             [new ContinuousPoolRegistration(ContinuousPoolKind.Delivery, async token =>
             {
@@ -125,9 +128,12 @@ public sealed class BeadsJournalClientIntegrationTests
             Assert.Equal(TimeSpan.FromSeconds(1), await delays.Reader.ReadAsync(lifetime.Token));
             string unjournaled;
             await trackerAccess.WaitAsync(lifetime.Token);
-            try { unjournaled = await InsertUnjournaledBeadAsync(runner, target.Path, lifetime.Token); }
+            try
+            {
+                unjournaled = await InsertUnjournaledBeadAsync(runner, target.Path, lifetime.Token);
+                Assert.Equal(firstHead, await ReadJournalHeadAsync(runner, target.Path, lifetime.Token));
+            }
             finally { trackerAccess.Release(); }
-            Assert.Equal(firstHead, await ReadJournalHeadAsync(runner, target.Path, lifetime.Token));
             ticks.Writer.TryWrite(true);
             var inventory = await WaitForInventoryAsync(inventories.Reader,
                 snapshot => snapshot.ById.ContainsKey(unjournaled), lifetime.Token)
@@ -159,6 +165,25 @@ public sealed class BeadsJournalClientIntegrationTests
         {
             lifetime.Cancel();
             await runtime.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+            TestContext.Current.TestOutputHelper?.WriteLine(error.ToString());
+        }
+    }
+
+    private sealed class SerializedJournalClient(IBeadsJournalClient inner, SemaphoreSlim access) : IBeadsJournalClient
+    {
+        public async Task EnableAsync(ValidatedTargetRepository repository, CancellationToken token)
+        {
+            await access.WaitAsync(token);
+            try { await inner.EnableAsync(repository, token); }
+            finally { access.Release(); }
+        }
+
+        public async Task<IReadOnlyList<long>> ReadBatchAsync(ValidatedTargetRepository repository, long cursor, int count,
+            CancellationToken token)
+        {
+            await access.WaitAsync(token);
+            try { return await inner.ReadBatchAsync(repository, cursor, count, token); }
+            finally { access.Release(); }
         }
     }
 

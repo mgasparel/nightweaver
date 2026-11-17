@@ -6,20 +6,27 @@ export type Envelope<T = unknown> = Identity & {
   schema: "nightweaver-observation-v1"; epoch: string; revision: string;
   health: "fresh" | "stale" | "unavailable"; data: T | null;
   observedAt: string | null; lastAttemptAt: string | null;
+  policy?: { expectedValidationIntervalMs: number; maxSnapshotAgeMs: number; maxPendingAgeMs: number } | null;
+  validatedAgeMs?: number | null; pendingAgeMs?: number | null;
+  synchronization?: { journal: "catching-up" | "current" | "degraded" | "inactive"; pending: boolean; delayed?: boolean; error?: ObservationError | null } | null;
   sources: Record<string, SourceState>; error: ObservationError | null; targetIntervalMs: number; nextAttemptAt: string | null;
 };
-export type Snapshot<T = unknown> = { observation?: Envelope<T>; connectionState: "connecting" | "connected" | "disconnected";
+export type Snapshot<T = unknown> = { observation?: Envelope<T>; connectionState: "connecting" | "connected" | "recovering" | "disconnected";
+  dataState?: "loading" | "unavailable" | "current" | "refreshing" | "delayed" | "stale";
+  synchronized?: boolean; updatesRecovering?: boolean;
   refreshing: boolean; stale: boolean; error?: string };
 type Frame = { schema: string; projectId: string; epoch: string; versions?: Record<string, string>; heartbeatMs?: number };
 export type Transport = {
   connect(project: string, keys: string[], event: (name: string, data: Frame) => void, failed: () => void): () => void;
   read(identity: Identity, signal: AbortSignal): Promise<Envelope>;
   refresh(project: string, keys: string[], signal: AbortSignal): Promise<void>;
+  wake?(project: string, keys: string[], signal: AbortSignal): Promise<void>;
 };
 export type Scheduler = { now(): number; later(callback: () => void, ms: number): () => void; random(): number };
 type Entry = { identity: Identity; listeners: Set<() => void>; snapshot: Snapshot; watermark: bigint;
   wanted: bigint; pending: boolean; request?: AbortController; cancelDeadline?: () => void;
   cancelCatchup?: () => void;
+  receivedAt?: number; catchupSince?: number; needsRead?: boolean;
   bytes: number; touched: number; refreshAttempt?: string | null; refreshOwner?: object; refreshError?: string };
 type RefreshAttempt = { promise: Promise<void>; cancel(error: Error): void };
 const id = (identity: Identity) => JSON.stringify([identity.projectId, identity.key]);
@@ -37,11 +44,14 @@ export class QueryCoordinator {
   private tick?: () => void;
   private retries = 0;
   private lastFrame = 0;
+  private lastBackend?: number;
+  private firstConnectionAttempt?: number;
   private lastPoll = 0;
   private visible = true;
   private disposed = false;
   private hello = false;
   private signature = "";
+  private wakeAttempt?: AbortController;
   private buffered = new Map<string, { epoch: string; revision: bigint }>();
   private refreshes = new Map<string, RefreshAttempt>();
   constructor(private transport: Transport, private clock: Scheduler) { this.timer(); }
@@ -128,14 +138,34 @@ export class QueryCoordinator {
     return this.refresh(keys.map(entry => entry.identity));
   }
 
-  setVisible(visible: boolean) { this.visible = visible; if (visible) this.wake(); }
+  setVisible(visible: boolean) {
+    if (visible === this.visible) return;
+    this.visible = visible;
+    if (visible) this.wake();
+    else { this.retry?.(); this.retry = undefined; this.disconnect(); }
+  }
   suspend() {
-    this.retry?.(); this.retry = undefined; this.disconnect();
+    this.retry?.(); this.retry = undefined; this.disconnect(); this.wakeAttempt?.abort();
     this.cancelRefreshes("Page suspended; reconciliation outcome unknown");
   }
-  wake() { if (this.disposed) return; if (!this.hello) this.restart(); else this.resync(); }
+  wake() {
+    if (this.disposed || !this.visible) return;
+    for (const entry of this.active()) { entry.needsRead = true; this.publish(entry, { synchronized: false }); }
+    if (!this.hello) this.restart(); else this.resync();
+    // Wake is a new read-reconciliation hint, never a replay of a guarded
+    // tracker command. The server also checks the journal immediately.
+    const active = this.active();
+    if (active.length && this.transport.wake) {
+      this.wakeAttempt?.abort();
+      const request = new AbortController(); this.wakeAttempt = request;
+      const cancel = this.clock.later(() => request.abort(), 10000);
+      void this.transport.wake(active[0].identity.projectId, active.map(entry => entry.identity.key), request.signal)
+        .catch(() => {}).finally(() => { cancel(); if (this.wakeAttempt === request) this.wakeAttempt = undefined; });
+    }
+  }
   dispose() {
     this.disposed = true; this.scheduled?.(); this.retry?.(); this.tick?.(); this.disconnect();
+    this.wakeAttempt?.abort();
     this.cancelRefreshes("Coordinator disposed; reconciliation outcome unknown");
     this.entries.clear();
   }
@@ -144,7 +174,23 @@ export class QueryCoordinator {
     for (const attempt of this.refreshes.values()) attempt.cancel(Error(message));
   }
   private publish(entry: Entry, patch: Partial<Snapshot>) {
-    entry.snapshot = { ...entry.snapshot, ...patch };
+    const snapshot = { ...entry.snapshot, ...patch };
+    const envelope = snapshot.observation;
+    const elapsed = entry.receivedAt === undefined ? 0 : Math.max(0, this.clock.now() - entry.receivedAt);
+    const age = envelope?.validatedAgeMs == null ? undefined : envelope.validatedAgeMs + elapsed;
+    const pendingAge = envelope?.pendingAgeMs == null ? undefined : envelope.pendingAgeMs + elapsed;
+    const catchupAge = entry.catchupSince === undefined ? undefined : this.clock.now() - entry.catchupSince;
+    // Runtime retains its own policy. Tracker age is supplied by the server,
+    // never computed by subtracting unrelated browser/server wall clocks.
+    const tracker = envelope && envelope.key !== "factory" && !envelope.key.startsWith("cleanup:");
+    const expired = envelope?.policy ? age === undefined || age > envelope.policy.maxSnapshotAgeMs
+      : tracker ? true : !!envelope && age !== undefined && age > envelope.targetIntervalMs + 2000;
+    snapshot.stale = expired || envelope?.health === "stale";
+    snapshot.dataState = !envelope?.data ? envelope?.error ? "unavailable" : "loading"
+      : snapshot.stale ? "stale"
+      : (pendingAge ?? 0) > (envelope.policy?.maxPendingAgeMs ?? 5000) || (catchupAge ?? 0) > 5000 ? "delayed"
+      : envelope.synchronization?.pending || envelope.synchronization?.journal === "catching-up" || entry.needsRead || entry.wanted > entry.watermark || snapshot.refreshing ? "refreshing" : "current";
+    entry.snapshot = snapshot;
     for (const listener of entry.listeners) listener();
   }
   private evict(requiredBytes = 0, except?: Entry) {
@@ -161,24 +207,33 @@ export class QueryCoordinator {
       this.scheduled = undefined;
       const signature = JSON.stringify(this.active().map(entry => id(entry.identity)).sort());
       if (signature !== this.signature) { this.signature = signature; this.restart(); }
-      for (const entry of this.active()) if (entry.pending) this.read(entry);
+      if (this.visible) for (const entry of this.active()) if (entry.pending) this.read(entry);
     }, 0);
+  }
+  private connection(): Snapshot["connectionState"] {
+    const evidenceSince = this.lastBackend ?? this.firstConnectionAttempt;
+    if (evidenceSince !== undefined && this.clock.now() - evidenceSince >= 25000) return "disconnected";
+    if (this.lastBackend === undefined) return this.retries ? "recovering" : "connecting";
+    return this.hello && this.active().every(entry => !entry.needsRead) ? "connected" : "recovering";
   }
   private disconnect() {
     ++this.generation; this.hello = false; this.close?.(); this.close = undefined;
     this.buffered.clear();
     for (const entry of this.entries.values()) {
       this.cancelRead(entry);
-      this.publish(entry, { connectionState: "disconnected", stale: true });
+      entry.needsRead = true;
+      this.publish(entry, { connectionState: this.connection(), synchronized: false, updatesRecovering: true });
     }
   }
   private restart() {
     this.retry?.(); this.retry = undefined; this.disconnect();
     const active = this.active();
-    if (!active.length || this.disposed) return;
+    if (!active.length) this.firstConnectionAttempt = undefined;
+    if (!active.length || this.disposed || !this.visible) return;
     const generation = this.generation;
+    this.firstConnectionAttempt ??= this.clock.now();
     this.lastFrame = this.clock.now();
-    for (const entry of active) this.publish(entry, { connectionState: "connecting" });
+    for (const entry of active) this.publish(entry, { connectionState: this.connection() });
     this.close = this.transport.connect(active[0].identity.projectId, active.map(entry => entry.identity.key),
       (name, frame) => {
         if (generation !== this.generation) return;
@@ -198,13 +253,14 @@ export class QueryCoordinator {
       if (!frame.versions || Object.keys(frame.versions).length !== active.length || active.some(entry => !frame.versions?.[entry.identity.key])) throw Error("Incomplete handshake");
       if (this.epoch !== frame.epoch) {
         this.epoch = frame.epoch;
-        for (const entry of this.entries.values()) { entry.watermark = 0n; entry.wanted = 0n; }
+        for (const entry of this.entries.values()) { entry.watermark = 0n; entry.wanted = 0n; entry.needsRead = true; }
       }
-      this.hello = true; this.retries = 0;
+      this.hello = true; this.retries = 0; this.lastBackend = this.clock.now();
       for (const entry of active) {
         const buffered = this.buffered.get(entry.identity.key);
         entry.wanted = max(max(entry.watermark, revision(frame.versions[entry.identity.key])), buffered?.epoch === frame.epoch ? buffered.revision : 0n);
-        this.publish(entry, { connectionState: "connected", stale: true });
+        entry.needsRead = true;
+        this.publish(entry, { connectionState: "recovering", synchronized: false, updatesRecovering: true });
       }
       this.buffered.clear(); this.resync(); return;
     }
@@ -220,6 +276,8 @@ export class QueryCoordinator {
       return;
     }
     if (frame.epoch !== this.epoch) { this.restart(); return; }
+    this.lastBackend = this.clock.now();
+    for (const entry of this.active()) this.publish(entry, { connectionState: this.connection() });
     if (name === "resync") this.resync();
     if (name === "invalidation") {
       for (const entry of this.active()) {
@@ -229,11 +287,12 @@ export class QueryCoordinator {
           // A notification starts a replacement read, not a source failure. Keep
           // the last validated status while catching up, with one fixed deadline
           // that subsequent notifications cannot postpone.
+          entry.catchupSince ??= this.clock.now();
           if (!entry.cancelCatchup) entry.cancelCatchup = this.clock.later(() => {
             entry.cancelCatchup = undefined;
             if (entry.listeners.size && entry.wanted > entry.watermark)
-              this.publish(entry, { stale: true });
-          }, 10000);
+              this.publish(entry, {});
+          }, 5000);
           this.queue(entry);
         }
       }
@@ -248,7 +307,7 @@ export class QueryCoordinator {
     request?.abort();
   }
   private read(entry: Entry) {
-    if (!this.hello || entry.request || !entry.listeners.size) return;
+    if (!this.epoch || !this.visible || entry.request || !entry.listeners.size) return;
     entry.pending = false;
     const request = new AbortController(); entry.request = request;
     const generation = this.generation; const epoch = this.epoch;
@@ -258,24 +317,31 @@ export class QueryCoordinator {
       if (!current()) return;
       // Release identity before abort: adapters may ignore cancellation or settle late.
       this.cancelRead(entry);
-      this.publish(entry, { stale: true, error: "Observation read timed out; retrying", refreshing: false });
+      this.publish(entry, { error: "Observation read timed out; retrying", refreshing: false });
       this.queue(entry);
     }, 10000);
     this.transport.read(entry.identity, request.signal).then(observation => {
       if (!current()) return;
       if (observation.projectId !== entry.identity.projectId || observation.key !== entry.identity.key || observation.schema !== "nightweaver-observation-v1") throw Error("Invalid observation identity");
       if (observation.epoch !== epoch) { this.restart(); return; }
+      if (!["fresh", "stale", "unavailable"].includes(observation.health) || !observation.sources
+        || !Number.isFinite(observation.targetIntervalMs) || observation.targetIntervalMs <= 0)
+        throw Error("Malformed observation");
       const version = revision(observation.revision);
-      if (version < entry.watermark) { this.publish(entry, { stale: true }); return; }
+      this.lastBackend = this.clock.now();
+      if (version < entry.watermark) return;
       if (version < entry.wanted) return;
       const bytes = new TextEncoder().encode(JSON.stringify(observation)).length;
       this.evict(bytes - entry.bytes, entry);
       if ([...this.entries.values()].reduce((sum, item) => sum + item.bytes, 0) - entry.bytes + bytes > 16 * 1024 * 1024) throw Error("Observation storage limit reached");
+      this.lastBackend = this.clock.now(); entry.receivedAt = this.clock.now(); entry.needsRead = false;
+      entry.catchupSince = undefined;
       entry.bytes = bytes; entry.watermark = version; entry.wanted = max(entry.wanted, version);
       entry.cancelCatchup?.(); entry.cancelCatchup = undefined;
       const refreshing = entry.snapshot.refreshing && observation.lastAttemptAt === entry.refreshAttempt;
-      this.publish(entry, { observation, stale: false, error: entry.refreshError, refreshing });
-    }).catch(error => { if (current()) this.publish(entry, { error: String(error), stale: true }); })
+      this.publish(entry, { observation, stale: false, error: entry.refreshError, refreshing,
+        synchronized: this.hello, updatesRecovering: !this.hello, connectionState: this.connection() });
+    }).catch(error => { if (current()) this.publish(entry, { error: String(error) }); })
       .finally(() => {
         if (current()) {
           entry.cancelDeadline?.(); entry.cancelDeadline = undefined; entry.request = undefined;
@@ -287,7 +353,8 @@ export class QueryCoordinator {
     this.tick = this.clock.later(() => {
       if (this.disposed) return;
       if (this.close && this.clock.now() - this.lastFrame >= 25000) this.failed();
-      if (this.visible && this.hello && this.clock.now() - this.lastPoll >= 2000) { this.lastPoll = this.clock.now(); this.resync(); }
+      for (const entry of this.entries.values()) this.publish(entry, { connectionState: this.connection() });
+      if (this.visible && this.epoch && this.clock.now() - this.lastPoll >= 2000) { this.lastPoll = this.clock.now(); this.resync(); }
       this.evict(); this.timer();
     }, 1000);
   }
@@ -312,4 +379,13 @@ export class InteractionStore {
 export function queryKey(kind: "explorer" | "cleanup", filter: string, search = "", page = 1): string {
   const query = btoa(String.fromCharCode(...new TextEncoder().encode(search.trim()))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
   return kind === "explorer" ? `explorer:${filter}:${query}` : `cleanup:${page}:${filter}:${query}`;
+}
+
+export function observationStatus(snapshot: Snapshot): string {
+  const body = snapshot.observation?.error ? `Source error · ${snapshot.observation.error.message}`
+    : ({ loading: "Loading", unavailable: "Unavailable", current: "Current", refreshing: "Refreshing",
+      delayed: "Updates delayed", stale: "Snapshot stale" } as const)[snapshot.dataState ?? "loading"];
+  const channel = snapshot.observation?.synchronization?.error?.message
+    ?? (snapshot.observation?.synchronization?.journal === "catching-up" ? "Catching up" : undefined);
+  return channel ? `${body} · ${channel}` : body;
 }

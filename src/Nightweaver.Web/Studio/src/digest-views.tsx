@@ -1,3 +1,4 @@
+import { observationStatus } from "./operations";
 import { Component, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import { beadPath } from "./bead-model";
@@ -30,7 +31,7 @@ export function DigestMetric({ project }: { project: string }) {
   const snapshot = useObservation<Digest>(project, "digest:auto");
   const data = snapshot.observation?.data;
   return <div className="metric"><span className="eyebrow">Completed</span><strong>{data?.metrics.completedTotal ?? "—"}</strong>
-    <small>{data ? `${labels[data.window]} · ${snapshot.stale ? "retained" : snapshot.observation?.health}` : "Digest unavailable"}</small></div>;
+    <small>{data ? `${labels[data.window]} · ${observationStatus(snapshot)}` : "Digest unavailable"}</small></div>;
 }
 
 export function CatchUpView({ project, compact = false }: { project: string; compact?: boolean }) {

@@ -7,13 +7,15 @@ internal static class OperationObservationEndpoints
 {
     internal static void AddOperationalObservations(this IServiceCollection services)
     {
+        services.AddSingleton<IConsoleJournalReader, ConsoleJournalReader>();
         services.AddSingleton<ObservationMemoryBudget>();
         services.AddSingleton<OperationalEventStream>();
         services.AddSingleton<IOperationalObservationSource, OperationalObservationSource>();
         services.AddSingleton(services => new OperationalObservationService(
             services.GetRequiredService<ProjectConfig>().Name.Value,
             services.GetRequiredService<IOperationalObservationSource>(), services.GetRequiredService<TimeProvider>(),
-            services.GetRequiredService<IHostApplicationLifetime>(), services.GetRequiredService<ObservationMemoryBudget>()));
+            services.GetRequiredService<IHostApplicationLifetime>(), services.GetRequiredService<ObservationMemoryBudget>(),
+            services.GetRequiredService<IConsoleJournalReader>()));
         services.AddHostedService(services => services.GetRequiredService<OperationalObservationService>());
     }
 

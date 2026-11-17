@@ -13,8 +13,63 @@ internal sealed class OperationalObservationSource(
     ProjectConfig project, HostPaths paths,
     IProcessRunner runner, TrackerBridge tracker, TimeProvider clock,
     CatchUpCheckpointStore checkpoint, FactoryTelemetryReader runtime,
-    IBeadWorkspaceRuntimeObserver runtimeObserver, ObservationMemoryBudget memory) : IOperationalObservationSource
+    IBeadWorkspaceRuntimeObserver runtimeObserver, ObservationMemoryBudget memory) : IOperationalObservationSource, IScheduledTrackerObservationSource
 {
+    private readonly TrackerSourceSchedule schedule = new(clock);
+    private readonly Dictionary<string, (long Source, long Broad)> historyGenerations = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, object> cacheReservations = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, object> cached = new(StringComparer.Ordinal);
+    internal event Action<string, string>? ReadStarted;
+    private bool scheduled;
+    private bool continuation;
+    private int reconciliationRequested;
+    private readonly HashSet<string> outstandingKeys = new(StringComparer.Ordinal);
+    private string interest = "";
+    private HashSet<string> selectedIds = new(StringComparer.Ordinal);
+    public void Invalidate(IReadOnlyList<BeadsInvalidation>? hints = null)
+    {
+        if (hints is null) schedule.InvalidateAll();
+        else foreach (var hint in hints)
+        {
+            schedule.Invalidate(hint);
+            if (hint.Operation == "comment" && hint.IssueId is { } id && selectedIds.Contains(id))
+                schedule.InvalidateNames(["detail:" + id, "environment:" + id]);
+        }
+    }
+    public double? PendingAge(IEnumerable<string> sources) => schedule.PendingAge(sources);
+    public void Reconcile() => Interlocked.Exchange(ref reconciliationRequested, 1);
+    public async Task<IReadOnlyDictionary<string, ObservationSample>> ReadScheduledAsync(
+        IReadOnlyList<OperationKey> keys, Action<string, ObservationSourceState> revalidated, CancellationToken token)
+    {
+        var signature = string.Join("\n", keys.Select(key => key.Value).Order(StringComparer.Ordinal));
+        var changed = signature != interest;
+        interest = signature;
+        selectedIds = keys.Where(key => key.Kind == "workspace").Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal);
+        var reconcile = Interlocked.Exchange(ref reconciliationRequested, 0) != 0;
+        if (!changed && !continuation && !reconcile && !schedule.HasDue) return new Dictionary<string, ObservationSample>();
+        // One bounded turn may publish only one selected Workspace. Remember
+        // completed projections for this round instead of reopening them merely
+        // because another projection was published on the next turn.
+        if (changed || !continuation || reconcile)
+        {
+            outstandingKeys.Clear();
+            outstandingKeys.UnionWith(keys.Select(key => key.Value));
+        }
+        scheduled = true;
+        try
+        {
+            var samples = await ReadTrackerAsync(keys, token, revalidated);
+            var published = samples.ToDictionary(pair => pair.Key, pair => pair.Value.Error is null
+                && pair.Value.Sources.Any(source => !schedule.IsCurrent(source.Key, source.Value.SourceGeneration))
+                    ? pair.Value with { Pending = true } : pair.Value, StringComparer.Ordinal);
+            foreach (var (key, sample) in published)
+                if (sample.Pending) outstandingKeys.Add(key);
+                else outstandingKeys.Remove(key);
+            continuation = outstandingKeys.Count > 0;
+            return published;
+        }
+        finally { scheduled = false; }
+    }
     private static readonly JsonSerializerOptions RuntimeJson = ObservationJson.Create(snakeCase: true);
     private static readonly string[] InventorySource = ["inventory"];
     private readonly Dictionary<string, ObservationSourceState> states = new(StringComparer.Ordinal);
@@ -53,6 +108,7 @@ internal sealed class OperationalObservationSource(
         internal BeadSnapshot Initial { get; } = initial;
         internal DateTimeOffset Started { get; } = started;
         internal int Step { get; set; }
+        internal bool RequiresConfirmation { get; set; }
         internal BeadSnapshot? Detail { get; set; }
         internal IReadOnlyList<BeadDependency> Incoming { get; set; } = [];
         internal IReadOnlyList<BeadDependency> Outgoing { get; set; } = [];
@@ -106,27 +162,50 @@ internal sealed class OperationalObservationSource(
         var hash = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(content, ObservationJson.Options));
         if (!sourceContent.TryGetValue(id, out var previousContent) || !hash.AsSpan().SequenceEqual(previousContent.Hash))
             sourceContent[id] = (hash, new object());
-        states[id] = new("fresh", clock.GetUtcNow(), attemptedAt, null) { ContentIdentity = sourceContent[id].Identity };
+        states[id] = new("fresh", clock.GetUtcNow(), attemptedAt, null) { ContentIdentity = sourceContent[id].Identity, ValidatedTimestamp = clock.GetTimestamp() };
         revalidate?.Invoke(id, states[id]);
     }
 
-    private async Task<T?> ReadAsync<T>(string id, Func<Task<T>> read, CancellationToken token) where T : class
+    private async Task<T?> ReadAsync<T>(string id, Func<Task<T>> read, CancellationToken token, string? reason = null) where T : class
     {
+        if (scheduled && !schedule.Due(id) && cached.TryGetValue(id, out var held)) return (T)held;
+        if (scheduled) ReadStarted?.Invoke(id, reason ?? schedule.Reason(id));
+        var generation = scheduled ? schedule.Begin(id) : default;
         var attempt = clock.GetUtcNow();
         try
         {
             var result = await read();
             RecordSuccessfulRead(id, result, attempt);
+            if (scheduled)
+            {
+                states[id] = states[id] with { SourceGeneration = generation.Source };
+                if (id.StartsWith("comments:", StringComparison.Ordinal)) historyGenerations[id] = generation;
+                else
+                {
+                    StoreCached(id, result);
+                    schedule.Complete(id, generation, true);
+                }
+            }
             return result;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception exception) when (IsSourceFailure(exception))
         {
+            if (scheduled) schedule.Complete(id, generation, false);
             states.TryGetValue(id, out var previous);
             states[id] = new(previous?.ObservedAt is null ? "unavailable" : "stale", previous?.ObservedAt, attempt, Error(exception))
                 { ContentIdentity = previous?.ContentIdentity };
             return null;
         }
+    }
+
+    private void StoreCached(string id, object value)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(value is BeadsInventory inventory ? inventory.ById : value, ObservationJson.Options).Length;
+        if (!cacheReservations.TryGetValue(id, out var owner)) owner = new object();
+        if (!memory.TryReplace([], [(owner, bytes)])) throw new ToolExecutionException("source cache exceeded shared memory limit");
+        cacheReservations[id] = owner;
+        cached[id] = value;
     }
 
     private static bool IsSourceFailure(Exception exception) => exception is ToolExecutionException or TargetRepositoryException
@@ -169,7 +248,9 @@ internal sealed class OperationalObservationSource(
         if (keys.Count == 0)
         {
             foreach (var history in histories.Values) memory.Release(history);
-            histories.Clear(); states.Clear(); sourceContent.Clear(); workspaces.Clear(); attentionBeads = null;
+            histories.Clear(); historyGenerations.Clear(); states.Clear(); sourceContent.Clear(); cached.Clear();
+            foreach (var owner in cacheReservations.Values) memory.Release(owner);
+            cacheReservations.Clear(); schedule.Reset(); workspaces.Clear(); attentionBeads = null;
             attentionPresentations.Clear(); retainedInventory = null; resumeDetails = false;
             return result;
         }
@@ -201,8 +282,10 @@ internal sealed class OperationalObservationSource(
         var resumedDetails = resumeDetails && retainedInventory is not null;
         if (resumedDetails)
         {
-            // Resume bounded detail work against its captured inventory. A Workspace
-            // still rereads inventory before publication; source age stays visible.
+            // Reserve one bounded detail turn when core work exhausted the last
+            // turn. New core invalidations must not starve due histories. Captured
+            // provenance and scheduled generation checks still guard publication;
+            // a Workspace additionally confirms inventory after native detail reads.
             inventory = retainedInventory; ready = retainedReady; blocked = retainedBlocked;
             generatedAt = inventoryGeneratedAt;
             states["inventory"] = retainedInventoryState!;
@@ -232,13 +315,29 @@ internal sealed class OperationalObservationSource(
             retainedInventoryState = states["inventory"];
         }
         var inventoryState = states["inventory"];
+        if (scheduled && attentionBeads is not null && !ReferenceEquals(attentionInventoryState?.ContentIdentity, inventoryState.ContentIdentity))
+        {
+            // Carry successful histories, but rebuild membership/presentation from
+            // the newer authoritative inventory before publishing the cohort.
+            attentionBeads = null;
+            attentionPresentations.Clear();
+        }
         var detailCommandsBefore = CommandCount;
         var checkpointAttempt = clock.GetUtcNow();
         DateTimeOffset? caughtUp = null;
         try
         {
-            caughtUp = checkpoint.ReadLastCaughtUpAt(strict: true);
-            RecordSuccessfulRead("checkpoint", caughtUp, checkpointAttempt);
+            if (!scheduled || schedule.Due("checkpoint"))
+            {
+                var generation = scheduled ? schedule.Begin("checkpoint") : default;
+                caughtUp = checkpoint.ReadLastCaughtUpAt(strict: true);
+                RecordSuccessfulRead("checkpoint", caughtUp, checkpointAttempt);
+                if (scheduled) states["checkpoint"] = states["checkpoint"] with { SourceGeneration = generation.Source };
+                cached["checkpoint"] = caughtUp is null ? Array.Empty<DateTimeOffset>() : new[] { caughtUp.Value };
+                if (scheduled) schedule.Complete("checkpoint", generation, true);
+            }
+            else if (cached.TryGetValue("checkpoint", out var heldCheckpoint))
+                caughtUp = ((DateTimeOffset[])heldCheckpoint).Cast<DateTimeOffset?>().FirstOrDefault();
         }
         catch (Exception exception) when (IsSourceFailure(exception))
         { states["checkpoint"] = new("unavailable", null, checkpointAttempt, Error(exception)); }
@@ -307,12 +406,14 @@ internal sealed class OperationalObservationSource(
                 var cycle = new WorkspaceCycle(initial, clock.GetUtcNow());
                 workspaces[id] = cycle;
                 commentsThisSweep++;
+                var prefetchCommandsBefore = CommandCount;
                 var comments = await ReadAsync("comments:" + id, () => reader.ReadDetailCommentsAsync(repository, id, token), token);
                 cycle.Sources["comments:" + id] = states["comments:" + id];
                 try
                 {
                     if (comments is not null) { StoreHistory(id, comments); cycle.Comments = comments; }
                     cycle.CommentsPrefetched = true;
+                cycle.RequiresConfirmation = CommandCount > prefetchCommandsBefore;
                 }
                 catch (ToolExecutionException exception)
                 {
@@ -345,7 +446,7 @@ internal sealed class OperationalObservationSource(
         // A new cycle must not repeatedly compare an external edit against the
         // old core while a different Workspace remains pending indefinitely.
         if (result.Values.Any(sample => sample.Error?.Code == "source-conflict")) resumeDetails = false;
-        TrimSources(selected.Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal));
+        TrimSources(selected.Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal), keys);
         return result;
     }
 
@@ -364,6 +465,7 @@ internal sealed class OperationalObservationSource(
             while (HasBudget)
             {
                 string sourceId;
+                var commandsBefore = CommandCount;
                 ObservationSourceState? capturedState = null;
                 switch (cycle.Step)
                 {
@@ -415,7 +517,9 @@ internal sealed class OperationalObservationSource(
                         break;
                     case 4:
                         sourceId = "inventory";
-                        var final = await ReadAsync(sourceId, () => reader.ReadSnapshotAsync(repository, token), token);
+                        if (scheduled && cycle.RequiresConfirmation) schedule.InvalidateNames(["inventory"]);
+                        var final = await ReadAsync(sourceId, () => reader.ReadSnapshotAsync(repository, token), token,
+                            cycle.RequiresConfirmation ? "confirmation" : null);
                         if (final is not null)
                         {
 
@@ -449,6 +553,7 @@ internal sealed class OperationalObservationSource(
                         var sample = WorkspaceSample(cycle, id);
                         return sample;
                 }
+                if (cycle.Step < 4 && CommandCount > commandsBefore) cycle.RequiresConfirmation = true;
                 var state = capturedState ?? states[sourceId];
                 cycle.Sources[sourceId] = state;
                 if (state.Error is not null && !sourceId.StartsWith("relations-", StringComparison.Ordinal)
@@ -508,7 +613,7 @@ internal sealed class OperationalObservationSource(
             attentionPresentations.Clear();
             return;
         }
-        var due = paused.Where(bead => !histories.TryGetValue(bead.Id, out var history) || history.ReadAt < attentionStarted).ToArray();
+        var due = paused.Where(bead => !histories.TryGetValue(bead.Id, out var history) || (scheduled ? schedule.Due("comments:" + bead.Id) : history.ReadAt < attentionStarted)).ToArray();
         var allowance = Math.Min(4 - commentsThisSweep, due.Length);
         for (var count = 0; count < allowance && HasBudget; count++)
         {
@@ -533,7 +638,7 @@ internal sealed class OperationalObservationSource(
                 return;
             }
         }
-        if (paused.Any(bead => !histories.TryGetValue(bead.Id, out var history) || history.ReadAt < attentionStarted)) return;
+        if (paused.Any(bead => !histories.TryGetValue(bead.Id, out var history) || (scheduled ? schedule.Due("comments:" + bead.Id) : history.ReadAt < attentionStarted))) return;
         var items = paused.Select(bead => AttentionDeskProjector.Project(bead, histories[bead.Id].Comments, project.Limits.MaxRepairCycles) with
         { Presentation = attentionPresentations[bead.Id] }).OrderBy(item => item.Priority)
             .ThenBy(item => item.PausedAt is null ? 1 : 0).ThenBy(item => item.PausedAt).ThenBy(item => item.BeadId, StringComparer.Ordinal).ToArray();
@@ -555,19 +660,38 @@ internal sealed class OperationalObservationSource(
         var history = new History(comments, clock.GetUtcNow(), bytes, states["comments:" + id]);
         var previous = histories.GetValueOrDefault(id);
         if (!memory.TryReplace(previous is null ? [] : [previous], [(history, bytes)]))
+        {
+            if (historyGenerations.Remove("comments:" + id, out var refused)) schedule.Complete("comments:" + id, refused, false);
             throw new ToolExecutionException("shared observation cache exceeded read limit");
+        }
         histories[id] = history;
+        if (scheduled)
+        {
+            cached["comments:" + id] = comments;
+            if (historyGenerations.Remove("comments:" + id, out var generation)) schedule.Complete("comments:" + id, generation, true);
+        }
         commentsReadThisSweep.Add(id);
     }
 
-    private void TrimSources(HashSet<string> selected)
+    private void TrimSources(HashSet<string> selected, IReadOnlyList<OperationKey> keys)
     {
-        var retained = selected.Union(attentionBeads?.Select(bead => bead.Id) ?? []
+        var retainedHistories = selected.Union(keys.Any(key => key.Kind == "attention")
+            ? attentionBeads?.Select(bead => bead.Id)
+                ?? retainedInventory?.ById.Values.Where(AttentionDeskProjector.IsPaused).Where(bead => !AttentionDeskProjector.IsTerminal(bead)).Select(bead => bead.Id) ?? []
+            : []
             , StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
-        foreach (var id in histories.Keys.Where(id => !retained.Contains(id)).ToArray())
+        foreach (var id in histories.Keys.Where(id => !retainedHistories.Contains(id)).ToArray())
         { memory.Release(histories[id]); histories.Remove(id); }
-        foreach (var id in states.Keys.Where(id => id.Contains(':') && !retained.Contains(id[(id.IndexOf(':') + 1)..])).ToArray())
-        { states.Remove(id); sourceContent.Remove(id); }
+        // Readiness sets have no colon-qualified identity. Retire them with the
+        // consuming Explorer view so an unreadable due slot cannot wake every turn.
+        foreach (var id in states.Keys.Where(id => id.Contains(':') && !(id.StartsWith("comments:", StringComparison.Ordinal)
+                ? retainedHistories : selected).Contains(id[(id.IndexOf(':') + 1)..])
+            || id is "ready" or "blocked" && !keys.Any(key => key.Kind == "explorer" && key.Argument == id)).ToArray())
+        {
+            states.Remove(id); sourceContent.Remove(id); cached.Remove(id); historyGenerations.Remove(id);
+            if (cacheReservations.Remove(id, out var owner)) memory.Release(owner);
+        }
+        if (scheduled) schedule.Retain(states.Keys.ToHashSet(StringComparer.Ordinal));
     }
 
     public async Task<IReadOnlyDictionary<string, ObservationSample>> ReadRuntimeAsync(IReadOnlyList<OperationKey> keys, CancellationToken token)

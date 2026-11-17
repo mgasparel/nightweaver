@@ -51,13 +51,32 @@ No browser UI changed in this investigation. See the
 `node source-freshness-qa.mjs` exercises the real native collector on a fresh
 exact isolated default stack. Set the discovered URL and config as below. It
 retains one disposable paused Bead, watches its actual Attention/Workspace
-responses and rendered statuses through repeated successful collections, then
+responses and rendered statuses for at least 130 seconds across two real source
+audits and the 120-second age boundary, then
 verifies an external comments-only edit reaches the selected Workspace. No responses
 or health metadata are substituted. Evidence and 1440/375/720 captures go to
 `TestResults/source-freshness` or `NIGHTWEAVER_QA_OUTPUT`. Stop the exact stack
 in `finally`, including on failure.
+Before the sustained window, the probe explicitly refreshes Attention and the
+selected Workspace and waits up to 30 seconds for both to report fresh post-write
+source validation, drained pending work and current journal catch-up. A transient
+Current rendering alone does not establish this baseline. The window rejects
+source/read errors, stale, unavailable, delayed or disconnected states and ages
+over 120 seconds. Refreshing is allowed only with corroborating pending response
+metadata within the configured five-second allowance and a return to Current.
+Timestamped rendered transitions, response policy/source metadata and the settled
+baseline are retained even on assertion failure. Unrelated runtime/environment
+availability badges are not tracker freshness states.
+Run the cheap offline acceptance assertions with
+`node --test source-freshness-assertions.test.mjs`; these include rejected stale,
+delayed, disconnected, source-failure, missing-audit and stuck-pending traces.
+`NIGHTWEAVER_QA_REUSE_STEADY` is only for explicitly qualified follow-up phases;
+it cannot replace a required fresh sustained acceptance run.
 The probe also navigates to Overview and watches Digest checkpoint freshness
 while the previous Workspace interest remains within its disconnect grace.
+Wake acceptance waits for a fresh, nonpending Attention response validated after
+the wake, since handshake/read recovery can display recent retained data before
+the queued authoritative Refresh completes.
 
 `node status-stability-qa.mjs` checks the shared Studio status lifecycle against
 the exact isolated stack. It injects frequent version notifications and delays
@@ -122,8 +141,10 @@ late settlement, and no automatic replay or page errors. Screenshots go to
 start, direct endpoint discovery and finally-stop lifecycle below.
 
 After discovering the exact isolated direct endpoint, `node read-timeout-qa.mjs`
-holds a real resource response while the operational SSE remains live. It checks
-the ten-second abort, retained stale/error display at 375px, a successful explicit
+first blocks operational responses through the 25-second cold-start silence
+deadline, verifies Disconnected across retries, then restores real handshake/read
+recovery. It holds a real resource response while the operational SSE remains live
+and checks the ten-second abort, retained recent data/read error at 375px, a successful explicit
 Refresh, wake recovery, a replacement read and rejection of the late held response.
 The probe never replays commands. Screenshots go to `NIGHTWEAVER_QA_OUTPUT` or
 `TestResults/read-timeout`. Stop the same AppHost in `finally` after all probes.
@@ -340,3 +361,23 @@ configured versus observed model, retained idle/stale/stopped/unavailable,
 Overview summary and long metadata at 1440/375/720 CSS pixels. Native telemetry
 additionally verifies actual Last-Event-ID resume, duplicate-free output,
 completion cessation and effective 200% zoom. Stop the exact AppHost in `finally`.
+
+## Event-cache scale acceptance (opt-in)
+
+Run the actual Web cache module with recording source/journal adapters:
+
+```powershell
+dotnet run --project tests/Nightweaver.QA.CacheProbe -- --scale --revision=$(git rev-parse HEAD) --output=TestResults/event-cache-scale.json
+```
+
+Run from the repository root. This separate executable is deliberately absent
+from `Nightweaver.slnx` and normal test discovery. It creates and retains a new
+isolated repository/home, imports 2,000 Beads with 40 paused histories and 800
+comments, measures a matching authoritative reference cohort, bootstraps the
+actual collector, drains bounded journal backlog and watches at least 130 seconds
+of settled operation. It records real source command counts and causes, journal
+pages, successful source age, comment visibility, native readiness/dependency and
+unjournaled audit fallback. Process CPU, logical IO and private-byte samples cover
+the probe host; short-lived child CPU/IO are explicitly excluded. It stops and
+settles the collector in `finally` and exposes no production debug endpoint.
+Large probes and sustained Playwright runs are never normal xUnit prerequisites.

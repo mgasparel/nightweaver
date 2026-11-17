@@ -14,6 +14,413 @@ namespace Nightweaver.Tests;
 public sealed class OperationalObservationSourceTests
 {
     [Fact]
+    public async Task TwoSettledWorkspacesStayIdleAndRefreshEachDueSource()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 2 };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("workspace:task-1", "workspace:task-2");
+        var token = TestContext.Current.CancellationToken;
+        var reads = new List<string>();
+        source.ReadStarted += (id, _) => reads.Add(id);
+        await DrainAsync();
+        await AssertIdleAsync();
+        reads.Clear();
+        clock.Advance(TimeSpan.FromSeconds(2));
+        await DrainAsync();
+        Assert.Contains("environment:task-1", reads);
+        Assert.Contains("environment:task-2", reads);
+        Assert.DoesNotContain(reads, id => id.StartsWith("comments:", StringComparison.Ordinal));
+        await AssertIdleAsync();
+        reads.Clear();
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await DrainAsync();
+        Assert.Contains("comments:task-1", reads);
+        Assert.Contains("comments:task-2", reads);
+        await AssertIdleAsync();
+        reads.Clear();
+        source.Invalidate([new BeadsInvalidation(1, "update", "task-1", null)]);
+        await DrainAsync();
+        Assert.Contains("detail:task-1", reads);
+        Assert.Contains("detail:task-2", reads);
+        await AssertIdleAsync();
+
+        async Task DrainAsync()
+        {
+            var completed = new HashSet<string>(StringComparer.Ordinal);
+            for (var turn = 0; turn < 8 && completed.Count < keys.Length; turn++)
+                foreach (var (key, sample) in await source.ReadScheduledAsync(keys, (_, _) => { }, token))
+                    if (!sample.Pending)
+                    {
+                        Assert.Null(sample.Error);
+                        Assert.IsType<BeadWorkspaceResponse>(sample.Data);
+                        completed.Add(key);
+                    }
+            Assert.Equal(keys.Length, completed.Count);
+        }
+
+        async Task AssertIdleAsync()
+        {
+            var commands = runner.Commands.Count;
+            var validations = runner.RepositoryValidations;
+            // Stay before the independent two-second environment deadline,
+            // which an intervening invalidation must not postpone.
+            for (var turn = 0; turn < 3; turn++)
+            {
+                clock.Advance(TimeSpan.FromMilliseconds(250));
+                Assert.Empty(await source.ReadScheduledAsync(keys, (_, _) => { }, token));
+            }
+            Assert.Equal(commands, runner.Commands.Count);
+            Assert.Equal(validations, runner.RepositoryValidations);
+        }
+    }
+
+    [Theory]
+    [InlineData("attention", "explorer:all:")]
+    [InlineData("workspace:task-1", "attention")]
+    public async Task RetiredPausedSourcesDoNotKeepIdleTurnsActive(string retiredKey, string remainingKey)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 2 };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var token = TestContext.Current.CancellationToken;
+        var both = Keys(retiredKey, remainingKey);
+        var remaining = Keys(remainingKey);
+        var reads = new List<string>();
+        source.ReadStarted += (id, _) => reads.Add(id);
+        for (var turn = 0; turn < 4; turn++) await source.ReadScheduledAsync(both, (_, _) => { }, token);
+        source.Invalidate(); // Navigation can retire sources during a queued Refresh.
+        await source.ReadScheduledAsync(remaining, (_, _) => { }, token);
+        Assert.Null(source.PendingAge(["inventory"]));
+        reads.Clear();
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await source.ReadScheduledAsync(remaining, (_, _) => { }, token);
+        Assert.Contains("inventory", reads);
+        Assert.DoesNotContain(reads, id => id.Contains(':') && (remainingKey != "attention" || !id.StartsWith("comments:", StringComparison.Ordinal)));
+        await AssertIdleAsync();
+        source.Invalidate();
+        await source.ReadScheduledAsync(remaining, (_, _) => { }, token);
+        await AssertIdleAsync();
+        reads.Clear();
+        await source.ReadScheduledAsync(both, (_, _) => { }, token);
+        Assert.Contains(retiredKey == "attention" ? "comments:task-1" : "detail:task-1", reads);
+
+        async Task AssertIdleAsync()
+        {
+            var commands = runner.Commands.Count;
+            var validations = runner.RepositoryValidations;
+            for (var turn = 0; turn < 8; turn++)
+            {
+                clock.Advance(TimeSpan.FromMilliseconds(250));
+                Assert.Empty(await source.ReadScheduledAsync(remaining, (_, _) => { }, token));
+            }
+            Assert.Equal(commands, runner.Commands.Count);
+            Assert.Equal(validations, runner.RepositoryValidations);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CommentRacingPublicationReconcilesWithoutDirtyingUnrelatedHistories(bool beforeSourceCapture)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        Action? duringCommand = null;
+        var runner = new Runner { Rows = 5, Advance = () => duringCommand?.Invoke() };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var journal = new CommentJournal();
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>(), journal: journal);
+        using var pin = service.Pin(["attention", "workspace:task-1", "explorer:ready:"]);
+        var token = TestContext.Current.CancellationToken;
+        for (var turn = 0; turn < 4; turn++) await service.CollectOnceAsync(false, token);
+        Assert.NotNull(service.Read("attention").Data);
+        var historiesBefore = runner.CommentIds.Count;
+        var reads = new List<string>();
+        var raced = false;
+        source.ReadStarted += (id, _) =>
+        {
+            reads.Add(id);
+            if (id != "inventory" || raced) return;
+            raced = true;
+            clock.Advance(TimeSpan.FromSeconds(5)); // Make the next journal page due before native work starts.
+            if (beforeSourceCapture) AddCommentHint();
+            else duringCommand = AddCommentHint;
+        };
+        void AddCommentHint()
+        {
+            duringCommand = null;
+            // Race on either side of source-generation capture: a consumed hint
+            // needs reprojection; an outstanding hint still needs another read.
+            journal.Sequence = 2;
+            runner.CommentOverrides["task-1"] = "Newest burst comment";
+            service.PollJournalOnceAsync(token).GetAwaiter().GetResult();
+        }
+        journal.Sequence = 1;
+        await service.PollJournalOnceAsync(token);
+        clock.Advance(TimeSpan.FromMilliseconds(250));
+        for (var turn = 0; turn < 6; turn++)
+        {
+            await service.CollectOnceAsync(false, token);
+            clock.Advance(TimeSpan.FromMilliseconds(250));
+        }
+        Assert.True(raced);
+        Assert.NotEmpty(runner.CommentIds.Skip(historiesBefore));
+        Assert.All(runner.CommentIds.Skip(historiesBefore), id => Assert.Equal("task-1", id));
+        Assert.DoesNotContain("ready", reads);
+        foreach (var key in Keys("attention", "workspace:task-1", "explorer:ready:"))
+        {
+            var observation = service.Read(key.Value);
+            Assert.True(observation.PendingAgeMs is null, key.Value + ": " + JsonSerializer.Serialize(observation));
+            Assert.False(observation.Synchronization!.Pending);
+        }
+        Assert.Contains("Newest burst comment", service.Read("workspace:task-1").Data!.Value.GetRawText());
+        var commands = runner.Commands.Count;
+        await service.CollectOnceAsync(false, token);
+        Assert.Equal(commands, runner.Commands.Count);
+    }
+
+    private sealed class CommentJournal : IConsoleJournalReader
+    {
+        internal long Sequence { get; set; }
+        public Task<ConsoleJournalPage> ReadAsync(long cursor, CancellationToken token)
+            => Task.FromResult(new ConsoleJournalPage("same", [new(Sequence, "comment", "task-1", null)]));
+    }
+
+    [Fact]
+    public async Task RefreshBeforeSourceReadCannotStrandTheNewerPendingGeneration()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 4 };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        using var pin = service.Pin(["attention", "digest:auto", "explorer:ready:"]);
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        var refreshDuringRead = true;
+        source.ReadStarted += (id, _) =>
+        {
+            if (id != "inventory" || !refreshDuringRead) return;
+            refreshDuringRead = false;
+            service.RequestRefresh(["attention"]);
+        };
+        service.RequestRefresh(["attention"]);
+        for (var turn = 0; turn < 10; turn++) await service.CollectOnceAsync(false, token);
+        var attention = service.Read("attention");
+        Assert.NotNull(attention.Data);
+        Assert.Null(attention.PendingAgeMs);
+        Assert.False(attention.Synchronization!.Pending);
+        var commands = runner.Commands.Count;
+        clock.Advance(TimeSpan.FromSeconds(6));
+        await service.CollectOnceAsync(false, token);
+        Assert.Null(service.Read("attention").PendingAgeMs);
+        Assert.Equal(commands, runner.Commands.Count);
+    }
+
+    [Theory]
+    [InlineData("ready")]
+    [InlineData("blocked")]
+    public async Task RetiredReadinessSourcesDoNotKeepIdleTurnsActive(string filter)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var token = TestContext.Current.CancellationToken;
+        var both = Keys("attention", $"explorer:{filter}:");
+        var attention = Keys("attention");
+        await source.ReadScheduledAsync(both, (_, _) => { }, token);
+        Assert.Single(runner.Commands, command => command == filter);
+        await source.ReadScheduledAsync(attention, (_, _) => { }, token);
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await source.ReadScheduledAsync(attention, (_, _) => { }, token);
+        await AssertIdleAsync();
+        source.Invalidate(); // Refresh must not revive an uninterested source.
+        await source.ReadScheduledAsync(attention, (_, _) => { }, token);
+        await AssertIdleAsync();
+        var inventories = runner.Commands.Count(command => command == "list");
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await source.ReadScheduledAsync(attention, (_, _) => { }, token);
+        Assert.Equal(inventories + 1, runner.Commands.Count(command => command == "list"));
+        await AssertIdleAsync();
+        await source.ReadScheduledAsync(both, (_, _) => { }, token);
+        Assert.Equal(2, runner.Commands.Count(command => command == filter));
+
+        async Task AssertIdleAsync()
+        {
+            var commands = runner.Commands.Count;
+            var validations = runner.RepositoryValidations;
+            for (var turn = 0; turn < 8; turn++)
+            {
+                clock.Advance(TimeSpan.FromMilliseconds(250));
+                Assert.Empty(await source.ReadScheduledAsync(attention, (_, _) => { }, token));
+            }
+            Assert.Equal(commands, runner.Commands.Count);
+            Assert.Equal(validations, runner.RepositoryValidations);
+        }
+    }
+
+    [Fact]
+    public async Task NewInventoryRebuildsPendingAttentionCohortBeforePublishing()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 5 };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("attention");
+        var token = TestContext.Current.CancellationToken;
+        Assert.Empty(await source.ReadScheduledAsync(keys, (_, _) => { }, token));
+        runner.Title = "New authoritative title";
+        source.Invalidate([new BeadsInvalidation(1, "update", "task-1", null)]);
+        var completed = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.All(Assert.IsType<AttentionDeskItem[]>(completed["attention"].Data), row => Assert.Equal(runner.Title, row.Title));
+    }
+
+    [Fact]
+    public async Task ScheduledReadsStayIdleSelectCommentHistoryAndAuditWithoutRepeatingCore()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 5 };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("attention", "explorer:ready:");
+        var token = TestContext.Current.CancellationToken;
+        var bootstrap = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.False(bootstrap.ContainsKey("attention"));
+        var completed = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Equal(5, Assert.IsType<AttentionDeskItem[]>(completed["attention"].Data).Length);
+        Assert.Single(runner.Commands, command => command == "list");
+        Assert.Single(runner.Commands, command => command == "ready");
+        var idleCount = runner.Commands.Count;
+        for (var turn = 0; turn < 100; turn++)
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(250));
+            Assert.Empty(await source.ReadScheduledAsync(keys, (_, _) => { }, token));
+        }
+        Assert.Equal(idleCount, runner.Commands.Count);
+        var historiesBefore = runner.CommentIds.Count;
+        runner.CommentOverrides["task-2"] = "External selective history";
+        source.Invalidate([new BeadsInvalidation(1, "comment", "task-2", null)]);
+        var changed = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.NotNull(changed["attention"].Data);
+        Assert.Equal(["task-2"], runner.CommentIds.Skip(historiesBefore));
+        Assert.Equal(2, runner.Commands.Count(command => command == "list"));
+        Assert.Single(runner.Commands, command => command == "ready");
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Equal(3, runner.Commands.Count(command => command == "list"));
+        Assert.Equal(2, runner.Commands.Count(command => command == "ready"));
+        Assert.Equal(11, runner.CommentIds.Count); // Five bootstrap, one change, five audit.
+    }
+
+    [Fact]
+    public async Task DirtyHintDuringAuthoritativeReadSurvivesUntilAnotherRead()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        OperationalObservationSource? source = null;
+        var invalidate = false;
+        var runner = new Runner { Advance = () =>
+        {
+            if (!invalidate) return;
+            invalidate = false;
+            source!.Invalidate([new BeadsInvalidation(2, "update", "task-1", null)]);
+        } };
+        using var factory = Factory(target.Path, runner, clock);
+        source = Adapter(factory);
+        var keys = Keys("explorer:all:");
+        var token = TestContext.Current.CancellationToken;
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        source.Invalidate([new BeadsInvalidation(1, "update", "task-1", null)]);
+        invalidate = true;
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.NotNull(source.PendingAge(["inventory"]));
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Null(source.PendingAge(["inventory"]));
+        Assert.Equal(3, runner.Commands.Count(command => command == "list"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ScheduledHistoriesProgressUnderContinuousCoreInvalidation(bool selectWorkspace)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { Rows = 5, TargetPath = target.Path };
+        OperationalObservationSource? source = null;
+        var busy = false;
+        long sequence = 0;
+        var runner = new RecordingProcessRunner((request, cancellation) =>
+        {
+            if (busy && request.FileName == "bd")
+            {
+                clock.Advance(TimeSpan.FromSeconds(1.8));
+                if (request.Arguments[2] is "list" or "ready" or "blocked")
+                    source!.Invalidate([new BeadsInvalidation(++sequence, "dep_add", "other-task", "another-task")]);
+            }
+            return native.RunAsync(request, cancellation);
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        source = Adapter(factory);
+        var keys = Keys(selectWorkspace
+            ? ["attention", "explorer:ready:", "explorer:blocked:", "workspace:task-1"]
+            : ["attention", "explorer:ready:", "explorer:blocked:"]);
+        var token = TestContext.Current.CancellationToken;
+
+        // Cold bootstrap must drain even though every successful core read is
+        // invalidated before it returns. Repeat for the independent due audit.
+        busy = true;
+        for (var round = 0; round < 2; round++)
+        {
+            var historyStart = native.CommentIds.Count;
+            var listsBefore = native.Commands.Count(command => command == "list");
+            var samples = new List<ObservationSample>();
+            for (var turn = 0; turn < 16; turn++)
+            {
+                var result = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+                if (result.TryGetValue("attention", out var attention)) samples.Add(attention);
+                if (native.CommentIds.Skip(historyStart).Distinct().Count() == 5) break;
+            }
+            Assert.Equal(Enumerable.Range(1, 5).Select(index => $"task-{index}").Order(),
+                native.CommentIds.Skip(historyStart).Distinct().Order());
+            Assert.True(native.Commands.Count(command => command == "list") > listsBefore);
+            Assert.Contains("ready", native.Commands);
+            Assert.Contains("blocked", native.Commands);
+            Assert.NotNull(source.PendingAge(["inventory"]));
+            var complete = Assert.Single(samples, sample => sample.Data is not null);
+            Assert.Equal(5, Assert.IsType<AttentionDeskItem[]>(complete.Data).Length);
+            Assert.True(complete.Pending); // History progress cannot certify the dirty core.
+            Assert.All(complete.Sources.Values, state => Assert.NotNull(state.ObservedAt));
+            clock.Advance(TimeSpan.FromSeconds(60));
+        }
+        busy = false;
+        ObservationSample? recovered = null;
+        for (var turn = 0; turn < 8; turn++)
+        {
+            var result = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+            if (result.TryGetValue("attention", out recovered) && recovered.Data is not null && !recovered.Pending) break;
+        }
+        Assert.NotNull(recovered?.Data);
+        Assert.False(recovered.Pending);
+        Assert.Null(recovered.Error);
+        Assert.Null(source.PendingAge(["inventory"]));
+    }
+
+    [Fact]
     public async Task UnchangedSourcesStayFreshBetweenCompleteSerialCollections()
     {
         using var target = new ObservationTargetFixture();
@@ -41,7 +448,7 @@ public sealed class OperationalObservationSourceTests
         await service.CollectOnceAsync(false, token);
         await service.CollectOnceAsync(false, token);
         Assert.Equal(first.Revision, service.Read("workspace:task-1").Revision);
-        Assert.Equal(18, runner.Commands.Count); // Six native queries per cycle, no added reads.
+        Assert.Equal(6, runner.Commands.Count); // One bootstrap with authoritative confirmation; idle turns perform no tracker-body reads.
     }
 
     [Fact]
@@ -488,10 +895,23 @@ public sealed class OperationalObservationSourceTests
             try { return await actual.RunAsync(request with { Environment = environment }, token); }
             finally { measured.Enqueue($"{request.FileName} {string.Join(' ', request.Arguments)}: {commandTimer.Elapsed.TotalMilliseconds:F1}ms"); }
         });
-        using var factory = Factory(target.Path, runner);
+        var journal = new ConcurrentQueue<ConsoleJournalPage>();
+        using var factory = Factory(target.Path, runner, configure: services =>
+        {
+            services.RemoveAll<IConsoleJournalReader>();
+            services.AddSingleton<IConsoleJournalReader>(provider => new RecordingJournalReader(
+                ActivatorUtilities.CreateInstance<ConsoleJournalReader>(provider), journal));
+        });
         using var client = factory.CreateClient();
         var token = TestContext.Current.CancellationToken;
         var path = $"/api/operations/v1/projects/web-test/resources?key=workspace:{bead}";
+        var source = Assert.IsType<OperationalObservationSource>(factory.Services.GetRequiredService<IOperationalObservationSource>());
+        var reads = new ConcurrentQueue<(string Id, string Reason, bool CommentHint, bool DependencyHint)>();
+        source.ReadStarted += (id, reason) =>
+        {
+            var hints = journal.SelectMany(page => page.Hints).Where(hint => hint.IssueId == bead).ToArray();
+            reads.Enqueue((id, reason, hints.Any(hint => hint.Operation == "comment"), hints.Any(hint => hint.Operation == "dep_add")));
+        };
         async Task<JsonElement> ReadObservedAsync(Func<JsonElement, bool> condition)
         {
             try { return await UntilAsync(client, path, condition, token); }
@@ -502,7 +922,12 @@ public sealed class OperationalObservationSourceTests
             }
         }
         var cold = Stopwatch.StartNew();
-        var first = await ReadObservedAsync(root => root.GetProperty("data").ValueKind == JsonValueKind.Object);
+        var first = await ReadObservedAsync(root => root.GetProperty("data").ValueKind == JsonValueKind.Object
+            && root.GetProperty("synchronization").GetProperty("journal").GetString() == "current"
+            && !root.GetProperty("synchronization").GetProperty("pending").GetBoolean());
+        var beforeMutation = journal.Count;
+        var readsBeforeMutation = reads.Count;
+        var commandsBeforeMutation = measured.Count;
         var coldSeconds = cold.Elapsed.TotalSeconds;
         var count = first.GetProperty("data").GetProperty("comments").GetArrayLength();
         var revision = first.GetProperty("revision").GetString();
@@ -533,6 +958,19 @@ public sealed class OperationalObservationSourceTests
                     && relation.GetProperty("direction").GetString() == "outgoing");
         });
         var combinedSeconds = changed.Elapsed.TotalSeconds;
+        var mutationReads = reads.Skip(readsBeforeMutation).ToArray();
+        // Keep diagnostics even if a causal assertion fails on a slower host.
+        foreach (var measurement in measured) TestContext.Current.TestOutputHelper?.WriteLine(measurement);
+        foreach (var read in mutationReads) TestContext.Current.TestOutputHelper?.WriteLine($"Source {read.Id}: {read.Reason}; comment hint {read.CommentHint}; dependency hint {read.DependencyHint}");
+        Assert.Contains(journal.Skip(beforeMutation).SelectMany(page => page.Hints), hint => hint.IssueId == bead && hint.Operation == "comment");
+        Assert.Contains(journal.Skip(beforeMutation).SelectMany(page => page.Hints), hint => hint.IssueId == bead && hint.Operation == "dep_add");
+        // Environment keeps its independent two-second policy. Tracker visibility
+        // must precede an actual 60-second source audit, regardless of host speed.
+        Assert.DoesNotContain(mutationReads, read => read.Reason == "audit" && !read.Id.StartsWith("environment:", StringComparison.Ordinal));
+        Assert.Contains(mutationReads, read => read.Id == "comments:" + bead && read.Reason == "dirty" && read.CommentHint);
+        Assert.Contains(mutationReads, read => read.Id == "relations-down:" + bead && read.Reason == "dirty" && read.DependencyHint);
+        Assert.Contains(mutationReads, read => read.Id == "inventory" && read.Reason == "dirty" && read.DependencyHint);
+        TestContext.Current.TestOutputHelper?.WriteLine($"Journal pages {journal.Count} ({journal.Count - beforeMutation} after baseline); source reads {reads.Count} ({mutationReads.Length} after baseline); native commands {measured.Count} ({measured.Count - commandsBeforeMutation} after baseline)");
         Assert.NotEqual(revision, combined.GetProperty("revision").GetString());
         var combinedData = combined.GetProperty("data");
         Assert.Equal(count + 1, combinedData.GetProperty("comments").GetArrayLength());
@@ -542,10 +980,19 @@ public sealed class OperationalObservationSourceTests
             relation.GetProperty("id").GetString() == blocker
             && relation.GetProperty("type").GetString() == "blocks"
             && relation.GetProperty("direction").GetString() == "outgoing");
-        var source = Assert.IsType<OperationalObservationSource>(factory.Services.GetRequiredService<IOperationalObservationSource>());
         TestContext.Current.TestOutputHelper?.WriteLine($"Native observer: cold Workspace {coldSeconds:F3}s; combined comments+dependency visibility {combinedSeconds:F3}s; commands {source.CommandCount}; native ms {source.NativeMilliseconds:F1}");
         // Performance targets are measured evidence; parallel-suite load can exceed them.
         // UntilAsync still enforces the functional observation bound.
+    }
+
+    private sealed class RecordingJournalReader(IConsoleJournalReader inner, ConcurrentQueue<ConsoleJournalPage> pages) : IConsoleJournalReader
+    {
+        public async Task<ConsoleJournalPage> ReadAsync(long cursor, CancellationToken token)
+        {
+            var page = await inner.ReadAsync(cursor, token);
+            pages.Enqueue(page);
+            return page;
+        }
     }
 
     private static async Task<JsonElement> UntilAsync(HttpClient client, string path, Func<JsonElement, bool> predicate, CancellationToken token)
@@ -629,6 +1076,77 @@ public sealed class OperationalObservationSourceTests
     }
 
     [Fact]
+    public async Task PendingWorkspaceRelationFailureIsVisibleWithoutReplacingAcceptedProvenance()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var commandCost = TimeSpan.Zero;
+        var runner = new Runner { TargetPath = target.Path };
+        var timedRunner = new RecordingProcessRunner((request, cancellation) =>
+        {
+            if (request.FileName == "bd" && request.Arguments[2] != "comments") clock.Advance(commandCost);
+            return runner.RunAsync(request, cancellation);
+        });
+        using var factory = Factory(target.Path, timedRunner, clock);
+        var source = Adapter(factory);
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        const string key = "workspace:task-1";
+        using var pin = service.Pin([key]);
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        var accepted = service.Read(key);
+        Assert.Equal("fresh", accepted.Health);
+        Assert.NotNull(accepted.Data);
+
+        clock.Advance(TimeSpan.FromSeconds(10));
+        runner.Title = "Replacement title";
+        runner.Comment = "Replacement comment";
+        runner.UpdatedAt = "2026-01-01T00:01:00Z";
+        runner.FailRelations = true;
+        commandCost = TimeSpan.FromSeconds(1.4);
+        source.Invalidate();
+        var commandsBefore = runner.Commands.Count;
+        await service.CollectOnceAsync(false, token);
+        // Inventory + detail + failed incoming relations exhaust the native turn.
+        // Confirmation/environment and the replacement body are still pending.
+        Assert.Equal(["list", "comments", "show", "dep"], runner.Commands.Skip(commandsBefore));
+        var pending = service.Read(key);
+        Assert.Equal("source-failed", pending.Sources["relations-up:task-1"].Error?.Code);
+        Assert.Equal("stale", pending.Sources["relations-up:task-1"].Health);
+        Assert.Equal("source-failed", pending.Error?.Code);
+        Assert.Equal("stale", pending.Health);
+        Assert.NotEqual(accepted.Revision, pending.Revision);
+        Assert.Equal(accepted.Data?.GetRawText(), pending.Data?.GetRawText());
+        Assert.Equal(accepted.ObservedAt, pending.ObservedAt);
+        Assert.Equal(14200d, pending.ValidatedAgeMs);
+        foreach (var (id, previous) in accepted.Sources)
+        {
+            var retained = pending.Sources[id];
+            Assert.Same(previous.ContentIdentity, retained.ContentIdentity);
+            Assert.Equal(previous.ObservedAt, retained.ObservedAt);
+            Assert.Equal(previous.ValidatedTimestamp, retained.ValidatedTimestamp);
+            Assert.Equal(previous.SourceGeneration, retained.SourceGeneration);
+        }
+        Assert.True(pending.Sources["relations-up:task-1"].LastAttemptAt > accepted.Sources["relations-up:task-1"].LastAttemptAt);
+        clock.Advance(TimeSpan.FromSeconds(6));
+        Assert.Equal("source-failed", service.Read(key).Error?.Code);
+        Assert.Equal(20200d, service.Read(key).ValidatedAgeMs);
+
+        runner.FailRelations = false;
+        commandCost = TimeSpan.Zero;
+        source.Invalidate();
+        for (var turn = 0; turn < 4 && service.Read(key).Health != "fresh"; turn++)
+            await service.CollectOnceAsync(false, token);
+        var recovered = service.Read(key);
+        Assert.Equal("fresh", recovered.Health);
+        Assert.Null(recovered.Error);
+        Assert.All(recovered.Sources.Values, state => Assert.Null(state.Error));
+        Assert.Contains("Replacement title", recovered.Data?.GetRawText());
+        Assert.Equal(0d, recovered.ValidatedAgeMs);
+    }
+
+    [Fact]
     public async Task PartialRelationsRemainExplicitAndSlowCoreYieldsToWorkspaceSubsteps()
     {
         using var target = new ObservationTargetFixture();
@@ -684,7 +1202,7 @@ public sealed class OperationalObservationSourceTests
     }
 
     private static OperationKey[] Keys(params string[] keys) => keys.Select(OperationKey.Parse).ToArray();
-    private static NightweaverWebApplicationFactory Factory(string target, IProcessRunner runner, TimeProvider? clock = null)
+    private static NightweaverWebApplicationFactory Factory(string target, IProcessRunner runner, TimeProvider? clock = null, Action<IServiceCollection>? configure = null)
     {
         if (runner is Runner scripted) scripted.TargetPath = target;
         var factory = new NightweaverWebApplicationFactory(configureServices: services =>
@@ -692,6 +1210,7 @@ public sealed class OperationalObservationSourceTests
             services.RemoveAll<IProcessRunner>();
             services.AddSingleton(runner);
             if (clock is not null) { services.RemoveAll<TimeProvider>(); services.AddSingleton(clock); }
+            configure?.Invoke(services);
         });
         File.WriteAllText(factory.ConfigPath, JsonSerializer.Serialize(new { name = "web-test", target_repository = new { path = target } }));
         return factory;
@@ -720,13 +1239,14 @@ public sealed class OperationalObservationSourceTests
         private static readonly string[] RootArguments = ["rev-parse", "--is-inside-work-tree", "--show-prefix", "--path-format=absolute", "--git-dir", "--git-common-dir"];
         internal string? TargetPath { get; set; }
         internal ConcurrentQueue<string> Commands { get; } = new();
+        internal int RepositoryValidations { get; private set; }
         internal ConcurrentQueue<string> CommentIds { get; } = new();
         internal string? FailCommentOnce { get; set; }
         internal int CommentTimeoutsRemaining { get; set; } = 1;
         internal int FailListAt { get; init; }
         internal bool FailEveryList { get; set; }
         internal Action? Advance { get; init; }
-        internal bool FailRelations { get; init; }
+        internal bool FailRelations { get; set; }
         internal bool Ready { get; set; } = true;
         internal bool Blocked { get; set; }
         internal string Title { get; set; } = "Original title";
@@ -751,6 +1271,7 @@ public sealed class OperationalObservationSourceTests
                 }
                 Assert.Equal(TargetPath, request.WorkingDirectory);
                 Assert.Equal(RootArguments, request.Arguments);
+                RepositoryValidations++;
                 var common = Path.Combine(TargetPath, ".git");
                 return Task.FromResult(new ProcessResult(0, $"true\n\n{common}\n{common}\n", ""));
             }
