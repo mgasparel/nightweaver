@@ -1,10 +1,43 @@
 using System.Text.Json;
+using Nightweaver.Configuration;
+using Nightweaver.Execution;
 using Nightweaver.Inspection;
 
 namespace Nightweaver.Tests;
 
 public sealed class BeadsIntegrationTests
 {
+    [Fact]
+    public async Task LargePublicationMetadataFileMergesThroughNativeGuardedUpdates()
+    {
+        using var target = new BeadsFixture("publication repo with spaces");
+        using var host = new TempDirectory();
+        const string actor = "nightweaver:demo";
+        var id = target.ControlBeadId;
+        target.Run("bd", ["update", id, "--status", "in_progress", "--assignee", actor,
+            "--set-metadata", "operator=preserve"]);
+        var graph = JsonSerializer.Serialize(new[] { new { description = new string('x', 60000) } });
+        using var file = InvocationRuntimeFiles.CreatePlanningPublicationMetadataFile(new(host.Path), ProjectSlug.Parse("demo"), id);
+        await JsonSerializer.SerializeAsync(file.Stream, new { publication_revision = "revision", publication_graph = graph },
+            cancellationToken: TestContext.Current.CancellationToken);
+        await file.Stream.FlushAsync(TestContext.Current.CancellationToken);
+        // Keep the same immutable, readable file pinned across both native writes.
+        foreach (var status in new[] { "in_progress", "open" })
+        {
+            var request = BeadsCommand.CreateWrite(target.Path, ["update", id, "--metadata", "@" + file.Stream.Name,
+                "--status", status, "--assignee", status == "open" ? "" : actor,
+                "--if-status", "in_progress", "--if-assignee", actor, "--json"], actor);
+            Assert.True(request.Arguments.Sum(a => a.Length + 3) < 2000);
+            target.Run("bd", request.Arguments);
+        }
+        var bead = BeadsReader.Parse(target.Run("bd", BeadsCommand.CreateShow(target.Path, id).Arguments)).ById[id];
+        Assert.Equal("open", bead.Status);
+        Assert.Null(bead.Assignee);
+        Assert.Equal(graph, PlanningPublisher.Metadata(bead, "publication_graph"));
+        Assert.Equal("revision", PlanningPublisher.Metadata(bead, "publication_revision"));
+        Assert.Equal("preserve", PlanningPublisher.Metadata(bead, "operator"));
+    }
+
     [Fact]
     public async Task RealInventoryReadsAllClaimsAndLeavesBothTrackersAndHostUntouched()
     {

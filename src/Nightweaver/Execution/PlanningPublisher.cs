@@ -95,9 +95,7 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         await CheckAuthorityAsync(session, approval, token);
         if (Metadata(retained, "publication_graph") != graphJson || Metadata(retained, "publication_revision") != approval.PlanRevision)
         {
-            await WriteUncertainAsync(session, ["update", session.BeadId,
-                "--set-metadata", "publication_revision=" + approval.PlanRevision,
-                "--set-metadata", "publication_graph=" + graphJson,
+            await WritePublicationMetadataAsync(session, approval.PlanRevision, graphJson, ["update", session.BeadId,
                 "--status", "in_progress", "--assignee", session.InitialAssignee!,
                 "--if-status", "in_progress", "--if-assignee", session.InitialAssignee!, "--json"], token);
             retained = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
@@ -128,9 +126,8 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         await CheckAuthorityAsync(session, approval, token);
         // All task holds are gone, but generated-task admission still requires this
         // exact parent revision and planned state. No multi-row transaction is assumed.
-        await WriteUncertainAsync(session, ["update", session.BeadId, "--add-label", "planned",
-            "--remove-label", "stage:plan-approved", "--set-metadata", "publication_revision=" + approval.PlanRevision,
-            "--set-metadata", "publication_graph=" + graphJson,
+        await WritePublicationMetadataAsync(session, approval.PlanRevision, graphJson, ["update", session.BeadId, "--add-label", "planned",
+            "--remove-label", "stage:plan-approved",
             "--status", "open", "--assignee", "", "--if-status", "in_progress",
             "--if-assignee", session.InitialAssignee!, "--json"], token);
         var parent = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
@@ -251,6 +248,19 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         && metadata.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     private static string? Field(BeadSnapshot bead, string key) => bead.Payload.TryGetProperty(key, out var value) ? value.GetString() : null;
+
+    private async Task WritePublicationMetadataAsync(AgentStageSession session, string revision, string graph,
+        string[] args, CancellationToken token)
+    {
+        using var file = InvocationRuntimeFiles.CreatePlanningPublicationMetadataFile(
+            session.HostPaths, session.Project.Name, session.BeadId);
+        // bd merges this patch with existing metadata. Do not snapshot/rewrite
+        // unrelated operator fields or place the graph on the Windows command line.
+        await JsonSerializer.SerializeAsync(file.Stream, new { publication_revision = revision, publication_graph = graph },
+            PlanningEvidence.JsonOptions, token);
+        await file.Stream.FlushAsync(token);
+        await WriteUncertainAsync(session, [.. args, "--metadata", "@" + file.Stream.Name], token);
+    }
 
     // A failed or lost response is uncertainty, never permission to repeat a create.
     // The caller immediately checks the exact intended effect through fresh reads.

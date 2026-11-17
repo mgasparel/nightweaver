@@ -483,6 +483,34 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         }
     }
 
+    // Retained in the owned Bead tmp tree for normal completion cleanup. Keep the
+    // file and its no-reparse parent chain pinned until the native reader exits.
+    internal static PinnedRuntimeFile CreatePlanningPublicationMetadataFile(
+        HostPaths paths, ProjectSlug project, string beadId)
+    {
+        if (!SafeWindowsSegment(project.Value) || !SafeBeadId(beadId))
+            throw new InvalidDataException("Invalid Planning publication file identity.");
+        var path = Path.GetFullPath(Path.Combine(paths.TmpRoot(project), beadId,
+            "publication-" + Guid.NewGuid().ToString("N") + ".json"));
+        var guard = new InvocationRuntimeFiles(string.Empty, path, null!);
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                ValidatePathSegments(path);
+                guard.PinDirectoryChain(Path.GetDirectoryName(path)!, createMissing: true, exclusiveLeaf: false);
+            }
+            else Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            return new(new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read,
+                16 * 1024, FileOptions.Asynchronous), guard);
+        }
+        catch
+        {
+            guard.Dispose();
+            throw;
+        }
+    }
+
     private static void ValidateFactorySnapshotDestination(string path)
     {
         using var handle = CreateFileW(ToExtendedLengthPath(path), FileReadAttributes, FileShareRead | FileShareWrite | FileShareDelete,

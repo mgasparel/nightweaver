@@ -10,6 +10,35 @@ namespace Nightweaver.Tests;
 public sealed class PlanningPublicationTests
 {
     [Theory]
+    [InlineData(null)]
+    [InlineData(8)]
+    [InlineData(17)]
+    public async Task LargeSevenTaskGraphPublishesWithBoundedArgumentsAndPreservesMetadata(int? lostResponse)
+    {
+        using var fixture = new Fixture(largeGraph: true) { LoseResponseAt = lostResponse };
+        fixture.Rows["product"]["metadata"]!["operator"] = "keep me";
+        Assert.True((await fixture.Publish()).VerifiedState!.Planned);
+        Assert.Equal(7, fixture.CreateCount);
+        Assert.Equal("keep me", fixture.Rows["product"]["metadata"]!["operator"]!.GetValue<string>());
+        Assert.True(PlanningPublisher.Metadata(fixture.Parent, "publication_graph")!.Length > 32767);
+        Assert.All(fixture.Tasks, task => Assert.True(PlanningPublicationGate.Allows(task, fixture.Inventory)));
+    }
+
+    [Theory]
+    [InlineData(8)]
+    [InlineData(17)]
+    public async Task FailedLargeMetadataWritesStayHeldAndResumeWithoutDuplicateTasks(int rejected)
+    {
+        using var fixture = new Fixture(largeGraph: true) { RejectWriteAt = rejected };
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+        Assert.DoesNotContain("planned", fixture.Parent.Labels);
+        Assert.All(fixture.Tasks, task => Assert.False(PlanningPublicationGate.Allows(task, fixture.Inventory)));
+        fixture.RejectWriteAt = null;
+        Assert.True((await fixture.Publish()).VerifiedState!.Planned);
+        Assert.Equal(7, fixture.CreateCount);
+    }
+
+    [Theory]
     [InlineData("pause")]
     [InlineData("notes")]
     public async Task AuthorityChangesDuringRetainedParentReadStopMembershipWrites(string change)
@@ -460,7 +489,7 @@ public sealed class PlanningPublicationTests
         internal BeadSnapshot Parent => Inventory.ById["product"];
         internal IEnumerable<BeadSnapshot> Tasks => Inventory.ById.Values.Where(b => b.IssueType == "task");
 
-        internal Fixture(bool singleTask = false)
+        internal Fixture(bool singleTask = false, bool largeGraph = false)
         {
             Rows["product"] = new JsonObject { ["id"] = "product", ["title"] = "Requested behavior", ["issue_type"] = "feature",
                 ["description"] = "Contract", ["status"] = "in_progress", ["assignee"] = "nightweaver:demo",
@@ -480,6 +509,12 @@ public sealed class PlanningPublicationTests
                     new("second", "Second behavior", "Observable second", "Contract.cs", "Advisory", ["Second works"], "Check second", ["first"])],
                 Constraints: [new("Preserve data", "Product contract")], Coverage: [new("Behavior", ["first", "second"], null, null)]);
             if (singleTask) plan = plan with { Tasks = [plan.Tasks![0]], Coverage = [new("Behavior", ["first"], null, null)] };
+            if (largeGraph)
+            {
+                var tasks = Enumerable.Range(0, 7).Select(i => new PlanningTask("entry" + i, "Behavior " + i,
+                    "Observable behavior", "Api.cs", new string('x', 8000), ["Behavior works"], "Component checks", [])).ToArray();
+                plan = plan with { Tasks = tasks, Coverage = [new("Behavior", tasks.Select(t => t.Id).ToArray(), null, null)] };
+            }
             AddComment(JsonSerializer.Serialize(plan, PlanningEvidence.JsonOptions));
             var review = new PlanningDocument(PlanningEvidence.ReviewSchema, grounding, PlanCommentId: "1",
                 PlanRevision: PlanningEvidence.Hash(Comments[0].Text), Assessment: "Complete", Findings: [], Questions: []);
@@ -515,6 +550,8 @@ public sealed class PlanningPublicationTests
         {
             token.ThrowIfCancellationRequested();
             var args = request.Arguments.ToList();
+            if (args.Sum(a => a.Length + 3) > 30000)
+                throw new IOException("Native command line exceeds the Windows process limit.");
             string Value(string flag) => args[args.IndexOf(flag) + 1];
             string output;
             var write = args.Contains("--dolt-auto-commit");
@@ -576,6 +613,14 @@ public sealed class PlanningPublicationTests
                         var pair = args[i + 1].Split('=', 2);
                         row["metadata"]![pair[0]] = JsonValue.Create(pair[1]);
                     }
+                if (args.Contains("--metadata"))
+                {
+                    var path = Value("--metadata");
+                    Assert.StartsWith("@", path);
+                    using var stream = new FileStream(path[1..], FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    var patch = JsonNode.Parse(stream)!.AsObject();
+                    foreach (var pair in patch) row["metadata"]![pair.Key] = pair.Value?.DeepClone();
+                }
                 row["status"] = Value("--status"); row["assignee"] = Value("--assignee") is "" ? null : Value("--assignee"); output = "";
             }
             else if (args.Contains("show"))
