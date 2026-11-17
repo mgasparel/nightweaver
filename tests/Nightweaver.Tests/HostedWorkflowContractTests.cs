@@ -68,7 +68,7 @@ public sealed class HostedWorkflowContractTests
         var policy = Read("scripts", "TestSuiteMeasurement.psm1");
         Assert.Contains("$Result.elapsedSeconds -lt 240", policy, StringComparison.Ordinal);
         Assert.Contains("$Result.elapsedSeconds -lt 300", policy, StringComparison.Ordinal);
-        Assert.Contains("$Result.elapsedSeconds -ge 1.5 * $Baseline.elapsedSeconds", policy, StringComparison.Ordinal);
+        Assert.Contains("$Result.elapsedSeconds -ge 1.5 * $baselineSeconds", policy, StringComparison.Ordinal);
         var entry = Read("scripts", "Measure-TestSuite.ps1");
         Assert.Contains("& dotnet test --solution Nightweaver.slnx --minimum-expected-tests 995", entry, StringComparison.Ordinal);
         Assert.DoesNotContain("--no-build", entry, StringComparison.Ordinal);
