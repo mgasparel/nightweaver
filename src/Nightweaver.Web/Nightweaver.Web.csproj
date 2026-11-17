@@ -10,6 +10,7 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Nightweaver.Tests" />
+    <InternalsVisibleTo Include="Nightweaver.QA.CacheProbe" />
   </ItemGroup>
   <!-- Build before static assets are discovered, including on a fresh checkout.
        Dynamic item discovery also includes generated files on the first build. -->

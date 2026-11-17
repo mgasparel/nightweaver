@@ -11,7 +11,7 @@ namespace Nightweaver.Web;
 // One instance belongs to the actual Web host, including a BackgroundWebHost child.
 internal sealed class OperationalObservationService(
     string projectId, IOperationalObservationSource source, TimeProvider clock,
-    IHostApplicationLifetime lifetime, ObservationMemoryBudget? memory = null) : BackgroundService
+    IHostApplicationLifetime lifetime, ObservationMemoryBudget? memory = null, IConsoleJournalReader? journal = null) : BackgroundService
 {
     private TimeProvider Clock => clock;
     private const int MetadataReserve = 16 * 1024;
@@ -22,6 +22,16 @@ internal sealed class OperationalObservationService(
     private readonly Channel<bool> wake = Channel.CreateBounded<bool>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
     private ulong revision;
     private bool stopping;
+    private string journalState = "inactive";
+    private string? journalIdentity;
+    private long journalCursor;
+    private bool journalStopped;
+    private ObservationError? journalError;
+    private long? journalAttempt;
+    private int journalFailures;
+    private double journalWaitSeconds = 5;
+    private long? dirtyReceived;
+    private readonly SemaphoreSlim collection = new(1, 1);
     internal string ProjectId => projectId;
     internal string Epoch { get; } = Guid.NewGuid().ToString("N");
     private event Action<string, string>? Changed;
@@ -34,6 +44,11 @@ internal sealed class OperationalObservationService(
         internal DateTimeOffset InterestUntil { get; set; } = now.AddSeconds(30);
         internal DateTimeOffset LastAccess { get; set; } = now;
         internal int Pins { get; set; }
+        internal long AdmittedTimestamp { get; set; }
+        internal long? AcceptedTimestamp { get; set; }
+        internal double AcceptedAgeMs { get; set; }
+        internal long DirtyGeneration { get; set; } = 1;
+        internal long? PendingTimestamp { get; set; }
         internal string Semantic { get; set; } = "";
         internal int Bytes { get; set; } = 1024;
         internal Dictionary<string, object?> ContentIdentities { get; set; } = new(StringComparer.Ordinal);
@@ -45,7 +60,7 @@ internal sealed class OperationalObservationService(
         {
             var entry = Admit([OperationKey.Parse(key)])[0];
             Age(entry);
-            return entry.Envelope;
+            return Response(entry);
         }
     }
 
@@ -129,7 +144,9 @@ internal sealed class OperationalObservationService(
             var envelope = new ObservationEnvelope("nightweaver-observation-v1", projectId, key.Value, Epoch,
                 ulong.MaxValue.ToString(CultureInfo.InvariantCulture), null, null, "unavailable", null, null,
                 InitialSources(key), interval, now);
-            var entry = new Entry(key, envelope, now);
+            var entry = new Entry(key, envelope, now) { AdmittedTimestamp = clock.GetTimestamp(), PendingTimestamp = clock.GetTimestamp() };
+            if (key.Kind is not ("factory" or "cleanup"))
+                entry.Envelope = envelope with { Policy = new(), Synchronization = new(journalState, true) };
             entry.Bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, Json).Length + MetadataReserve;
             entry.Semantic = Semantic(envelope);
             created.Add(entry);
@@ -156,7 +173,7 @@ internal sealed class OperationalObservationService(
         }
         var result = keys.Select(key => entries[key.Value]).ToArray();
         foreach (var entry in result) { entry.LastAccess = now; entry.InterestUntil = now.AddSeconds(30); }
-        if (additions.Length > 0) RequestReconciliation();
+        if (additions.Length > 0) wake.Writer.TryWrite(true);
         return result;
     }
 
@@ -180,10 +197,116 @@ internal sealed class OperationalObservationService(
             { entries.Remove(entry.Key.Value); budget.Release(entry); }
     }
 
-    internal void RequestReconciliation() => wake.Writer.TryWrite(true);
+    internal void RequestReconciliation()
+    {
+        lock (sync) { MarkDirty(); journalAttempt = null; }
+        (source as IScheduledTrackerObservationSource)?.Invalidate();
+        wake.Writer.TryWrite(true);
+    }
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
-        => Task.WhenAll(TrackerLoopAsync(stoppingToken), RuntimeLoopAsync(stoppingToken), CleanupLoopAsync(stoppingToken), AgeLoopAsync(stoppingToken));
+        => Task.WhenAll(JournalLoopAsync(stoppingToken), TrackerLoopAsync(stoppingToken), RuntimeLoopAsync(stoppingToken), CleanupLoopAsync(stoppingToken), AgeLoopAsync(stoppingToken));
+
+
+    private void MarkDirty()
+    {
+        foreach (var entry in entries.Values.Where(entry => entry.Key.Kind is not ("factory" or "cleanup")))
+        { entry.DirtyGeneration++; entry.PendingTimestamp ??= clock.GetTimestamp(); }
+    }
+    private double? PendingAge(Entry entry) => entry.PendingTimestamp is { } pending ? clock.GetElapsedTime(pending).TotalMilliseconds : null;
+    private double? ValidatedAge(Entry entry) => entry.AcceptedTimestamp is { } accepted
+        ? entry.AcceptedAgeMs + clock.GetElapsedTime(accepted).TotalMilliseconds : null;
+    private void AcceptAge(Entry entry, ObservationEnvelope envelope)
+    {
+        if (envelope.Data is null || envelope.Sources.Values.Any(state => state.ObservedAt is null))
+        { entry.AcceptedTimestamp = null; return; }
+        entry.AcceptedTimestamp = clock.GetTimestamp();
+        entry.AcceptedAgeMs = envelope.Sources.Values.Max(state => state.ValidatedTimestamp is { } validated
+            ? clock.GetElapsedTime(validated).TotalMilliseconds
+            : Math.Max(0, (clock.GetUtcNow() - state.ObservedAt!.Value).TotalMilliseconds));
+    }
+    private ObservationEnvelope Response(Entry entry) => entry.Envelope.Policy is null ? entry.Envelope : entry.Envelope with
+    {
+        ValidatedAgeMs = ValidatedAge(entry),
+        PendingAgeMs = PendingAge(entry)
+    };
+
+    internal async Task PollJournalOnceAsync(CancellationToken token)
+    {
+        if (journal is null) return;
+        bool interested;
+        lock (sync) interested = entries.Values.Any(entry => entry.Key.Kind is not ("factory" or "cleanup") && IsPinned(entry, clock.GetUtcNow()));
+        if (!interested) { lock (sync) journalState = "inactive"; }
+        else if (!journalStopped && (journalAttempt is null || clock.GetElapsedTime(journalAttempt.Value).TotalSeconds >= journalWaitSeconds))
+        {
+            journalAttempt = clock.GetTimestamp();
+            try
+            {
+                var page = await journal.ReadAsync(journalCursor, token);
+                var changed = journalIdentity is not null && journalIdentity != page.Identity;
+                var cursor = changed ? 0 : journalCursor;
+                var hints = new List<Nightweaver.Inspection.BeadsInvalidation>();
+                var gap = changed;
+                long? previousSequence = null;
+                foreach (var hint in page.Hints)
+                {
+                    if (hint.Sequence < 0 || previousSequence is { } previous && hint.Sequence < previous)
+                        throw new InvalidDataException("Console journal page is out of order.");
+                    previousSequence = hint.Sequence;
+                    if (hint.Sequence <= cursor) continue;
+                    if (hint.Sequence != cursor + 1) gap = true;
+                    hints.Add(hint); cursor = hint.Sequence;
+                }
+                if (page.Hints.Count > 256) throw new InvalidDataException("Console journal page exceeded its limit.");
+                lock (sync)
+                {
+                    journalIdentity = page.Identity; journalCursor = cursor;
+                    journalState = page.Hints.Count == 256 || gap ? "catching-up" : "current";
+                    if (source is IScheduledTrackerObservationSource scheduled)
+                    {
+                        if (gap) scheduled.Invalidate(); else if (hints.Count > 0) scheduled.Invalidate(hints);
+                    }
+                    if (gap || hints.Count > 0) { MarkDirty(); dirtyReceived ??= clock.GetTimestamp(); }
+                }
+                journalFailures = 0; journalWaitSeconds = 5; journalError = null;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (Nightweaver.Application.BeadsJournalTruncatedException truncated)
+            {
+                // Lower head proves a replaced/reset session; discard its cursor.
+                journalCursor = truncated.Head < journalCursor ? 0 : truncated.Head;
+                lock (sync) { journalState = "catching-up"; MarkDirty(); }
+                (source as IScheduledTrackerObservationSource)?.Invalidate();
+                journalWaitSeconds = 5;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException or TimeoutException
+                or OperationCanceledException or Nightweaver.Application.BeadsJournalSettlementException
+                or TargetRepositoryException or ProjectConfigurationException
+                or ToolExecutionException or System.Text.Json.JsonException)
+            {
+                lock (sync) journalState = "degraded";
+                journalStopped = exception is Nightweaver.Application.BeadsJournalSettlementException;
+                journalError = journalStopped
+                    ? new("journal-settlement", "Event reader stopped because child settlement is uncertain. Inspect Web host diagnostics before restarting it.", false)
+                    : new("journal-failed", "Event updates are unavailable; source audits continue while the reader retries.");
+                journalWaitSeconds = Math.Min(30, 5 * Math.Pow(2, Math.Min(3, journalFailures++)));
+            }
+        }
+    }
+
+    private async Task JournalLoopAsync(CancellationToken token)
+    {
+        if (journal is null) return;
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                await PollJournalOnceAsync(token);
+                await Task.Delay(TimeSpan.FromMilliseconds(250), clock, token);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+    }
 
     private async Task TrackerLoopAsync(CancellationToken token)
     {
@@ -193,8 +316,8 @@ internal sealed class OperationalObservationService(
             {
                 var started = clock.GetTimestamp();
                 await CollectOnceAsync(false, token);
-                var delay = TimeSpan.FromSeconds(1) - clock.GetElapsedTime(started);
-                if (delay <= TimeSpan.Zero) delay = TimeSpan.FromMilliseconds(1);
+                var delay = TimeSpan.FromMilliseconds(250) - clock.GetElapsedTime(started);
+                if (delay <= TimeSpan.Zero) delay = TimeSpan.FromMilliseconds(250);
                 using var wait = CancellationTokenSource.CreateLinkedTokenSource(token);
                 var timer = Task.Delay(delay, clock, wait.Token);
                 var signal = wake.Reader.ReadAsync(wait.Token).AsTask();
@@ -237,6 +360,14 @@ internal sealed class OperationalObservationService(
 
     internal async Task CollectOnceAsync(bool runtime, CancellationToken token, bool cleanup = false)
     {
+        if (runtime) { await CollectCoreAsync(runtime, cleanup, token); return; }
+        await collection.WaitAsync(token);
+        try { await CollectCoreAsync(runtime, cleanup, token); }
+        finally { collection.Release(); }
+    }
+
+    private async Task CollectCoreAsync(bool runtime, bool cleanup, CancellationToken token)
+    {
         Entry[] captured;
         lock (sync)
         {
@@ -246,12 +377,26 @@ internal sealed class OperationalObservationService(
         }
         if (captured.Length == 0)
         {
-            if (!runtime) await source.ReadTrackerAsync([], token);
+            if (!runtime)
+            {
+                if (source is IScheduledTrackerObservationSource scheduled) await scheduled.ReadScheduledAsync([], (_, _) => { }, token);
+                else await source.ReadTrackerAsync([], token);
+            }
             return;
         }
+        if (!runtime && dirtyReceived is { } dirty)
+        {
+            var remaining = TimeSpan.FromMilliseconds(250) - clock.GetElapsedTime(dirty);
+            if (remaining > TimeSpan.Zero) await Task.Delay(remaining, clock, token);
+            dirtyReceived = null;
+        }
+        Dictionary<Entry, long> generations;
+        lock (sync) generations = captured.ToDictionary(entry => entry, entry => entry.DirtyGeneration);
         var keys = captured.Select(entry => entry.Key).ToArray();
         var samples = runtime ? await source.ReadRuntimeAsync(keys, token)
-            : await source.ReadTrackerAsync(keys, token, (id, state) => Revalidate(captured, id, state));
+            : source is IScheduledTrackerObservationSource scheduledSource
+                ? await scheduledSource.ReadScheduledAsync(keys, (id, state) => Revalidate(captured, id, state), token)
+                : await source.ReadTrackerAsync(keys, token, (id, state) => Revalidate(captured, id, state));
         lock (sync)
         {
             foreach (var entry in captured)
@@ -272,7 +417,7 @@ internal sealed class OperationalObservationService(
                 }
                 if (sample.Pending)
                 {
-                    Publish(entry, entry.Envelope with { LastAttemptAt = sample.AttemptedAt, Sources = sources,
+                    Publish(entry, entry.Envelope with { LastAttemptAt = sample.AttemptedAt,
                         NextAttemptAt = clock.GetUtcNow().AddMilliseconds(entry.Envelope.TargetIntervalMs) });
                     Age(entry);
                     continue;
@@ -287,7 +432,10 @@ internal sealed class OperationalObservationService(
                     LastAttemptAt = sample.AttemptedAt,
                     NextAttemptAt = clock.GetUtcNow().AddMilliseconds(entry.Envelope.TargetIntervalMs)
                 };
-                Publish(entry, updated, projection: sample.Error is null || sample.Partial || missing);
+                var previousPending = entry.PendingTimestamp;
+                if (sample.Error is null && generations[entry] == entry.DirtyGeneration) entry.PendingTimestamp = null;
+                var accepted = Publish(entry, updated, projection: sample.Error is null || sample.Partial || missing);
+                if (!accepted) entry.PendingTimestamp = previousPending;
             }
         }
     }
@@ -311,9 +459,11 @@ internal sealed class OperationalObservationService(
                     && entry.ContentIdentities.TryGetValue(pair.Key, out var identity) && ReferenceEquals(identity, pair.Value.ContentIdentity));
                 var recovered = coherent && envelope.Error?.Code == "budget-exceeded"
                     && sources.Values.All(item => item.Health == "fresh" && item.Error is null);
-                var updated = WithAge(entry, envelope with { Sources = sources,
+                var candidate = envelope with { Sources = sources,
                     ObservedAt = coherent && observed > envelope.ObservedAt ? observed : envelope.ObservedAt,
-                    Health = recovered ? "fresh" : envelope.Health, Error = recovered ? null : envelope.Error });
+                    Health = recovered ? "fresh" : envelope.Health, Error = recovered ? null : envelope.Error };
+                if (coherent) AcceptAge(entry, candidate);
+                var updated = WithAge(entry, candidate);
                 if (updated.Health == envelope.Health && updated.Error == envelope.Error
                     && updated.Sources.All(pair => envelope.Sources.TryGetValue(pair.Key, out var old) && pair.Value.Health == old.Health && pair.Value.Error == old.Error))
                     // Only fixed-width sampling timestamps changed. Avoid serializing
@@ -327,7 +477,13 @@ internal sealed class OperationalObservationService(
     private void Age(Entry entry)
     {
         var aged = WithAge(entry, entry.Envelope);
-        if (aged.Health == entry.Envelope.Health && aged.Error == entry.Envelope.Error
+        if (aged.Policy is not null)
+        {
+            var pending = PendingAge(entry);
+            aged = aged with { Synchronization = new(journalState, pending is not null)
+                { Delayed = pending > aged.Policy.MaxPendingAgeMs, Error = journalError } };
+        }
+        if (aged.Health == entry.Envelope.Health && aged.Error == entry.Envelope.Error && aged.Synchronization == entry.Envelope.Synchronization
             && aged.Sources.All(pair => entry.Envelope.Sources.TryGetValue(pair.Key, out var previous) && pair.Value == previous))
             return;
         Publish(entry, aged);
@@ -336,13 +492,17 @@ internal sealed class OperationalObservationService(
     private ObservationEnvelope WithAge(Entry entry, ObservationEnvelope envelope)
     {
         var now = clock.GetUtcNow();
-        var maximum = TimeSpan.FromMilliseconds(envelope.TargetIntervalMs + 2000);
+        var maximum = TimeSpan.FromMilliseconds(envelope.Policy?.MaxSnapshotAgeMs ?? envelope.TargetIntervalMs + 2000);
         var error = new ObservationError("budget-exceeded", "Observation is overdue; retained data may be stale.");
-        var overdue = now - (envelope.ObservedAt ?? envelope.LastAttemptAt ?? entry.AdmittedAt) > maximum;
+        var overdue = envelope.Policy is not null
+            ? ValidatedAge(entry) is { } age && age > maximum.TotalMilliseconds
+            : now - (envelope.ObservedAt ?? envelope.LastAttemptAt ?? entry.AdmittedAt) > maximum;
         var sources = envelope.Sources.ToDictionary(pair => pair.Key, pair =>
         {
             var state = pair.Value;
-            if (now - (state.ObservedAt ?? state.LastAttemptAt ?? entry.AdmittedAt) <= maximum
+            var sourceAge = state.ValidatedTimestamp is { } validated ? clock.GetElapsedTime(validated)
+                : now - (state.ObservedAt ?? state.LastAttemptAt ?? entry.AdmittedAt);
+            if (sourceAge <= maximum
                 || state.Error is not null && state.Error.Code != "budget-exceeded") return state;
             overdue = true;
             return state with { Health = state.ObservedAt is null ? "unavailable" : "stale", Error = error };
@@ -352,14 +512,24 @@ internal sealed class OperationalObservationService(
         return envelope with { Health = envelope.Data is null ? "unavailable" : "stale", Error = error, Sources = sources };
     }
 
-    private void Publish(Entry entry, ObservationEnvelope envelope, bool projection = false)
+    private bool Publish(Entry entry, ObservationEnvelope envelope, bool projection = false)
     {
+        var previousAccepted = entry.AcceptedTimestamp;
+        var previousAge = entry.AcceptedAgeMs;
+        if (projection) AcceptAge(entry, envelope);
         envelope = WithAge(entry, envelope);
+        if (envelope.Policy is not null)
+        {
+            var pending = PendingAge(entry);
+            envelope = envelope with { Synchronization = new(journalState, pending is not null)
+                { Delayed = pending > envelope.Policy.MaxPendingAgeMs, Error = journalError } };
+        }
         var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope with { Revision = ulong.MaxValue.ToString(CultureInfo.InvariantCulture) }, Json).Length + MetadataReserve;
         if (!budget.TryReplace([], [((object)entry, bytes)]))
         {
             projection = false;
-            envelope = envelope with { Data = entry.Envelope.Data, ObservedAt = entry.Envelope.ObservedAt,
+            entry.AcceptedTimestamp = previousAccepted; entry.AcceptedAgeMs = previousAge;
+            envelope = envelope with { Data = entry.Envelope.Data, ObservedAt = entry.Envelope.ObservedAt, Sources = entry.Envelope.Sources,
                 Health = entry.Envelope.Data is null ? "unavailable" : "stale",
                 Error = new("source-limit", "Projection exceeds the observation cache budget.") };
             var required = JsonSerializer.SerializeToUtf8Bytes(envelope with { Revision = ulong.MaxValue.ToString(CultureInfo.InvariantCulture) }, Json).Length;
@@ -381,11 +551,12 @@ internal sealed class OperationalObservationService(
         if (projection) entry.ContentIdentities = envelope.Sources.ToDictionary(pair => pair.Key, pair => pair.Value.ContentIdentity, StringComparer.Ordinal);
         entry.Bytes = bytes;
         if (changed) Changed?.Invoke(entry.Key.Value, envelope.Revision);
+        return projection;
     }
 
     private static string Semantic(ObservationEnvelope envelope)
     {
-        var node = JsonSerializer.SerializeToNode(new { envelope.Data, envelope.Health, envelope.Error, envelope.Sources }, Json)!;
+        var node = JsonSerializer.SerializeToNode(new { envelope.Data, envelope.Health, envelope.Error, envelope.Sources, envelope.Policy, envelope.Synchronization }, Json)!;
         // Only sampling clocks are excluded; domain activity and checkpoint dates remain.
         static void Strip(JsonNode? value)
         {

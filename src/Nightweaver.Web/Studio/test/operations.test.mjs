@@ -5,7 +5,9 @@ import { QueryCoordinator, InteractionStore, queryKey } from '../src/operations.
 const identity = (key = 'attention') => ({ projectId: 'qa', key });
 const envelope = (revision = '1', epoch = 'A', key = 'attention', extra = {}) => ({
   schema: 'nightweaver-observation-v1', ...identity(key), epoch, revision, health: 'fresh', data: [revision],
-  lastAttemptAt: revision, observedAt: revision, sources: {}, error: null, targetIntervalMs: 1000, nextAttemptAt: null, ...extra,
+  lastAttemptAt: revision, observedAt: revision,
+  policy: { expectedValidationIntervalMs: 60000, maxSnapshotAgeMs: 120000, maxPendingAgeMs: 5000 },
+  validatedAgeMs: 0, pendingAgeMs: null, synchronization: { journal: 'current', pending: false }, sources: {}, error: null, targetIntervalMs: 1000, nextAttemptAt: null, ...extra,
 });
 const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 test('Product and readiness commands reconcile cleanup along with active tracker resources', async () => {
@@ -89,7 +91,7 @@ test('healthy status stays current through successive invalidations and deferred
   f.coordinator.dispose();
 });
 
-test('notifications cannot postpone stale status when replacement reads keep lagging', async () => {
+test('notifications cannot postpone delayed status when replacement reads keep lagging', async () => {
   const f = fixture(); f.coordinator.subscribe(identity(), () => {});
   await f.advance(); f.hello(); await f.advance();
   f.reads[0].resolve(envelope()); await f.advance();
@@ -99,7 +101,8 @@ test('notifications cannot postpone stale status when replacement reads keep lag
     assert.equal(f.snapshot().stale, false);
     await f.advance(1000);
   }
-  assert.equal(f.snapshot().stale, true);
+  assert.equal(f.snapshot().stale, false);
+  assert.equal(f.snapshot().dataState, 'delayed');
   assert.equal(f.snapshot().observation.revision, '1', 'Lagging responses cannot replace validated data');
   f.reads.at(-1).resolve(envelope('11')); await f.advance();
   assert.equal(f.snapshot().stale, false);
@@ -153,20 +156,20 @@ test('reconnect gap resync retains same-epoch watermark and rejects late old res
   const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
   f.reads[0].resolve(envelope('9007199254740994')); await f.advance();
   await f.advance(2000); assert.equal(f.reads.length, 2);
-  f.streams[0].failed(); assert.equal(f.snapshot().connectionState, 'disconnected');
+  f.streams[0].failed(); assert.equal(f.snapshot().connectionState, 'recovering');
   await f.advance(1000); f.hello(); await f.advance();
   f.reads[1].resolve(envelope('9007199254740999')); f.reads[2].resolve(envelope('2')); await f.advance();
-  assert.equal(f.snapshot().observation.revision, '9007199254740994'); assert.equal(f.snapshot().stale, true);
+  assert.equal(f.snapshot().observation.revision, '9007199254740994'); assert.equal(f.snapshot().stale, false);
   f.send('invalidation', { versions: { attention: '9007199254740995' } }); await f.advance();
   f.reads.at(-1).resolve(envelope('9007199254740995')); await f.advance();
   assert.equal(f.snapshot().observation.revision, '9007199254740995'); f.coordinator.dispose();
 });
 
-test('new epoch marks retained display stale, resets watermarks and rejects superseded epoch HTTP', async () => {
+test('new epoch marks retained display unsynchronized, resets watermarks and rejects superseded epoch HTTP', async () => {
   const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
   f.reads[0].resolve(envelope('900')); await f.advance(); await f.advance(2000);
   f.send('heartbeat', { epoch: 'B' }); f.hello({ epoch: 'B' }); await f.advance();
-  assert.equal(f.snapshot().stale, true); assert.equal(f.snapshot().observation.epoch, 'A');
+  assert.equal(f.snapshot().synchronized, false); assert.equal(f.snapshot().dataState, 'refreshing'); assert.equal(f.snapshot().observation.epoch, 'A');
   f.reads[1].resolve(envelope('999')); f.reads[2].resolve(envelope('1', 'B')); await f.advance();
   assert.equal(f.snapshot().observation.epoch, 'B'); assert.equal(f.snapshot().observation.revision, '1');
   f.coordinator.dispose();
@@ -184,7 +187,7 @@ test('overflow and equal-version resync refetch freshness, transient HTTP errors
   const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
   f.reads[0].resolve(envelope()); await f.advance();
   f.send('resync', { reason: 'overflow' }); await f.advance(); f.reads[1].reject(Error('temporary')); await f.advance();
-  assert.equal(f.snapshot().stale, true); assert.match(f.snapshot().error, /temporary/);
+  assert.equal(f.snapshot().stale, false); assert.match(f.snapshot().error, /temporary/);
   await f.advance(2000); f.reads[2].resolve(envelope('1', 'A', 'attention', { observedAt: 'later' })); await f.advance();
   assert.equal(f.snapshot().observation.observedAt, 'later'); assert.equal(f.snapshot().error, undefined);
   assert.equal(f.posts.length, 0); f.coordinator.dispose();
@@ -199,18 +202,19 @@ test('stalled reads expire under healthy heartbeats and recovery rejects late co
     assert.equal(stalled.signal.aborted, false);
     if (trigger === 'invalidation') f.send('invalidation', { versions: { attention: '2' } });
     if (trigger === 'refresh') await f.coordinator.refresh([identity()]);
-    if (trigger === 'wake') { f.coordinator.setVisible(false); f.coordinator.setVisible(true); }
+    if (trigger === 'wake') { f.coordinator.setVisible(false); f.coordinator.setVisible(true); f.hello(); }
     f.send('heartbeat'); await f.advance(2000);
     assert.equal(stalled.signal.aborted, true, trigger);
-    assert.equal(f.snapshot().connectionState, 'connected');
-    assert.equal(f.snapshot().stale, true); assert.match(f.snapshot().error, /timed out/i);
+    assert.equal(f.snapshot().connectionState, trigger === 'wake' ? 'recovering' : 'connected');
+    assert.equal(f.snapshot().stale, false);
+    if (trigger !== 'wake') assert.match(f.snapshot().error, /timed out/i);
     assert.equal(f.snapshot().observation.revision, '1'); assert.equal(f.reads.length, 3);
     f.reads[2].resolve(envelope('2')); await f.advance();
     assert.equal(f.snapshot().stale, false); assert.equal(f.snapshot().error, undefined);
     stalled.resolve(envelope('999')); await f.advance();
     assert.equal(f.snapshot().observation.revision, '2');
     assert.equal(f.posts.length, trigger === 'refresh' ? 1 : 0);
-    assert.equal(f.streams.length, 1); f.coordinator.dispose(); assert.equal(f.jobs.size, 0);
+    assert.equal(f.streams.length, trigger === 'wake' ? 2 : 1); f.coordinator.dispose(); assert.equal(f.jobs.size, 0);
   }
 });
 
@@ -231,17 +235,18 @@ test('read deadlines are canceled on settlement, unsubscribe, suspension and dis
   }
 });
 
-test('hidden tabs pause freshness reads; wake and heartbeat silence recover without marking sources fresh', async () => {
+test('hidden tabs release the stream, retain data and reconcile on wake', async () => {
   const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
   f.reads[0].resolve(envelope('1', 'A', 'attention', { health: 'stale' })); await f.advance();
-  f.coordinator.setVisible(false); await f.advance(10000); f.send('heartbeat'); await f.advance(10000);
-  assert.equal(f.reads.length, 1); assert.equal(f.snapshot().observation.health, 'stale');
-  f.coordinator.setVisible(true); await f.advance(); assert.equal(f.reads.length, 2);
-  await f.advance(15000); assert.equal(f.snapshot().connectionState, 'disconnected');
-  f.coordinator.wake(); assert.equal(f.streams.length, 2);
-  f.coordinator.suspend(); await f.advance(15000); assert.equal(f.streams.length, 2);
-  assert.ok(f.streams.every(stream => stream.closed));
-  f.coordinator.wake(); assert.equal(f.streams.length, 3); f.coordinator.dispose();
+  f.coordinator.setVisible(false); await f.advance(30000);
+  assert.equal(f.reads.length, 1); assert.equal(f.streams[0].closed, true);
+  assert.equal(f.snapshot().observation.health, 'stale');
+  f.coordinator.setVisible(true); f.hello(); await f.advance();
+  assert.equal(f.streams.length, 2); assert.equal(f.reads.length, 2);
+  assert.equal(f.snapshot().synchronized, false);
+  f.reads[1].resolve(envelope()); await f.advance();
+  assert.equal(f.snapshot().synchronized, true); assert.equal(f.snapshot().stale, false);
+  f.coordinator.dispose(); assert.equal(f.jobs.size, 0);
 });
 
 test('manual recovery coalesces refresh POST, clears only after later attempt, commands invalidate observations only', async () => {
@@ -363,7 +368,7 @@ test('equal-revision reconnect accepts refreshed metadata, stale stream callback
   f.reads[1].resolve(envelope('8', 'A', 'attention', { observedAt: 'later' })); await f.advance();
   assert.equal(f.snapshot().observation.observedAt, 'later'); assert.equal(f.snapshot().stale, false);
   await f.advance(2000); f.reads[2].resolve(envelope('7')); await f.advance();
-  assert.equal(f.snapshot().observation.revision, '8'); assert.equal(f.snapshot().stale, true);
+  assert.equal(f.snapshot().observation.revision, '8'); assert.equal(f.snapshot().stale, false);
   f.coordinator.dispose();
 });
 
@@ -381,7 +386,7 @@ test('pinned byte limit retains prior display with a visible error', async () =>
   f.reads[0].resolve(envelope()); await f.advance(); await f.advance(2000);
   f.reads[1].resolve(envelope('2', 'A', 'attention', { data: 'x'.repeat(16 * 1024 * 1024) })); await f.advance();
   assert.equal(f.snapshot().observation.revision, '1'); assert.match(f.snapshot().error, /storage limit/);
-  assert.equal(f.snapshot().stale, true); f.coordinator.dispose();
+  assert.equal(f.snapshot().stale, false); f.coordinator.dispose();
 });
 
 test('refresh before initial observation stays pending until a real attempt', async () => {
@@ -409,4 +414,41 @@ test('LRU eviction removes only inactive responses and a refresh rejection remai
   f.transport.refresh = refresh;
   await f.coordinator.refresh([identity('workspace:qa-64')]);
   assert.equal(f.snapshot('workspace:qa-64').error, undefined); f.coordinator.dispose();
+});
+
+test('tracker age uses receipt elapsed time, retained data expires while disconnected and recovers on validation', async () => {
+  const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
+  f.reads[0].resolve(envelope('1', 'A', 'attention', { observedAt: '2099-01-01', validatedAgeMs: 119000 })); await f.advance();
+  assert.equal(f.snapshot().stale, false);
+  f.coordinator.setVisible(false); await f.advance(2000);
+  assert.equal(f.snapshot().dataState, 'stale'); assert.equal(f.snapshot().observation.data[0], '1');
+  f.coordinator.setVisible(true); f.hello(); await f.advance();
+  assert.equal(f.snapshot().synchronized, false);
+  f.reads.at(-1).resolve(envelope('1', 'A', 'attention', { observedAt: '1900-01-01', validatedAgeMs: 0 })); await f.advance();
+  assert.equal(f.snapshot().dataState, 'current'); assert.equal(f.snapshot().synchronized, true);
+  f.coordinator.dispose();
+});
+
+test('pending response receipts cannot postpone five-second warning or imply accepted-body validation', async () => {
+  const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
+  f.reads[0].resolve(envelope('1', 'A', 'attention', { validatedAgeMs: 100000, pendingAgeMs: 4000,
+    synchronization: { journal: 'current', pending: true } })); await f.advance();
+  assert.equal(f.snapshot().dataState, 'refreshing');
+  await f.advance(2000); assert.equal(f.snapshot().dataState, 'delayed');
+  f.reads.at(-1).resolve(envelope('1', 'A', 'attention', { validatedAgeMs: 102000, pendingAgeMs: 6000,
+    synchronization: { journal: 'current', pending: true } })); await f.advance();
+  assert.equal(f.snapshot().dataState, 'delayed');
+  f.coordinator.dispose();
+});
+
+test('valid HTTP proves backend reachability during channel recovery; hello alone does not complete recovery', async () => {
+  const f = fixture(); f.coordinator.subscribe(identity(), () => {}); await f.advance(); f.hello(); await f.advance();
+  f.reads[0].resolve(envelope()); await f.advance(); f.streams[0].failed();
+  assert.equal(f.snapshot().connectionState, 'recovering'); assert.equal(f.snapshot().stale, false);
+  await f.advance(1000); f.hello(); await f.advance();
+  f.reads.at(-1).reject(Error('read failed')); await f.advance();
+  assert.equal(f.snapshot().connectionState, 'recovering'); assert.equal(f.snapshot().synchronized, false);
+  await f.advance(2000); f.reads.at(-1).resolve(envelope()); await f.advance();
+  assert.equal(f.snapshot().connectionState, 'connected'); assert.equal(f.posts.length, 0);
+  f.coordinator.dispose();
 });

@@ -51,7 +51,8 @@ No browser UI changed in this investigation. See the
 `node source-freshness-qa.mjs` exercises the real native collector on a fresh
 exact isolated default stack. Set the discovered URL and config as below. It
 retains one disposable paused Bead, watches its actual Attention/Workspace
-responses and rendered statuses through repeated successful collections, then
+responses and rendered statuses for at least 130 seconds across two real source
+audits and the 120-second age boundary, then
 verifies an external comments-only edit reaches the selected Workspace. No responses
 or health metadata are substituted. Evidence and 1440/375/720 captures go to
 `TestResults/source-freshness` or `NIGHTWEAVER_QA_OUTPUT`. Stop the exact stack
@@ -340,3 +341,23 @@ configured versus observed model, retained idle/stale/stopped/unavailable,
 Overview summary and long metadata at 1440/375/720 CSS pixels. Native telemetry
 additionally verifies actual Last-Event-ID resume, duplicate-free output,
 completion cessation and effective 200% zoom. Stop the exact AppHost in `finally`.
+
+## Event-cache scale acceptance (opt-in)
+
+Run the actual Web cache module with recording source/journal adapters:
+
+```powershell
+dotnet run --project tests/Nightweaver.QA.CacheProbe -- --scale --output=TestResults/event-cache-scale.json
+```
+
+Run from the repository root. This separate executable is deliberately absent
+from `Nightweaver.slnx` and normal test discovery. It creates and retains a new
+isolated repository/home, imports 2,000 Beads with 40 paused histories and 800
+comments, measures a matching authoritative reference cohort, bootstraps the
+actual collector, drains bounded journal backlog and watches at least 130 seconds
+of settled operation. It records real source command counts and causes, journal
+pages, successful source age, comment visibility, native readiness/dependency and
+unjournaled audit fallback. Process CPU, logical IO and private-byte samples cover
+the probe host; short-lived child CPU/IO are explicitly excluded. It stops and
+settles the collector in `finally` and exposes no production debug endpoint.
+Large probes and sustained Playwright runs are never normal xUnit prerequisites.

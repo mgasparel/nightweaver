@@ -41,11 +41,12 @@ try {
     if (!response.url().includes('/api/operations/v1/') || !response.url().includes('/resources?')) return;
     const value = await response.json().catch(() => null);
     if (value) responses.push({ at: Date.now(), key: value.key, health: value.health, revision: value.revision,
-      observedAt: value.observedAt, sources: value.sources, error: value.error?.code });
+      observedAt: value.observedAt, sources: value.sources, error: value.error?.code,
+      validatedAgeMs: value.validatedAgeMs, pendingAgeMs: value.pendingAgeMs, synchronization: value.synchronization });
   });
   await page.goto(`${base}/projects/qa/beads/${selected}?tab=history`);
-  await page.waitForFunction(() => document.querySelector('.synchronization [role=status]')?.textContent === 'Live connection · Tracker fresh'
-    && [...document.querySelectorAll('.status')].some(element => element.textContent === 'fresh'));
+  await page.waitForFunction(() => document.querySelector('.synchronization [role=status]')?.textContent === 'Live connection · Current'
+    && [...document.querySelectorAll('.status')].some(element => element.textContent === 'Current'));
   responses.length = 0;
   await page.evaluate(() => {
     window.sourceStates = [];
@@ -56,12 +57,18 @@ try {
     };
     capture(); new MutationObserver(capture).observe(document.body, {subtree:true,childList:true,attributes:true,characterData:true});
   });
-  await page.waitForTimeout(16000);
+  const sustainedStart = Date.now();
+  await page.waitForTimeout(130000);
   const states = await page.evaluate(() => window.sourceStates);
-  assert(responses.length >= 8, 'Observe multiple real collection cycles');
-  assert(responses.every(value => value.health === 'fresh'), 'Successful unchanged source reads must not age-flash stale between collections');
-  assert(states.every(state => state.header === 'Live connection · Tracker fresh' && !state.badges.includes('stale')));
-  steady = { responses: responses.slice(), states };
+  assert(Date.now() - sustainedStart >= 130000, 'Cross two real audits and the 120-second age boundary');
+  assert(responses.length >= 100, 'Observe sustained HTTP receipt ageing');
+  const trackerResponses = responses.filter(value => value.key === 'attention' || value.key.startsWith('workspace:'));
+  assert(trackerResponses.every(value => value.validatedAgeMs <= 120000), 'Accepted sources remain within the age allowance');
+  const attentionTimes = [...new Set(trackerResponses.filter(value => value.key === 'attention').map(value => value.observedAt))];
+  assert(attentionTimes.length >= 3, 'Bootstrap and two real authoritative audits must validate Attention');
+  assert(trackerResponses.every(value => value.health === 'fresh'), 'Successful unchanged source reads must not age-flash stale between collections');
+  assert(states.every(state => state.header === 'Live connection · Current' && !state.badges.includes('stale')));
+  steady = { wallSeconds: (Date.now() - sustainedStart) / 1000, attentionValidations: attentionTimes, responses: responses.slice(), states };
   const comment = 'Source freshness external edit ' + Date.now();
   bd(['comments', 'add', selected, comment]);
   const added = page.getByText(comment, { exact: true });
@@ -79,7 +86,7 @@ try {
     && new URL(response.url()).searchParams.get('key')?.startsWith('digest:') && (await response.json()).health === 'fresh');
   await page.goto(`${base}/projects/qa/overview`);
   await digestReady;
-  await page.waitForFunction(() => document.querySelector('.synchronization [role=status]')?.textContent === 'Live connection · Tracker fresh');
+  await page.waitForFunction(() => document.querySelector('.synchronization [role=status]')?.textContent === 'Live connection · Current');
   responses.length = 0;
   await page.waitForTimeout(10000);
   const digest = responses.filter(value => value.key.startsWith('digest:'));

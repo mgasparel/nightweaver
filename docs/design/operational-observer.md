@@ -1,3 +1,20 @@
+## Event-driven scheduling amendment (ns-sib.1)
+
+The v1.2 contract amendment in `operational-observations-v1.md` supersedes the
+original one-second tracker schedule below. `ConsoleJournalReader` binds public
+bounded batches to Git/Dolt branch and host/repository identity and shares the
+observer gate. `TrackerSourceSchedule` owns bounded source generations and
+independent audit deadlines; `OperationalObservationSource.ReadScheduledAsync`
+reuses clean authoritative values and drains unfinished cohorts. Cohort source
+generations must still be current at publication. Resource pending generations
+remain owned by `OperationalObservationService` until accepted-body publication.
+Shared memory reservations cover source values, histories and projections.
+Workspace confirming inventory remains authoritative after native detail reads;
+a confirming read is a correctness guard, not an idle polling sweep. Environment
+inputs retain a separate two-second fallback. Journal failures leave audits active
+and carry an independent actionable diagnostic. The Orchestrator still uses its
+unchanged sequence-only projection and thirty-second cadence.
+
 # Shared operational observations
 
 The wire contract is [Operational observations v1, amendment v1.1](operational-observations-v1.md). `ns-mbd.2` implements the shared backend and read/refresh routes. `ns-mbd.3` owns SSE transport and browser coordination. Existing console routes retain their payloads and guarded commands.

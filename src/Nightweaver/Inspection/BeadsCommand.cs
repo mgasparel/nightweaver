@@ -41,6 +41,10 @@ internal static class BeadsCommand
     internal static ProcessRequest CreateShowWithComments(string workingDirectory, string beadId)
         => Create(workingDirectory, ["--readonly", "--sandbox", "show", beadId, "--include-comments", "--json"]);
 
+    internal static ProcessRequest CreateJournalBranch(string workingDirectory)
+        => Create(workingDirectory, ["--readonly", "--sandbox", "branch", "--json"])
+            with { Timeout = TimeSpan.FromSeconds(2), MaximumOutputBytes = 1024 * 1024 };
+
     internal static ProcessRequest CreateJournalSetup(string workingDirectory)
         => CreateWrite(workingDirectory, ["config", "set", "events-journal", "true"]);
 

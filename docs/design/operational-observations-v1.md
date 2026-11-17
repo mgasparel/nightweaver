@@ -1,3 +1,61 @@
+## Amendment v1.2 — event-driven tracker observations (ns-sib.1)
+
+This amendment supersedes the one-second tracker command schedule and its
+three-second overdue rule. Runtime and cleanup retain their existing policies.
+The URL, schema identifier, HTTP/SSE topology and guarded commands are unchanged;
+backend and Studio assets ship together.
+
+Tracker envelopes add `policy: {expectedValidationIntervalMs: 60000,
+maxSnapshotAgeMs: 120000, maxPendingAgeMs: 5000}`, `validatedAgeMs` (null before
+accepted data), `pendingAgeMs` (null when clean), and `synchronization: {journal:
+"catching-up"|"current"|"degraded"|"inactive", pending: boolean}`. Ages are response
+metadata, excluded from semantic revisions. Actual delayed/stale/source-status
+transitions notify subscribers. Successful validation of the exact accepted
+source content resets age; pending replacement provenance cannot refresh old data.
+Server deadlines and browser receipt ageing use monotonic clocks. On wake, retained
+data requires reconciliation; browser wall-clock skew cannot confer freshness.
+
+One Web-owned bounded journal reader serves interested tracker resources, including
+standalone Web. It checks at five-second start-to-start cadence, at most one
+256-record/8-MiB page, with a linked two-second deadline, no overlap or catch-up
+spin (minimum 250ms after overruns). Failed pages do not advance the cursor;
+retry is 5/10/20/30 seconds. Uncertain child settlement stops replacements.
+No interested tracker resources means no journal process after the 30-second
+interest grace. Hidden/suspended browser consumers release tracker interest;
+wake requests immediate reconciliation and journal checking.
+
+Hints invalidate sources, never supply authoritative bodies or authorize actions.
+Create/update/close/delete and dependency changes invalidate inventory, interested
+native ready/blocked sets and selected Workspace inputs. Comment invalidates
+inventory and only the named cached history plus dependent presentations.
+Unknown operations, gaps and identity ambiguity request full reconciliation.
+Cold replay starts at zero in bounded pages with explicit catching-up; truncation
+head is only a resume hint and requires an authoritative baseline. Cursors are
+host/session-bound and discarded when repository/branch identity is uncertain.
+Dirty generations coalesce for at most 250ms from the first hint, with at most
+512 retained source identities and broad invalidation on overflow. New hints
+cannot erase an older outstanding five-second obligation or a newer revision.
+
+Each interested source also receives an authoritative audit every 60 seconds,
+spread after bootstrap, sharing inventory/readiness through continuation turns.
+Four-history and four-second native-work limits, two-second native-command bound,
+mutation fairness, two selected Workspaces and memory limits remain unchanged.
+Unfinished Attention/Workspace cohorts drain without another event. Idle turns
+issue no list/ready/comments commands before audit. Explicit refresh and local
+writes wake reconciliation immediately, even after uncertain command outcomes.
+
+Connection evidence, source failure, snapshot age and pending delay are separate.
+Transport heartbeat remains 10 seconds; 25 seconds without valid backend evidence
+means disconnected. Stream errors mean recovering; valid HTTP reads still prove
+backend reachability. A failed request retains data and is a read error. A retry
+start never proves recovery. A valid identity handshake and resource read are
+required for synchronization recovery. Snapshot states are loading/unavailable,
+current/refreshing/delayed/stale, with source errors immediately visible. Age
+continues locally during disconnection, and drafts/focus survive resynchronization.
+Normal supported changes take five-second detection plus bounded read/render
+work; backlog/startup/failure and unjournaled-write audit recovery are exceptional.
+Large scale and 130-second browser acceptance remain opt-in, outside normal tests.
+
 # Operational observations v1
 
 Contract owner: ns-mbd.8; backend consumer: ns-mbd.2; stream/coordinator consumer:

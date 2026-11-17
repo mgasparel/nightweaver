@@ -4,7 +4,7 @@ import { Panel, Status } from "./primitives";
 import { DeliveryView } from "./delivery-views";
 import { operations, interactions } from "./operations-browser";
 import { useObservation } from "./use-observation";
-import type { Snapshot } from "./operations";
+import { observationStatus, type Snapshot } from "./operations";
 import { beadPath, safeBeadId, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
 import { AttentionCommands } from "./attention-commands";
 import { PlanningAuthorization } from "./product-views";
@@ -94,8 +94,8 @@ export function Freshness({ snapshot, project, resource }: { snapshot: Snapshot;
   const [error, setError] = useState("");
   const envelope = snapshot.observation;
   return <div className="bead-freshness">
-    <div role="status"><Status tone={snapshot.stale || envelope?.health !== "fresh" ? "warn" : "accent"}>
-      {snapshot.stale ? "Retained / awaiting current data" : envelope?.health ?? "Unavailable"}</Status>
+    <div role="status"><Status tone={snapshot.stale || envelope?.health !== "fresh" || envelope?.synchronization?.error || snapshot.dataState === "delayed" ? "warn" : "accent"}>
+      {observationStatus(snapshot)}</Status>
       <span> {envelope?.observedAt ? `Observed ${new Date(envelope.observedAt).toLocaleString()}` : "No observation yet"}</span></div>
     <button className="button" onClick={() => { setError(""); operations.refresh([{ projectId: project, key: resource }]).catch(() => setError("Refresh could not be confirmed. Try Refresh again.")); }}>
       {snapshot.refreshing ? "Refresh again" : "Refresh view"}</button>
@@ -187,7 +187,7 @@ export function AttentionView({ project, compact = false }: { project: string; c
       {item && <EvidenceHistory value={{ path: beadPath(project, selected) }}><Evidence message={item.message} fallback={item.question || item.diagnostic || "No attributable pause message is available. Review history before acting."} />
         {item.contextNotice && <p className="bead-notice">{item.contextNotice}</p>}</EvidenceHistory>}
       <Link className="text-link" to={beadPath(project, selected)}>Open Full Bead Workspace and evidence</Link>
-      <Guidance key={selected} project={project} id={selected} item={item} current={!snapshot.stale && snapshot.observation?.health !== "unavailable" && !!item} />
+      <Guidance key={selected} project={project} id={selected} item={item} current={snapshot.synchronized === true && !snapshot.stale && snapshot.observation?.health !== "unavailable" && !!item} />
     </Panel>}
     </div>
   </FocusBoundary>;
@@ -277,7 +277,7 @@ function WorkspaceIdentity({ project, id }: { project: string; id: string }) {
             <pre className="bead-original" tabIndex={0} aria-label="Original tracker metadata">{valid.sourceMetadata ?? "No source metadata recorded."}</pre>
           </details>
         </>}
-        <PlanningAuthorization project={project} data={valid} current={!missing && !snapshot.stale && snapshot.observation?.health !== "unavailable"} />
+        <PlanningAuthorization project={project} data={valid} current={snapshot.synchronized === true && !missing && !snapshot.stale && snapshot.observation?.health !== "unavailable"} />
         {[["Description", valid.bead.description], ["Acceptance criteria", valid.bead.acceptanceCriteria]].map(([label, text]) => <section key={label}><h3>{label}</h3><Markdown text={text || "Not provided."} /></section>)}
         <details><summary>Design and notes</summary><Markdown text={valid.bead.design || "No design recorded."} /><Markdown text={valid.bead.notes || "No notes recorded."} /></details>
         <Relations data={valid} project={project} />
@@ -294,7 +294,7 @@ function WorkspaceIdentity({ project, id }: { project: string; id: string }) {
         {valid.attention && <><Evidence message={valid.attention.message} fallback={valid.attention.question || valid.attention.diagnostic || "Review history before acting."} />
           {valid.attention.contextNotice && <p>{valid.attention.contextNotice}</p>}
           <Link className="text-link" to={`?${new URLSearchParams({ ...Object.fromEntries(params), tab: "history" })}`}>Read active evidence and full history</Link></>}
-        <Guidance project={project} id={id} item={valid.attention} current={!missing && !snapshot.stale && snapshot.observation?.health !== "unavailable"} />
+        <Guidance project={project} id={id} item={valid.attention} current={snapshot.synchronized === true && !missing && !snapshot.stale && snapshot.observation?.health !== "unavailable"} />
       </Panel>}
     </>}
     {!valid && interactions.get(project, id) && <Guidance project={project} id={id} current={false} />}

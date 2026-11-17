@@ -10,6 +10,22 @@ namespace Nightweaver.Tests;
 public sealed class BeadsJournalClientTests
 {
     [Fact]
+    public async Task TypedHintsRetainOnlySafeBoundedIdentityAndShareSequenceParser()
+    {
+        const string text = """
+            {"seq":1,"op":"comment","issue_id":"ns-abc.1","comment":{"text":"private payload"}}
+            {"seq":2,"op":"dep_add","issue_id":"../unsafe","dep":{"kind":"blocks","target":"ns-xyz","metadata":"not retained"}}
+            """;
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(text));
+        using var reader = new StreamReader(stream);
+        var hints = await BeadsJournalClient.ParseInvalidationsAsync(reader, 256, TestContext.Current.CancellationToken);
+        Assert.Equal(new BeadsInvalidation(1, "comment", "ns-abc.1", null), hints[0]);
+        Assert.Equal(new BeadsInvalidation(2, "dep_add", null, "ns-xyz"), hints[1]);
+        Assert.Equal([1L, 2L], await ParseAsync(text));
+        Assert.DoesNotContain("private payload", JsonSerializer.Serialize(hints));
+    }
+
+    [Fact]
     public async Task MultilineRecordsKeepOnlySequencesAndAcceptOldOrDuplicateHints()
     {
         const string text = """

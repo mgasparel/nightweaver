@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Nightweaver.Tests" />
+    <InternalsVisibleTo Include="Nightweaver.QA.CacheProbe" />
     <InternalsVisibleTo Include="Nightweaver.Web" />
     <InternalsVisibleTo Include="Nightweaver.QA.AppHost" />
     <InternalsVisibleTo Include="ExecutionCrashHost" />

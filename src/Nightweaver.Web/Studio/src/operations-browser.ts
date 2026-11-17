@@ -23,7 +23,7 @@ const transport: Transport = {
   },
 };
 export const operations = new QueryCoordinator(transport, {
-  now: () => Date.now(), random: () => Math.random(),
+  now: () => performance.now(), random: () => Math.random(),
   later(callback, ms) { const timer = setTimeout(callback, ms); return () => clearTimeout(timer); },
 });
 export const interactions = new InteractionStore();

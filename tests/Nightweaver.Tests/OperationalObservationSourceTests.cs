@@ -14,6 +14,89 @@ namespace Nightweaver.Tests;
 public sealed class OperationalObservationSourceTests
 {
     [Fact]
+    public async Task NewInventoryRebuildsPendingAttentionCohortBeforePublishing()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 5 };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("attention");
+        var token = TestContext.Current.CancellationToken;
+        Assert.Empty(await source.ReadScheduledAsync(keys, (_, _) => { }, token));
+        runner.Title = "New authoritative title";
+        source.Invalidate([new BeadsInvalidation(1, "update", "task-1", null)]);
+        var completed = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.All(Assert.IsType<AttentionDeskItem[]>(completed["attention"].Data), row => Assert.Equal(runner.Title, row.Title));
+    }
+
+    [Fact]
+    public async Task ScheduledReadsStayIdleSelectCommentHistoryAndAuditWithoutRepeatingCore()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 5 };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("attention", "explorer:ready:");
+        var token = TestContext.Current.CancellationToken;
+        var bootstrap = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.False(bootstrap.ContainsKey("attention"));
+        var completed = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Equal(5, Assert.IsType<AttentionDeskItem[]>(completed["attention"].Data).Length);
+        Assert.Single(runner.Commands, command => command == "list");
+        Assert.Single(runner.Commands, command => command == "ready");
+        var idleCount = runner.Commands.Count;
+        for (var turn = 0; turn < 100; turn++)
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(250));
+            Assert.Empty(await source.ReadScheduledAsync(keys, (_, _) => { }, token));
+        }
+        Assert.Equal(idleCount, runner.Commands.Count);
+        var historiesBefore = runner.CommentIds.Count;
+        runner.CommentOverrides["task-2"] = "External selective history";
+        source.Invalidate([new BeadsInvalidation(1, "comment", "task-2", null)]);
+        var changed = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.NotNull(changed["attention"].Data);
+        Assert.Equal(["task-2"], runner.CommentIds.Skip(historiesBefore));
+        Assert.Equal(2, runner.Commands.Count(command => command == "list"));
+        Assert.Single(runner.Commands, command => command == "ready");
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Equal(3, runner.Commands.Count(command => command == "list"));
+        Assert.Equal(2, runner.Commands.Count(command => command == "ready"));
+        Assert.Equal(11, runner.CommentIds.Count); // Five bootstrap, one change, five audit.
+    }
+
+    [Fact]
+    public async Task DirtyHintDuringAuthoritativeReadSurvivesUntilAnotherRead()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        OperationalObservationSource? source = null;
+        var invalidate = false;
+        var runner = new Runner { Advance = () =>
+        {
+            if (!invalidate) return;
+            invalidate = false;
+            source!.Invalidate([new BeadsInvalidation(2, "update", "task-1", null)]);
+        } };
+        using var factory = Factory(target.Path, runner, clock);
+        source = Adapter(factory);
+        var keys = Keys("explorer:all:");
+        var token = TestContext.Current.CancellationToken;
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        source.Invalidate([new BeadsInvalidation(1, "update", "task-1", null)]);
+        invalidate = true;
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.NotNull(source.PendingAge(["inventory"]));
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Null(source.PendingAge(["inventory"]));
+        Assert.Equal(3, runner.Commands.Count(command => command == "list"));
+    }
+
+    [Fact]
     public async Task UnchangedSourcesStayFreshBetweenCompleteSerialCollections()
     {
         using var target = new ObservationTargetFixture();
@@ -41,7 +124,7 @@ public sealed class OperationalObservationSourceTests
         await service.CollectOnceAsync(false, token);
         await service.CollectOnceAsync(false, token);
         Assert.Equal(first.Revision, service.Read("workspace:task-1").Revision);
-        Assert.Equal(18, runner.Commands.Count); // Six native queries per cycle, no added reads.
+        Assert.Equal(6, runner.Commands.Count); // One bootstrap with authoritative confirmation; idle turns perform no tracker-body reads.
     }
 
     [Fact]
@@ -488,7 +571,13 @@ public sealed class OperationalObservationSourceTests
             try { return await actual.RunAsync(request with { Environment = environment }, token); }
             finally { measured.Enqueue($"{request.FileName} {string.Join(' ', request.Arguments)}: {commandTimer.Elapsed.TotalMilliseconds:F1}ms"); }
         });
-        using var factory = Factory(target.Path, runner);
+        var journal = new ConcurrentQueue<ConsoleJournalPage>();
+        using var factory = Factory(target.Path, runner, configure: services =>
+        {
+            services.RemoveAll<IConsoleJournalReader>();
+            services.AddSingleton<IConsoleJournalReader>(provider => new RecordingJournalReader(
+                ActivatorUtilities.CreateInstance<ConsoleJournalReader>(provider), journal));
+        });
         using var client = factory.CreateClient();
         var token = TestContext.Current.CancellationToken;
         var path = $"/api/operations/v1/projects/web-test/resources?key=workspace:{bead}";
@@ -502,7 +591,10 @@ public sealed class OperationalObservationSourceTests
             }
         }
         var cold = Stopwatch.StartNew();
-        var first = await ReadObservedAsync(root => root.GetProperty("data").ValueKind == JsonValueKind.Object);
+        var first = await ReadObservedAsync(root => root.GetProperty("data").ValueKind == JsonValueKind.Object
+            && root.GetProperty("synchronization").GetProperty("journal").GetString() == "current"
+            && !root.GetProperty("synchronization").GetProperty("pending").GetBoolean());
+        var beforeMutation = journal.Count;
         var coldSeconds = cold.Elapsed.TotalSeconds;
         var count = first.GetProperty("data").GetProperty("comments").GetArrayLength();
         var revision = first.GetProperty("revision").GetString();
@@ -533,6 +625,10 @@ public sealed class OperationalObservationSourceTests
                     && relation.GetProperty("direction").GetString() == "outgoing");
         });
         var combinedSeconds = changed.Elapsed.TotalSeconds;
+        Assert.Contains(journal.Skip(beforeMutation).SelectMany(page => page.Hints), hint => hint.IssueId == bead && hint.Operation == "comment");
+        Assert.Contains(journal.Skip(beforeMutation).SelectMany(page => page.Hints), hint => hint.IssueId == bead && hint.Operation == "dep_add");
+        Assert.True(cold.Elapsed.TotalSeconds < 30, "All visibility precedes the first scheduled source audit.");
+        TestContext.Current.TestOutputHelper?.WriteLine($"Journal pages {journal.Count}; consumed mutation hints before audit; body reads {measured.Count}");
         Assert.NotEqual(revision, combined.GetProperty("revision").GetString());
         var combinedData = combined.GetProperty("data");
         Assert.Equal(count + 1, combinedData.GetProperty("comments").GetArrayLength());
@@ -546,6 +642,16 @@ public sealed class OperationalObservationSourceTests
         TestContext.Current.TestOutputHelper?.WriteLine($"Native observer: cold Workspace {coldSeconds:F3}s; combined comments+dependency visibility {combinedSeconds:F3}s; commands {source.CommandCount}; native ms {source.NativeMilliseconds:F1}");
         // Performance targets are measured evidence; parallel-suite load can exceed them.
         // UntilAsync still enforces the functional observation bound.
+    }
+
+    private sealed class RecordingJournalReader(IConsoleJournalReader inner, ConcurrentQueue<ConsoleJournalPage> pages) : IConsoleJournalReader
+    {
+        public async Task<ConsoleJournalPage> ReadAsync(long cursor, CancellationToken token)
+        {
+            var page = await inner.ReadAsync(cursor, token);
+            pages.Enqueue(page);
+            return page;
+        }
     }
 
     private static async Task<JsonElement> UntilAsync(HttpClient client, string path, Func<JsonElement, bool> predicate, CancellationToken token)
@@ -684,7 +790,7 @@ public sealed class OperationalObservationSourceTests
     }
 
     private static OperationKey[] Keys(params string[] keys) => keys.Select(OperationKey.Parse).ToArray();
-    private static NightweaverWebApplicationFactory Factory(string target, IProcessRunner runner, TimeProvider? clock = null)
+    private static NightweaverWebApplicationFactory Factory(string target, IProcessRunner runner, TimeProvider? clock = null, Action<IServiceCollection>? configure = null)
     {
         if (runner is Runner scripted) scripted.TargetPath = target;
         var factory = new NightweaverWebApplicationFactory(configureServices: services =>
@@ -692,6 +798,7 @@ public sealed class OperationalObservationSourceTests
             services.RemoveAll<IProcessRunner>();
             services.AddSingleton(runner);
             if (clock is not null) { services.RemoveAll<TimeProvider>(); services.AddSingleton(clock); }
+            configure?.Invoke(services);
         });
         File.WriteAllText(factory.ConfigPath, JsonSerializer.Serialize(new { name = "web-test", target_repository = new { path = target } }));
         return factory;
