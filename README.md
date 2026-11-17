@@ -131,7 +131,7 @@ The supported v1 deployment starts one detached runtime and its matching Web Con
 
 The background owner explicitly breaks away from the launching terminal's Windows Job Object as well as detaching from its console. Its own Job Object still contains the runtime, Web Console and Agent descendants. If the launching host forbids job breakaway, startup fails without creating an owner; launch from a terminal that permits background processes. Nightweaver does not silently fall back to a process that would die when the terminal closes.
 
-Publish both apphosts and their prompts/static assets to a new destination. Pass the existing Target Repository so the script can refuse a destination that overlaps either repository:
+Publish both apphosts and their prompts/static assets to a new destination with Windows PowerShell 5.1 or PowerShell 7. The publisher verifies the supported `web/wwwroot/studio/index.html` entry and its local JS/CSS references (root URLs resolve under `wwwroot`, relative URLs beside the entry); the legacy root entry is not required. Pass the existing Target Repository so the script can refuse a destination that overlaps either repository:
 
 ```powershell
 .\scripts\Publish-Nightweaver.ps1 `

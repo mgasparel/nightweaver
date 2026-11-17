@@ -24,6 +24,15 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Run the cheap paired publisher contract explicitly in local Review/QA:
+`powershell.exe -NoProfile -File scripts/tests/Publish-Nightweaver.Tests.ps1`
+and `pwsh -NoProfile -File scripts/tests/Publish-Nightweaver.Tests.ps1`.
+CI runs both shells. Disposable staged files and a controlled `dotnet` function
+exercise the real script interface, Studio-only success, exact revision manifest,
+missing entry/JS/CSS/apphosts/prompts, staging cleanup and destination preservation.
+These checks perform no real builds or publishes. Existing published standalone
+and background hosting tests retain the native hosting boundary.
+
 Journal hint tests use fake batches and delay callbacks for pagination, atomic cursor
 commit, failure backoff, truncation, session replacement and cancellation. In-memory
 parser cases cover multiline JSON, invalid suffixes, UTF-8 byte and record limits,

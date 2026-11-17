@@ -87,8 +87,30 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $stageFull 'prompts/implementer.md') -PathType Leaf)) {
         throw 'Published CLI role prompts are incomplete.'
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $webOutput 'wwwroot/index.html') -PathType Leaf)) {
-        throw 'Published Web Console static assets are incomplete.'
+    $webRoot = Join-Path $webOutput 'wwwroot'
+    $studioEntry = Join-Path $webRoot 'studio/index.html'
+    if (-not (Test-Path -LiteralPath $studioEntry -PathType Leaf)) {
+        throw 'Published Web Console Studio entry is missing.'
+    }
+    # Vite emits quoted src/href URLs. Resolve root URLs against wwwroot and
+    # relative URLs against the entry, including query/fragment cache suffixes.
+    $html = [System.IO.File]::ReadAllText($studioEntry)
+    $bundleReferences = [regex]::Matches($html, '(?i)\b(?:src|href)\s*=\s*["''](?<url>[^"'']+\.(?:js|css)(?:[?#][^"'']*)?)["'']')
+    $localBundles = 0
+    foreach ($reference in $bundleReferences) {
+        $url = [System.Net.WebUtility]::HtmlDecode($reference.Groups['url'].Value)
+        if ($url -match '^(?:[a-z][a-z0-9+.-]*:|//)') { continue }
+        $assetPath = [System.Uri]::UnescapeDataString(($url -split '[?#]', 2)[0])
+        $assetBase = Split-Path -Parent $studioEntry
+        if ($assetPath.StartsWith('/')) { $assetBase = $webRoot; $assetPath = $assetPath.TrimStart('/') }
+        $bundle = Get-FullPath (Join-Path $assetBase $assetPath)
+        if (-not (Test-ContainsPath $webRoot $bundle) -or -not (Test-Path -LiteralPath $bundle -PathType Leaf)) {
+            throw "Published Web Console Studio bundle is missing or outside wwwroot: $url"
+        }
+        $localBundles++
+    }
+    if ($localBundles -eq 0) {
+        throw 'Published Web Console Studio entry has no local JS/CSS bundles.'
     }
 
     $buildVersion = (& git -C $repositoryRoot rev-parse --verify HEAD).Trim()

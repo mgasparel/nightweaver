@@ -105,6 +105,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Studio coordinator tests
         run: npm test --prefix src/Nightweaver.Web/Studio
+      - name: Paired publisher contract (Windows PowerShell 5.1 and PowerShell 7)
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -File scripts/tests/Publish-Nightweaver.Tests.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./scripts/tests/Publish-Nightweaver.Tests.ps1
       - name: Complete correctness suite (diagnostic timing)
         id: suite
         shell: pwsh
