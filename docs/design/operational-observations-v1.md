@@ -48,6 +48,15 @@ issue no list/ready/comments commands before audit. Explicit refresh and local
 writes wake reconciliation immediately, even after uncertain command outcomes.
 Ready/Blocked source values and audit slots retire when their Explorer keys lose
 interest; returning to those views requires authoritative readiness validation.
+Continuation tracks outstanding projections across bounded turns, so a completed
+Workspace omitted from another Workspace's turn does not keep idle collection
+active. Histories remain cached for selected Workspaces and, only while Attention
+is interested, its paused cohort. Workspace detail, relation and environment
+sources retire when deselected even if Attention still consumes the same history.
+Retirement releases values, provenance, memory reservations and audit slots;
+renewed interest establishes a new authoritative baseline for retired inputs.
+A broad refresh clears once every retained source has incorporated its dirty
+generation; retired sources cannot strand that pending obligation.
 
 Connection evidence, source failure, snapshot age and pending delay are separate.
 Transport heartbeat remains 10 seconds; 25 seconds without valid backend evidence

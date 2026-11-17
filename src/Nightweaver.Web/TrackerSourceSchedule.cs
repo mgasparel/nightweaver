@@ -30,7 +30,16 @@ internal sealed class TrackerSourceSchedule(TimeProvider clock)
         }
     }
     internal void Retain(ISet<string> ids)
-    { lock (sync) foreach (var id in slots.Keys.Where(id => !ids.Contains(id)).ToArray()) slots.Remove(id); }
+    {
+        lock (sync)
+        {
+            foreach (var id in slots.Keys.Where(id => !ids.Contains(id)).ToArray()) slots.Remove(id);
+            // Retired dirty sources cannot leave a broad Refresh pending after
+            // every remaining consumer has incorporated its authoritative read.
+            if (slots.Values.All(slot => slot.DirtySince is null))
+            { broad = false; broadSince = null; }
+        }
+    }
     internal void InvalidateAll()
     {
         lock (sync)

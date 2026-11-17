@@ -22,6 +22,7 @@ internal sealed class OperationalObservationSource(
     internal event Action<string, string>? ReadStarted;
     private bool scheduled;
     private bool continuation;
+    private readonly HashSet<string> outstandingKeys = new(StringComparer.Ordinal);
     private string interest = "";
     private HashSet<string> selectedIds = new(StringComparer.Ordinal);
     public void Invalidate(IReadOnlyList<BeadsInvalidation>? hints = null)
@@ -43,6 +44,14 @@ internal sealed class OperationalObservationSource(
         interest = signature;
         selectedIds = keys.Where(key => key.Kind == "workspace").Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal);
         if (!changed && !continuation && !schedule.HasDue) return new Dictionary<string, ObservationSample>();
+        // One bounded turn may publish only one selected Workspace. Remember
+        // completed projections for this round instead of reopening them merely
+        // because another projection was published on the next turn.
+        if (changed || !continuation)
+        {
+            outstandingKeys.Clear();
+            outstandingKeys.UnionWith(keys.Select(key => key.Value));
+        }
         scheduled = true;
         try
         {
@@ -50,7 +59,10 @@ internal sealed class OperationalObservationSource(
             var published = samples.ToDictionary(pair => pair.Key, pair => pair.Value.Error is null
                 && pair.Value.Sources.Any(source => !schedule.IsCurrent(source.Key, source.Value.SourceGeneration))
                     ? pair.Value with { Pending = true } : pair.Value, StringComparer.Ordinal);
-            continuation = keys.Any(key => !published.TryGetValue(key.Value, out var sample) || sample.Pending);
+            foreach (var (key, sample) in published)
+                if (sample.Pending) outstandingKeys.Add(key);
+                else outstandingKeys.Remove(key);
+            continuation = outstandingKeys.Count > 0;
             return published;
         }
         finally { scheduled = false; }
@@ -658,14 +670,17 @@ internal sealed class OperationalObservationSource(
 
     private void TrimSources(HashSet<string> selected, IReadOnlyList<OperationKey> keys)
     {
-        var retained = selected.Union(attentionBeads?.Select(bead => bead.Id)
-            ?? (scheduled ? retainedInventory?.ById.Values.Where(AttentionDeskProjector.IsPaused).Select(bead => bead.Id) : null) ?? []
+        var retainedHistories = selected.Union(keys.Any(key => key.Kind == "attention")
+            ? attentionBeads?.Select(bead => bead.Id)
+                ?? retainedInventory?.ById.Values.Where(AttentionDeskProjector.IsPaused).Where(bead => !AttentionDeskProjector.IsTerminal(bead)).Select(bead => bead.Id) ?? []
+            : []
             , StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
-        foreach (var id in histories.Keys.Where(id => !retained.Contains(id)).ToArray())
+        foreach (var id in histories.Keys.Where(id => !retainedHistories.Contains(id)).ToArray())
         { memory.Release(histories[id]); histories.Remove(id); }
         // Readiness sets have no colon-qualified identity. Retire them with the
         // consuming Explorer view so an unreadable due slot cannot wake every turn.
-        foreach (var id in states.Keys.Where(id => id.Contains(':') && !retained.Contains(id[(id.IndexOf(':') + 1)..])
+        foreach (var id in states.Keys.Where(id => id.Contains(':') && !(id.StartsWith("comments:", StringComparison.Ordinal)
+                ? retainedHistories : selected).Contains(id[(id.IndexOf(':') + 1)..])
             || id is "ready" or "blocked" && !keys.Any(key => key.Kind == "explorer" && key.Argument == id)).ToArray())
         {
             states.Remove(id); sourceContent.Remove(id); cached.Remove(id); historyGenerations.Remove(id);

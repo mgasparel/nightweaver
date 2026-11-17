@@ -14,6 +14,116 @@ namespace Nightweaver.Tests;
 public sealed class OperationalObservationSourceTests
 {
     [Fact]
+    public async Task TwoSettledWorkspacesStayIdleAndRefreshEachDueSource()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 2 };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("workspace:task-1", "workspace:task-2");
+        var token = TestContext.Current.CancellationToken;
+        var reads = new List<string>();
+        source.ReadStarted += (id, _) => reads.Add(id);
+        await DrainAsync();
+        await AssertIdleAsync();
+        reads.Clear();
+        clock.Advance(TimeSpan.FromSeconds(2));
+        await DrainAsync();
+        Assert.Contains("environment:task-1", reads);
+        Assert.Contains("environment:task-2", reads);
+        Assert.DoesNotContain(reads, id => id.StartsWith("comments:", StringComparison.Ordinal));
+        await AssertIdleAsync();
+        reads.Clear();
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await DrainAsync();
+        Assert.Contains("comments:task-1", reads);
+        Assert.Contains("comments:task-2", reads);
+        await AssertIdleAsync();
+        reads.Clear();
+        source.Invalidate([new BeadsInvalidation(1, "update", "task-1", null)]);
+        await DrainAsync();
+        Assert.Contains("detail:task-1", reads);
+        Assert.Contains("detail:task-2", reads);
+        await AssertIdleAsync();
+
+        async Task DrainAsync()
+        {
+            var completed = new HashSet<string>(StringComparer.Ordinal);
+            for (var turn = 0; turn < 8 && completed.Count < keys.Length; turn++)
+                foreach (var (key, sample) in await source.ReadScheduledAsync(keys, (_, _) => { }, token))
+                    if (!sample.Pending)
+                    {
+                        Assert.Null(sample.Error);
+                        Assert.IsType<BeadWorkspaceResponse>(sample.Data);
+                        completed.Add(key);
+                    }
+            Assert.Equal(keys.Length, completed.Count);
+        }
+
+        async Task AssertIdleAsync()
+        {
+            var commands = runner.Commands.Count;
+            var validations = runner.RepositoryValidations;
+            // Stay before the independent two-second environment deadline,
+            // which an intervening invalidation must not postpone.
+            for (var turn = 0; turn < 3; turn++)
+            {
+                clock.Advance(TimeSpan.FromMilliseconds(250));
+                Assert.Empty(await source.ReadScheduledAsync(keys, (_, _) => { }, token));
+            }
+            Assert.Equal(commands, runner.Commands.Count);
+            Assert.Equal(validations, runner.RepositoryValidations);
+        }
+    }
+
+    [Theory]
+    [InlineData("attention", "explorer:all:")]
+    [InlineData("workspace:task-1", "attention")]
+    public async Task RetiredPausedSourcesDoNotKeepIdleTurnsActive(string retiredKey, string remainingKey)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 2 };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var token = TestContext.Current.CancellationToken;
+        var both = Keys(retiredKey, remainingKey);
+        var remaining = Keys(remainingKey);
+        var reads = new List<string>();
+        source.ReadStarted += (id, _) => reads.Add(id);
+        for (var turn = 0; turn < 4; turn++) await source.ReadScheduledAsync(both, (_, _) => { }, token);
+        source.Invalidate(); // Navigation can retire sources during a queued Refresh.
+        await source.ReadScheduledAsync(remaining, (_, _) => { }, token);
+        Assert.Null(source.PendingAge(["inventory"]));
+        reads.Clear();
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await source.ReadScheduledAsync(remaining, (_, _) => { }, token);
+        Assert.Contains("inventory", reads);
+        Assert.DoesNotContain(reads, id => id.Contains(':') && (remainingKey != "attention" || !id.StartsWith("comments:", StringComparison.Ordinal)));
+        await AssertIdleAsync();
+        source.Invalidate();
+        await source.ReadScheduledAsync(remaining, (_, _) => { }, token);
+        await AssertIdleAsync();
+        reads.Clear();
+        await source.ReadScheduledAsync(both, (_, _) => { }, token);
+        Assert.Contains(retiredKey == "attention" ? "comments:task-1" : "detail:task-1", reads);
+
+        async Task AssertIdleAsync()
+        {
+            var commands = runner.Commands.Count;
+            var validations = runner.RepositoryValidations;
+            for (var turn = 0; turn < 8; turn++)
+            {
+                clock.Advance(TimeSpan.FromMilliseconds(250));
+                Assert.Empty(await source.ReadScheduledAsync(remaining, (_, _) => { }, token));
+            }
+            Assert.Equal(commands, runner.Commands.Count);
+            Assert.Equal(validations, runner.RepositoryValidations);
+        }
+    }
+
+    [Fact]
     public async Task RefreshBeforeSourceReadCannotStrandTheNewerPendingGeneration()
     {
         using var target = new ObservationTargetFixture();
