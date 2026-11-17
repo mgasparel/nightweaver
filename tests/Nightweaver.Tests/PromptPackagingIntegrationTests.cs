@@ -18,6 +18,26 @@ public sealed class PromptPackagingIntegrationTests(PublishedCliArtifactFixture 
     ];
 
     [Fact]
+    public async Task DeliveryPromptsRequireComparableCostAndPreserveTargetRepositoryPolicy()
+    {
+        var root = FindRepositoryRoot();
+        foreach (var file in new[] { "implementer.md", "reviewer.md", "qa.md", "merger.md" })
+        {
+            var prompt = await File.ReadAllTextAsync(Path.Combine(root, "prompts", file), TestContext.Current.CancellationToken);
+            Assert.Contains("do not impose Nightweaver's numeric limits on other repositories", prompt, StringComparison.Ordinal);
+            Assert.Contains("below 240 seconds is the operating target", prompt, StringComparison.Ordinal);
+            Assert.Contains("below 300 seconds is the hard local limit", prompt, StringComparison.Ordinal);
+            Assert.Contains("capture-first", prompt, StringComparison.Ordinal);
+            Assert.Contains("exact baseline/candidate revisions", prompt, StringComparison.Ordinal);
+            Assert.Contains("originating Bead", prompt, StringComparison.Ordinal);
+            Assert.Contains("uncovered boundary", prompt, StringComparison.Ordinal);
+        }
+        var merger = await File.ReadAllTextAsync(Path.Combine(root, "prompts", "merger.md"), TestContext.Current.CancellationToken);
+        Assert.Contains("kind=performance", merger, StringComparison.Ordinal);
+        Assert.Contains("NIGHTWEAVER_PERFORMANCE_CHECK_V1", merger, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DeliveryPromptsReserveReadinessForMergerAndScopeHostedExceptions()
     {
         var root = FindRepositoryRoot();

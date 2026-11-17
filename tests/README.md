@@ -2,21 +2,25 @@
 
 Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection; use at least the committed floor of 995 tests and report the actual discovered total.
 
+Use PowerShell 7 and the single retained measurement entry point:
+
 ```powershell
-$timer = [Diagnostics.Stopwatch]::StartNew()
-dotnet test --solution Nightweaver.slnx --minimum-expected-tests 995 --report-xunit-xml --report-xunit-xml-filename timing.xml --show-slowest-tests 20
-$testExit = $LASTEXITCODE
-$timer.Stop()
-Write-Host "Suite wall time (build, fixture publishing, tests, teardown): $($timer.Elapsed)"
-if ($testExit -ne 0) { throw "Tests failed (exit $testExit)" }
-if ($timer.Elapsed.TotalSeconds -ge 300) { throw 'Suite exceeded the five-minute budget' }
+pwsh -NoProfile -File scripts/Measure-TestSuite.ps1 -Checkout <absolute-checkout> -EvidenceRoot <absolute-evidence-root> -BaseRevision <full-base-sha> -Baseline <accepted-result.json> -ProductionInstallation <absolute-installation> -Project nightshift
 ```
 
-The five-minute budget covers the normal solution build, native fixture publishing, tests, and teardown. Keep the committed six-thread parallelism in `TestScheduling.cs`. For a cold-machine run, report package restore and first build separately from this warm, normal suite command. A filtered run never establishes full-suite acceptance.
+The operating target is **below 240 seconds**; the **below 300-second hard limit**
+remains unchanged. Measure normal build, fixture publishing, execution and teardown
+with the committed six-thread parallelism. Report actual full-suite counts, exact
+baseline/candidate identities, outer elapsed time and concrete cost changes for
+every change. A filtered run never establishes full-suite acceptance. Hosted time
+is diagnostic and final exact-head correctness remains required.
 
-This is the **local latest-main performance requirement**. Candidate timing is reported separately and latest main must be measured after integration. Hosted correctness CI reports timing diagnostically and uses a separate 15-minute hang timeout; it does not fail solely for exceeding five minutes. Local Implementation/Review/QA iteration uses draft PRs, with final hosted verification owned by Merger. See [hosted verification](../docs/agents/hosted-verification.md) for triggers and the explicit CI-investigation dispatch exception.
-
-Use `--report-xunit-xml --report-xunit-xml-filename timing.xml` to collect per-test and per-collection durations in `TestResults`.
+See [test-cost evidence](../docs/agents/test-cost-evidence.md) for the versioned
+measurement/comparability contract, native-boundary justification, capture-first
+1.5x diagnostic trigger and ordinary repair routing. Reuse comparable retained
+evidence; Merger's mandatory fresh synchronized-head checks and post-integration
+latest-main acceptance remain required. For draft CI and final hosted checks see
+[hosted verification](../docs/agents/hosted-verification.md).
 
 ## Coverage pyramid
 

@@ -27,3 +27,12 @@ Do not use `bd update` or otherwise change stage labels, pause labels, status, a
 Do not make legal determinations or resolve product ambiguity. When a concrete ambiguity or trade-off requires a human choice, report the precise question, relevant requirement and code context, available choices and their impact when known, in an evidence comment. Do not add a pause label or change workflow state. Preserve the worktree and let the Orchestrator publish the pause.
 
 If a blocker has no transition permitted by your authority, describe the evidence in a comment and leave workflow state and claim unchanged for the Orchestrator to handle.
+
+## Test-cost acceptance
+
+Follow the Target Repository's test-cost policy and measurement entry point; do not impose Nightweaver's numeric limits on other repositories. For Nightweaver, read `tests/README.md` and `docs/agents/test-cost-evidence.md`: below 240 seconds is the operating target, below 300 seconds is the hard local limit, and a comparable 1.5x slowdown triggers capture-first diagnostics, not a new release gate. Keep hosted correctness and final exact-head checks separate from local performance.
+
+Require exact baseline/candidate revisions, complete actual counts and outer elapsed time, comparable retained artifact identities, concrete additional work and explanations for material deltas, including production changes that slow existing tests. Missing or mismatched context means comparison unavailable, never zero delta. Detailed cases belong in cheap deterministic fixtures; new native journeys must justify an uncovered boundary, coverage overlap, shared setup and measured cost. Reuse successful comparable evidence outside mandatory checks; do not rerun unchanged full suites without a new concern.
+
+An attributable material regression is actionable repair on the originating Bead through existing Review/QA findings and repair budgets. Passing correctness does not excuse cost; never invent failed tests, weaken assertions, reduce parallelism, inflate deadlines or repeat until green. Investigate environmental uncertainty with capture-first evidence before restart/reset/rerun/cleanup/config changes. Agents report evidence; the Orchestrator owns workflow and repair publication.
+Reuse retained candidate timing where applicable while verifying new behavior and environment comparability. Report attributable material cost regressions as repair findings alongside correctness results.

@@ -531,6 +531,18 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         }
     }
 
+    internal static PinnedLogReadStream OpenExistingMeasurementForRead(HostPaths paths, ProjectSlug project,
+        AgentStageResult invocation, string evidenceId, string fileName)
+    {
+        if (!SafeBeadId(invocation.BeadId) || !SafeWindowsSegment(project.Value)
+            || !IsValidInvocationId(invocation.InvocationId) || !Guid.TryParseExact(evidenceId, "N", out _)
+            || fileName is not ("result.json" or "suite.log" or "report-1.xml"))
+            throw new InvalidDataException("Invalid measurement identity.");
+        var expected = RuntimePaths.Normalize(Path.Combine(paths.TmpRoot(project), invocation.BeadId,
+            invocation.InvocationId, evidenceId, fileName));
+        return OpenPinnedReadOnlyFile(expected, FileShareRead, "settled suite measurement");
+    }
+
     private static PinnedLogReadStream OpenPinnedReadOnlyFile(string expected, uint shareMode, string description)
     {
         ValidatePathSegments(expected);

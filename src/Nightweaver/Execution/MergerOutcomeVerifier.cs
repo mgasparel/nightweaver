@@ -14,7 +14,8 @@ internal sealed record MergerRejectionFinding(
     string SourceCommentId,
     string? CheckSource = null,
     int? LocalExitCode = null,
-    HostedFailureIdentity? HostedFailure = null);
+    HostedFailureIdentity? HostedFailure = null,
+    PerformanceCheckEvidence? Performance = null);
 
 internal sealed record HostedFailureIdentity(long RunId, long Attempt, long JobId);
 
@@ -271,6 +272,7 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         CancellationToken cancellationToken)
     {
         if (session.Role != AgentRole.Merger || invocation.Role != AgentRole.Merger
+            || invocation.BeadId != session.BeadId
             || classification.Outcome != AgentOutcomeChoice.ChangesRequired)
             return Failed("Only a classified Merger rejection can enter rejection verification.");
         if (invocation.Failure is not null || invocation.Observations is not { } observations
@@ -323,6 +325,28 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                 return Failed("No structured actionable Merger rejection comment from this invocation was found.");
             if (!string.Equals(finding.CheckedHead, expectedHead, StringComparison.OrdinalIgnoreCase))
                 return Failed("The rejection finding does not identify the retained current HEAD.");
+
+            if (finding.Kind == "performance")
+            {
+                if (observations.WorktreeClean != true
+                    || !string.IsNullOrEmpty((await RunGitAsync(["status", "--porcelain"], session.Worktree.Path,
+                        cancellationToken).ConfigureAwait(false)).StandardOutput))
+                    return Failed("Performance rejection requires unchanged clean measured source.");
+                var identity = GitHubRepositoryIdentity.ParsePullRequestUrl(finding.PullRequest);
+                if (identity is null || session.Repository.OriginRepository is not { } origin
+                    || !origin.Matches(identity.Repository)
+                    || !await OriginMatchesValidatedTargetAsync(session.Repository, origin, cancellationToken).ConfigureAwait(false))
+                    return Failed("Performance evidence does not identify the validated Target Repository.");
+                var before = await ReadPullRequestAsync(session.Worktree.Path, finding.PullRequest, cancellationToken).ConfigureAwait(false);
+                if (!MatchesCurrentPullRequest(before, finding.PullRequest, expectedBranch, expectedHead!))
+                    return Failed("Performance evidence does not identify the open retained PR and HEAD.");
+                await MergerPerformanceCheckReader.VerifyAsync(hostPaths, project.Name, invocation, finding, cancellationToken).ConfigureAwait(false);
+                var after = await ReadPullRequestAsync(session.Worktree.Path, finding.PullRequest, cancellationToken).ConfigureAwait(false);
+                if (!MatchesCurrentPullRequest(after, finding.PullRequest, expectedBranch, expectedHead!)
+                    || !await OriginMatchesValidatedTargetAsync(session.Repository, origin, cancellationToken).ConfigureAwait(false))
+                    return Failed("Performance PR identity or origin changed during verification.");
+                return new(true, "Verified current-invocation all-passing hard performance violation.", finding);
+            }
 
             var log = finding is { Kind: "checks", CheckSource: "local" }
                 ? await MergerLocalCheckReader.ReadAsync(hostPaths, project.Name, invocation, finding, cancellationToken).ConfigureAwait(false)
@@ -726,7 +750,7 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                 var root = document.RootElement;
                 if (root.ValueKind != JsonValueKind.Object || !HasUniqueNames(root)
                     || !ReadString(root, "schema", out var schema) || schema != "nightweaver-merger-rejection-v1"
-                    || !ReadString(root, "kind", out var kind) || kind is not ("conflict" or "design" or "checks")
+                    || !ReadString(root, "kind", out var kind) || kind is not ("conflict" or "design" or "checks" or "performance")
                     || !ReadString(root, "pull_request", out var pullRequest)
                     || !ReadString(root, "checked_head", out var checkedHead) || !IsSha(checkedHead)
                     || !ReadString(root, "subject", out var subject)
@@ -740,7 +764,17 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                 string? checkSource = null;
                 int? localExitCode = null;
                 HostedFailureIdentity? hostedFailure = null;
-                if (kind == "checks")
+                PerformanceCheckEvidence? performance = null;
+                if (kind == "performance")
+                {
+                    if (root.EnumerateObject().Count() != 10 || subject != PerformanceCheckEvidence.Subject
+                        || !ReadString(root, "check_source", out checkSource) || checkSource != "local"
+                        || !root.TryGetProperty("local_exit_code", out var exit) || !exit.TryGetInt32(out var code) || code != 0
+                        || !root.TryGetProperty("performance", out var payload)
+                        || (performance = PerformanceCheckEvidence.Parse(payload)) is null) continue;
+                    localExitCode = 0;
+                }
+                else if (kind == "checks")
                 {
                     if (!ReadString(root, "check_source", out checkSource)) continue;
                     if (checkSource == "remote")
@@ -769,7 +803,7 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
                     continue;
 
                 if (kind == "conflict" && !IsSafeRepositoryRelativePath(subject)) continue;
-                return new(kind, uri.AbsoluteUri, checkedHead, subject, summary, details, comment.Id, checkSource, localExitCode, hostedFailure);
+                return new(kind, uri.AbsoluteUri, checkedHead, subject, summary, details, comment.Id, checkSource, localExitCode, hostedFailure, performance);
             }
             catch (JsonException) { }
         }
