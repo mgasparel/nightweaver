@@ -65,10 +65,10 @@ try {
   assert.equal(await row(merged).getByRole('link', { name: commit.slice(0, 7) }).getAttribute('href'), `https://github.com/owner/repo/commit/${commit}`);
   assert.match(await row(merged).innerText(), /Cleanup needs attention: locked report/);
   assert.match(await row(ordinary).innerText(), /Resolved/);
-  assert.equal(await row(ordinary).getByRole('link', { name: 'Merged pull request' }).count(), 0);
+  assert.equal(await row(ordinary).getByRole('link', { name: 'Merged pull request', exact: true }).count(), 0);
   await row(malformed).getByText('Merge verification invalid.', { exact: true }).waitFor();
   assert.match(await row(malformed).innerText(), /Resolved/);
-  assert.equal(await row(malformed).getByRole('link', { name: 'Merged pull request' }).count(), 0);
+  assert.equal(await row(malformed).getByRole('link', { name: 'Merged pull request', exact: true }).count(), 0);
   assert.match(await row(noop).innerText(), /No-Op \/ Duplicate/);
   await row(late).getByText('No host merge verification recorded.', { exact: true }).waitFor();
   add(late, verified(lateSource)); // Journal invalidation, no refresh command or reload.

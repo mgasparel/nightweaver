@@ -180,12 +180,12 @@ internal static class Program
                     start.ArgumentList.Add(argument);
                 using var child = Process.Start(start) ?? throw new InvalidOperationException("Could not start native Dolt lock holder.");
                 var output = new System.Collections.Concurrent.ConcurrentQueue<string>();
-                using var ready = new ManualResetEventSlim();
+                var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 child.OutputDataReceived += (_, line) =>
                 {
                     if (line.Data is not { } text) return;
                     output.Enqueue(text);
-                    if (text == readyMarker) ready.Set();
+                    if (text == readyMarker) ready.TrySetResult();
                 };
                 child.BeginOutputReadLine();
                 var error = child.StandardError.ReadToEndAsync();
@@ -197,7 +197,7 @@ internal static class Program
                 while (true)
                 {
                     EnsureDoltChildAlive("before LOCK readiness");
-                    if (ready.IsSet) break;
+                    if (ready.Task.IsCompletedSuccessfully) break;
                     if (DateTime.UtcNow >= lockDeadline) throw new TimeoutException("Dolt did not acquire the fixture database lock within the existing ten-second fixture bound.");
                     Thread.Sleep(10);
                 }
