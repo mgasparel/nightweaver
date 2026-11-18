@@ -880,6 +880,44 @@ public sealed class OperationalObservationSourceTests
     }
 
     [Fact]
+    public async Task DependencyHintDuringWorkspaceRefreshCanUseInventoryConfirmation()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("workspace:task-1");
+        var token = TestContext.Current.CancellationToken;
+        for (var turn = 0; turn < 4; turn++) await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        var dependencyHint = false;
+        var reads = new List<(string Id, string Reason, bool DependencyHint)>();
+        source.ReadStarted += (id, reason) =>
+        {
+            reads.Add((id, reason, dependencyHint));
+            if (id != "detail:task-1" || dependencyHint) return;
+            dependencyHint = true;
+            source.Invalidate([new BeadsInvalidation(2, "dep_add", "task-1", "task-2")]);
+        };
+
+        source.Invalidate([new BeadsInvalidation(1, "comment", "task-1", null)]);
+        var refreshed = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+
+        Assert.True(dependencyHint);
+        Assert.NotNull(refreshed["workspace:task-1"].Data);
+        Assert.Contains(reads, read => read.Id == "relations-down:task-1" && read.DependencyHint);
+        Assert.Contains(reads, read => read.Id == "inventory" && read.Reason == "confirmation" && read.DependencyHint);
+        Assert.Null(source.PendingAge(["inventory"]));
+        Assert.DoesNotContain(reads, read => read.Reason == "audit");
+        Assert.Contains(reads, read => IsDependencyHintInventoryRead(read.Id, read.Reason, read.DependencyHint));
+    }
+
+    private static bool IsDependencyHintInventoryRead(string id, string reason, bool dependencyHint)
+        // A hint arriving after the core read can be consumed by the Workspace's
+        // authoritative inventory confirmation before another core turn starts.
+        => id == "inventory" && reason is "dirty" or "confirmation" && dependencyHint;
+
+    [Fact]
     public async Task NativeBdSmokeDetectsExternalCommentsAndDependenciesAndReportsCost()
     {
         using var target = new BeadsFixture("operational observations native");
@@ -969,7 +1007,7 @@ public sealed class OperationalObservationSourceTests
         Assert.DoesNotContain(mutationReads, read => read.Reason == "audit" && !read.Id.StartsWith("environment:", StringComparison.Ordinal));
         Assert.Contains(mutationReads, read => read.Id == "comments:" + bead && read.Reason == "dirty" && read.CommentHint);
         Assert.Contains(mutationReads, read => read.Id == "relations-down:" + bead && read.Reason == "dirty" && read.DependencyHint);
-        Assert.Contains(mutationReads, read => read.Id == "inventory" && read.Reason == "dirty" && read.DependencyHint);
+        Assert.Contains(mutationReads, read => IsDependencyHintInventoryRead(read.Id, read.Reason, read.DependencyHint));
         TestContext.Current.TestOutputHelper?.WriteLine($"Journal pages {journal.Count} ({journal.Count - beforeMutation} after baseline); source reads {reads.Count} ({mutationReads.Length} after baseline); native commands {measured.Count} ({measured.Count - commandsBeforeMutation} after baseline)");
         Assert.NotEqual(revision, combined.GetProperty("revision").GetString());
         var combinedData = combined.GetProperty("data");
