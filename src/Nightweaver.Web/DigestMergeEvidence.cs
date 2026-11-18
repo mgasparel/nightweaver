@@ -60,7 +60,9 @@ internal sealed record DigestMergeEvidence(
         if (values["required_checks"] != "passed" || !Hash(values["checked_head"]) || !Hash(values["merge_commit"])
             || !Uri.TryCreate(values["pull_request"], UriKind.Absolute, out var uri) || uri.Scheme != "https"
             || uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0
-            || values["pull_request"].Contains('\\') || values["source_comment"] == comment.Id) return null;
+            || values["pull_request"].Contains('\\')
+            || GitHubRepositoryIdentity.ParsePullRequestUrl(values["pull_request"]) is null
+            || values["source_comment"] == comment.Id) return null;
         return values;
     }
 

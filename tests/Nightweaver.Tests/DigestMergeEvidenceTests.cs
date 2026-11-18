@@ -73,6 +73,24 @@ public sealed class DigestMergeEvidenceTests
     }
 
     [Theory]
+    [InlineData("https://github.com/owner/repo/issues/42")]
+    [InlineData("https://example.com/")]
+    [InlineData("https://github.com/owner/repo/pull/0")]
+    [InlineData("https://github.com/owner/repo/pull/-1")]
+    [InlineData("https://github.com/owner/repo/pull/abc")]
+    public void MatchingProducerRecordsWithMalformedPullRequestIdentityCannotProjectMerged(string url)
+    {
+        var bead = Bead();
+        var comments = Comments(bead.Id)
+            .Select(comment => comment with { Text = comment.Text.Replace(Pr, url, StringComparison.Ordinal) }).ToArray();
+        var evidence = DigestMergeEvidence.Read(bead, comments);
+        Assert.Equal("invalid", evidence.State);
+        Assert.Null(evidence.PullRequest);
+        Assert.Null(evidence.CommitUrl);
+        Assert.Equal("Resolved", Project(bead, evidence).OutcomeLabel);
+    }
+
+    [Theory]
     [InlineData("duplicate; no fix claimed", "no_op", false)]
     [InlineData("aborted", "aborted", true)]
     [InlineData("Documentation resolved", "resolved", false)]

@@ -40,6 +40,11 @@ add(ordinary, agent); bd(['close', ordinary]);
 const late = create('Comment-only host evidence arrives after closure');
 const lateSource = add(late, agent); bd(['update', late, '--status', 'closed']);
 const noop = create('Legitimate duplicate closure'); bd(['close', noop, '--reason', 'duplicate; no fix claimed']);
+const malformed = create('Matching issue URLs do not establish a merged pull request');
+const issueUrl = 'https://github.com/owner/repo/issues/42';
+const malformedSource = add(malformed, agent.replace(pr, issueUrl));
+add(malformed, verified(malformedSource).replace(pr, issueUrl));
+bd(['update', malformed, '--status', 'closed']);
 const output = path.resolve(process.env.NIGHTWEAVER_QA_OUTPUT || 'TestResults/digest-merge');
 fs.mkdirSync(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
@@ -61,6 +66,9 @@ try {
   assert.match(await row(merged).innerText(), /Cleanup needs attention: locked report/);
   assert.match(await row(ordinary).innerText(), /Resolved/);
   assert.equal(await row(ordinary).getByRole('link', { name: 'Merged pull request' }).count(), 0);
+  await row(malformed).getByText('Merge verification invalid.', { exact: true }).waitFor();
+  assert.match(await row(malformed).innerText(), /Resolved/);
+  assert.equal(await row(malformed).getByRole('link', { name: 'Merged pull request' }).count(), 0);
   assert.match(await row(noop).innerText(), /No-Op \/ Duplicate/);
   await row(late).getByText('No host merge verification recorded.', { exact: true }).waitFor();
   add(late, verified(lateSource)); // Journal invalidation, no refresh command or reload.
@@ -75,6 +83,6 @@ try {
     await page.screenshot({ path: path.join(output, `digest-merge-${width}.png`), fullPage: true });
   }
   assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.deepEqual(posts, []);
-  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, merged, ordinary, late, noop,
-    checks: ['native empty closure and producer protocol', 'exact safe PR/commit links', 'separate cleanup warning', 'ordinary SHA/agent-only stays resolved', 'non-code duplicate', 'automatic comments-only refresh', 'legacy shared evidence reuse', '1440/375/720 reflow', 'no browser mutations or external requests'], errors }, null, 2));
+  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, merged, ordinary, late, noop, malformed,
+    checks: ['native empty closure and producer protocol', 'exact safe PR/commit links', 'matching non-PR URLs stay invalid/resolved', 'separate cleanup warning', 'ordinary SHA/agent-only stays resolved', 'non-code duplicate', 'automatic comments-only refresh', 'legacy shared evidence reuse', '1440/375/720 reflow', 'no browser mutations or external requests'], errors }, null, 2));
 } finally { await browser.close(); }

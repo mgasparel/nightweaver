@@ -175,19 +175,29 @@ internal static class Program
                     WorkingDirectory = doltRepository, UseShellExecute = false, CreateNoWindow = true,
                     RedirectStandardOutput = true, RedirectStandardError = true
                 };
-                foreach (var argument in new[] { "sql", "-q", "SELECT SLEEP(30)" })
+                const string readyMarker = "nightweaver-lock-ready";
+                foreach (var argument in new[] { "sql", "-r", "csv", "-q", $"SELECT '{readyMarker}' AS fixture_readiness; SELECT SLEEP(30)" })
                     start.ArgumentList.Add(argument);
                 using var child = Process.Start(start) ?? throw new InvalidOperationException("Could not start native Dolt lock holder.");
+                var output = new System.Collections.Concurrent.ConcurrentQueue<string>();
+                using var ready = new ManualResetEventSlim();
+                child.OutputDataReceived += (_, line) =>
+                {
+                    if (line.Data is not { } text) return;
+                    output.Enqueue(text);
+                    if (text == readyMarker) ready.Set();
+                };
+                child.BeginOutputReadLine();
+                var error = child.StandardError.ReadToEndAsync();
                 WriteAtomicText(args[2], $"{child.Id}|{child.StartTime.ToUniversalTime().Ticks}");
-                var lockPath = Path.Combine(doltRepository, ".dolt", "noms", "LOCK");
                 var lockDeadline = DateTime.UtcNow.AddSeconds(10);
                 var rootDeadline = DateTime.UtcNow.AddSeconds(15);
+                // An exclusive open here can deny Dolt's own startup open. Observe a
+                // result emitted after database acquisition instead of competing for LOCK.
                 while (true)
                 {
                     EnsureDoltChildAlive("before LOCK readiness");
-                    try { using var unlocked = File.Open(lockPath, FileMode.Open, FileAccess.Read, FileShare.None); }
-                    catch (IOException exception) when ((exception.HResult & 0xFFFF) == 32)
-                    { break; }
+                    if (ready.IsSet) break;
                     if (DateTime.UtcNow >= lockDeadline) throw new TimeoutException("Dolt did not acquire the fixture database lock within the existing ten-second fixture bound.");
                     Thread.Sleep(10);
                 }
@@ -206,8 +216,9 @@ internal static class Program
                     if (!child.HasExited) return;
                     var exitCode = child.ExitCode;
                     var childStart = child.StartTime.ToUniversalTime().Ticks;
-                    var standardOutput = child.StandardOutput.ReadToEnd();
-                    var standardError = child.StandardError.ReadToEnd();
+                    child.WaitForExit(); // Drain the asynchronous output callbacks before reporting.
+                    var standardOutput = string.Join(Environment.NewLine, output);
+                    var standardError = error.GetAwaiter().GetResult();
                     WriteAtomicText(args[2] + ".failure.json", JsonSerializer.Serialize(new
                     {
                         phase,
