@@ -1,5 +1,11 @@
 # QA AppHost
 
+For verified Catch-Up Digest outcomes, run `studio-cutover.ps1 -Only digest-merge-qa`
+with a fresh invocation output directory. This starts/stops the exact isolated
+stack and verifies native host evidence, safe PR/commit links, cleanup separation,
+comments-only refresh and 1440/375/720 layouts. See
+[digest merge acceptance](../../docs/acceptance/digest-merge.md).
+
 ## Observation cost investigation
 
 For the implemented shared observer, install the Playwright tools below and start

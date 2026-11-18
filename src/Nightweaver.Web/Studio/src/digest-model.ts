@@ -1,6 +1,7 @@
 export type DigestItem = { id: string; title: string; type: string; priority: number; status: string;
   activityKind: string; activityAt: string; outcomeLabel: string; summary: string; commits: string[];
   pullRequests: string[]; fromId?: string | null; fromRelation?: string | null;
+  mergeEvidence?: { state: string; pullRequest?: string | null; mergeCommit?: string | null; commitUrl?: string | null; cleanupWarning?: string | null } | null;
   presentation?: { role: string; summary: string } };
 export type Digest = { generatedAt: string; window: string; windowStart?: string | null; lastCaughtUpAt: string | null;
   isCaughtUp: boolean; metrics: { completedTotal: number; activeThreads: number; openOrUpdatedTotal: number; waitingForGuidance: number };

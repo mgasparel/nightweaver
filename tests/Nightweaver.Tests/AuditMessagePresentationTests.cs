@@ -120,15 +120,18 @@ public sealed class AuditMessagePresentationTests
     public void ExactMergeTextHasAttributedChecksAndInspectableReferences(string schema, string title)
     {
         var head = new string('a',40);
+        const string pullRequest = "https://github.com/owner/repo/pull/1";
         var text = schema == "nightweaver-merge-v1"
-            ? $"{schema} pull_request=https://example.invalid/pr/1 checked_head={head} required_checks=passed merge_method=squash merge_commit={head}"
-            : $"{schema} pull_request=https://example.invalid/pr/1 checked_head={head} merge_commit={head} required_checks=passed source_comment=report";
+            ? $"{schema} pull_request={pullRequest} checked_head={head} required_checks=passed merge_method=squash merge_commit={head}"
+            : $"{schema} pull_request={pullRequest} checked_head={head} merge_commit={head} required_checks=passed source_comment=report";
         var message = Project(text);
         Assert.Equal(title, message.Title);
         Assert.Contains(message.Sections, s => s.Label == "Reported checks" && s.Text.Contains("according to", StringComparison.Ordinal));
         Assert.Equal(text, message.Original);
         foreach (var invalid in new[] { text + " extra=unknown", text.Replace(head, "invalid", StringComparison.Ordinal), text.Replace("=passed", "=failed", StringComparison.Ordinal) })
             Assert.Equal("fallback", Project(invalid).State);
+        if (schema == "nightweaver-verified-merge-v1")
+            Assert.Equal("fallback", Project(text.Replace(pullRequest, "https://example.invalid/pr/1", StringComparison.Ordinal)).State);
     }
 
     [Fact]

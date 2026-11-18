@@ -24,6 +24,14 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+The native Dolt descendant fixture waits for a CSV result marker emitted after
+database acquisition before publishing lock readiness. Exclusive `LOCK` polling
+could itself deny Dolt's startup open with incompatible sharing flags. The existing
+settlement cases still verify the live child, held/nondeletable lock before and
+after root exit, and settled child plus deletable lock after disposal. Their
+ten-second readiness, fifteen-second root, thirty-second query and six-thread
+scheduling bounds are unchanged; no native journey was added.
+
 Run the cheap paired publisher contract explicitly in local Review/QA:
 `powershell.exe -NoProfile -File scripts/tests/Publish-Nightweaver.Tests.ps1`
 and `pwsh -NoProfile -File scripts/tests/Publish-Nightweaver.Tests.ps1`.
