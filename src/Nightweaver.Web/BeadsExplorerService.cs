@@ -119,7 +119,7 @@ internal sealed partial class TrackerBridge(
     }
 
     internal async Task<CatchUpDigestResponse> ReadDigestAsync(string window, DateTimeOffset? lastCaughtUpAt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, CatchUpDigestResponse? observed = null)
     {
         await operationGate.WaitAsync(cancellationToken);
         try
@@ -132,7 +132,16 @@ internal sealed partial class TrackerBridge(
             // boundary second rather than checkpointing past an unseen write in that second.
             var generatedAt = DateTimeOffset.FromUnixTimeSeconds(timeProvider.GetUtcNow().ToUnixTimeSeconds());
             var inventory = await beadsReader.ReadSnapshotAsync(target, cancellationToken);
-            return CatchUpDigestProjector.Project(inventory, window, lastCaughtUpAt, generatedAt, project.Limits.MaxRepairCycles);
+            // Legacy callers reuse the shared collector's bounded evidence. Never
+            // open every completed task's history on an HTTP request.
+            var current = CatchUpDigestProjector.Project(inventory, window, lastCaughtUpAt, generatedAt, project.Limits.MaxRepairCycles);
+            var currentItems = current.Threads.SelectMany(thread => thread.Items.Prepend(thread.Root)).Concat(current.StandaloneCompleted)
+                .ToDictionary(item => item.Id, StringComparer.Ordinal);
+            var evidence = observed?.Threads.SelectMany(thread => thread.Items.Prepend(thread.Root)).Concat(observed.StandaloneCompleted)
+                .Where(item => item.MergeEvidence is not null && currentItems.TryGetValue(item.Id, out var fresh)
+                    && fresh.Status == item.Status && fresh.ActivityAt == item.ActivityAt)
+                .ToDictionary(item => item.Id, item => item.MergeEvidence!, StringComparer.Ordinal);
+            return CatchUpDigestProjector.Project(inventory, window, lastCaughtUpAt, generatedAt, project.Limits.MaxRepairCycles, evidence);
         }
         finally
         {

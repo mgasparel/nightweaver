@@ -87,6 +87,8 @@ internal sealed class OperationalObservationSource(
     private double sweepNativeStarted;
     private bool preferAttention = true;
     private int commentsThisSweep;
+    private readonly HashSet<string> digestEvidenceIds = new(StringComparer.Ordinal);
+    private static readonly string[] DigestCoreSources = ["inventory", "checkpoint"];
     private bool resumeDetails;
     private BeadsInventory? retainedInventory;
     private FrozenSet<string>? retainedReady;
@@ -242,6 +244,7 @@ internal sealed class OperationalObservationSource(
         sweepNativeStarted = nativeMilliseconds;
         commentsReadThisSweep.Clear();
         commentsThisSweep = 0;
+        digestEvidenceIds.Clear();
         var started = clock.GetUtcNow();
         var generatedAt = DateTimeOffset.FromUnixTimeSeconds(started.ToUnixTimeSeconds());
         var result = new Dictionary<string, ObservationSample>(StringComparer.Ordinal);
@@ -343,38 +346,32 @@ internal sealed class OperationalObservationSource(
         { states["checkpoint"] = new("unavailable", null, checkpointAttempt, Error(exception)); }
 
         BeadExplorerItem[]? explorerItems = null;
-        foreach (var key in keys.Where(key => key.Kind is "explorer" or "digest"))
+        foreach (var key in keys.Where(key => key.Kind == "explorer"))
         {
             try
             {
-                if (key.Kind == "digest")
-                    result[key.Value] = Sample(inventory is null ? null : CatchUpDigestProjector.Project(inventory, key.Argument!, caughtUp,
-                        generatedAt, project.Limits.MaxRepairCycles), started, "inventory", "checkpoint");
-                else
+                var ids = key.Argument == "ready" ? new[] { "inventory", "ready" }
+                    : key.Argument == "blocked" ? ["inventory", "blocked"] : ["inventory"];
+                // A skipped due source is a failed projection, never a fresh blend.
+                if (key.Argument == "ready" && ready is null || key.Argument == "blocked" && blocked is null)
                 {
-                    var ids = key.Argument == "ready" ? new[] { "inventory", "ready" }
-                        : key.Argument == "blocked" ? ["inventory", "blocked"] : ["inventory"];
-                    // A skipped due source is a failed projection, never a fresh blend.
-                    if (key.Argument == "ready" && ready is null || key.Argument == "blocked" && blocked is null)
-                    {
-                        var id = key.Argument!;
-                        states[id] = new("stale", states.GetValueOrDefault(id)?.ObservedAt, started,
-                            states.GetValueOrDefault(id)?.Error ?? new("budget-exceeded", "Source is awaiting its bounded observation turn."));
-                    }
-                    var items = explorerItems ??= inventory?.ById.Values.Select(bead => BeadExplorerItem.FromSnapshot(bead) with
-                    { Presentation = BeadPresenter.Project(bead, project.Limits.MaxRepairCycles, inventory) }).ToArray();
-                    var filtered = items?.Where(item => key.Argument switch
-                    {
-                        "active" => item.Status == "in_progress", "closed" => item.Status == "closed",
-                        "ready" => item.Status == "open" && ready?.Contains(item.Id) == true,
-                        "blocked" => item.Status != "closed" && (item.Status == "blocked" || blocked?.Contains(item.Id) == true),
-                        _ => true
-                    }).Where(item => string.IsNullOrEmpty(key.Query) || item.Id.Contains(key.Query, StringComparison.OrdinalIgnoreCase)
-                        || item.Title.Contains(key.Query, StringComparison.OrdinalIgnoreCase)).OrderBy(item => item.Priority)
-                        .ThenBy(item => item.Id, StringComparer.Ordinal).ToArray();
-                    result[key.Value] = Sample(key.Value.Count(character => character == ':') == 3 && filtered is not null
-                        ? ExplorerPage.Project(filtered, key.Page) : filtered, started, ids);
+                    var id = key.Argument!;
+                    states[id] = new("stale", states.GetValueOrDefault(id)?.ObservedAt, started,
+                        states.GetValueOrDefault(id)?.Error ?? new("budget-exceeded", "Source is awaiting its bounded observation turn."));
                 }
+                var items = explorerItems ??= inventory?.ById.Values.Select(bead => BeadExplorerItem.FromSnapshot(bead) with
+                { Presentation = BeadPresenter.Project(bead, project.Limits.MaxRepairCycles, inventory) }).ToArray();
+                var filtered = items?.Where(item => key.Argument switch
+                {
+                    "active" => item.Status == "in_progress", "closed" => item.Status == "closed",
+                    "ready" => item.Status == "open" && ready?.Contains(item.Id) == true,
+                    "blocked" => item.Status != "closed" && (item.Status == "blocked" || blocked?.Contains(item.Id) == true),
+                    _ => true
+                }).Where(item => string.IsNullOrEmpty(key.Query) || item.Id.Contains(key.Query, StringComparison.OrdinalIgnoreCase)
+                    || item.Title.Contains(key.Query, StringComparison.OrdinalIgnoreCase)).OrderBy(item => item.Priority)
+                    .ThenBy(item => item.Id, StringComparer.Ordinal).ToArray();
+                result[key.Value] = Sample(key.Value.Count(character => character == ':') == 3 && filtered is not null
+                    ? ExplorerPage.Project(filtered, key.Page) : filtered, started, ids);
             }
             catch (Exception exception) when (IsSourceFailure(exception))
             { result[key.Value] = Sample(null, started, "inventory") with { Error = Error(exception) }; }
@@ -438,6 +435,38 @@ internal sealed class OperationalObservationSource(
             }
         else if (inventory is null && keys.Any(key => key.Kind == "attention")) result["attention"] = Sample(null, started, "inventory");
         if (attentionFirst) await ReadSelectedAsync();
+        // Digest evidence uses only budget left by the selected Workspace and
+        // Attention Desk. Retain compact results, never full digest histories.
+        foreach (var key in keys.Where(key => key.Kind == "digest"))
+        {
+            try
+            {
+                var digest = inventory is null ? null : CatchUpDigestProjector.Project(inventory, key.Argument!, caughtUp,
+                    generatedAt, project.Limits.MaxRepairCycles);
+                var candidates = digest is null ? [] : digest.Threads.SelectMany(thread => thread.Items.Prepend(thread.Root))
+                    .Concat(digest.StandaloneCompleted).Where(item => item.Status == "closed" && item.Type == "task")
+                    .DistinctBy(item => item.Id).OrderByDescending(item => item.ActivityAt).ThenBy(item => item.Id, StringComparer.Ordinal)
+                    .Take(128).Select(item => item.Id).ToArray();
+                var evidence = new Dictionary<string, DigestMergeEvidence>(StringComparer.Ordinal);
+                var pending = false;
+                foreach (var id in candidates)
+                {
+                    digestEvidenceIds.Add(id);
+                    var sourceId = "merge:" + id;
+                    if ((!scheduled || schedule.Due(sourceId)) && (commentsThisSweep >= 4 || !HasBudget))
+                    { pending = true; continue; }
+                    if (!scheduled || schedule.Due(sourceId)) commentsThisSweep++;
+                    var observed = await ReadAsync(sourceId, async () => DigestMergeEvidence.Read(inventory!.ById[id],
+                        await reader.ReadDetailCommentsAsync(repository, id, token)), token);
+                    if (observed is not null) evidence[id] = observed;
+                }
+                result[key.Value] = Sample(inventory is null ? null : CatchUpDigestProjector.Project(inventory, key.Argument!, caughtUp,
+                    generatedAt, project.Limits.MaxRepairCycles, evidence), started,
+                    DigestCoreSources.Concat(candidates.Select(id => "merge:" + id)).ToArray()) with { Pending = pending };
+            }
+            catch (Exception exception) when (IsSourceFailure(exception))
+            { result[key.Value] = Sample(null, started, "inventory") with { Error = Error(exception) }; }
+        }
         // Bound reuse to one continuation turn even if another selected Workspace
         // never recovers. New interest and external creation must reach a fresh core.
         resumeDetails = !resumedDetails && ((workspaces.Count > 0 && keys.All(key => key.Kind == "workspace"))
@@ -685,7 +714,7 @@ internal sealed class OperationalObservationSource(
         // Readiness sets have no colon-qualified identity. Retire them with the
         // consuming Explorer view so an unreadable due slot cannot wake every turn.
         foreach (var id in states.Keys.Where(id => id.Contains(':') && !(id.StartsWith("comments:", StringComparison.Ordinal)
-                ? retainedHistories : selected).Contains(id[(id.IndexOf(':') + 1)..])
+                ? retainedHistories : id.StartsWith("merge:", StringComparison.Ordinal) ? digestEvidenceIds : selected).Contains(id[(id.IndexOf(':') + 1)..])
             || id is "ready" or "blocked" && !keys.Any(key => key.Kind == "explorer" && key.Argument == id)).ToArray())
         {
             states.Remove(id); sourceContent.Remove(id); cached.Remove(id); historyGenerations.Remove(id);

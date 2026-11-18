@@ -118,6 +118,7 @@ internal static class AuditMessagePresenter
         if (string.IsNullOrWhiteSpace(comment.Id) || comment.IssueId != bead.Id) return Unsupported(comment, prefix);
         var sections = new List<MessageSection>();
         var verified = prefix == "nightweaver-verified-merge-v1";
+        if (verified && DigestMergeEvidence.Parse(comment, bead) is null) return Unsupported(comment, prefix);
         if (prefix == "nightweaver-finalization-v1")
         {
             const string start = "nightweaver-finalization-v1 Verified merge closure completed; cleanup=";

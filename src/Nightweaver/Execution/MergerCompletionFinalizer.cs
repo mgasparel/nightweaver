@@ -25,13 +25,16 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner, IC
     private readonly BeadsReader reader = new(processRunner);
     private readonly BeadsWriter writer = new(processRunner);
 
+    internal static string CreateEvidenceComment(MergerVerifiedMergeEvidence evidence) =>
+        $"nightweaver-verified-merge-v1 pull_request={evidence.PullRequest} checked_head={evidence.CheckedHead} merge_commit={evidence.MergeCommit} required_checks=passed source_comment={evidence.SourceCommentId}";
+
     internal async Task<MergerCompletionResult> CompleteAsync(AgentStageSession session,
         AgentStageResult invocation, string expectedAssignee, MergerVerifiedMergeEvidence evidence,
         CancellationToken cancellationToken)
     {
         var initial = await ReadTaskAsync(session.Repository, session.BeadId, cancellationToken).ConfigureAwait(false);
         EnsureClaimedMergeTask(initial, invocation, expectedAssignee);
-        var evidenceComment = $"nightweaver-verified-merge-v1 pull_request={evidence.PullRequest} checked_head={evidence.CheckedHead} merge_commit={evidence.MergeCommit} required_checks=passed source_comment={evidence.SourceCommentId}";
+        var evidenceComment = CreateEvidenceComment(evidence);
         await AddCommentVerifiedAsync(session.Repository, session.BeadId, evidenceComment, cancellationToken)
             .ConfigureAwait(false);
 

@@ -504,6 +504,23 @@ The Web host offers a Project-bound, versioned read model beside the legacy cons
 
 The wire schema and finite budgets are specified in [operational observations v1.2](docs/design/operational-observations-v1.md), with implementation ownership, scheduling and lifecycle documented in [shared operational observations](docs/design/operational-observer.md). Standalone and background-launched Web instances use the same registration and shutdown path. SSE transport and browser synchronization are separate consumers of the shared cache.
 
+Catch-Up Digest displays **Merged** for a closed task only when its exact
+`nightweaver-verified-merge-v1` host record and referenced `nightweaver-merge-v1`
+report agree on the PR, checked head and merge commit. Empty `close_reason` is
+supported. Ordinary SHA notes, agent reports alone and missing, malformed, foreign
+or conflicting records do not establish verification. Cleanup diagnostics remain
+separate from the successful merge. These are historical presentation facts,
+never workflow authority or a new hosted verification.
+
+The shared collector acquires evidence for at most the 128 most recent closed
+tasks in each requested digest window, retaining compact results in its existing
+memory budget. It shares the four-history/four-native-second turn budget after
+Workspace and Attention work, refreshes on comment hints and independent source
+audits, and retires unused sources. Older/unacquired evidence is explicitly
+unavailable without changing window membership, lineage or counts. The legacy
+digest endpoint reuses a fresh matching shared observation when available and
+does no per-request history scan. See [digest merge acceptance](docs/acceptance/digest-merge.md).
+
 ---
 
 ### 7.4 Studio console entry and interaction lifetime
