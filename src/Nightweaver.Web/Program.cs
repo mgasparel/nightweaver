@@ -27,6 +27,7 @@ public sealed class Program
 
     public static void Main(string[] args)
     {
+        var startupTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             Args = args,
@@ -86,6 +87,8 @@ public sealed class Program
         var app = builder.Build();
         // Resolve before listening, after all host configuration providers have been applied.
         _ = app.Services.GetRequiredService<ProjectConfig>();
+        // Environment-only opt-in, with a dedicated log pipeline; application/request logs stay local.
+        using var telemetryLifetime = new WebTelemetryLifetime(app.Lifetime, startupTimestamp);
         app.UseStaticFiles();
         // Serve Studio at the console entry points; narrowly scoped fallbacks
         // preserve API and missing-asset 404s. Node is build-time only.
