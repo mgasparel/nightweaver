@@ -110,8 +110,6 @@ internal sealed class AgentInvocationPreparer
         string standardInput,
         string roleSuffix)
     {
-        var arguments = BuildArguments(settings,
-            readOnly: string.Equals(roleSuffix, "outcome-classifier", StringComparison.Ordinal));
         var invocationId = AllocateInvocationId(roleSuffix);
         var beadTmpRoot = RuntimePaths.Normalize(Path.Combine(hostPaths.TmpRoot(project.Name), context.BeadId));
         var temporaryDirectory = RuntimePaths.Normalize(Path.Combine(beadTmpRoot, invocationId));
@@ -119,6 +117,8 @@ internal sealed class AgentInvocationPreparer
         var logFilePath = RuntimePaths.Normalize(Path.Combine(beadLogsRoot, invocationId + ".log"));
         EnsureDirectChild(beadTmpRoot, temporaryDirectory, "temporary directory");
         EnsureDirectChild(beadLogsRoot, logFilePath, "log file");
+        var arguments = BuildArguments(settings, temporaryDirectory,
+            readOnly: string.Equals(roleSuffix, "outcome-classifier", StringComparison.Ordinal));
 
         var environmentOverrides = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -238,7 +238,7 @@ internal sealed class AgentInvocationPreparer
         }
     }
 
-    private static ReadOnlyCollection<string> BuildArguments(AgentSettings settings, bool readOnly = false)
+    private static ReadOnlyCollection<string> BuildArguments(AgentSettings settings, string temporaryDirectory, bool readOnly = false)
     {
         var arguments = new List<string>();
         switch (settings.Cli)
@@ -255,7 +255,7 @@ internal sealed class AgentInvocationPreparer
             case AgentCli.Codex:
                 arguments.AddRange(readOnly
                     ? ["exec", "--sandbox", "read-only", "--ephemeral"]
-                    : ["exec", "--dangerously-bypass-approvals-and-sandbox", "--ephemeral"]);
+                    : ["exec", "--approve-for-me", "--ephemeral", "--add-dir", temporaryDirectory]);
                 if (settings.Model is not null)
                     arguments.AddRange(["--model", settings.Model]);
                 arguments.AddRange(["-c", $"model_reasoning_effort=\"{settings.Effort}\"", "-"]);
