@@ -77,7 +77,8 @@ public sealed class AgentInvocationPreparerTests
         var codex = await new AgentInvocationPreparer().PrepareAsync(host, codexProject, AgentRole.Qa,
             new("ns-xci.2", "task", "stage:qa", 1), worktree, TestContext.Current.CancellationToken);
         Assert.Equal("codex", codex.Executable);
-        Assert.Equal(["exec", "--dangerously-bypass-approvals-and-sandbox", "--ephemeral", "--model", "codex model", "-c", "model_reasoning_effort=\"medium\"", "-"], codex.Arguments);
+        Assert.Equal(["exec", "--approve-for-me", "--ephemeral", "--add-dir", codex.TemporaryDirectory,
+            "--model", "codex model", "-c", "model_reasoning_effort=\"medium\"", "-"], codex.Arguments);
         Assert.Equal("model_reasoning_effort=\"medium\"", codex.Arguments[^2]);
         Assert.Equal("-", codex.Arguments[^1]);
         Assert.Equal(TimeSpan.FromMinutes(23), codex.Timeout);
@@ -85,7 +86,8 @@ public sealed class AgentInvocationPreparerTests
         var codexWithoutModel = await new AgentInvocationPreparer().PrepareAsync(host,
             CreateProject(AgentCli.Codex, model: null, effort: "low"), AgentRole.Merger,
             new("ns-xci.2", "task", "stage:merge", 0), worktree, TestContext.Current.CancellationToken);
-        Assert.Equal(["exec", "--dangerously-bypass-approvals-and-sandbox", "--ephemeral", "-c", "model_reasoning_effort=\"low\"", "-"], codexWithoutModel.Arguments);
+        Assert.Equal(["exec", "--approve-for-me", "--ephemeral", "--add-dir", codexWithoutModel.TemporaryDirectory,
+            "-c", "model_reasoning_effort=\"low\"", "-"], codexWithoutModel.Arguments);
         Assert.Equal(codexWithoutModel.InvocationId, codexWithoutModel.EnvironmentOverrides["NIGHTWEAVER_INVOCATION_ID"]);
         Assert.Equal("terminal", codexWithoutModel.EnvironmentOverrides["NIGHTWEAVER_LOCAL_CHECK_OUTPUT"]);
         var claudeMerger = await new AgentInvocationPreparer().PrepareAsync(host, claudeProject, AgentRole.Merger,
@@ -151,7 +153,7 @@ public sealed class AgentInvocationPreparerTests
             host, project, context, worktree, payload, TestContext.Current.CancellationToken);
 
         Assert.Equal("codex", prepared.Executable);
-        Assert.Equal(["exec", "--dangerously-bypass-approvals-and-sandbox", "--ephemeral", "--model", "classifier model with spaces",
+        Assert.Equal(["exec", "--approve-for-me", "--ephemeral", "--add-dir", prepared.TemporaryDirectory, "--model", "classifier model with spaces",
             "-c", "model_reasoning_effort=\"high\"", "-"], prepared.Arguments);
         Assert.Equal(TimeSpan.FromMinutes(7), prepared.Timeout);
         Assert.Matches("^\\d{8}T\\d{13}Z-classifier$", prepared.InvocationId);
@@ -224,8 +226,42 @@ public sealed class AgentInvocationPreparerTests
         }
         else
         {
-            Assert.Equal("read-only", prepared.Arguments[Array.IndexOf(prepared.Arguments.ToArray(), "--sandbox") + 1]);
+            Assert.Equal(["exec", "--sandbox", "read-only", "--ephemeral", "--model", "fixture-model",
+                "-c", "model_reasoning_effort=\"low\"", "-"], prepared.Arguments);
         }
+    }
+
+    [Theory]
+    [InlineData((int)AgentRole.Planner)]
+    [InlineData((int)AgentRole.PlanChallenger)]
+    [InlineData((int)AgentRole.Implementer)]
+    [InlineData((int)AgentRole.Reviewer)]
+    [InlineData((int)AgentRole.Qa)]
+    [InlineData((int)AgentRole.Merger)]
+    public async Task CodexRolesUseAutomaticReviewWithOnlyTheirOwnAdditionalWritableDirectory(int roleValue)
+    {
+        using var temp = new TempDirectory();
+        var host = CreateHost(temp.Path);
+        var project = CreateProject(AgentCli.Codex);
+        var role = (AgentRole)roleValue;
+        var preparer = new AgentInvocationPreparer();
+        var context = new AgentDispatchContext("ns-policy", "task", "stage:implement", 0);
+        var worktree = CanonicalWorktree(host, project, context.BeadId);
+
+        var first = await preparer.PrepareAsync(host, project, role, context, worktree, TestContext.Current.CancellationToken);
+        var second = await preparer.PrepareAsync(host, project, role, context, worktree, TestContext.Current.CancellationToken);
+
+        foreach (var invocation in new[] { first, second })
+        {
+            Assert.Equal(worktree, invocation.WorkingDirectory);
+            Assert.Equal(["exec", "--approve-for-me", "--ephemeral", "--add-dir", invocation.TemporaryDirectory,
+                "-c", "model_reasoning_effort=\"medium\"", "-"], invocation.Arguments);
+            Assert.Equal(invocation.TemporaryDirectory, invocation.EnvironmentOverrides["TEMP"]);
+            Assert.StartsWith(host.TmpRoot(project.Name) + Path.DirectorySeparatorChar, invocation.TemporaryDirectory, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(invocation.TemporaryDirectory));
+        }
+        Assert.DoesNotContain(first.TemporaryDirectory, second.Arguments);
+        Assert.DoesNotContain(second.TemporaryDirectory, first.Arguments);
     }
 
     [Fact]
