@@ -453,9 +453,13 @@ internal sealed class OperationalObservationSource(
                 {
                     digestEvidenceIds.Add(id);
                     var sourceId = "merge:" + id;
-                    if ((!scheduled || schedule.Due(sourceId)) && (commentsThisSweep >= 4 || !HasBudget))
+                    var due = !scheduled || schedule.Due(sourceId);
+                    // A failed bootstrap has no cached value. Respect its retry
+                    // backoff instead of falling through to an uncounted read.
+                    if (!due && !cached.ContainsKey(sourceId)) continue;
+                    if (due && (commentsThisSweep >= 4 || !HasBudget))
                     { pending = true; continue; }
-                    if (!scheduled || schedule.Due(sourceId)) commentsThisSweep++;
+                    if (due) commentsThisSweep++;
                     var observed = await ReadAsync(sourceId, async () => DigestMergeEvidence.Read(inventory!.ById[id],
                         await reader.ReadDetailCommentsAsync(repository, id, token)), token);
                     if (observed is not null) evidence[id] = observed;

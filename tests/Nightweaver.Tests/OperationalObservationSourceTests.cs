@@ -74,6 +74,10 @@ public sealed class OperationalObservationSourceTests
         Assert.Equal(129, digest.Metrics.CompletedTotal);
         Assert.All(digest.StandaloneCompleted, item => Assert.NotEqual("merged", item.Outcome));
         Assert.Contains(digest.StandaloneCompleted, item => item.MergeEvidence!.State == "unavailable");
+        var count = runner.CommentIds.Count;
+        await source.ReadScheduledAsync(Keys("digest:all"), (_, _) => { }, TestContext.Current.CancellationToken);
+        Assert.InRange(runner.CommentIds.Count - count, 0, 4);
+        Assert.Equal(1, runner.CommentIds.Count(id => id == "task-1")); // Backoff cannot become an uncounted read.
     }
 
     [Fact]
