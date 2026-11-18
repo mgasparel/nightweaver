@@ -110,6 +110,50 @@ public sealed class PlanningPublicationTests
     }
 
     [Theory]
+    [InlineData("feature", true)]
+    [InlineData("bug", true)]
+    [InlineData("task", false)]
+    public async Task FollowupProductProvenanceDoesNotExpandPublishedTaskMembership(string issueType, bool allowed)
+    {
+        using var fixture = new Fixture();
+        await fixture.Publish();
+        var edge = new BeadDependency("followup", "product", "discovered-from");
+        fixture.Edges.Add(edge);
+        fixture.Rows["followup"] = new JsonObject { ["id"] = "followup", ["title"] = "Follow-up work",
+            ["issue_type"] = issueType, ["status"] = "open", ["priority"] = 2,
+            ["labels"] = new JsonArray(), ["created_at"] = "2026-11-13T00:00:00Z",
+            ["dependencies"] = JsonSerializer.SerializeToNode(new[]
+                { new { issue_id = edge.IssueId, depends_on_id = edge.DependsOnId, type = edge.Type } }) };
+        var inventory = fixture.Inventory;
+        var published = inventory.ById.Values.Where(b => b.Id != "followup" && b.IssueType == "task").ToArray();
+        Assert.All(published, task => Assert.Equal(allowed, PlanningPublicationGate.Allows(task, inventory)));
+        Assert.Equal(!allowed, PlanningPublicationGate.HasProductGraphConflict(fixture.Parent, inventory));
+        var before = JsonSerializer.Serialize(fixture.Rows);
+        var writes = fixture.WriteCount;
+        Assert.Equal(!allowed, await fixture.Reconcile());
+        if (allowed)
+        {
+            Assert.Equal(before, JsonSerializer.Serialize(fixture.Rows));
+            Assert.Equal(writes, fixture.WriteCount);
+        }
+        else
+            Assert.All(published, task => Assert.Contains("needs-human", fixture.Inventory.ById[task.Id].Labels));
+    }
+
+    [Theory]
+    [InlineData("feature")]
+    [InlineData("bug")]
+    public async Task PublishedTaskCannotEscapeGraphValidationByChangingItsType(string issueType)
+    {
+        using var fixture = new Fixture();
+        await fixture.Publish();
+        fixture.Rows.Values.ElementAt(1)["issue_type"] = issueType;
+        Assert.True(PlanningPublicationGate.HasProductGraphConflict(fixture.Parent, fixture.Inventory));
+        Assert.All(fixture.Tasks, task => Assert.False(PlanningPublicationGate.Allows(task, fixture.Inventory)));
+        Assert.True(await fixture.Reconcile());
+    }
+
+    [Theory]
     [InlineData("content")]
     [InlineData("edge")]
     [InlineData("child")]

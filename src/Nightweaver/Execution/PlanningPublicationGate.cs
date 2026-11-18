@@ -67,7 +67,9 @@ internal static class PlanningPublicationGate
                 if (!dependencies.ToHashSet().SetEquals(expected)) return false;
             }
             var intendedIds = intended.Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
-            return !inventory.ById.Values.Any(b => !intendedIds.Contains(b.Id)
+            // Follow-up Products can cite this Product as their discovery source
+            // without joining its published task graph. Unmapped tasks still fail closed.
+            return !inventory.ById.Values.Any(b => b.IssueType == "task" && !intendedIds.Contains(b.Id)
                 && b.Payload.TryGetProperty("dependencies", out var edges)
                 && BeadsReader.ParseDownDependencies(edges, b.Id).Any(e => e.Type == "discovered-from" && e.DependsOnId == product));
         }
