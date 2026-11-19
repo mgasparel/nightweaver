@@ -48,6 +48,17 @@ try {
     $timer = [Diagnostics.Stopwatch]::new()
     $runner = {
         $timer.Start()
+        $fixtureWatch = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            $context.archiveFixtures = & (Join-Path $Checkout 'scripts/tests/UnattendedEvidenceArchive.Tests.ps1') -OutputRoot $destination | ConvertFrom-Json
+            if ($context.archiveFixtures.passed -lt 61 -or $context.archiveFixtures.failed -ne 0 -or $context.archiveFixtures.skipped -ne 0) { throw 'Archive fixture count or result invalid' }
+        } catch {
+            $context.archiveFixtures = @{ failed = 1; error = 'Archive fixture verification failed' }
+            $context.measurementErrors += 'Archive fixture verification failed'
+        } finally {
+            $fixtureWatch.Stop()
+            $context.archiveFixtureSeconds = $fixtureWatch.Elapsed.TotalSeconds
+        }
         & dotnet test --solution Nightweaver.slnx --minimum-expected-tests 995 --report-xunit-xml --report-xunit-xml-filename "$id.xml" --show-slowest-tests 20 2>&1 | Tee-Object -FilePath $context.log | Out-Host
         $testExit = $LASTEXITCODE
         $timer.Stop()

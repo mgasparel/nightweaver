@@ -15,6 +15,12 @@ baseline/candidate identities, outer elapsed time and concrete cost changes for
 every change. A filtered run never establishes full-suite acceptance. Hosted time
 is diagnostic and final exact-head correctness remains required.
 
+The retained measurement also runs the cheap [unattended archive fixtures](../scripts/tests/UnattendedEvidenceArchive.Tests.ps1)
+inside its outer stopwatch and reports their counts/time separately from xUnit.
+Fixture failure prevents acceptance even if xUnit passes. Windows CI runs the same
+checks inside the timed correctness step. For direct format inspection and its
+integrity-versus-coverage semantics, see [the archive format](../docs/acceptance/unattended-evidence-archive.md).
+
 See [test-cost evidence](../docs/agents/test-cost-evidence.md) for the versioned
 measurement/comparability contract, native-boundary justification, capture-first
 1.5x diagnostic trigger and ordinary repair routing. Reuse comparable retained
