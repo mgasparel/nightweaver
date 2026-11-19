@@ -1,5 +1,6 @@
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -193,6 +194,14 @@ internal sealed class PlanningSlotCoordinator
     }
 
     private async Task<PlanningSlotOutcome> RefuseAfterClaimAsync(ProjectConfig project,
+        ValidatedTargetRepository repository, string beadId, string reason, BeadWorkflowState? state)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.Finalization, WorkflowPhase.Finalization,
+            () => RefuseAfterClaimCoreAsync(project, repository, beadId, reason, state),
+            result => WorkflowResult.Refused).ConfigureAwait(false);
+    }
+
+    private async Task<PlanningSlotOutcome> RefuseAfterClaimCoreAsync(ProjectConfig project,
         ValidatedTargetRepository repository, string beadId, string reason, BeadWorkflowState? state)
     {
         if (ContinuousAgentLaunchContext.ForceStopRequested)

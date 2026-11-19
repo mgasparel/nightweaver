@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -718,6 +719,20 @@ internal sealed class DeliverySlotCoordinator
         };
 
     private async Task<DeliverySlotOutcome> RefuseAfterClaimAsync(
+        ProjectConfig project,
+        ValidatedTargetRepository repository,
+        string beadId,
+        BeadSnapshot? claimed,
+        string reason,
+        BeadWorkflowState? state,
+        bool requiredFinalization = false)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.Finalization, WorkflowPhase.Finalization,
+            () => RefuseAfterClaimCoreAsync(project, repository, beadId, claimed, reason, state, requiredFinalization),
+            result => WorkflowResult.Refused).ConfigureAwait(false);
+    }
+
+    private async Task<DeliverySlotOutcome> RefuseAfterClaimCoreAsync(
         ProjectConfig project,
         ValidatedTargetRepository repository,
         string beadId,

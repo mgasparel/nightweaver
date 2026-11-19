@@ -1,5 +1,6 @@
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -85,6 +86,22 @@ internal sealed class AgentStageCoordinator
         BeadWorkflowState? expectedState = null,
         bool allowPublication = false)
     {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.Preparation, WorkflowPhase.Preparation,
+            () => OpenSessionCoreAsync(hostPaths, project, repository, beadId, role, expectedAssignee, cancellationToken, expectedState, allowPublication),
+            result => WorkflowResult.Success).ConfigureAwait(false);
+    }
+
+    private async Task<AgentStageSession> OpenSessionCoreAsync(
+        HostPaths hostPaths,
+        ProjectConfig project,
+        ValidatedTargetRepository repository,
+        string beadId,
+        AgentRole role,
+        string? expectedAssignee,
+        CancellationToken cancellationToken,
+        BeadWorkflowState? expectedState = null,
+        bool allowPublication = false)
+    {
         ArgumentNullException.ThrowIfNull(hostPaths);
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(repository);
@@ -150,6 +167,7 @@ internal sealed class AgentStageCoordinator
         string beforeHead,
         CancellationToken cancellationToken)
     {
+        using var preparationTiming = WorkflowTiming.EnterPhase(WorkflowPhase.Preparation);
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(before);
         cancellationToken.ThrowIfCancellationRequested();
@@ -161,6 +179,7 @@ internal sealed class AgentStageCoordinator
         var validHead = ParseProvisionedHead(beforeHead);
         var invocation = await prepare(session.HostPaths, session.Project, session.Role, session.DispatchContext,
             session.Worktree.Path, cancellationToken);
+        WorkflowTiming.ObserveInvocation(invocation.InvocationId);
         cancellationToken.ThrowIfCancellationRequested();
         IReadOnlySet<string>? preInvocationCommentIds = null;
         if (session.Role != AgentRole.Classifier)

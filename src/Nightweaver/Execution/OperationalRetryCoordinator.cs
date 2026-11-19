@@ -1,5 +1,6 @@
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -271,6 +272,7 @@ internal sealed class OperationalRetryCoordinator
                             : reset(paths, project.Name, repository, beadId, session.Purpose, cancellationToken),
                         out var resetTask))
                     return StoppedForDrain(latest, attemptCount, lastClassification);
+                OperationalTelemetry.Current?.Telemetry.RecordRetry(latest.Failure!.Kind);
                 progress?.Invoke(new(OperationalRetryProgressKind.RetryPreparing, attemptCount + 1, maximumAttempts,
                     latest.Failure!.Kind, latest.Failure.Reason, InvocationId: latest.InvocationId,
                     LogFilePath: latest.LogFilePath));
@@ -578,9 +580,13 @@ internal sealed class OperationalRetryCoordinator
                 throw new AgentStageInputException(classification.Diagnostic);
             if (invocation.Observations is not { WorktreeClean: true, ProcessStatus: AgentExecutionStatus.Exited, ExitCode: 0 })
                 throw new AgentStageInputException("Planning process and clean read-only checkout could not be verified.");
-            var grounding = await planningEvidence.CaptureAsync(session, token);
-            comments = await beadsReader.ReadCommentsAsync(session.Repository, session.BeadId, token);
-            var verified = PlanningEvidence.Verify(invocation, classification.Outcome.Value, grounding, comments);
+            var verified = await WorkflowTiming.MeasureAsync(WorkflowOperation.OutcomeVerification, WorkflowPhase.Verification,
+                async () =>
+                {
+                    var grounding = await planningEvidence.CaptureAsync(session, token);
+                    comments = await beadsReader.ReadCommentsAsync(session.Repository, session.BeadId, token);
+                    return PlanningEvidence.Verify(invocation, classification.Outcome.Value, grounding, comments);
+                }, result => result.Error is null ? WorkflowResult.Success : WorkflowResult.Refused);
             if (verified.Error is not null) throw new AgentStageInputException(verified.Error);
             invocation = invocation with { PlanningApproval = verified.Approval, OutcomeClassification = classification };
             if (classification.Outcome == AgentOutcomeChoice.ChangesRequired

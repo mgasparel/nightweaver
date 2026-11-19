@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
+using Nightweaver.Configuration;
+using Nightweaver.Execution;
 using OpenTelemetry;
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Logs;
@@ -26,8 +28,7 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     // Two hosts: 6 operation counters + 2 * (9 buckets + sum + count) +
     // 3 signals * 4 drop reasons + 3 export failure counters + one target_info each.
     // Includes one SDK overflow series per stream (histogram overflow costs 11 series).
-    internal const int ProjectedSeries = 2 * (6 + 2 * 11 + 12 + 3 + 1 + 1 + 11 + 1 + 1 + 43 + 8 * 11 + 1 + 5
-        + 13 + 4 * 11 + 19 + 19);
+    internal const int ProjectedSeries = 2 * (37 + 7 + 22 + 8 * 11 + 4 + 4 * 11 + 55 + 12 + 6 + 2 * 11 + 12 + 3 + 1 + 1 + 11 + 1 + 1 + 43 + 8 * 11 + 1 + 5 + 13 + 4 * 11 + 19 + 19);
     private readonly ActivitySource source = new(ScopeName);
     private readonly Meter meter = new(ScopeName);
     private readonly CancellationTokenSource stop = new();
@@ -45,6 +46,14 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     private readonly Histogram<double> invocationDuration;
     private readonly Counter<long> verifiedMerges;
     private readonly Counter<long> mergeCleanup;
+    private readonly Counter<double> phaseSeconds;
+    private readonly Histogram<double> phaseDuration;
+    private readonly Counter<double> occupiedSeconds;
+    private readonly Histogram<double> classificationDuration;
+    private readonly Counter<long> workflowResults;
+    private readonly Counter<long> operationalRetries;
+    private readonly Counter<long> publishedOutcomes;
+    private readonly Counter<long> semanticRepairs;
     private readonly Counter<long> drops;
     private readonly Counter<long> failures;
     private readonly Counter<long> observationAttempts;
@@ -63,7 +72,7 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
 
     private readonly record struct Record(string Operation, string Outcome, double Seconds, string? DetailId,
         string? Role = null, string? BeadId = null, string? RuntimeId = null, string? InvocationId = null,
-        string? CheckedHead = null, string? MergeCommit = null, DateTime? EndUtc = null, string? Source = null);
+        string? CheckedHead = null, string? MergeCommit = null, DateTime? EndUtc = null, string? Kind = null, string? Source = null);
 
     private static readonly AsyncLocal<RuntimeScope?> Runtime = new();
     internal static RuntimeScope? Current => Runtime.Value;
@@ -121,6 +130,14 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
         invocationDuration = meter.CreateHistogram<double>("nightweaver.invocation.duration", "s");
         verifiedMerges = meter.CreateCounter<long>("nightweaver.verified_merge");
         mergeCleanup = meter.CreateCounter<long>("nightweaver.merge.cleanup");
+        phaseSeconds = meter.CreateCounter<double>("nightweaver.phase.seconds", "s");
+        phaseDuration = meter.CreateHistogram<double>("nightweaver.phase.duration", "s");
+        occupiedSeconds = meter.CreateCounter<double>("nightweaver.slot.occupied", "s");
+        classificationDuration = meter.CreateHistogram<double>("nightweaver.classification.duration", "s");
+        workflowResults = meter.CreateCounter<long>("nightweaver.workflow.results");
+        operationalRetries = meter.CreateCounter<long>("nightweaver.operational.retries");
+        publishedOutcomes = meter.CreateCounter<long>("nightweaver.published.outcomes");
+        semanticRepairs = meter.CreateCounter<long>("nightweaver.semantic.repairs");
         drops = meter.CreateCounter<long>("nightweaver.telemetry.dropped");
         failures = meter.CreateCounter<long>("nightweaver.telemetry.export.failed");
         observationAttempts = meter.CreateCounter<long>("nightweaver.observation.attempts");
@@ -132,7 +149,7 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
             traces = Sdk.CreateTracerProviderBuilder().SetResourceBuilder(resource).AddSource(ScopeName)
                 .SetSampler(new ParentBasedSampler(new TraceIdRatioBasedSampler(configuration.SamplingRatio)))
                 .AddProcessor(new SimpleActivityExportProcessor(new SafeTraceExporter(
-                    Options(configuration, "traces"), source, Failed)))
+                    Options(configuration, "traces"), source, configuration.SamplingRatio, Failed)))
                 .Build();
             metrics = Sdk.CreateMeterProviderBuilder().SetResourceBuilder(resource).AddMeter(ScopeName)
                 .SetExemplarFilter(ExemplarFilterType.AlwaysOff)
@@ -153,6 +170,22 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
                             { TagKeys = [], CardinalityLimit = 1 },
                         "nightweaver.merge.cleanup" => new MetricStreamConfiguration
                             { TagKeys = ["outcome"], CardinalityLimit = 5 },
+                        "nightweaver.phase.seconds" => new MetricStreamConfiguration
+                            { TagKeys = ["pool", "phase"], CardinalityLimit = 22 },
+                        "nightweaver.phase.duration" => new ExplicitBucketHistogramConfiguration
+                            { TagKeys = ["phase"], Boundaries = DurationBuckets, CardinalityLimit = 8 },
+                        "nightweaver.slot.occupied" => new MetricStreamConfiguration
+                            { TagKeys = ["pool"], CardinalityLimit = 4 },
+                        "nightweaver.classification.duration" => new ExplicitBucketHistogramConfiguration
+                            { TagKeys = ["kind"], Boundaries = DurationBuckets, CardinalityLimit = 4 },
+                        "nightweaver.workflow.results" => new MetricStreamConfiguration
+                            { TagKeys = ["kind", "outcome"], CardinalityLimit = 55 },
+                        "nightweaver.published.outcomes" => new MetricStreamConfiguration
+                            { TagKeys = ["role", "outcome"], CardinalityLimit = 37 },
+                        "nightweaver.semantic.repairs" => new MetricStreamConfiguration
+                            { TagKeys = ["role"], CardinalityLimit = 7 },
+                        "nightweaver.operational.retries" => new MetricStreamConfiguration
+                            { TagKeys = ["reason"], CardinalityLimit = 12 },
                         "nightweaver.telemetry.dropped" => new MetricStreamConfiguration
                             { TagKeys = ["signal", "reason"], CardinalityLimit = 13 },
                         "nightweaver.telemetry.export.failed" => new MetricStreamConfiguration
@@ -298,6 +331,58 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
             mergeCleanup.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
     }
 
+    internal void RecordPhase(string pool, WorkflowPhase phase, double seconds)
+    {
+        if (Volatile.Read(ref closing) != 0 || pool is not ("planning" or "delivery" or "merger")
+            || !Enum.IsDefined(phase) || !double.IsFinite(seconds) || seconds < 0) return;
+        var name = phase.ToString().ToLowerInvariant();
+        phaseSeconds.Add(seconds, new("pool", pool), new("phase", name));
+        phaseDuration.Record(seconds, new KeyValuePair<string, object?>("phase", name));
+    }
+
+    internal void RecordOccupied(string pool, double seconds)
+    {
+        if (Volatile.Read(ref closing) == 0 && pool is "planning" or "delivery" or "merger"
+            && double.IsFinite(seconds) && seconds >= 0)
+            occupiedSeconds.Add(seconds, new KeyValuePair<string, object?>("pool", pool));
+    }
+
+    internal void RecordRetry(AgentOperationalFailureKind reason)
+    {
+        if (Volatile.Read(ref closing) == 0 && Enum.IsDefined(reason))
+            operationalRetries.Add(1, new KeyValuePair<string, object?>("reason", reason.ToString()));
+    }
+
+    internal WorkflowResult RecordPublication(AgentStageResult result)
+    {
+        if (result.PublicationReceipt is not { } receipt || !Enum.IsDefined(receipt.Role)
+            || receipt.Role == AgentRole.Classifier) return WorkflowResult.Uncertain;
+        if (Volatile.Read(ref closing) != 0) return WorkflowResult.Success;
+        var role = AgentRoles.ToConfigKey(receipt.Role);
+        if (!IsRole(role) || !Enum.IsDefined(receipt.Outcome)) return WorkflowResult.Uncertain;
+        publishedOutcomes.Add(1, new("role", role), new("outcome", receipt.Outcome.ToString()));
+        if (receipt.Outcome == AgentOutcomeChoice.ChangesRequired)
+            semanticRepairs.Add(1, new KeyValuePair<string, object?>("role", role));
+        return WorkflowResult.Success;
+    }
+
+    internal void RecordWorkflow(WorkflowOperation operation, WorkflowResult outcome, double seconds, string runtimeId,
+        string? beadId = null, string? invocationId = null)
+    {
+        if (Volatile.Read(ref closing) != 0 || !Enum.IsDefined(operation) || !Enum.IsDefined(outcome)
+            || !double.IsFinite(seconds) || seconds is < 0 or > 2_592_000 || !IsOpaqueId(runtimeId)
+            || (beadId is not null && !IsOperationalId(beadId))
+            || (invocationId is not null && !IsOperationalId(invocationId))) return;
+        var kind = operation.ToString();
+        var result = outcome.ToString().ToLowerInvariant();
+        workflowResults.Add(1, new("kind", kind), new("outcome", result));
+        if (operation is WorkflowOperation.LifecyclePrimary or WorkflowOperation.LifecycleFallback or WorkflowOperation.DuplicateFailure)
+            classificationDuration.Record(seconds, new KeyValuePair<string, object?>("kind", kind));
+        Submit(new("workflow", result, seconds, null, BeadId: beadId, RuntimeId: runtimeId,
+            InvocationId: invocationId, EndUtc: DateTime.UtcNow,
+            Kind: kind));
+    }
+
     private void Submit(Record record)
     {
         Admit(spans.Writer, spanAdmission, record, "traces");
@@ -348,6 +433,7 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     private static List<KeyValuePair<string, object?>> Tags(Record record)
     {
         List<KeyValuePair<string, object?>> tags = [new("operation", record.Operation), new("outcome", record.Outcome)];
+        if (record.Kind is not null) tags.Add(new("kind", record.Kind));
         if (record.DetailId is not null) tags.Add(new("detail.id", record.DetailId));
         if (record.Role is not null) tags.Add(new("role", record.Role));
         if (record.BeadId is not null) tags.Add(new("bead.id", record.BeadId));
@@ -470,25 +556,35 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
         }
     }
 
-    private sealed class SafeTraceExporter(OtlpExporterOptions options, ActivitySource ownedSource,
+    private sealed class SafeTraceExporter(OtlpExporterOptions options, ActivitySource ownedSource, double samplingRatio,
         Action<string> failed) : OtlpTraceExporter(options)
     {
+        private readonly TraceIdRatioBasedSampler sampler = new(samplingRatio);
+
         public override ExportResult Export(in Batch<Activity> batch)
         {
 
             foreach (var activity in batch)
             {
+                // A different provider listening to the same fixed source name can upgrade
+                // IsAllDataRequested globally. SimpleActivityExportProcessor sends one span
+                // per batch; reapply this instance's root sampling decision before export.
+                var parameters = new SamplingParameters(default, activity.TraceId, activity.DisplayName,
+                    activity.Kind, activity.TagObjects, activity.Links);
+                if (sampler.ShouldSample(parameters).Decision != SamplingDecision.RecordAndSample)
+                    return ExportResult.Success;
                 // Other listeners may decorate owned Activities. Reject rather than export their fields.
                 if (!ReferenceEquals(activity.Source, ownedSource) || activity.Events.Any() || activity.Links.Any()
                     || activity.Baggage.Any() || activity.TraceStateString is not null
                     || activity.StatusDescription is not null
-                    || activity.DisplayName is not ("host.start" or "host.stop" or "invocation" or "verified_merge" or "observation")
+                    || activity.DisplayName is not ("host.start" or "host.stop" or "invocation" or "verified_merge" or "workflow" or "observation")
                     || activity.TagObjects.Count() > 9
                     || activity.TagObjects.Any(tag => tag.Key switch
                     {
-                        "operation" => tag.Value is not ("host.start" or "host.stop" or "invocation" or "verified_merge" or "observation"),
+                        "operation" => tag.Value is not ("host.start" or "host.stop" or "invocation" or "verified_merge" or "workflow" or "observation"),
+                        "outcome" => tag.Value is not ("success" or "failure" or "cancelled" or "completed" or "failed" or "timed_out" or "launch_failed" or "unknown" or "unavailable" or "invalid" or "refused" or "uncertain"),
                         "source" => tag.Value is not string family || !IsObservationSource(family),
-                        "outcome" => tag.Value is not ("success" or "failure" or "cancelled" or "completed" or "failed" or "timed_out" or "launch_failed" or "unknown"),
+                        "kind" => tag.Value is not string kind || !Enum.TryParse<WorkflowOperation>(kind, out var operation) || !Enum.IsDefined(operation),
                         "detail.id" => tag.Value is not string id || !IsOpaqueId(id),
                         "role" => tag.Value is not string role || !IsRole(role),
                         "bead.id" or "invocation.id" => tag.Value is not string identity || !IsOperationalId(identity),

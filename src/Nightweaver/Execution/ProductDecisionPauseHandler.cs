@@ -2,6 +2,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -47,6 +48,18 @@ internal sealed class ProductDecisionPauseHandler
     }
 
     internal async Task<ProductDecisionPauseResult> PauseAsync(
+        HostPaths paths,
+        ProjectSlug project,
+        ValidatedTargetRepository repository,
+        ProductDecisionPauseRequest request,
+        CancellationToken cancellationToken)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.Finalization, WorkflowPhase.Finalization,
+            () => PauseCoreAsync(paths, project, repository, request, cancellationToken),
+            result => result.Succeeded ? WorkflowResult.Success : WorkflowResult.Uncertain).ConfigureAwait(false);
+    }
+
+    private async Task<ProductDecisionPauseResult> PauseCoreAsync(
         HostPaths paths,
         ProjectSlug project,
         ValidatedTargetRepository repository,

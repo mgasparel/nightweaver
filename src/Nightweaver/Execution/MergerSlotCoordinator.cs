@@ -1,6 +1,7 @@
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 using Nightweaver.Planning;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -454,6 +455,15 @@ internal sealed class MergerSlotCoordinator
     }
 
     private async Task<MergerSlotOutcome> RefuseAfterClaimAsync(ProjectConfig project,
+        ValidatedTargetRepository repository, string beadId, BeadSnapshot? claimed, bool claimAcquiredHere, string reason,
+        bool requiredFinalization = false)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.Finalization, WorkflowPhase.Finalization,
+            () => RefuseAfterClaimCoreAsync(project, repository, beadId, claimed, claimAcquiredHere, reason, requiredFinalization),
+            result => WorkflowResult.Refused).ConfigureAwait(false);
+    }
+
+    private async Task<MergerSlotOutcome> RefuseAfterClaimCoreAsync(ProjectConfig project,
         ValidatedTargetRepository repository, string beadId, BeadSnapshot? claimed, bool claimAcquiredHere, string reason,
         bool requiredFinalization = false)
     {

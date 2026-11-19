@@ -53,7 +53,7 @@ URL, source map, exception, prose, prompt, local invocation output, HTTP/SSE bod
 credential or arbitrary application log. The three family snapshots replace
 bounded in-memory arrays; no telemetry cache drives source collection. Export
 failure does not add native reads or block collection. Twelve streams translate
-to a conservative 580 series across both service identities including overflow,
+to a conservative 1118 series (including the execution overhead extension) across both service identities including overflow,
 below the unchanged 2,000-series design budget. Runtime normally emits none of
 the four Web observation streams; the inventory deliberately overestimates it.
 

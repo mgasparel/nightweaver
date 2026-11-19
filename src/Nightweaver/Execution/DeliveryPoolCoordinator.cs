@@ -78,6 +78,7 @@ internal sealed class DeliveryPoolCoordinator
         internal string BeadId { get; } = beadId;
         internal string SlotId { get; } = slotId;
         internal IDisposable? EnvironmentLease { get; set; }
+        internal WorkflowTiming? Timing { get; set; }
         internal TaskCompletionSource<DeliveryPoolCompletion> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -308,7 +309,7 @@ internal sealed class DeliveryPoolCoordinator
                 }
                 var slotId = telemetry?.SlotForReservation("delivery", beadId)
                     ?? $"delivery-{Enumerable.Range(1, capacityLimit).First(index => reservations.Values.All(active => active.SlotId != $"delivery-{index}"))}";
-                reservation = new ReservationState(beadId, slotId) { EnvironmentLease = environmentLease };
+                reservation = new ReservationState(beadId, slotId) { EnvironmentLease = environmentLease, Timing = WorkflowTiming.Reserve("delivery", beadId) };
                 reservations.Add(beadId, reservation);
                 telemetry?.Reserve("delivery", slotId, beadId);
                 return true;
@@ -361,6 +362,8 @@ internal sealed class DeliveryPoolCoordinator
 
     private async Task RunReservedSlotAsync(ReservationState reservation)
     {
+        using var timingContext = reservation.Timing?.Enter();
+        using var preparationTiming = WorkflowTiming.EnterPhase(WorkflowPhase.Preparation);
         DeliverySlotOutcome? outcome = null;
         Exception? failure = null;
         var canceled = false;
@@ -389,6 +392,7 @@ internal sealed class DeliveryPoolCoordinator
         var completion = new DeliveryPoolCompletion(reservation.BeadId, outcome, failure, canceled, LocalCapacityReleased: true);
         lock (stateGate)
         {
+            reservation.Timing?.Dispose();
             telemetry?.Release("delivery", reservation.SlotId, reservation.BeadId);
             reservations.Remove(reservation.BeadId);
             reservation.EnvironmentLease?.Dispose();

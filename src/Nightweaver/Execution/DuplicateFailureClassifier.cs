@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -52,6 +53,23 @@ internal sealed class DuplicateFailureClassifier
     }
 
     internal async Task<DuplicateFailureClassificationResult> CompareAsync(
+        HostPaths paths,
+        ProjectConfig project,
+        AgentDispatchContext stageContext,
+        AgentRole failedRole,
+        string worktreePath,
+        AgentStageResult previous,
+        AgentStageResult latest,
+        CancellationToken cancellationToken)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.DuplicateFailure, WorkflowPhase.Classification,
+            () => CompareCoreAsync(paths, project, stageContext, failedRole, worktreePath, previous, latest, cancellationToken),
+            result => result.Verdict != DuplicateFailureVerdict.Inconclusive ? WorkflowResult.Success
+                : result.Reason is DuplicateFailureInconclusiveReason.InvalidOutput or DuplicateFailureInconclusiveReason.OutputTooLarge
+                    or DuplicateFailureInconclusiveReason.InputTooLarge ? WorkflowResult.Invalid : WorkflowResult.Unavailable).ConfigureAwait(false);
+    }
+
+    private async Task<DuplicateFailureClassificationResult> CompareCoreAsync(
         HostPaths paths,
         ProjectConfig project,
         AgentDispatchContext stageContext,

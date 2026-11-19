@@ -110,6 +110,7 @@ internal sealed class AgentInvocationExecutor
         var launchDenied = false;
         var nativeLaunchAttempted = false;
         long? telemetryStarted = null;
+        IDisposable? phaseTiming = null;
 
         try
         {
@@ -127,6 +128,8 @@ internal sealed class AgentInvocationExecutor
             var launchStarted = timeProvider.GetTimestamp();
             nativeLaunchAttempted = true;
             telemetryStarted = Stopwatch.GetTimestamp();
+            if (invocation.Purpose is not ("classifier" or "outcome-classifier"))
+                phaseTiming = WorkflowTiming.EnterPhase(WorkflowPhase.Agent);
             if (!ContinuousAgentLaunchContext.TryLaunchAgent(() => processLauncher is null
                     ? WindowsProcessLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment)
                     : processLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment),
@@ -209,6 +212,7 @@ internal sealed class AgentInvocationExecutor
         catch (Exception exception) { cleanupFailure = Combine(cleanupFailure, exception); }
         logFlushStop?.Dispose();
 
+        phaseTiming?.Dispose();
         if (telemetryStarted is long started && !launchDenied && OperationalTelemetry.Current is { } export)
         {
             var settled = cleanupFailure is not null || primaryFailure is not null ? "failed"

@@ -4,11 +4,54 @@ using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
+using static Nightweaver.Tests.OperationalTelemetryTests;
 
 namespace Nightweaver.Tests;
 
 public sealed class AgentOutcomeClassifierTests
 {
+    [Theory]
+    [InlineData("primary", "success", false)]
+    [InlineData("unavailable", "unavailable", true)]
+    [InlineData("invalid", "invalid", true)]
+    public async Task ClassifierDiagnosticsAreSeparateFromVerifiedLifecycleOutcomes(string mode, string primaryResult, bool fallback)
+    {
+        using var fixture = new OutcomeFixture();
+        await using var receiver = await Receiver.StartAsync();
+        await using var telemetry = new OperationalTelemetry(OperationalHost.Runtime, new(receiver.Endpoint, "", 1),
+            _ => { }, metricIntervalMilliseconds: 100);
+        using var runtime = telemetry.EnterRuntime("0123456789abcdef0123456789abcdef");
+        const string canary = "PRIVATE_CLASSIFIER_EVIDENCE_AND_SECRET";
+        File.AppendAllText(fixture.Invocation.LogFilePath, canary);
+        using var client = new HttpClient(new DelegateHttpMessageHandler(_ => Task.FromResult(mode switch
+        {
+            "primary" => JsonResponse("ready_for_review"),
+            "invalid" => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(canary) },
+            _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent(canary) }
+        })));
+        var calls = 0;
+        var classifier = new AgentOutcomeClassifier(client, executeFallback: (_, _, invocation, _, _) =>
+        {
+            calls++;
+            return Task.FromResult(ValidFallbackResult(invocation));
+        }, apiKeyOverride: canary);
+        var result = await classifier.ClassifyAsync(fixture.Paths, fixture.Project, fixture.Context, fixture.Worktree,
+            fixture.Invocation, [], TestContext.Current.CancellationToken);
+        Assert.True(result.Succeeded);
+        Assert.Equal(fallback ? 1 : 0, calls);
+        await receiver.WaitForSignalsAsync();
+        await telemetry.StopAsync(false);
+        var spans = receiver.Captures.Where(c => c.Signal == "traces").SelectMany(FirstPathTelemetryTests.DecodeRecords)
+            .Select(span => Attributes(span, 9)).ToArray();
+        Assert.Contains(spans, tags => tags.GetValueOrDefault("kind") == "LifecyclePrimary" && tags["outcome"] == primaryResult);
+        Assert.Equal(fallback, spans.Any(tags => tags.GetValueOrDefault("kind") == "LifecycleFallback"));
+        Assert.DoesNotContain(spans, tags => tags["operation"] == "verified_merge");
+        foreach (var capture in receiver.Captures) Assert.DoesNotContain(canary, Encoding.UTF8.GetString(capture.Bytes));
+        Assert.DoesNotContain(receiver.Captures.Where(c => c.Signal == "metrics").SelectMany(FirstPathTelemetryTests.DecodeRecords),
+            m => m.Only(1).String is "nightweaver.published.outcomes" or "nightweaver.semantic.repairs");
+    }
+
     [Theory]
     [InlineData("Planner", "stage:plan", "planner_outcome", "ready_for_review")]
     [InlineData("PlanChallenger", "stage:plan-challenge", "plan_challenger_outcome", "approved")]

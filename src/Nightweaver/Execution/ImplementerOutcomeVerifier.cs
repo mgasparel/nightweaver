@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -28,6 +29,18 @@ internal sealed class DeliveryOutcomeVerifier(IProcessRunner processRunner) : ID
     private readonly BeadsReader beadsReader = new(processRunner);
 
     public async Task<string?> VerifyNoClassifierMutationAsync(
+        ValidatedTargetRepository repository,
+        string worktreePath,
+        AgentStageResult invocation,
+        string expectedAssignee,
+        CancellationToken cancellationToken)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.OutcomeVerification, WorkflowPhase.Verification,
+            () => VerifyNoClassifierMutationCoreAsync(repository, worktreePath, invocation, expectedAssignee, cancellationToken),
+            result => result is null ? WorkflowResult.Success : WorkflowResult.Refused).ConfigureAwait(false);
+    }
+
+    private async Task<string?> VerifyNoClassifierMutationCoreAsync(
         ValidatedTargetRepository repository,
         string worktreePath,
         AgentStageResult invocation,
@@ -64,6 +77,19 @@ internal sealed class DeliveryOutcomeVerifier(IProcessRunner processRunner) : ID
     }
 
     public async Task<string?> VerifyApprovalAsync(
+        ValidatedTargetRepository repository,
+        string worktreePath,
+        AgentStageResult invocation,
+        string expectedAssignee,
+        string defaultBranch,
+        CancellationToken cancellationToken)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.OutcomeVerification, WorkflowPhase.Verification,
+            () => VerifyApprovalCoreAsync(repository, worktreePath, invocation, expectedAssignee, defaultBranch, cancellationToken),
+            result => result is null ? WorkflowResult.Success : WorkflowResult.Refused).ConfigureAwait(false);
+    }
+
+    private async Task<string?> VerifyApprovalCoreAsync(
         ValidatedTargetRepository repository,
         string worktreePath,
         AgentStageResult invocation,

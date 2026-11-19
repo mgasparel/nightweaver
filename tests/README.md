@@ -39,6 +39,13 @@ journey or publish is added; the uncovered boundary is the real executable's
 environment-only exporter and observer wiring, which direct service tests cannot
 prove. See [the contract](../docs/design/web-observation-telemetry.md).
 
+Execution overhead adds deterministic monotonic-clock phase allocation cases and
+reuses fake classifier/publisher seams plus in-process OTLP receivers for private
+canaries, primary/fallback diagnostics, confirmed/reread/refused publication,
+cancellation, concurrent scopes and unsampled retry/repair totals. No native
+journey, deadline change or additional tool command is introduced. See the
+[observation contract](../docs/design/execution-overhead-telemetry.md).
+
 The invocation-to-verified-merge telemetry slice adds one native OTLP smoke using
 the existing immutable AgentStage template: actual fake Agent launch/settlement,
 native Git/bd verification and guarded closure must export matching operational

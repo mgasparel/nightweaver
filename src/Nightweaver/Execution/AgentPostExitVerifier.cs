@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -62,6 +63,21 @@ internal sealed record AgentStageResult(
 internal sealed class AgentPostExitVerifier(IProcessRunner processRunner, BeadsReader beadsReader)
 {
     internal async Task<AgentStageResult> VerifyAsync(
+        ValidatedTargetRepository repository,
+        string worktreePath,
+        AgentRole role,
+        BeadWorkflowState before,
+        string? beforeAssignee,
+        string beforeHead,
+        AgentExecutionResult execution,
+        CancellationToken cancellationToken)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.PostExitVerification, WorkflowPhase.Verification,
+            () => VerifyCoreAsync(repository, worktreePath, role, before, beforeAssignee, beforeHead, execution, cancellationToken),
+            result => result.Succeeded ? WorkflowResult.Success : WorkflowResult.Refused).ConfigureAwait(false);
+    }
+
+    private async Task<AgentStageResult> VerifyCoreAsync(
         ValidatedTargetRepository repository,
         string worktreePath,
         AgentRole role,
