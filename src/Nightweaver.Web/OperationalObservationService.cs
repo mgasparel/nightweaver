@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Web;
 
@@ -22,6 +23,7 @@ internal sealed class OperationalObservationService(
     private readonly Channel<bool> wake = Channel.CreateBounded<bool>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
     private ulong revision;
     private bool stopping;
+    internal OperationalTelemetry? Telemetry { get; set; }
     private string journalState = "inactive";
     private string? journalIdentity;
     private long journalCursor;
@@ -355,6 +357,7 @@ internal sealed class OperationalObservationService(
                 {
                     EvictExpired(clock.GetUtcNow());
                     foreach (var entry in entries.Values) Age(entry);
+                    ReportHealth();
                 }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
@@ -384,6 +387,7 @@ internal sealed class OperationalObservationService(
                 if (source is IScheduledTrackerObservationSource scheduled) await scheduled.ReadScheduledAsync([], (_, _) => { }, token);
                 else await source.ReadTrackerAsync([], token);
             }
+            lock (sync) ReportHealth();
             return;
         }
         if (!runtime && dirtyReceived is { } dirty)
@@ -395,10 +399,28 @@ internal sealed class OperationalObservationService(
         Dictionary<Entry, long> generations;
         lock (sync) generations = captured.ToDictionary(entry => entry, entry => entry.DirtyGeneration);
         var keys = captured.Select(entry => entry.Key).ToArray();
-        var samples = runtime ? await source.ReadRuntimeAsync(keys, token)
-            : source is IScheduledTrackerObservationSource scheduledSource
-                ? await scheduledSource.ReadScheduledAsync(keys, (id, state) => Revalidate(captured, id, state), token)
-                : await source.ReadTrackerAsync(keys, token, (id, state) => Revalidate(captured, id, state));
+        var family = runtime ? cleanup ? "cleanup" : "runtime" : "tracker";
+        var started = clock.GetTimestamp();
+        IReadOnlyDictionary<string, ObservationSample> samples;
+        try
+        {
+            samples = runtime ? await source.ReadRuntimeAsync(keys, token)
+                : source is IScheduledTrackerObservationSource scheduledSource
+                    ? await scheduledSource.ReadScheduledAsync(keys, (id, state) => Revalidate(captured, id, state), token)
+                    : await source.ReadTrackerAsync(keys, token, (id, state) => Revalidate(captured, id, state));
+        }
+        catch (Exception)
+        {
+            Telemetry?.RecordObservation(family, token.IsCancellationRequested ? "cancelled" : "failure", clock.GetElapsedTime(started).TotalSeconds);
+            throw;
+        }
+        // A scheduled no-op is not a collector attempt. Projection counts and subscriber counts
+        // never multiply this record; a turn may share one native inventory across many keys.
+        if (samples.Count > 0)
+            Telemetry?.RecordObservation(family, samples.Values.Any(sample => sample.Error?.Code == "source-timeout"
+                || sample.Sources.Values.Any(state => state.Error?.Code == "source-timeout")) ? "timed_out"
+                : samples.Values.Any(sample => sample.Error is not null || sample.Sources.Values.Any(state => state.Error is not null))
+                    ? "failure" : "success", clock.GetElapsedTime(started).TotalSeconds);
         lock (sync)
         {
             var reconcileAgain = false;
@@ -465,6 +487,33 @@ internal sealed class OperationalObservationService(
             // actual outstanding hints retain their selective source dirtiness.
             // Broad invalidation here would turn a named comment into full reads.
             if (reconcileAgain) (source as IScheduledTrackerObservationSource)?.Reconcile();
+            ReportHealth();
+        }
+    }
+
+    // Called under sync. Only fixed family/state names and monotonic accepted-body age
+    // cross the telemetry boundary. No key, source map, payload or error text is submitted.
+    private void ReportHealth()
+    {
+        if (Telemetry is not { } telemetry) return;
+        foreach (var family in new[] { "tracker", "runtime", "cleanup" })
+        {
+            var interested = entries.Values.Where(entry => IsPinned(entry, clock.GetUtcNow())
+                && (family == "runtime" ? entry.Key.Kind == "factory"
+                    : family == "cleanup" ? entry.Key.Kind == "cleanup" : entry.Key.Kind is not ("factory" or "cleanup"))).ToArray();
+            if (stopping) telemetry.SetObservationHealth(family, [("stopped", null)]);
+            else if (interested.Length == 0) telemetry.SetObservationHealth(family, [("idle", null)]);
+            else telemetry.SetObservationHealth(family, interested.Select(entry =>
+            {
+                var envelope = WithAge(entry, entry.Envelope);
+                var health = envelope.Health == "fresh" ? "healthy" : envelope.Health;
+                if (family == "runtime" && health == "healthy" && envelope.Data is { } data && data.ValueKind == JsonValueKind.Object
+                    && data.TryGetProperty("availability", out var availability) && availability.ValueKind == JsonValueKind.String
+                    && availability.GetString() == "stopped") health = "stopped";
+                else if (health == "healthy" && entry.PendingTimestamp is not null) health = "pending";
+                var age = ValidatedAge(entry) / 1000;
+                return (health, age);
+            }).ToArray());
         }
     }
 
@@ -626,6 +675,7 @@ internal sealed class OperationalObservationService(
         lock (sync)
         {
             stopping = true;
+            ReportHealth();
             foreach (var entry in entries.Values) budget.Release(entry);
             entries.Clear();
         }
@@ -634,7 +684,7 @@ internal sealed class OperationalObservationService(
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        lock (sync) stopping = true;
+        lock (sync) { stopping = true; ReportHealth(); }
         await base.StopAsync(cancellationToken);
     }
 }

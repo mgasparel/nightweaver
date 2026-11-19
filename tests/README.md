@@ -30,6 +30,15 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Web observation telemetry adds three cheap loopback/component cases for shared
+subscriber collection, scheduled no-op suppression, monotonic retained age,
+timeout/unavailable/idle/stopped states and exported canary exclusion. Existing
+standalone hosting journeys now inspect observation export and the existing
+published standalone/background journey checks SDK dependencies. No native
+journey or publish is added; the uncovered boundary is the real executable's
+environment-only exporter and observer wiring, which direct service tests cannot
+prove. See [the contract](../docs/design/web-observation-telemetry.md).
+
 The invocation-to-verified-merge telemetry slice adds one native OTLP smoke using
 the existing immutable AgentStage template: actual fake Agent launch/settlement,
 native Git/bd verification and guarded closure must export matching operational

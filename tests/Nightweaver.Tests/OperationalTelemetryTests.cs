@@ -261,7 +261,7 @@ public sealed class OperationalTelemetryTests
         clock.Seconds = 1_000_000;
         for (var index = 0; index < 16; index++) Assert.True(admission.TryTake());
         Assert.False(admission.TryTake());
-        Assert.Equal(390, OperationalTelemetry.ProjectedSeries);
+        Assert.Equal(580, OperationalTelemetry.ProjectedSeries);
         Assert.True(OperationalTelemetry.ProjectedSeries <= 2000);
     }
 

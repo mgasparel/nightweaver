@@ -7,6 +7,7 @@ namespace Nightweaver.Web;
 internal sealed class WebTelemetryLifetime : IDisposable
 {
     private readonly OperationalTelemetry? telemetry;
+    internal OperationalTelemetry? Telemetry => telemetry;
     private readonly CancellationTokenRegistration started;
     private readonly CancellationTokenRegistration stopped;
     private readonly CancellationTokenRegistration stopping;
