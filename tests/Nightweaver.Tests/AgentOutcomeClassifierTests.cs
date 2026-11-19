@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -12,15 +14,17 @@ namespace Nightweaver.Tests;
 public sealed class AgentOutcomeClassifierTests
 {
     [Theory]
-    [InlineData("primary", "success", false)]
-    [InlineData("unavailable", "unavailable", true)]
-    [InlineData("invalid", "invalid", true)]
-    public async Task ClassifierDiagnosticsAreSeparateFromVerifiedLifecycleOutcomes(string mode, string primaryResult, bool fallback)
+    [InlineData("primary", "success", false, false)]
+    [InlineData("unavailable", "unavailable", true, false)]
+    [InlineData("invalid", "invalid", true, false)]
+    [InlineData("unavailable", "unavailable", true, true)]
+    public async Task ClassifierDiagnosticsAreSeparateFromVerifiedLifecycleOutcomes(string mode, string primaryResult, bool fallback, bool concurrentDecorator)
     {
         using var fixture = new OutcomeFixture();
         await using var receiver = await Receiver.StartAsync();
+        ConcurrentQueue<string> diagnostics = new();
         await using var telemetry = new OperationalTelemetry(OperationalHost.Runtime, new(receiver.Endpoint, "", 1),
-            _ => { }, metricIntervalMilliseconds: 100);
+            diagnostics.Enqueue, metricIntervalMilliseconds: 100);
         using var runtime = telemetry.EnterRuntime("0123456789abcdef0123456789abcdef");
         const string canary = "PRIVATE_CLASSIFIER_EVIDENCE_AND_SECRET";
         File.AppendAllText(fixture.Invocation.LogFilePath, canary);
@@ -31,25 +35,44 @@ public sealed class AgentOutcomeClassifierTests
             _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent(canary) }
         })));
         var calls = 0;
-        var classifier = new AgentOutcomeClassifier(client, executeFallback: (_, _, invocation, _, _) =>
+        ActivityListener? decorator = null;
+        using var releaseDecorator = new CallbackDisposable(() => decorator?.Dispose());
+        var classifier = new AgentOutcomeClassifier(client, executeFallback: async (_, _, invocation, _, _) =>
         {
             calls++;
-            return Task.FromResult(ValidFallbackResult(invocation));
+            if (concurrentDecorator)
+            {
+                // Pin the privacy-test overlap after primary export and before fallback completion.
+                await receiver.WaitForSignalAsync("traces");
+                decorator = DecorateActivities("event", Guid.NewGuid().ToString("N"));
+            }
+            return ValidFallbackResult(invocation);
         }, apiKeyOverride: canary);
         var result = await classifier.ClassifyAsync(fixture.Paths, fixture.Project, fixture.Context, fixture.Worktree,
             fixture.Invocation, [], TestContext.Current.CancellationToken);
         Assert.True(result.Succeeded);
         Assert.Equal(fallback ? 1 : 0, calls);
+        // Seeing the first trace does not mean the fallback export has settled.
+        // Assert records before bounded best-effort shutdown can cancel pending work.
+        await receiver.WaitForWorkflowKindsAsync(fallback ? ["LifecyclePrimary", "LifecycleFallback"] : ["LifecyclePrimary"], diagnostics);
         await receiver.WaitForSignalsAsync();
         await telemetry.StopAsync(false);
         var spans = receiver.Captures.Where(c => c.Signal == "traces").SelectMany(FirstPathTelemetryTests.DecodeRecords)
             .Select(span => Attributes(span, 9)).ToArray();
         Assert.Contains(spans, tags => tags.GetValueOrDefault("kind") == "LifecyclePrimary" && tags["outcome"] == primaryResult);
-        Assert.Equal(fallback, spans.Any(tags => tags.GetValueOrDefault("kind") == "LifecycleFallback"));
+        Assert.True(fallback == spans.Any(tags => tags.GetValueOrDefault("kind") == "LifecycleFallback"),
+            $"Expected fallback={fallback}; kinds={string.Join(",", spans.Select(t => t.GetValueOrDefault("kind")))}; losses={string.Join(";", diagnostics)}");
+        if (fallback) Assert.Contains(spans, tags => tags.GetValueOrDefault("kind") == "LifecycleFallback" && tags["outcome"] == "success");
+        Assert.Empty(diagnostics);
         Assert.DoesNotContain(spans, tags => tags["operation"] == "verified_merge");
         foreach (var capture in receiver.Captures) Assert.DoesNotContain(canary, Encoding.UTF8.GetString(capture.Bytes));
         Assert.DoesNotContain(receiver.Captures.Where(c => c.Signal == "metrics").SelectMany(FirstPathTelemetryTests.DecodeRecords),
             m => m.Only(1).String is "nightweaver.published.outcomes" or "nightweaver.semantic.repairs");
+    }
+
+    private sealed class CallbackDisposable(Action dispose) : IDisposable
+    {
+        public void Dispose() => dispose();
     }
 
     [Theory]

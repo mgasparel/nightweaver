@@ -96,5 +96,12 @@ contexts, exception/cancellation reconciliation and idempotent closure. Existing
 fake classifier and publisher fixtures verify primary/fallback diagnostics,
 private canaries, confirmed/lost/refused writes and absence of unconfirmed business
 success. In-process OTLP receivers check the real wire schema and zero sampling.
+Classifier acceptance waits for each expected primary/fallback kind before
+best-effort shutdown, reporting observed kinds and bounded loss diagnostics on
+failure. A controlled overlap starts the privacy-test ActivityListener between
+primary export and fallback completion. Privacy decoration targets a unique
+fixture detail ID because listeners are process-wide; other concurrent exports
+must remain observable. Decorated owned records still fail closed. Export queues,
+shutdown budgets and the six-thread test schedule are unchanged.
 Existing executor, retry, Planning, verifier and pool suites retain native timeout,
 launch, publication and cleanup boundaries. No native journey is added.
