@@ -266,6 +266,7 @@ internal sealed class OperationalRetryCoordinator
             ProvisionedWorktree resetWorktree;
             try
             {
+                using var preparationTiming = WorkflowTiming.EnterPhase(WorkflowPhase.Preparation);
                 if (!ContinuousAgentLaunchContext.TryBeginExternalOperation(
                         () => session.PreserveInheritedChanges
                             ? resetter.PreserveAsync(paths, project.Name, repository, beadId, session.Purpose, cancellationToken)

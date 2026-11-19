@@ -1,12 +1,53 @@
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 using System.Text.Json;
 
 namespace Nightweaver.Tests;
 
 public sealed class DeliverySlotCoordinatorTests
 {
+    [Fact]
+    public async Task AdmissionAndInterstageReadsHaveDistinctPhaseAllocations()
+    {
+        using var fixture = new FastSlotFixture();
+        var bead = fixture.CreateTask();
+        var clock = new WorkflowTimingTests.Clock();
+        Dictionary<WorkflowPhase, double> phases = [];
+        List<double> occupied = [];
+        using var timing = new WorkflowTiming(clock, phases.Add, occupied.Add);
+        using var context = timing.Enter();
+        var roleStarted = false;
+        var admissionCommands = 0;
+        var coordinationCommands = 0;
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            clock.Advance(1);
+            if (roleStarted) coordinationCommands++;
+            else admissionCommands++;
+            return await fixture.Runner.RunAsync(request, token);
+        });
+        var outcome = await fixture.RunAsync(bead, (role, _) =>
+        {
+            roleStarted = true;
+            using (WorkflowTiming.EnterPhase(WorkflowPhase.Agent))
+                clock.Advance(3);
+            clock.Advance(5); // host coordination between owned operations
+            fixture.Advance(bead, role);
+            return Task.FromResult(Success(role, bead, fixture.ReadState(bead)));
+        }, runner);
+        Assert.True(outcome.MergeReady, outcome.Diagnostic);
+        timing.Dispose();
+        Assert.True(admissionCommands > 0);
+        Assert.True(coordinationCommands > 0);
+        Assert.Equal(admissionCommands, phases[WorkflowPhase.Preparation]);
+        Assert.Equal(9, phases[WorkflowPhase.Agent]);
+        Assert.Equal(15 + coordinationCommands, phases[WorkflowPhase.Other]);
+        Assert.Equal(24 + admissionCommands + coordinationCommands, Assert.Single(occupied));
+        Assert.Equal(occupied[0], phases.Values.Sum());
+    }
+
     [Theory]
     [InlineData("receipt", true, 1)]
     [InlineData("malformed", true, 2)]

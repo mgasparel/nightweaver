@@ -373,7 +373,6 @@ internal sealed class PlanningPoolCoordinator
     private async Task RunReservedSlotAsync(ReservationState reservation)
     {
         using var timingContext = reservation.Timing?.Enter();
-        using var preparationTiming = WorkflowTiming.EnterPhase(WorkflowPhase.Preparation);
         PlanningSlotOutcome? outcome = null;
         Exception? failure = null;
         var canceled = false;

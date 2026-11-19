@@ -107,6 +107,7 @@ internal sealed class DeliverySlotCoordinator
             return Result(DeliverySlotDisposition.Refused, null, null, null, false, "Bead ID must be nonblank.");
 
         BeadWorkflowState? initial = null;
+        using var admissionTiming = WorkflowTiming.EnterPhase(WorkflowPhase.Preparation);
         BeadSnapshot? claimed = null;
         var claimAcquisitionAttempted = false;
         var claimAcquired = false;
@@ -201,6 +202,8 @@ internal sealed class DeliverySlotCoordinator
 
             var claimedSnapshot = await reader.ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor,
                 cancellationToken).ConfigureAwait(false);
+            // Admission ends here; later unowned coordination belongs to Other.
+            admissionTiming?.Dispose();
             var claimedInventory = claimedSnapshot.Inventory;
             var claimedReadiness = claimedSnapshot.Readiness;
             if (!claimedInventory.ById.TryGetValue(beadId, out claimed))

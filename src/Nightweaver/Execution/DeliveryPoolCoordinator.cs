@@ -363,7 +363,6 @@ internal sealed class DeliveryPoolCoordinator
     private async Task RunReservedSlotAsync(ReservationState reservation)
     {
         using var timingContext = reservation.Timing?.Enter();
-        using var preparationTiming = WorkflowTiming.EnterPhase(WorkflowPhase.Preparation);
         DeliverySlotOutcome? outcome = null;
         Exception? failure = null;
         var canceled = false;

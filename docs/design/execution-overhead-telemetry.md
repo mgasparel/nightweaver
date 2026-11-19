@@ -20,6 +20,10 @@ and time waiting to start the reserved task. Exception and cancellation unwinds
 restore the enclosing phase; idempotent reservation disposal freezes all totals.
 Concurrent reservations have independent async contexts and fixed-size arrays.
 
+Claim admission ends after the confirming claimed snapshot. Pool wrappers do not
+hold a preparation scope across the slot: interstage inventory, readiness and
+ownership coordination restores Other between the individually owned operations.
+
 Allocation is exported once at release, including zero-duration phases. Active
 reservations are therefore absent from these completed-reservation totals until
 they settle. Process termination may lose an unfinished allocation. No timer is

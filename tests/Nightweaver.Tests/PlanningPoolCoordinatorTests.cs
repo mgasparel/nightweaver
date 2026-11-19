@@ -3,11 +3,53 @@ using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Tests;
 
 public sealed class PlanningPoolCoordinatorTests
 {
+    [Theory]
+    [InlineData("success")]
+    [InlineData("exception")]
+    [InlineData("cancelled")]
+    public async Task SlotCoordinationRestoresOtherAfterOwnedOperations(string mode)
+    {
+        var clock = new WorkflowTimingTests.Clock();
+        Dictionary<WorkflowPhase, double> phases = [];
+        List<double> occupied = [];
+        using var timing = new WorkflowTiming(clock, phases.Add, occupied.Add);
+        // No exporter/reservation timer is installed: the pool inherits this controlled
+        // async context, so its production wrapper still participates in allocation.
+        using var context = timing.Enter();
+        var pool = CreatePool(1, () => Task.FromResult(Snapshot([Row("candidate")], ["candidate"])),
+            async (_, _, _, _, _) =>
+            {
+                await Task.Yield();
+                using (WorkflowTiming.EnterPhase(WorkflowPhase.Preparation))
+                    clock.Advance(2);
+                using (WorkflowTiming.EnterPhase(WorkflowPhase.Agent))
+                    clock.Advance(3);
+                clock.Advance(5); // uninstrumented coordination after the owned work
+                if (mode == "exception") throw new IOException("controlled failure");
+                if (mode == "cancelled") throw new OperationCanceledException();
+                return SlotOutcome(PlanningSlotDisposition.Refused);
+            });
+        var evaluation = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        var completion = await Assert.Single(evaluation.Admitted).Completion;
+        Assert.Empty(pool.ActiveReservations);
+        Assert.Equal(mode == "cancelled", completion.IsCanceled);
+        if (mode == "exception") Assert.IsType<IOException>(completion.Exception);
+        timing.Dispose();
+        clock.Advance(100);
+        timing.Dispose();
+        Assert.Equal(2, phases[WorkflowPhase.Preparation]);
+        Assert.Equal(3, phases[WorkflowPhase.Agent]);
+        Assert.Equal(5, phases[WorkflowPhase.Other]);
+        Assert.Equal(10, Assert.Single(occupied));
+        Assert.Equal(occupied[0], phases.Values.Sum());
+    }
+
     [Fact]
     public async Task RepeatedReadinessSnapshotMismatchFailsBeforePlanningSelectionOrLaunch()
     {

@@ -204,6 +204,7 @@ internal sealed class AgentStageCoordinator
                 invocation.ConfiguredModel, invocation.Effort);
         }
         cancellationToken.ThrowIfCancellationRequested();
+        preparationTiming?.Dispose();
         var execution = await execute(session.HostPaths, session.Project.Name, invocation, cancellationToken);
         var result = await verifier.VerifyAsync(session.Repository, session.Worktree.Path, session.Role, before,
             session.InitialAssignee, validHead, execution, cancellationToken).ConfigureAwait(false);

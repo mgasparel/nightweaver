@@ -100,6 +100,7 @@ internal sealed class MergerSlotCoordinator
         if (string.IsNullOrWhiteSpace(beadId))
             return Result(MergerSlotDisposition.Refused, null, null, false, "Bead ID must be nonblank.");
 
+        using var admissionTiming = WorkflowTiming.EnterPhase(WorkflowPhase.Preparation);
         BeadSnapshot? claimed = null;
         BeadWorkflowState? initialState = null;
         var claimAcquisitionAttempted = false;
@@ -133,6 +134,8 @@ internal sealed class MergerSlotCoordinator
 
             var claimedSnapshot = await reader.ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor,
                 cancellationToken).ConfigureAwait(false);
+            // Admission ends here; later unowned coordination belongs to Other.
+            admissionTiming?.Dispose();
             if (!claimedSnapshot.Inventory.ById.TryGetValue(beadId, out claimed))
                 return await RefuseAfterClaimAsync(project, repository, beadId, null,
                     claimAcquiredHere, "Bead disappeared after Merger admission.").ConfigureAwait(false);

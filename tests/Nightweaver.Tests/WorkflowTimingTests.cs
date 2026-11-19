@@ -214,7 +214,7 @@ public sealed class WorkflowTimingTests
         Assert.Equal("LifecycleFallback", Attributes(span, 9)["kind"]);
     }
 
-    private sealed class Clock : TimeProvider
+    internal sealed class Clock : TimeProvider
     {
         private long seconds;
         public override long TimestampFrequency => 1;

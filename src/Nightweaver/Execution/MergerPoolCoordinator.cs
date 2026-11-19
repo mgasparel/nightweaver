@@ -260,7 +260,6 @@ internal sealed class MergerPoolCoordinator
     private async Task RunReservedSlotAsync(ReservationState reservation)
     {
         using var timingContext = reservation.Timing?.Enter();
-        using var preparationTiming = WorkflowTiming.EnterPhase(WorkflowPhase.Preparation);
         MergerSlotOutcome? outcome = null;
         Exception? failure = null;
         var canceled = false;
