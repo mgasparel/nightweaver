@@ -30,6 +30,14 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+The native console inheritance probe reads its atomically published child readiness
+file within one monotonic twenty-second deadline. Missing-file and sharing/lock
+violations can settle within that budget; other I/O errors, malformed JSON and
+nonce/PID mismatches still fail. Six cheap controlled cases exercise transient
+sharing, permanent contention and unchanged payload/error handling. The existing
+native journey retains its live-child, pipe inheritance and cleanup assertions;
+no extra process journey or longer deadline is introduced.
+
 The native Dolt descendant fixture waits for a CSV result marker emitted after
 database acquisition before publishing lock readiness. Exclusive `LOCK` polling
 could itself deny Dolt's startup open with incompatible sharing flags. The existing

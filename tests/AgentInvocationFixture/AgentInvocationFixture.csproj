@@ -6,5 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../Nightweaver.Tests/WindowsConsoleProcess.cs" Link="WindowsConsoleProcess.cs" />
+    <Compile Include="../Nightweaver.Tests/FixtureReadinessFile.cs" Link="FixtureReadinessFile.cs" />
   </ItemGroup>
 </Project>

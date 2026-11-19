@@ -328,8 +328,8 @@ internal static class Program
             child = WindowsConsoleProcess.Start(executable,
                 ["--native-handle-child", readyPath, releasePath, nonce], root,
                 new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase), observation.ChildLogPath);
-            WaitForFile(readyPath, TimeSpan.FromSeconds(20));
-            observation.Ready = JsonSerializer.Deserialize<NativeHandleChildReady>(File.ReadAllText(readyPath))
+            observation.Ready = JsonSerializer.Deserialize<NativeHandleChildReady>(
+                FixtureReadinessFile.Read(readyPath, TimeSpan.FromSeconds(20)))
                 ?? throw new InvalidDataException("Native handle child readiness report was empty.");
             if (observation.Ready.Nonce != nonce) throw new InvalidDataException("Native handle child readiness nonce did not match.");
             if (observation.Ready.ProcessId != child.Id) throw new InvalidDataException("Native handle child PID did not match the helper process.");
