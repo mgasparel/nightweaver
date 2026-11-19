@@ -1,7 +1,7 @@
 import { observationStatus } from "./operations";
 import { Component, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
-import { beadPath } from "./bead-model";
+import { beadPath, safeEvidenceUrl } from "./bead-model";
 import { DigestCheckpoints, digestWindow, visibleThreads, windows, type Digest, type DigestItem } from "./digest-model";
 import { operations } from "./operations-browser";
 import { Status } from "./primitives";
@@ -102,10 +102,15 @@ function Item({ project, item, context = "item", onFocus, onDisclosure }: { proj
   return <div className="digest-item-row" data-bead-id={item.id} onFocusCapture={onFocus}>
     <div className="digest-item-meta"><Status>{item.presentation?.role ?? "Role unavailable"} · Type: {item.type} · P{item.priority}</Status><Status>{item.activityKind === "context" ? `Root context (${item.status})` : (item.activityKind === "closed" ? item.outcomeLabel : item.presentation?.summary ?? item.outcomeLabel)}</Status>
       {item.fromId && <span>↳ {item.fromRelation ?? "Lineage"}: <Link to={beadPath(project, item.fromId)}>{item.fromId}</Link></span>}
-      {item.commits?.map(sha => <code key={sha}>{sha.slice(0, 7)}</code>)}{item.pullRequests?.map(pr => <span key={pr}>{pr}</span>)}</div>
+      {item.mergeEvidence?.state === "verified" ? <>
+        {item.mergeEvidence.pullRequest && safeEvidenceUrl(item.mergeEvidence.pullRequest) && <a href={item.mergeEvidence.pullRequest} target="_blank" rel="noreferrer">Merged pull request</a>}
+        {item.mergeEvidence.commitUrl && safeEvidenceUrl(item.mergeEvidence.commitUrl) && <a href={item.mergeEvidence.commitUrl} target="_blank" rel="noreferrer"><code>{item.mergeEvidence.mergeCommit?.slice(0, 7)}</code></a>}
+      </> : <>{item.commits?.map(sha => <code key={sha}>{sha.slice(0, 7)}</code>)}{item.pullRequests?.map(pr => <span key={pr}>{pr}</span>)}</>}</div>
     <h4><Link to={beadPath(project, item.id)}>{item.id} · {item.title}</Link></h4>
     <p className="digest-item-time">{stamp(item.activityAt)}</p>
     {item.summary && <p id={id} className={`digest-summary${long && !expanded ? " is-clamped" : ""}`}>{item.summary}</p>}
+    {item.mergeEvidence && item.mergeEvidence.state !== "verified" && <p className="digest-item-time">{item.mergeEvidence.state === "missing" ? "No host merge verification recorded." : `Merge verification ${item.mergeEvidence.state}.`}</p>}
+    {item.mergeEvidence?.cleanupWarning && <p className="bead-notice">Cleanup needs attention: {item.mergeEvidence.cleanupWarning}</p>}
     {long && <button className="digest-inline-toggle text-link" aria-expanded={expanded} aria-controls={id} onClick={() => { setExpanded(!expanded); onDisclosure?.(!expanded); }}>{expanded ? "Show less" : "Show more"}</button>}
   </div>;
 }

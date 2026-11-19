@@ -54,6 +54,7 @@ internal sealed record CatchUpDigestItem(
     [property: JsonPropertyName("fromRelation")] string? FromRelation)
 {
     [JsonPropertyName("presentation")] public BeadPresentation? Presentation { get; init; }
+    [JsonPropertyName("mergeEvidence")] public DigestMergeEvidence? MergeEvidence { get; init; }
 }
 
 internal sealed record CatchUpCheckpointResult(
@@ -202,10 +203,22 @@ internal static partial class CatchUpDigestProjector
         BeadsInventory inventory,
         string requestedWindow,
         DateTimeOffset? lastCaughtUpAt,
-        DateTimeOffset generatedAt, int? maxRepairCycles = null)
+        DateTimeOffset generatedAt, int? maxRepairCycles = null,
+        IReadOnlyDictionary<string, DigestMergeEvidence>? mergeEvidence = null)
     {
-        CatchUpDigestItem Present(CatchUpDigestItem item) => item with
-        { Presentation = BeadPresenter.Project(inventory.ById[item.Id], maxRepairCycles, inventory) };
+        CatchUpDigestItem Present(CatchUpDigestItem item)
+        {
+            var evidence = item.Status == "closed" && item.Type == "task"
+                ? mergeEvidence?.GetValueOrDefault(item.Id) ?? new DigestMergeEvidence("unavailable") : null;
+            var presented = item with
+            {
+                Presentation = BeadPresenter.Project(inventory.ById[item.Id], maxRepairCycles, inventory),
+                MergeEvidence = evidence
+            };
+            return evidence is { State: "verified", PullRequest: { } pr, MergeCommit: { } commit }
+                ? presented with { Outcome = "merged", OutcomeLabel = "Merged", Summary = "Host verified the merged pull request and passing required checks.", Commits = [commit], PullRequests = [pr] }
+                : presented;
+        }
 
         var normalizedNow = generatedAt.ToUniversalTime();
         var (effectiveWindow, windowStart) = ResolveWindow(requestedWindow, lastCaughtUpAt, normalizedNow);
@@ -456,7 +469,7 @@ internal static partial class CatchUpDigestProjector
                 : FirstParagraph(bead.Notes);
             var commits = ExtractCommits(bead.CloseReason, bead.Notes);
             var prs = ExtractPullRequests(bead.CloseReason, bead.Notes);
-            var (outcome, outcomeLabel) = ClassifyClosedOutcome(bead, rawText, commits);
+            var (outcome, outcomeLabel) = ClassifyClosedOutcome(bead, rawText);
             var summary = NormalizeSummary(rawText, "Closed in tracker.");
             return new CatchUpDigestItem(
                 bead.Id,
@@ -507,19 +520,15 @@ internal static partial class CatchUpDigestProjector
 
     private static (string Outcome, string Label) ClassifyClosedOutcome(
         ParsedBead bead,
-        string? rawText,
-        IReadOnlyList<string> commits)
+        string? rawText)
     {
         var hasNeedsHuman = bead.Labels.Contains("needs-human", StringComparer.Ordinal);
         if (hasNeedsHuman && (string.IsNullOrWhiteSpace(rawText)
             || rawText.Contains("abort", StringComparison.OrdinalIgnoreCase)))
             return ("aborted", "Aborted");
 
-        if (commits.Count == 0 && !string.IsNullOrWhiteSpace(rawText) && NoOpPattern().IsMatch(rawText))
+        if (!string.IsNullOrWhiteSpace(rawText) && NoOpPattern().IsMatch(rawText))
             return ("no_op", "Closed (No-Op / Duplicate)");
-
-        if (commits.Count > 0)
-            return ("resolved", "Merged / Resolved");
 
         return ("resolved", "Resolved");
     }

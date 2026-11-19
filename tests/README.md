@@ -15,6 +15,12 @@ baseline/candidate identities, outer elapsed time and concrete cost changes for
 every change. A filtered run never establishes full-suite acceptance. Hosted time
 is diagnostic and final exact-head correctness remains required.
 
+The retained measurement also runs the cheap [unattended archive fixtures](../scripts/tests/UnattendedEvidenceArchive.Tests.ps1)
+inside its outer stopwatch and reports their counts/time separately from xUnit.
+Fixture failure prevents acceptance even if xUnit passes. Windows CI runs the same
+checks inside the timed correctness step. For direct format inspection and its
+integrity-versus-coverage semantics, see [the archive format](../docs/acceptance/unattended-evidence-archive.md).
+
 See [test-cost evidence](../docs/agents/test-cost-evidence.md) for the versioned
 measurement/comparability contract, native-boundary justification, capture-first
 1.5x diagnostic trigger and ordinary repair routing. Reuse comparable retained
@@ -23,6 +29,22 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 [hosted verification](../docs/agents/hosted-verification.md).
 
 ## Coverage pyramid
+
+The native console inheritance probe reads its atomically published child readiness
+file within one monotonic twenty-second deadline. Missing-file and sharing/lock
+violations can settle within that budget; other I/O errors, malformed JSON and
+nonce/PID mismatches still fail. Six cheap controlled cases exercise transient
+sharing, permanent contention and unchanged payload/error handling. The existing
+native journey retains its live-child, pipe inheritance and cleanup assertions;
+no extra process journey or longer deadline is introduced.
+
+The native Dolt descendant fixture waits for a CSV result marker emitted after
+database acquisition before publishing lock readiness. Exclusive `LOCK` polling
+could itself deny Dolt's startup open with incompatible sharing flags. The existing
+settlement cases still verify the live child, held/nondeletable lock before and
+after root exit, and settled child plus deletable lock after disposal. Their
+ten-second readiness, fifteen-second root, thirty-second query and six-thread
+scheduling bounds are unchanged; no native journey was added.
 
 Run the cheap paired publisher contract explicitly in local Review/QA:
 `powershell.exe -NoProfile -File scripts/tests/Publish-Nightweaver.Tests.ps1`

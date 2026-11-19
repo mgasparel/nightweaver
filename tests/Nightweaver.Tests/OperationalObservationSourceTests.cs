@@ -14,6 +14,73 @@ namespace Nightweaver.Tests;
 public sealed class OperationalObservationSourceTests
 {
     [Fact]
+    public async Task DigestAcquiresCompactEvidenceWithinBudgetAndRefreshesCommentOnlyChanges()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 9, Closed = true };
+        for (var index = 1; index <= 9; index++) runner.HistoryOverrides[$"task-{index}"] = DigestMergeEvidenceTests.Comments($"task-{index}");
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("digest:all");
+        var token = TestContext.Current.CancellationToken;
+        ObservationSample? settled = null;
+        for (var turn = 0; turn < 4; turn++)
+        {
+            var before = runner.CommentIds.Count;
+            var samples = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+            Assert.InRange(runner.CommentIds.Count - before, 0, 4);
+            if (samples.TryGetValue("digest:all", out var sample) && !sample.Pending) settled = sample;
+        }
+        Assert.NotNull(settled);
+        Assert.Null(settled.Error);
+        Assert.All(Assert.IsType<CatchUpDigestResponse>(settled.Data).StandaloneCompleted, item => Assert.Equal("merged", item.Outcome));
+        Assert.Equal(9, runner.CommentIds.Count);
+        Assert.Empty(await source.ReadScheduledAsync(keys, (_, _) => { }, token));
+
+        runner.HistoryOverrides["task-3"] = [];
+        source.Invalidate([new BeadsInvalidation(1, "comment", "task-3", null)]);
+        var refreshed = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        var digest = Assert.IsType<CatchUpDigestResponse>(refreshed["digest:all"].Data);
+        Assert.Equal("missing", Assert.Single(digest.StandaloneCompleted, item => item.Id == "task-3").MergeEvidence!.State);
+        Assert.Equal(10, runner.CommentIds.Count);
+        Assert.Null(refreshed["digest:all"].Error);
+        Assert.False(refreshed["digest:all"].Pending);
+
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.InRange(runner.CommentIds.Count, 11, 14);
+        await source.ReadScheduledAsync(Keys("explorer:all:"), (_, _) => { }, token);
+        var count = runner.CommentIds.Count;
+        clock.Advance(TimeSpan.FromSeconds(60));
+        await source.ReadScheduledAsync(Keys("explorer:all:"), (_, _) => { }, token);
+        Assert.Equal(count, runner.CommentIds.Count);
+    }
+
+    [Fact]
+    public async Task DigestReportsUnavailableEvidenceOnHistoryFailureAndCapsAcquisition()
+    {
+        using var target = new ObservationTargetFixture();
+        var runner = new Runner { Rows = 129, Closed = true, FailCommentOnce = "task-1" };
+        using var factory = Factory(target.Path, runner, new CostClock());
+        var source = Adapter(factory);
+        var sample = (await source.ReadScheduledAsync(Keys("digest:all"), (_, _) => { }, TestContext.Current.CancellationToken))["digest:all"];
+        Assert.True(sample.Pending);
+        Assert.NotNull(sample.Error);
+        Assert.Equal(4, runner.CommentIds.Count);
+        Assert.InRange(sample.Sources.Count, 1, 130); // 128 bounded histories plus inventory/checkpoint.
+        Assert.Contains(sample.Sources, pair => pair.Key == "merge:task-1" && pair.Value.Health == "unavailable");
+        var digest = Assert.IsType<CatchUpDigestResponse>(sample.Data);
+        Assert.Equal(129, digest.Metrics.CompletedTotal);
+        Assert.All(digest.StandaloneCompleted, item => Assert.NotEqual("merged", item.Outcome));
+        Assert.Contains(digest.StandaloneCompleted, item => item.MergeEvidence!.State == "unavailable");
+        var count = runner.CommentIds.Count;
+        await source.ReadScheduledAsync(Keys("digest:all"), (_, _) => { }, TestContext.Current.CancellationToken);
+        Assert.InRange(runner.CommentIds.Count - count, 0, 4);
+        Assert.Equal(1, runner.CommentIds.Count(id => id == "task-1")); // Backoff cannot become an uncounted read.
+    }
+
+    [Fact]
     public async Task TwoSettledWorkspacesStayIdleAndRefreshEachDueSource()
     {
         using var target = new ObservationTargetFixture();
@@ -941,10 +1008,7 @@ public sealed class OperationalObservationSourceTests
         Assert.DoesNotContain(reads, read => read.Reason == "audit" && !read.Id.StartsWith("environment:", StringComparison.Ordinal));
         Assert.Contains(reads, read => read.Id == "comments:" + bead && read.Reason == "dirty" && read.CommentHint);
         Assert.Contains(reads, read => read.Id == "relations-down:" + bead && read.Reason == "dirty" && read.DependencyHint);
-        // A hint arriving after the core inventory can be consumed by the
-        // mandatory post-detail inventory. It is an authoritative native read,
-        // explicitly labelled confirmation rather than dirty by the source.
-        Assert.Contains(reads, read => read.Id == "inventory" && read.Reason is "dirty" or "confirmation" && read.DependencyHint);
+        Assert.Contains(reads, read => IsDependencyHintInventoryRead(read.Id, read.Reason, read.DependencyHint));
     }
 
     [Theory]
@@ -962,6 +1026,44 @@ public sealed class OperationalObservationSourceTests
         ];
         Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertJournalCausedReads(reads, "task-1"));
     }
+
+    [Fact]
+    public async Task DependencyHintDuringWorkspaceRefreshCanUseInventoryConfirmation()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("workspace:task-1");
+        var token = TestContext.Current.CancellationToken;
+        for (var turn = 0; turn < 4; turn++) await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        var dependencyHint = false;
+        var reads = new List<(string Id, string Reason, bool DependencyHint)>();
+        source.ReadStarted += (id, reason) =>
+        {
+            reads.Add((id, reason, dependencyHint));
+            if (id != "detail:task-1" || dependencyHint) return;
+            dependencyHint = true;
+            source.Invalidate([new BeadsInvalidation(2, "dep_add", "task-1", "task-2")]);
+        };
+
+        source.Invalidate([new BeadsInvalidation(1, "comment", "task-1", null)]);
+        var refreshed = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+
+        Assert.True(dependencyHint);
+        Assert.NotNull(refreshed["workspace:task-1"].Data);
+        Assert.Contains(reads, read => read.Id == "relations-down:task-1" && read.DependencyHint);
+        Assert.Contains(reads, read => read.Id == "inventory" && read.Reason == "confirmation" && read.DependencyHint);
+        Assert.Null(source.PendingAge(["inventory"]));
+        Assert.DoesNotContain(reads, read => read.Reason == "audit");
+        Assert.Contains(reads, read => IsDependencyHintInventoryRead(read.Id, read.Reason, read.DependencyHint));
+    }
+
+    private static bool IsDependencyHintInventoryRead(string id, string reason, bool dependencyHint)
+        // A hint arriving after the core read can be consumed by the Workspace's
+        // authoritative inventory confirmation before another core turn starts.
+        => id == "inventory" && reason is "dirty" or "confirmation" && dependencyHint;
 
     [Fact]
     public async Task NativeBdSmokeDetectsExternalCommentsAndDependenciesAndReportsCost()
@@ -1334,6 +1436,8 @@ public sealed class OperationalObservationSourceTests
         internal bool FailReady { get; init; }
         internal bool Conflict { get; init; }
         internal int Rows { get; set; } = 1;
+        internal bool Closed { get; set; }
+        internal Dictionary<string, BeadsCommentSnapshot[]> HistoryOverrides { get; } = new(StringComparer.Ordinal);
         internal string UpdatedAt { get; set; } = "2026-01-01T00:00:00Z";
         internal string Comment { get; set; } = "Initial comment";
         internal Dictionary<string, string> CommentOverrides { get; } = new(StringComparer.Ordinal);
@@ -1381,8 +1485,8 @@ public sealed class OperationalObservationSourceTests
             var title = Conflict && inventories > 0 ? "Concurrent edit" : Title;
             var rows = Enumerable.Range(1, Rows).Select(index => new
             {
-                id = $"task-{index}", title, issue_type = "task", priority = Conflict && inventories > 0 ? 2 : Priority, status = "open", assignee = (string?)null,
-                labels = (string[])["product-decision-required"], created_at = "2026-01-01T00:00:00Z", updated_at = UpdatedAt,
+                id = $"task-{index}", title, issue_type = "task", priority = Conflict && inventories > 0 ? 2 : Priority, status = Closed ? "closed" : "open", assignee = (string?)null,
+                labels = Closed ? [] : (string[])["product-decision-required"], created_at = "2026-01-01T00:00:00Z", updated_at = UpdatedAt,
                 description = "Description"
             }).ToArray();
             if (command == "list") inventories++;
@@ -1393,6 +1497,7 @@ public sealed class OperationalObservationSourceTests
                     ? "[{\"issue_id\":\"task-1\",\"depends_on_id\":\"task-2\",\"type\":\"blocks\"}]" : "[]",
                 "ready" => Ready ? "[{\"id\":\"task-1\"}]" : "[]",
                 "show" => JsonSerializer.Serialize(rows.Where(row => row.id == args[3])),
+                "comments" when HistoryOverrides.TryGetValue(args[3], out var history) => JsonSerializer.Serialize(history.Select(c => new { id = c.Id, issue_id = c.IssueId, author = c.Author, text = c.Text, created_at = c.CreatedAt })),
                 "comments" => JsonSerializer.Serialize(new[] { new { id = "comment-1", issue_id = args[3], author = "human", text = CommentOverrides.GetValueOrDefault(args[3], Comment), created_at = "2026-01-01T00:00:00Z" } }),
                 _ => JsonSerializer.Serialize(rows)
             };

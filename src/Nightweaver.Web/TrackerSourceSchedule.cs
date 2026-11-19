@@ -57,7 +57,7 @@ internal sealed class TrackerSourceSchedule(TimeProvider clock)
             if (hint.IssueId is null || hint.Operation is not ("comment" or "create" or "update" or "close" or "delete" or "dep_add" or "dep_remove"))
             { InvalidateAll(); return; }
             foreach (var (id, slot) in slots)
-                if (id == "inventory" || id == "comments:" + hint.IssueId
+                if (id == "inventory" || id == "comments:" + hint.IssueId || id == "merge:" + hint.IssueId
                     || hint.Operation != "comment" && id != "checkpoint" && !id.StartsWith("comments:", StringComparison.Ordinal)) Dirty(slot);
         }
     }

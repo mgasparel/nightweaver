@@ -191,7 +191,7 @@ public sealed class Program
             }
         });
         app.MapGet("/api/digest", async (HttpContext context, TrackerBridge tracker,
-            CatchUpCheckpointStore checkpointStore, ILogger<Program> logger) =>
+            CatchUpCheckpointStore checkpointStore, OperationalObservationService observer, ILogger<Program> logger) =>
         {
             context.Response.Headers.CacheControl = "no-store";
             var query = context.Request.Query;
@@ -212,7 +212,10 @@ public sealed class Program
             try
             {
                 var lastCaughtUpAt = checkpointStore.ReadLastCaughtUpAt();
-                return Results.Ok(await tracker.ReadDigestAsync(window, lastCaughtUpAt, context.RequestAborted));
+                var observation = observer.Read("digest:" + window);
+                var observed = observation.Health == "fresh" && observation.Error is null && observation.Synchronization?.Pending != true
+                    ? observation.Data?.Deserialize<CatchUpDigestResponse>(ObservationJson.Options) : null;
+                return Results.Ok(await tracker.ReadDigestAsync(window, lastCaughtUpAt, context.RequestAborted, observed));
             }
             catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
             {
