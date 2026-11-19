@@ -118,6 +118,8 @@ jobs:
           & ./tests/TestSuiteMeasurement.Tests.ps1
           "fixture-temp=$([IO.Path]::GetTempPath().Replace('\', '/').TrimEnd('/'))" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           $timer = [Diagnostics.Stopwatch]::StartNew()
+          $archiveFixtures = & ./scripts/tests/UnattendedEvidenceArchive.Tests.ps1 | ConvertFrom-Json
+          if ($archiveFixtures.passed -lt 66 -or $archiveFixtures.failed -ne 0 -or $archiveFixtures.skipped -ne 0) { throw 'Archive fixture verification failed' }
           dotnet test --solution Nightweaver.slnx --minimum-expected-tests 995 --report-xunit-xml --report-xunit-xml-filename ci.xml --show-slowest-tests 20
           $testExit = $LASTEXITCODE
           $timer.Stop()
