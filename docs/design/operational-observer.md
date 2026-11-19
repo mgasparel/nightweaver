@@ -22,6 +22,10 @@ unchanged sequence-only projection and thirty-second cadence.
 
 # Shared operational observations
 
+Optional sanitized collector latency, accepted-body age and health export is
+specified in [Web observation telemetry](web-observation-telemetry.md). It runs
+at shared collector/aging boundaries and never establishes workflow authority.
+
 The wire contract is [Operational observations v1, amendment v1.1](operational-observations-v1.md). `ns-mbd.2` implements the shared backend and read/refresh routes. `ns-mbd.3` owns SSE transport and browser coordination. Existing console routes retain their payloads and guarded commands.
 
 `Program` registers one `OperationalObservationService` and source adapter for the configured Project. `BackgroundWebHost` launches that same Web executable, so every actual host has its own opaque epoch and observation lifecycle. Runtime replacement within that host does not replace its epoch. Revisions use a single checked unsigned 64-bit counter: admission, semantic changes and health changes allocate positive decimal revisions; clocks alone do not. Exhaustion stops admission and requests host shutdown. Resources are serialized into immutable JSON before publication; old asynchronous results must still match their original cache-entry identity. No eviction watermark map is retained.

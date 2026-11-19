@@ -90,6 +90,7 @@ public sealed class WebHostIntegrationTests
     [InlineData(true)]
     public async Task StandaloneHostReadsEnvironmentAndCommandLineOverrides(bool useCommandLine)
     {
+        await using var receiver = await OperationalTelemetryTests.Receiver.StartAsync();
         using var directory = new TempDirectory();
         var host = directory.CreateDirectory("host");
         directory.CreateDirectory("target");
@@ -114,6 +115,11 @@ public sealed class WebHostIntegrationTests
         startInfo.Environment["Nightweaver__ConfigPath"] = useCommandLine ? "missing.json" : "project.json";
         startInfo.Environment["Nightweaver__Root"] = useCommandLine ? directory.Path : host;
         startInfo.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:0";
+        startInfo.Environment["NIGHTWEAVER_TELEMETRY_ENABLED"] = "true";
+        startInfo.Environment["NIGHTWEAVER_TELEMETRY_ISOLATED_QA"] = "true";
+        startInfo.Environment["OTEL_EXPORTER_OTLP_ENDPOINT"] = receiver.Endpoint.AbsoluteUri;
+        startInfo.Environment["OTEL_EXPORTER_OTLP_HEADERS"] = "";
+        startInfo.Environment["OTEL_EXPORTER_OTLP_PROTOCOL"] = "http/protobuf";
         if (useCommandLine)
         {
             foreach (var argument in new[] { "--Nightweaver:ConfigPath", configPath, "--Nightweaver:Root", host })
@@ -152,6 +158,13 @@ public sealed class WebHostIntegrationTests
             using var unknown = await client.GetAsync("/unknown", timeout.Token);
             Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
             Assert.Empty(Directory.EnumerateFileSystemEntries(host));
+            using var observation = await client.GetAsync("/api/operations/v1/projects/standalone/resources?key=factory", timeout.Token);
+            Assert.Equal(HttpStatusCode.OK, observation.StatusCode);
+            await receiver.WaitForSignalAsync("traces");
+            await receiver.WaitForSignalAsync("logs");
+            while (!receiver.Captures.Any(capture => Encoding.UTF8.GetString(capture.Bytes).Contains("observation", StringComparison.Ordinal)))
+                await Task.Delay(20, timeout.Token);
+            ObservationTelemetryAssertions.AssertSanitized(receiver, configPath);
         }
         finally
         {
@@ -290,6 +303,8 @@ public sealed class WebHostIntegrationTests
         }
         finally { TestProjectBuildGate.NightweaverProject.Release(); }
         Assert.False(Directory.Exists(Path.Combine(published, "Studio")));
+        foreach (var dependency in new[] { "OpenTelemetry.dll", "OpenTelemetry.Api.dll", "OpenTelemetry.Exporter.OpenTelemetryProtocol.dll" })
+            Assert.True(File.Exists(Path.Combine(published, dependency)), dependency);
         Assert.False(File.Exists(Path.Combine(published, "wwwroot", "js", "app.js")));
         Assert.False(File.Exists(Path.Combine(published, "wwwroot", "css", "site.css")));
         var log = Path.Combine(root, "web.log");

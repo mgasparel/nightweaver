@@ -8,11 +8,40 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Nightweaver.Inspection;
 using Nightweaver.Web;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Tests;
 
 public sealed class OperationalObservationSourceTests
 {
+    [Fact]
+    public async Task ScheduledSharedSourceNoOpDoesNotAddNativeWorkOrExportedAttempts()
+    {
+        const string canary = "workspace-prose-not-for-export";
+        await using var receiver = await OperationalTelemetryTests.Receiver.StartAsync();
+        await using var telemetry = new OperationalTelemetry(OperationalHost.Web, new(receiver.Endpoint, "", 1),
+            _ => { }, metricIntervalMilliseconds: 50);
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Title = canary, Comment = canary };
+        using var factory = Factory(target.Path, runner, clock);
+        using var observer = new OperationalObservationService("web-test", Adapter(factory), clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>()) { Telemetry = telemetry };
+        var subscribers = Enumerable.Range(0, 100).Select(_ => observer.Subscribe(["explorer:all:"], (_, _) => { })).ToArray();
+        try
+        {
+            var token = TestContext.Current.CancellationToken;
+            await observer.CollectOnceAsync(false, token);
+            var commands = runner.Commands.Count;
+            for (var index = 0; index < 10; index++) await observer.CollectOnceAsync(false, token);
+            Assert.Equal(commands, runner.Commands.Count);
+            await ObservationTelemetryAssertions.WaitForMetricAsync(receiver, "nightweaver.observation.attempts", "tracker", null, value => value == 1);
+            await receiver.WaitForSignalsAsync();
+            ObservationTelemetryAssertions.AssertSanitized(receiver, canary);
+        }
+        finally { foreach (var subscriber in subscribers) subscriber.Dispose(); }
+    }
+
     [Fact]
     public async Task DigestAcquiresCompactEvidenceWithinBudgetAndRefreshesCommentOnlyChanges()
     {

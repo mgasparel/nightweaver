@@ -13,6 +13,11 @@ namespace Nightweaver.Tests;
 
 public sealed class OperationalTelemetryTests
 {
+    [Fact]
+    public void InitialMetricResourceWithoutScopeHasNoMeasurements()
+        => Assert.Empty(ObservationTelemetryAssertions.Metrics(new("metrics", "application/x-protobuf",
+            [0x0a, 0x02, 0x0a, 0x00], false)));
+
     private const string Canary = "hostile-prompt-source-transcript-password-exception-path-url";
     private static readonly string[] DetailKeys = ["operation", "outcome", "detail.id"];
     private static readonly string[] AggregateKeys = ["operation", "outcome"];
@@ -261,7 +266,7 @@ public sealed class OperationalTelemetryTests
         clock.Seconds = 1_000_000;
         for (var index = 0; index < 16; index++) Assert.True(admission.TryTake());
         Assert.False(admission.TryTake());
-        Assert.Equal(390, OperationalTelemetry.ProjectedSeries);
+        Assert.Equal(580, OperationalTelemetry.ProjectedSeries);
         Assert.True(OperationalTelemetry.ProjectedSeries <= 2000);
     }
 

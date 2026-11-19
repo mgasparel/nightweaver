@@ -89,6 +89,7 @@ public sealed class Program
         _ = app.Services.GetRequiredService<ProjectConfig>();
         // Environment-only opt-in, with a dedicated log pipeline; application/request logs stay local.
         using var telemetryLifetime = new WebTelemetryLifetime(app.Lifetime, startupTimestamp);
+        app.Services.GetRequiredService<OperationalObservationService>().Telemetry = telemetryLifetime.Telemetry;
         app.UseStaticFiles();
         // Serve Studio at the console entry points; narrowly scoped fallbacks
         // preserve API and missing-asset 404s. Node is build-time only.

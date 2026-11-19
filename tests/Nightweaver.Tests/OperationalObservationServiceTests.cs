@@ -1,11 +1,74 @@
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Nightweaver.Web;
+using Nightweaver.Telemetry;
+using static Nightweaver.Tests.ObservationTelemetryAssertions;
 
 namespace Nightweaver.Tests;
 
 public sealed class OperationalObservationServiceTests
 {
+    [Fact]
+    public async Task SharedCollectorExportsSafeHealthAgeAndOneAttemptAcrossManySubscribers()
+    {
+        const string canary = "secret-workspace-comment-transcript";
+        await using var receiver = await OperationalTelemetryTests.Receiver.StartAsync();
+        await using var telemetry = new OperationalTelemetry(OperationalHost.Web, new(receiver.Endpoint, "", 1),
+            _ => { }, metricIntervalMilliseconds: 50);
+        var clock = new Clock();
+        var source = new Source(clock) { Content = canary };
+        using var service = Service(source, clock);
+        service.Telemetry = telemetry;
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        await WaitForMetricAsync(receiver, "nightweaver.observation.health", "tracker", "idle", value => value == 1);
+        Assert.DoesNotContain(receiver.Captures.SelectMany(Metrics), metric => metric.Only(1).String == "nightweaver.observation.attempts");
+        var subscribers = Enumerable.Range(0, 100).Select(_ => service.Subscribe(["workspace:" + canary], (_, _) => { })).ToArray();
+        try
+        {
+            await service.CollectOnceAsync(false, token);
+            // The fake's empty-key bookkeeping read above does no tracker work.
+            Assert.Equal(2, source.TrackerReads);
+            await WaitForMetricAsync(receiver, "nightweaver.observation.attempts", "tracker", null, value => value == 1);
+            await WaitForMetricAsync(receiver, "nightweaver.observation.health", "tracker", "healthy", value => value == 1);
+            clock.Advance(TimeSpan.FromSeconds(8));
+            source.Error = new("source-timeout", canary);
+            await service.CollectOnceAsync(false, token);
+            Assert.NotNull(service.Read("workspace:" + canary).Data);
+            await WaitForMetricAsync(receiver, "nightweaver.observation.health", "tracker", "stale", value => value == 1);
+            await WaitForMetricAsync(receiver, "nightweaver.observation.age", "tracker", "stale", value => value == 8);
+            await receiver.WaitForSignalsAsync();
+            AssertSanitized(receiver, canary);
+        }
+        finally { foreach (var subscriber in subscribers) subscriber.Dispose(); }
+        clock.Advance(TimeSpan.FromSeconds(31));
+        await service.CollectOnceAsync(false, token);
+        await WaitForMetricAsync(receiver, "nightweaver.observation.health", "tracker", "healthy", value => value == 0);
+        await service.StopAsync(token);
+        await WaitForMetricAsync(receiver, "nightweaver.observation.health", "tracker", "stopped", value => value == 1);
+    }
+
+    [Fact]
+    public async Task InitialTimeoutIsUnavailableAndStoppedRuntimeRemainsDistinct()
+    {
+        await using var receiver = await OperationalTelemetryTests.Receiver.StartAsync();
+        await using var telemetry = new OperationalTelemetry(OperationalHost.Web, new(receiver.Endpoint, "", 1),
+            _ => { }, metricIntervalMilliseconds: 50);
+        var clock = new Clock();
+        var source = new Source(clock) { Error = new("source-timeout", "private-error"), RuntimeStopped = true };
+        using var service = Service(source, clock);
+        service.Telemetry = telemetry;
+        service.Read("attention"); service.Read("factory");
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        await service.CollectOnceAsync(true, token);
+        await WaitForMetricAsync(receiver, "nightweaver.observation.health", "tracker", "unavailable", value => value == 1);
+        await WaitForMetricAsync(receiver, "nightweaver.observation.health", "runtime", "stopped", value => value == 1);
+        var attempt = await receiver.WaitForSignalAsync("logs");
+        Assert.Contains("timed_out", System.Text.Encoding.UTF8.GetString(attempt.Bytes));
+        AssertSanitized(receiver, "private-error");
+    }
+
     [Fact]
     public async Task IdentityReplacementRebaselinesAndNoProgressPageDegradesWithoutLosingCursor()
     {
@@ -608,6 +671,7 @@ public sealed class OperationalObservationServiceTests
         internal object InventoryIdentity { get; set; } = new();
         internal object ReadyIdentity { get; set; } = new();
         internal bool Pending { get; set; }
+        internal bool RuntimeStopped { get; set; }
         internal Action<string, ObservationSourceState>? Revalidate { get; private set; }
         public async Task<IReadOnlyDictionary<string, ObservationSample>> ReadTrackerAsync(IReadOnlyList<OperationKey> keys, CancellationToken token,
             Action<string, ObservationSourceState>? revalidated = null)
@@ -631,7 +695,8 @@ public sealed class OperationalObservationServiceTests
         {
             var now = clock.GetUtcNow();
             return keys.ToDictionary(key => key.Value, _ => new ObservationSample(
-                IncludeSamplingDates ? new { content = Content, generatedAt = now, lastCaughtUpAt = Checkpoint, activityAt = Activity } : new { content = Content },
+                runtime && RuntimeStopped ? new { availability = "stopped" } :
+                    IncludeSamplingDates ? new { content = Content, generatedAt = now, lastCaughtUpAt = Checkpoint, activityAt = Activity } : new { content = Content },
                 now, now, new Dictionary<string, ObservationSourceState>
                 {
                     [runtime ? "runtime" : "inventory"] = new("fresh", now, now, null) { ContentIdentity = InventoryIdentity },

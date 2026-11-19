@@ -26,7 +26,8 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     // Two hosts: 6 operation counters + 2 * (9 buckets + sum + count) +
     // 3 signals * 4 drop reasons + 3 export failure counters + one target_info each.
     // Includes one SDK overflow series per stream (histogram overflow costs 11 series).
-    internal const int ProjectedSeries = 2 * (6 + 2 * 11 + 12 + 3 + 1 + 1 + 11 + 1 + 1 + 43 + 8 * 11 + 1 + 5);
+    internal const int ProjectedSeries = 2 * (6 + 2 * 11 + 12 + 3 + 1 + 1 + 11 + 1 + 1 + 43 + 8 * 11 + 1 + 5
+        + 13 + 4 * 11 + 19 + 19);
     private readonly ActivitySource source = new(ScopeName);
     private readonly Meter meter = new(ScopeName);
     private readonly CancellationTokenSource stop = new();
@@ -46,6 +47,11 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     private readonly Counter<long> mergeCleanup;
     private readonly Counter<long> drops;
     private readonly Counter<long> failures;
+    private readonly Counter<long> observationAttempts;
+    private readonly Histogram<double> observationDuration;
+    private readonly object observationSync = new();
+    private readonly Dictionary<string, Measurement<double>[]> observationHealth = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Measurement<double>[]> observationAge = new(StringComparer.Ordinal);
     private readonly TracerProvider traces;
     private readonly MeterProvider metrics;
     private readonly ILoggerFactory logFactory;
@@ -57,7 +63,7 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
 
     private readonly record struct Record(string Operation, string Outcome, double Seconds, string? DetailId,
         string? Role = null, string? BeadId = null, string? RuntimeId = null, string? InvocationId = null,
-        string? CheckedHead = null, string? MergeCommit = null, DateTime? EndUtc = null);
+        string? CheckedHead = null, string? MergeCommit = null, DateTime? EndUtc = null, string? Source = null);
 
     private static readonly AsyncLocal<RuntimeScope?> Runtime = new();
     internal static RuntimeScope? Current => Runtime.Value;
@@ -117,6 +123,10 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
         mergeCleanup = meter.CreateCounter<long>("nightweaver.merge.cleanup");
         drops = meter.CreateCounter<long>("nightweaver.telemetry.dropped");
         failures = meter.CreateCounter<long>("nightweaver.telemetry.export.failed");
+        observationAttempts = meter.CreateCounter<long>("nightweaver.observation.attempts");
+        observationDuration = meter.CreateHistogram<double>("nightweaver.observation.duration", "s");
+        meter.CreateObservableGauge("nightweaver.observation.health", () => ObservationMeasurements(observationHealth));
+        meter.CreateObservableGauge("nightweaver.observation.age", () => ObservationMeasurements(observationAge), "s");
         try
         {
             traces = Sdk.CreateTracerProviderBuilder().SetResourceBuilder(resource).AddSource(ScopeName)
@@ -147,6 +157,12 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
                             { TagKeys = ["signal", "reason"], CardinalityLimit = 13 },
                         "nightweaver.telemetry.export.failed" => new MetricStreamConfiguration
                             { TagKeys = ["signal"], CardinalityLimit = 4 },
+                        "nightweaver.observation.attempts" => new MetricStreamConfiguration
+                            { TagKeys = ["source", "outcome"], CardinalityLimit = 13 },
+                        "nightweaver.observation.duration" => new ExplicitBucketHistogramConfiguration
+                            { TagKeys = ["source"], Boundaries = DurationBuckets, CardinalityLimit = 4 },
+                        "nightweaver.observation.health" or "nightweaver.observation.age" => new MetricStreamConfiguration
+                            { TagKeys = ["source", "health"], CardinalityLimit = 19 },
                         _ => MetricStreamConfiguration.Drop
                     };
                 })
@@ -216,6 +232,40 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     private static bool IsRevision(string value) => value.Length is 40 or 64 && value.All(char.IsAsciiHexDigit);
     private static bool IsRole(string? value) => value is "planner" or "plan-challenger" or "implementer"
         or "reviewer" or "qa" or "merger" or "classifier";
+
+    private static bool IsObservationSource(string value) => value is "tracker" or "runtime" or "cleanup";
+    private static readonly string[] ObservationStates = ["healthy", "stale", "unavailable", "idle", "stopped", "pending"];
+
+    private Measurement<double>[] ObservationMeasurements(Dictionary<string, Measurement<double>[]> values)
+    {
+        lock (observationSync) return values.Values.SelectMany(value => value).ToArray();
+    }
+
+    // Counts describe cached resources, never subscribers. Unknown age is absent, never zero.
+    internal void SetObservationHealth(string family, IReadOnlyList<(string Health, double? Age)> resources)
+    {
+        if (Volatile.Read(ref closing) != 0 || !IsObservationSource(family) || resources.Count > 64
+            || resources.Any(item => !ObservationStates.Contains(item.Health)
+                || item.Age is { } age && (!double.IsFinite(age) || age < 0))) return;
+        lock (observationSync)
+        {
+            observationHealth[family] = ObservationStates.Select(health => new Measurement<double>(
+                resources.Count(item => item.Health == health), new("source", family), new("health", health))).ToArray();
+            observationAge[family] = resources.Where(item => item.Age is not null).GroupBy(item => item.Health)
+                .Select(group => new Measurement<double>(group.Max(item => item.Age!.Value),
+                    new("source", family), new("health", group.Key))).ToArray();
+        }
+    }
+
+    internal void RecordObservation(string family, string outcome, double seconds)
+    {
+        if (Volatile.Read(ref closing) != 0 || !IsObservationSource(family)
+            || outcome is not ("success" or "failure" or "cancelled" or "timed_out")
+            || !double.IsFinite(seconds) || seconds is < 0 or > 2_592_000) return;
+        observationAttempts.Add(1, new("source", family), new("outcome", outcome));
+        observationDuration.Record(seconds, new KeyValuePair<string, object?>("source", family));
+        Submit(new("observation", outcome, seconds, null, EndUtc: DateTime.UtcNow, Source: family));
+    }
 
     internal void RecordInvocation(string role, string status, double seconds, string beadId,
         string runtimeId, string invocationId)
@@ -288,9 +338,11 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     private void EmitEvent(Record record)
     {
         if (!logger.IsEnabled(LogLevel.Information)) return;
-        logger.Log(LogLevel.Information, record.Operation == "verified_merge"
+        logger.Log(LogLevel.Information, record.Operation == "observation"
+                ? new EventId(1003, "ObservationCompletion") : record.Operation == "verified_merge"
                 ? new EventId(1002, "VerifiedMerge") : new EventId(1001, "OperationalCompletion"), Tags(record), null,
-            (_, _) => record.Operation == "verified_merge" ? "Verified merge closure confirmed." : "Operational operation completed.");
+            (_, _) => record.Operation == "observation" ? "Observation collection completed."
+                : record.Operation == "verified_merge" ? "Verified merge closure confirmed." : "Operational operation completed.");
     }
 
     private static List<KeyValuePair<string, object?>> Tags(Record record)
@@ -303,6 +355,7 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
         if (record.InvocationId is not null) tags.Add(new("invocation.id", record.InvocationId));
         if (record.CheckedHead is not null) tags.Add(new("checked.head", record.CheckedHead));
         if (record.MergeCommit is not null) tags.Add(new("merge.commit", record.MergeCommit));
+        if (record.Source is not null) tags.Add(new("source", record.Source));
         return tags;
     }
 
@@ -429,11 +482,12 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
                 if (!ReferenceEquals(activity.Source, ownedSource) || activity.Events.Any() || activity.Links.Any()
                     || activity.Baggage.Any() || activity.TraceStateString is not null
                     || activity.StatusDescription is not null
-                    || activity.DisplayName is not ("host.start" or "host.stop" or "invocation" or "verified_merge")
+                    || activity.DisplayName is not ("host.start" or "host.stop" or "invocation" or "verified_merge" or "observation")
                     || activity.TagObjects.Count() > 9
                     || activity.TagObjects.Any(tag => tag.Key switch
                     {
-                        "operation" => tag.Value is not ("host.start" or "host.stop" or "invocation" or "verified_merge"),
+                        "operation" => tag.Value is not ("host.start" or "host.stop" or "invocation" or "verified_merge" or "observation"),
+                        "source" => tag.Value is not string family || !IsObservationSource(family),
                         "outcome" => tag.Value is not ("success" or "failure" or "cancelled" or "completed" or "failed" or "timed_out" or "launch_failed" or "unknown"),
                         "detail.id" => tag.Value is not string id || !IsOpaqueId(id),
                         "role" => tag.Value is not string role || !IsRole(role),
