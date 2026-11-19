@@ -1,0 +1,274 @@
+{
+  "uid": "nightweaver-first-path",
+  "title": "Nightweaver - invocation to verified merge",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "tags": [
+    "nightweaver",
+    "observation-only"
+  ],
+  "description": "Observation only. Invocation timing includes native settlement. Verified closure precedes housekeeping. Counts may be lost or duplicated across restart/transport; they are not business accounting. IDs filter detail panels only. Hosted acceptance is separate.",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "10s",
+  "templating": {
+    "list": [
+      {
+        "name": "DS_METRICS",
+        "label": "Metrics",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "refresh": 1
+      },
+      {
+        "name": "DS_TEMPO",
+        "label": "Traces",
+        "type": "datasource",
+        "query": "tempo",
+        "current": {
+          "text": "Tempo",
+          "value": "tempo"
+        },
+        "refresh": 1
+      },
+      {
+        "name": "DS_LOKI",
+        "label": "Events",
+        "type": "datasource",
+        "query": "loki",
+        "current": {
+          "text": "Loki",
+          "value": "loki"
+        },
+        "refresh": 1
+      },
+      {
+        "name": "bead",
+        "label": "bead ID (details)",
+        "type": "textbox",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "options": []
+      },
+      {
+        "name": "runtime",
+        "label": "runtime ID (details)",
+        "type": "textbox",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "options": []
+      },
+      {
+        "name": "invocation",
+        "label": "invocation ID (details)",
+        "type": "textbox",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "options": []
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "Explore correlated traces",
+      "type": "link",
+      "url": "/explore?left=%7B%22datasource%22%3A%22${DS_TEMPO}%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22nightweaver-runtime%5C%22%20%26%26%20span.bead.id%20%3D~%20%5C%22$bead%5C%22%20%26%26%20span.runtime.id%20%3D~%20%5C%22$runtime%5C%22%20%26%26%20span.invocation.id%20%3D~%20%5C%22$invocation%5C%22%20%7D%22%2C%22expr%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22nightweaver-runtime%5C%22%20%26%26%20span.bead.id%20%3D~%20%5C%22$bead%5C%22%20%26%26%20span.runtime.id%20%3D~%20%5C%22$runtime%5C%22%20%26%26%20span.invocation.id%20%3D~%20%5C%22$invocation%5C%22%20%7D%22%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-1h%22%2C%22to%22%3A%22now%22%7D%7D",
+      "targetBlank": false
+    },
+    {
+      "title": "Explore verified events",
+      "type": "link",
+      "url": "/explore?left=%7B%22datasource%22%3A%22${DS_LOKI}%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7Bservice_name%3D%5C%22nightweaver-runtime%5C%22%7D%20%7C%20operation%3D%5C%22verified_merge%5C%22%20%7C%20bead_id%3D~%5C%22$bead%5C%22%20%7C%20runtime_id%3D~%5C%22$runtime%5C%22%20%7C%20invocation_id%3D~%5C%22$invocation%5C%22%22%2C%22expr%22%3A%22%7Bservice_name%3D%5C%22nightweaver-runtime%5C%22%7D%20%7C%20operation%3D%5C%22verified_merge%5C%22%20%7C%20bead_id%3D~%5C%22$bead%5C%22%20%7C%20runtime_id%3D~%5C%22$runtime%5C%22%20%7C%20invocation_id%3D~%5C%22$invocation%5C%22%22%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-1h%22%2C%22to%22%3A%22now%22%7D%7D",
+      "targetBlank": false
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Observed invocation duration",
+      "description": "Mean seconds by role over the selected window; IDs are never metric dimensions.",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_METRICS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (role) (nightweaver_invocation_duration_seconds_sum) / sum by (role) (nightweaver_invocation_duration_seconds_count)",
+          "instant": true,
+          "legendFormat": "{{role}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Confirmed verified merges",
+      "description": "Cumulative observation since runtime start, after independent proof and guarded closure. Cleanup failure does not subtract success.",
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_METRICS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(nightweaver_verified_merge_total)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Post-closure cleanup",
+      "description": "Queued is not completed. Cleanup is separate from verified success and Product completion.",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_METRICS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (nightweaver_merge_cleanup_total)",
+          "instant": true,
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "id": 4,
+      "type": "logs",
+      "title": "Verified outcome - operational IDs",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=\"nightweaver-runtime\"} | operation=\"verified_merge\" | bead_id=~\"$bead\" | runtime_id=~\"$runtime\" | invocation_id=~\"$invocation\"",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      }
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Short traces - invocation and closure",
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "${DS_TEMPO}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "{ resource.service.name = \"nightweaver-runtime\" && span.bead.id =~ \"$bead\" && span.runtime.id =~ \"$runtime\" && span.invocation.id =~ \"$invocation\" }",
+          "queryType": "traceql",
+          "tableType": "traces",
+          "limit": 20
+        }
+      ],
+      "options": {
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    }
+  ]
+}

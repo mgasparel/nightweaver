@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using Nightweaver.Configuration;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -108,6 +109,7 @@ internal sealed class AgentInvocationExecutor
         var cancelled = false;
         var launchDenied = false;
         var nativeLaunchAttempted = false;
+        long? telemetryStarted = null;
 
         try
         {
@@ -124,6 +126,7 @@ internal sealed class AgentInvocationExecutor
             // The role wall-clock budget starts immediately before native launch and includes prompt delivery.
             var launchStarted = timeProvider.GetTimestamp();
             nativeLaunchAttempted = true;
+            telemetryStarted = Stopwatch.GetTimestamp();
             if (!ContinuousAgentLaunchContext.TryLaunchAgent(() => processLauncher is null
                     ? WindowsProcessLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment)
                     : processLauncher.Launch(executable, invocation.Arguments, invocation.WorkingDirectory, environment),
@@ -205,6 +208,17 @@ internal sealed class AgentInvocationExecutor
         try { runtimeFiles?.Dispose(); }
         catch (Exception exception) { cleanupFailure = Combine(cleanupFailure, exception); }
         logFlushStop?.Dispose();
+
+        if (telemetryStarted is long started && !launchDenied && OperationalTelemetry.Current is { } export)
+        {
+            var settled = cleanupFailure is not null || primaryFailure is not null ? "failed"
+                : cancelled || cancellationToken.IsCancellationRequested ? "cancelled"
+                : status == AgentExecutionStatus.TimedOut ? "timed_out"
+                : status == AgentExecutionStatus.Exited && exitCode == 0 ? "completed"
+                : status == AgentExecutionStatus.Exited ? "failed" : "unknown";
+            export.Telemetry.RecordInvocation(invocation.Purpose, child is null ? "launch_failed" : settled,
+                Stopwatch.GetElapsedTime(started).TotalSeconds, beadId, export.RuntimeId, invocation.InvocationId);
+        }
 
         if (child is not null)
         {

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Tests;
 
@@ -1146,6 +1147,10 @@ public sealed class MergerOutcomeVerifierTests
     [Fact]
     public async Task RejectsApprovalFromHistoricalEvidenceOrChangedClaim()
     {
+        await using var receiver = await OperationalTelemetryTests.Receiver.StartAsync();
+        await using var telemetry = new OperationalTelemetry(OperationalHost.Runtime, new(receiver.Endpoint, "", 1), _ => { });
+        using var scope = telemetry.EnterRuntime(new string('a', 32));
+        using var measurements = new FirstPathTelemetryTests.Measurements();
         using (var fixture = new VerifierFixture())
         {
             fixture.Runner.ApprovalMode = true;
@@ -1159,7 +1164,6 @@ public sealed class MergerOutcomeVerifierTests
             Assert.Contains("current invocation", result.Diagnostic, StringComparison.Ordinal);
             Assert.Equal(0, fixture.Runner.PullRequestViewCount);
         }
-
         using (var fixture = new VerifierFixture())
         {
             fixture.Runner.ApprovalMode = true;
@@ -1171,11 +1175,16 @@ public sealed class MergerOutcomeVerifierTests
             Assert.Contains("state or claim owner", result.Diagnostic, StringComparison.Ordinal);
             Assert.Equal(0, fixture.Runner.PullRequestViewCount);
         }
+        Assert.Equal(0, measurements.Merges);
     }
 
     [Fact]
     public async Task RejectsApprovalWhenPullRequestOrCurrentHeadChecksAreNotVerified()
     {
+        await using var receiver = await OperationalTelemetryTests.Receiver.StartAsync();
+        await using var telemetry = new OperationalTelemetry(OperationalHost.Runtime, new(receiver.Endpoint, "", 1), _ => { });
+        using var scope = telemetry.EnterRuntime(new string('a', 32));
+        using var measurements = new FirstPathTelemetryTests.Measurements();
         using (var fixture = new VerifierFixture())
         {
             fixture.Runner.ApprovalMode = true;
@@ -1207,6 +1216,7 @@ public sealed class MergerOutcomeVerifierTests
             Assert.False(result.Succeeded);
             Assert.Contains("Required pull request checks", result.Diagnostic, StringComparison.Ordinal);
         }
+        Assert.Equal(0, measurements.Merges);
     }
 
     [Fact]

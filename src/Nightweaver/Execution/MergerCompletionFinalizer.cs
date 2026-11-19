@@ -2,6 +2,7 @@ using Nightweaver.Application;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 using Nightweaver.Planning;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -65,7 +66,7 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner, IC
                 var published = BeadsReader.ParsePublicationResult(write.StandardOutput, session.BeadId);
                 var publishedState = BeadWorkflowState.Parse(published);
                 if (publishedState == expectedState with { Status = "closed" } && published.Assignee is null)
-                    return await FinalizeHousekeepingAsync(session, evidence, publishedState, cancellationToken)
+                    return await ConfirmedClosureAsync(session, invocation, evidence, publishedState, cancellationToken)
                         .ConfigureAwait(false);
             }
             catch (System.Text.Json.JsonException) { }
@@ -78,13 +79,35 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner, IC
         try { observedState = BeadWorkflowState.Parse(observed); }
         catch (FormatException exception) { return Failed($"Task closure returned an invalid current state: {exception.Message}"); }
         if (observedState == expectedState with { Status = "closed" } && observed.Assignee is null)
-            return await FinalizeHousekeepingAsync(session, evidence, observedState, cancellationToken).ConfigureAwait(false);
+            return await ConfirmedClosureAsync(session, invocation, evidence, observedState, cancellationToken).ConfigureAwait(false);
 
         return Failed(writeFailure is null
             ? $"Guarded Merger task closure was not confirmed; observed status '{observed.Status}' and owner '{observed.Assignee ?? "(none)"}'. No follow-up mutation was attempted."
             : $"Guarded Merger task closure could not be confirmed after one reread: {writeFailure.Message}");
 
         MergerCompletionResult Failed(string diagnostic) => new(false, null, null, diagnostic);
+    }
+
+    private async Task<MergerCompletionResult> ConfirmedClosureAsync(AgentStageSession session,
+        AgentStageResult invocation, MergerVerifiedMergeEvidence evidence, BeadWorkflowState closedState,
+        CancellationToken cancellationToken)
+    {
+        var export = OperationalTelemetry.Current;
+        if (export is not null && session.TryRecordMergeTelemetry())
+            export.Telemetry.RecordVerifiedMerge(session.BeadId, export.RuntimeId, invocation.InvocationId,
+                evidence.CheckedHead, evidence.MergeCommit);
+        try
+        {
+            var result = await FinalizeHousekeepingAsync(session, evidence, closedState, cancellationToken).ConfigureAwait(false);
+            export?.Telemetry.RecordMergeCleanup(result.Receipt!.CleanupQueued ? "queued"
+                : result.Receipt.CleanupSucceeded ? "completed" : "failed");
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            export?.Telemetry.RecordMergeCleanup("cancelled");
+            throw;
+        }
     }
 
     internal async Task<MergerCompletionResult> FinalizeHousekeepingAsync(AgentStageSession session,

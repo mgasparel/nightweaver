@@ -30,6 +30,17 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+The invocation-to-verified-merge telemetry slice adds one native OTLP smoke using
+the existing immutable AgentStage template: actual fake Agent launch/settlement,
+native Git/bd verification and guarded closure must export matching operational
+IDs without prompt/output canaries. Existing executor and verifier tests cannot
+prove that exported correlation boundary. Seven cheap finalizer cases cover
+guard mismatch, uncertain response, unconfirmed closure, duplicate callback,
+cleanup failure/cancellation and already-closed inventory; bounded-role/sampling
+coverage is also deterministic. Disposable Grafana/Collector/backends and
+Playwright run only through `tests/telemetry-first-path/Run-Proof.ps1`, outside
+the normal suite. See [the contract](../docs/design/operational-telemetry-first-path.md).
+
 The native console inheritance probe reads its atomically published child readiness
 file within one monotonic twenty-second deadline. Missing-file and sharing/lock
 violations can settle within that budget; other I/O errors, malformed JSON and
