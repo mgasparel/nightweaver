@@ -6,6 +6,7 @@
     <UseAppHost>true</UseAppHost>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <InternalsVisibleTo Include="Nightweaver.Tests" />
     <InternalsVisibleTo Include="Nightweaver.QA.CacheProbe" />
     <InternalsVisibleTo Include="Nightweaver.Web" />

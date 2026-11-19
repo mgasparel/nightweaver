@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Nightweaver.Cli;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
@@ -17,6 +18,7 @@ internal static class ContinuousApplication
         CancellationToken cancellationToken,
         Func<FactoryTelemetryPublisher, ProjectConfig, HostPaths, ValidatedTargetRepository, CancellationToken, Task>? onRuntimeReady = null)
     {
+        var startupTimestamp = Stopwatch.GetTimestamp();
         var selector = options.Selector ?? throw new InvalidOperationException("A Project selector is required");
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -49,6 +51,8 @@ internal static class ContinuousApplication
             project.Concurrency.MaxConcurrentDelivery, ConcurrencyConfig.MergerSlots,
             message => environment.Err.WriteLine("nightweaver: " + message), processRunner);
         await telemetry.StartAsync(cancellationToken).ConfigureAwait(false);
+        await using var operationalTelemetry = OperationalTelemetry.Start(OperationalHost.Runtime, options.DryRun,
+            message => environment.Err.WriteLine("nightweaver: " + message));
         if (onRuntimeReady is not null)
             await onRuntimeReady(telemetry, project, hostPaths, repository, cancellationToken).ConfigureAwait(false);
 
@@ -129,6 +133,8 @@ internal static class ContinuousApplication
 
         environment.Out.WriteLine($"Continuous Planning and Delivery runtime starting with singleton Merger for Project '{project.Name.Value}' and Target Repository '{repository.Path}'.");
         environment.Out.WriteLine($"Planning capacity: {planningPool.CapacityLimit}; Delivery capacity: {pool.CapacityLimit}; Merger capacity: {mergerPool.CapacityLimit}; periodic discovery: 30 seconds; press Ctrl+C to stop.");
+        operationalTelemetry?.RecordOperation(OperationalOperation.HostStart, OperationalOutcome.Success,
+            Stopwatch.GetElapsedTime(startupTimestamp).TotalSeconds);
         try
         {
             var drained = await runtime.RunAsync(cancellationToken).ConfigureAwait(false);
@@ -136,13 +142,29 @@ internal static class ContinuousApplication
         }
         finally
         {
-            cleanupLifetime.Cancel();
-            try { await cleanupTask.ConfigureAwait(false); }
-            catch (OperationCanceledException) when (cleanupLifetime.IsCancellationRequested) { }
-            // All completion producers have drained. Persistence failures are required operational
-            // failures; closure remains intact and startup reconciliation recovers after repair.
-            if (!stopGate.IsForceStopRequested)
-                await cleanup.FlushCompletionsAsync(CancellationToken.None).ConfigureAwait(false);
+            var shutdownTimestamp = Stopwatch.GetTimestamp();
+            var shutdownOutcome = OperationalOutcome.Failure;
+            try
+            {
+                cleanupLifetime.Cancel();
+                try { await cleanupTask.ConfigureAwait(false); }
+                catch (OperationCanceledException) when (cleanupLifetime.IsCancellationRequested) { }
+                // All completion producers have drained. Persistence failures are required operational
+                // failures; closure remains intact and startup reconciliation recovers after repair.
+                if (!stopGate.IsForceStopRequested)
+                    await cleanup.FlushCompletionsAsync(CancellationToken.None).ConfigureAwait(false);
+                shutdownOutcome = OperationalOutcome.Success;
+            }
+            finally
+            {
+                if (operationalTelemetry is not null)
+                {
+                    if (!stopGate.IsForceStopRequested)
+                        operationalTelemetry.RecordOperation(OperationalOperation.HostStop, shutdownOutcome,
+                            Stopwatch.GetElapsedTime(shutdownTimestamp).TotalSeconds);
+                    await operationalTelemetry.StopAsync(stopGate.IsForceStopRequested).ConfigureAwait(false);
+                }
+            }
         }
     }
 

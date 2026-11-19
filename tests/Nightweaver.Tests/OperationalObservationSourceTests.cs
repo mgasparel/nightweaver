@@ -946,6 +946,87 @@ public sealed class OperationalObservationSourceTests
         Assert.Equal(HttpStatusCode.BadRequest, duplicate.StatusCode);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task JournalCausalityIncludesDependencyHintsBeforeAndAfterCoreInventory(bool dependencyDuringDetails)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 2 };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var token = TestContext.Current.CancellationToken;
+        var keys = Keys("workspace:task-1");
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        var reads = new List<(string Id, string Reason, bool CommentHint, bool DependencyHint)>();
+        var dependencyHint = false;
+        var commentHint = false;
+        source.ReadStarted += (id, reason) =>
+        {
+            // Match the hosted interleaving: the comment starts core collection,
+            // then the dependency arrives before the first detail generation.
+            if (dependencyDuringDetails && id == "detail:task-1" && !dependencyHint) AddDependency();
+            reads.Add((id, reason, commentHint, dependencyHint));
+        };
+        void AddDependency()
+        {
+            dependencyHint = true;
+            runner.OutgoingDependency = true;
+            source.Invalidate([new BeadsInvalidation(2, "dep_add", "task-1", "task-2")]);
+        }
+        runner.Comment = "External combined observer comment marker";
+        commentHint = true;
+        source.Invalidate([new BeadsInvalidation(1, "comment", "task-1", null)]);
+        if (!dependencyDuringDetails) AddDependency();
+        ObservationSample? published = null;
+        for (var turn = 0; turn < 4; turn++)
+        {
+            var samples = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+            if (samples.TryGetValue(keys[0].Value, out var sample) && sample.Data is not null && !sample.Pending)
+            { published = sample; break; }
+        }
+        Assert.NotNull(published);
+        Assert.Null(published.Error);
+        var workspace = Assert.IsType<BeadWorkspaceResponse>(published.Data);
+        Assert.Contains(workspace.Comments, comment => comment.Body == runner.Comment);
+        Assert.Contains(workspace.Relations, relation => relation.Id == "task-2" && relation.Type == "blocks" && relation.Direction == "outgoing");
+        Assert.Null(source.PendingAge(["inventory", "relations-down:task-1", "comments:task-1"]));
+        AssertJournalCausedReads(reads, "task-1");
+        if (dependencyDuringDetails)
+        {
+            Assert.Contains(reads, read => read.Id == "inventory" && read.Reason == "dirty" && !read.DependencyHint);
+            Assert.DoesNotContain(reads, read => read.Id == "inventory" && read.Reason == "dirty" && read.DependencyHint);
+        }
+    }
+
+    private static void AssertJournalCausedReads(
+        IEnumerable<(string Id, string Reason, bool CommentHint, bool DependencyHint)> reads, string bead)
+    {
+        // Environment keeps its independent two-second policy. Tracker visibility
+        // must precede an actual 60-second source audit, regardless of host speed.
+        Assert.DoesNotContain(reads, read => read.Reason == "audit" && !read.Id.StartsWith("environment:", StringComparison.Ordinal));
+        Assert.Contains(reads, read => read.Id == "comments:" + bead && read.Reason == "dirty" && read.CommentHint);
+        Assert.Contains(reads, read => read.Id == "relations-down:" + bead && read.Reason == "dirty" && read.DependencyHint);
+        Assert.Contains(reads, read => IsDependencyHintInventoryRead(read.Id, read.Reason, read.DependencyHint));
+    }
+
+    [Theory]
+    [InlineData("audit", true)]
+    [InlineData("bootstrap", true)]
+    [InlineData("dirty", false)]
+    [InlineData("confirmation", false)]
+    public void JournalCausalityRejectsInventoryWithoutPostHintEventEvidence(string reason, bool dependencyHint)
+    {
+        (string Id, string Reason, bool CommentHint, bool DependencyHint)[] reads =
+        [
+            ("comments:task-1", "dirty", true, false),
+            ("relations-down:task-1", "dirty", true, true),
+            ("inventory", reason, true, dependencyHint)
+        ];
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertJournalCausedReads(reads, "task-1"));
+    }
+
     [Fact]
     public async Task DependencyHintDuringWorkspaceRefreshCanUseInventoryConfirmation()
     {
@@ -1069,12 +1150,7 @@ public sealed class OperationalObservationSourceTests
         foreach (var read in mutationReads) TestContext.Current.TestOutputHelper?.WriteLine($"Source {read.Id}: {read.Reason}; comment hint {read.CommentHint}; dependency hint {read.DependencyHint}");
         Assert.Contains(journal.Skip(beforeMutation).SelectMany(page => page.Hints), hint => hint.IssueId == bead && hint.Operation == "comment");
         Assert.Contains(journal.Skip(beforeMutation).SelectMany(page => page.Hints), hint => hint.IssueId == bead && hint.Operation == "dep_add");
-        // Environment keeps its independent two-second policy. Tracker visibility
-        // must precede an actual 60-second source audit, regardless of host speed.
-        Assert.DoesNotContain(mutationReads, read => read.Reason == "audit" && !read.Id.StartsWith("environment:", StringComparison.Ordinal));
-        Assert.Contains(mutationReads, read => read.Id == "comments:" + bead && read.Reason == "dirty" && read.CommentHint);
-        Assert.Contains(mutationReads, read => read.Id == "relations-down:" + bead && read.Reason == "dirty" && read.DependencyHint);
-        Assert.Contains(mutationReads, read => IsDependencyHintInventoryRead(read.Id, read.Reason, read.DependencyHint));
+        AssertJournalCausedReads(mutationReads, bead);
         TestContext.Current.TestOutputHelper?.WriteLine($"Journal pages {journal.Count} ({journal.Count - beforeMutation} after baseline); source reads {reads.Count} ({mutationReads.Length} after baseline); native commands {measured.Count} ({measured.Count - commandsBeforeMutation} after baseline)");
         Assert.NotEqual(revision, combined.GetProperty("revision").GetString());
         var combinedData = combined.GetProperty("data");
@@ -1352,6 +1428,7 @@ public sealed class OperationalObservationSourceTests
         internal bool FailEveryList { get; set; }
         internal Action? Advance { get; init; }
         internal bool FailRelations { get; set; }
+        internal bool OutgoingDependency { get; set; }
         internal bool Ready { get; set; } = true;
         internal bool Blocked { get; set; }
         internal string Title { get; set; } = "Original title";
@@ -1416,7 +1493,8 @@ public sealed class OperationalObservationSourceTests
             var json = command switch
             {
                 "blocked" => Blocked ? "[{\"id\":\"task-1\",\"blocked_by_count\":1,\"blocked_by\":[\"task-2\"]}]" : "[]",
-                "dep" => "[]",
+                "dep" => OutgoingDependency && args.Contains("down")
+                    ? "[{\"issue_id\":\"task-1\",\"depends_on_id\":\"task-2\",\"type\":\"blocks\"}]" : "[]",
                 "ready" => Ready ? "[{\"id\":\"task-1\"}]" : "[]",
                 "show" => JsonSerializer.Serialize(rows.Where(row => row.id == args[3])),
                 "comments" when HistoryOverrides.TryGetValue(args[3], out var history) => JsonSerializer.Serialize(history.Select(c => new { id = c.Id, issue_id = c.IssueId, author = c.Author, text = c.Text, created_at = c.CreatedAt })),

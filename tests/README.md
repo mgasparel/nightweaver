@@ -121,9 +121,16 @@ with a foreign sentinel, proving encoding cannot redirect the publication.
 The native observer's two external writes explicitly enable Dolt auto-commit,
 matching production rather than inheriting its fixture's read-probe default.
 Read/write overlap and the original cold/update observation deadlines remain.
-After a settled baseline, test-side source-read recording requires dirty inventory,
-comment and dependency reads after their journal hints and excludes tracker audits
-until combined visibility. The independent two-second environment audit remains
+After a settled baseline, test-side source-read recording requires dirty comment
+and dependency reads after their journal hints, plus an authoritative inventory
+read after the dependency hint, and excludes tracker audits until combined
+visibility. If the dependency hint arrives during Workspace detail work, its
+mandatory post-detail inventory is labelled `confirmation` and satisfies the
+same causal boundary as a `dirty` inventory read. Controlled component cases
+cover hints before core collection and during detail work, require the combined
+comment/relation projection with no pending source generation, and reject audit,
+bootstrap and pre-hint inventory evidence. No native journey or deadline is added.
+The independent two-second environment audit remains
 allowed. This observes the actual event path instead of treating total elapsed
 time below 30 seconds as proof of the 60-second tracker audit boundary. Command
 timings, source causes and exact page/read counts survive assertion failures.
