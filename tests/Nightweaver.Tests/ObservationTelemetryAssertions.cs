@@ -35,8 +35,12 @@ internal static class ObservationTelemetryAssertions
         }
     }
 
-    internal static Message[] Metrics(Capture capture) => Message.Parse(Message.Parse(Message.Parse(capture.Bytes)
-        .Only(1).Bytes).Only(2).Bytes).Fields.Where(field => field.Number == 2).Select(field => Message.Parse(field.Bytes)).ToArray();
+    // An early SDK collection can contain a resource with no scope/measurements yet.
+    // Keep waiting for real points; do not treat an empty export as a metric or a failure.
+    internal static Message[] Metrics(Capture capture) => Message.Parse(capture.Bytes).Fields.Where(field => field.Number == 1)
+        .SelectMany(resource => Message.Parse(resource.Bytes).Fields.Where(field => field.Number == 2))
+        .SelectMany(scope => Message.Parse(scope.Bytes).Fields.Where(field => field.Number == 2))
+        .Select(field => Message.Parse(field.Bytes)).ToArray();
 
     internal static void AssertSanitized(Receiver receiver, string canary)
     {

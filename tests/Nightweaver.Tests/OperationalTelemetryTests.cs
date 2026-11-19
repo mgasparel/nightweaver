@@ -13,6 +13,11 @@ namespace Nightweaver.Tests;
 
 public sealed class OperationalTelemetryTests
 {
+    [Fact]
+    public void InitialMetricResourceWithoutScopeHasNoMeasurements()
+        => Assert.Empty(ObservationTelemetryAssertions.Metrics(new("metrics", "application/x-protobuf",
+            [0x0a, 0x02, 0x0a, 0x00], false)));
+
     private const string Canary = "hostile-prompt-source-transcript-password-exception-path-url";
     private static readonly string[] DetailKeys = ["operation", "outcome", "detail.id"];
     private static readonly string[] AggregateKeys = ["operation", "outcome"];

@@ -30,7 +30,7 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
-Web observation telemetry adds three cheap loopback/component cases for shared
+Web observation telemetry adds four cheap decoder/loopback/component cases for shared
 subscriber collection, scheduled no-op suppression, monotonic retained age,
 timeout/unavailable/idle/stopped states and exported canary exclusion. Existing
 standalone hosting journeys now inspect observation export and the existing
