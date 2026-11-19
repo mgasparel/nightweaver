@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -106,6 +107,7 @@ internal sealed class DeliverySlotCoordinator
             return Result(DeliverySlotDisposition.Refused, null, null, null, false, "Bead ID must be nonblank.");
 
         BeadWorkflowState? initial = null;
+        using var admissionTiming = WorkflowTiming.EnterPhase(WorkflowPhase.Preparation);
         BeadSnapshot? claimed = null;
         var claimAcquisitionAttempted = false;
         var claimAcquired = false;
@@ -200,6 +202,8 @@ internal sealed class DeliverySlotCoordinator
 
             var claimedSnapshot = await reader.ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor,
                 cancellationToken).ConfigureAwait(false);
+            // Admission ends here; later unowned coordination belongs to Other.
+            admissionTiming?.Dispose();
             var claimedInventory = claimedSnapshot.Inventory;
             var claimedReadiness = claimedSnapshot.Readiness;
             if (!claimedInventory.ById.TryGetValue(beadId, out claimed))
@@ -718,6 +722,20 @@ internal sealed class DeliverySlotCoordinator
         };
 
     private async Task<DeliverySlotOutcome> RefuseAfterClaimAsync(
+        ProjectConfig project,
+        ValidatedTargetRepository repository,
+        string beadId,
+        BeadSnapshot? claimed,
+        string reason,
+        BeadWorkflowState? state,
+        bool requiredFinalization = false)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.Finalization, WorkflowPhase.Finalization,
+            () => RefuseAfterClaimCoreAsync(project, repository, beadId, claimed, reason, state, requiredFinalization),
+            result => WorkflowResult.Refused).ConfigureAwait(false);
+    }
+
+    private async Task<DeliverySlotOutcome> RefuseAfterClaimCoreAsync(
         ProjectConfig project,
         ValidatedTargetRepository repository,
         string beadId,

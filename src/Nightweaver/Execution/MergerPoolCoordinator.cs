@@ -64,6 +64,7 @@ internal sealed class MergerPoolCoordinator
         internal string BeadId { get; } = beadId;
         internal string SlotId { get; } = slotId;
         internal IDisposable? EnvironmentLease { get; set; }
+        internal WorkflowTiming? Timing { get; set; }
         internal TaskCompletionSource<MergerPoolCompletion> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -258,6 +259,7 @@ internal sealed class MergerPoolCoordinator
 
     private async Task RunReservedSlotAsync(ReservationState reservation)
     {
+        using var timingContext = reservation.Timing?.Enter();
         MergerSlotOutcome? outcome = null;
         Exception? failure = null;
         var canceled = false;
@@ -285,6 +287,7 @@ internal sealed class MergerPoolCoordinator
         var completion = new MergerPoolCompletion(reservation.BeadId, outcome, failure, canceled, LocalCapacityReleased: true);
         lock (stateGate)
         {
+            reservation.Timing?.Dispose();
             telemetry?.Release("merger", reservation.SlotId, reservation.BeadId);
             reservations.Remove(reservation.BeadId);
             reservation.EnvironmentLease?.Dispose();
@@ -325,7 +328,7 @@ internal sealed class MergerPoolCoordinator
                     return false;
                 }
                 var slotId = telemetry?.SlotForReservation("merger", beadId) ?? "merger-1";
-                reservation = new ReservationState(beadId, slotId) { EnvironmentLease = environmentLease };
+                reservation = new ReservationState(beadId, slotId) { EnvironmentLease = environmentLease, Timing = WorkflowTiming.Reserve("merger", beadId) };
                 reservations.Add(beadId, reservation);
                 telemetry?.Reserve("merger", slotId, beadId);
                 return true;

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -22,6 +23,15 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         + $"## Dependency ordering\n{string.Join("\n", task.DependsOn)}";
 
     internal async Task<AgentStageResult> PublishAsync(AgentStageSession session, CancellationToken token,
+        bool releaseRevalidationClaim = true)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.PlanningPublication, WorkflowPhase.Publication,
+            () => PublishCoreAsync(session, token, releaseRevalidationClaim),
+            result => OperationalTelemetry.Current?.Telemetry.RecordPublication(result)
+                ?? (result.PublicationReceipt is not null ? WorkflowResult.Success : WorkflowResult.Uncertain)).ConfigureAwait(false);
+    }
+
+    private async Task<AgentStageResult> PublishCoreAsync(AgentStageSession session, CancellationToken token,
         bool releaseRevalidationClaim = true)
     {
         BeadsReader.EnsureMutationFreeBackend(session.Repository);

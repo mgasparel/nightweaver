@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -56,6 +57,19 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
     private readonly BeadsReader beadsReader = new(processRunner);
 
     public async Task<MergerApprovalVerification> VerifyApprovalAsync(
+        AgentStageSession session,
+        AgentStageResult invocation,
+        AgentOutcomeClassificationResult classification,
+        IReadOnlyList<BeadCommentSnapshot> comments,
+        string expectedAssignee,
+        CancellationToken cancellationToken)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.OutcomeVerification, WorkflowPhase.Verification,
+            () => VerifyApprovalCoreAsync(session, invocation, classification, comments, expectedAssignee, cancellationToken),
+            result => result.Succeeded ? WorkflowResult.Success : WorkflowResult.Refused).ConfigureAwait(false);
+    }
+
+    private async Task<MergerApprovalVerification> VerifyApprovalCoreAsync(
         AgentStageSession session,
         AgentStageResult invocation,
         AgentOutcomeClassificationResult classification,
@@ -262,6 +276,21 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         string? Head, string? Url, string? MergedAt, string? MergeCommit);
 
     public async Task<MergerRejectionVerification> VerifyRejectionAsync(
+        HostPaths hostPaths,
+        ProjectConfig project,
+        AgentStageSession session,
+        AgentStageResult invocation,
+        AgentOutcomeClassificationResult classification,
+        IReadOnlyList<BeadCommentSnapshot> comments,
+        string expectedAssignee,
+        CancellationToken cancellationToken)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.OutcomeVerification, WorkflowPhase.Verification,
+            () => VerifyRejectionCoreAsync(hostPaths, project, session, invocation, classification, comments, expectedAssignee, cancellationToken),
+            result => result.Succeeded ? WorkflowResult.Success : WorkflowResult.Refused).ConfigureAwait(false);
+    }
+
+    private async Task<MergerRejectionVerification> VerifyRejectionCoreAsync(
         HostPaths hostPaths,
         ProjectConfig project,
         AgentStageSession session,

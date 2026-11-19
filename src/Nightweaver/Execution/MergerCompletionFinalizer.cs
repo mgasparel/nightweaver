@@ -33,6 +33,15 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner, IC
         AgentStageResult invocation, string expectedAssignee, MergerVerifiedMergeEvidence evidence,
         CancellationToken cancellationToken)
     {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.Publication, WorkflowPhase.Publication,
+            () => CompleteCoreAsync(session, invocation, expectedAssignee, evidence, cancellationToken),
+            result => result.Succeeded ? WorkflowResult.Success : WorkflowResult.Uncertain).ConfigureAwait(false);
+    }
+
+    private async Task<MergerCompletionResult> CompleteCoreAsync(AgentStageSession session,
+        AgentStageResult invocation, string expectedAssignee, MergerVerifiedMergeEvidence evidence,
+        CancellationToken cancellationToken)
+    {
         var initial = await ReadTaskAsync(session.Repository, session.BeadId, cancellationToken).ConfigureAwait(false);
         EnsureClaimedMergeTask(initial, invocation, expectedAssignee);
         var evidenceComment = CreateEvidenceComment(evidence);
@@ -111,6 +120,15 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner, IC
     }
 
     internal async Task<MergerCompletionResult> FinalizeHousekeepingAsync(AgentStageSession session,
+        MergerVerifiedMergeEvidence evidence, BeadWorkflowState closedState, CancellationToken cancellationToken)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.Finalization, WorkflowPhase.Finalization,
+            () => FinalizeHousekeepingCoreAsync(session, evidence, closedState, cancellationToken),
+            result => result.Receipt is { CleanupDiagnostic: null, ProductDiagnostic: null, DiagnosticPersistenceDiagnostic: null }
+                ? WorkflowResult.Success : WorkflowResult.Uncertain).ConfigureAwait(false);
+    }
+
+    private async Task<MergerCompletionResult> FinalizeHousekeepingCoreAsync(AgentStageSession session,
         MergerVerifiedMergeEvidence evidence, BeadWorkflowState closedState, CancellationToken cancellationToken)
     {
         string? cleanupDiagnostic = null;

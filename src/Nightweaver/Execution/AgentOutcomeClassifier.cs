@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -24,7 +25,8 @@ internal sealed record AgentOutcomeClassificationResult(
     string Provider,
     string Diagnostic,
     string? InvocationId = null,
-    string? LogFilePath = null)
+    string? LogFilePath = null,
+    WorkflowResult TelemetryResult = WorkflowResult.Unavailable)
 {
     internal bool Succeeded => Outcome is not null;
 }
@@ -147,6 +149,7 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
         IReadOnlyList<BeadCommentSnapshot> comments,
         CancellationToken cancellationToken)
     {
+        using var classificationTiming = WorkflowTiming.EnterPhase(WorkflowPhase.Classification);
         ArgumentNullException.ThrowIfNull(hostPaths);
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(context);
@@ -204,6 +207,18 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
         OutcomeContract contract,
         CancellationToken cancellationToken)
     {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.LifecyclePrimary, WorkflowPhase.Classification,
+            () => TryPrimaryCoreAsync(project, apiKey, evidenceJson, contract, cancellationToken),
+            result => result.Succeeded ? WorkflowResult.Success : result.TelemetryResult).ConfigureAwait(false);
+    }
+
+    private async Task<AgentOutcomeClassificationResult> TryPrimaryCoreAsync(
+        ProjectConfig project,
+        string? apiKey,
+        string evidenceJson,
+        OutcomeContract contract,
+        CancellationToken cancellationToken)
+    {
         var openRouter = project.DecisionsApiProvider == DecisionsApiProvider.OpenRouter;
         var provider = openRouter ? "openrouter-decisions" : "openai-decisions";
         if (string.IsNullOrWhiteSpace(apiKey))
@@ -240,9 +255,9 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
             var responseBytes = await ReadBoundedAsync(response.Content, MaximumFallbackOutputBytes, linked.Token)
                 .ConfigureAwait(false);
             if (responseBytes is null)
-                return new(null, provider, "Decisions API response exceeded the bounded response size.");
+                return new(null, provider, "Decisions API response exceeded the bounded response size.", TelemetryResult: WorkflowResult.Invalid);
             if (!TryParseDecisionResponse(responseBytes, contract, openRouter, out var outcome))
-                return new(null, provider, "Decisions API returned an invalid or ambiguous answer.");
+                return new(null, provider, "Decisions API returned an invalid or ambiguous answer.", TelemetryResult: WorkflowResult.Invalid);
             return new(outcome, provider, "Valid response.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -260,6 +275,20 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
     }
 
     private async Task<AgentOutcomeClassificationResult> TryFallbackAsync(
+        HostPaths hostPaths,
+        ProjectConfig project,
+        AgentDispatchContext context,
+        string worktreePath,
+        string evidenceJson,
+        OutcomeContract contract,
+        CancellationToken cancellationToken)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.LifecycleFallback, WorkflowPhase.Classification,
+            () => TryFallbackCoreAsync(hostPaths, project, context, worktreePath, evidenceJson, contract, cancellationToken),
+            result => result.Succeeded ? WorkflowResult.Success : result.TelemetryResult).ConfigureAwait(false);
+    }
+
+    private async Task<AgentOutcomeClassificationResult> TryFallbackCoreAsync(
         HostPaths hostPaths,
         ProjectConfig project,
         AgentDispatchContext context,
@@ -327,9 +356,11 @@ internal sealed class AgentOutcomeClassifier : IAgentOutcomeClassifier
             if (captured.Execution.ExitCode != 0)
                 return new(null, "standard-agent-cli", "Fallback classifier exited unsuccessfully.", invocation.InvocationId, invocation.LogFilePath);
             if (captured.Overflowed || captured.StandardOutput.Length > MaximumFallbackOutputBytes)
-                return new(null, "standard-agent-cli", "Fallback classifier stdout exceeded the bounded response size.", invocation.InvocationId, invocation.LogFilePath);
+                return new(null, "standard-agent-cli", "Fallback classifier stdout exceeded the bounded response size.", invocation.InvocationId, invocation.LogFilePath,
+                    WorkflowResult.Invalid);
             if (!TryParseFallbackAnswer(captured.StandardOutput, contract, out var outcome))
-                return new(null, "standard-agent-cli", "Fallback classifier did not emit exactly one valid answer object.", invocation.InvocationId, invocation.LogFilePath);
+                return new(null, "standard-agent-cli", "Fallback classifier did not emit exactly one valid answer object.", invocation.InvocationId, invocation.LogFilePath,
+                    WorkflowResult.Invalid);
             return new(outcome, "standard-agent-cli", "Valid response.", invocation.InvocationId, invocation.LogFilePath);
         }
         catch (OperationCanceledException) { throw; }

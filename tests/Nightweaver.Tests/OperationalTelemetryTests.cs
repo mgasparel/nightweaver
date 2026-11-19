@@ -163,12 +163,33 @@ public sealed class OperationalTelemetryTests
         ConcurrentQueue<string> diagnostics = new();
         await using var telemetry = new OperationalTelemetry(OperationalHost.Runtime, new(receiver.Endpoint, "", 1),
             diagnostics.Enqueue, metricIntervalMilliseconds: 100);
-        using var listener = new ActivityListener
+        var detailId = Guid.NewGuid().ToString("N");
+        using var listener = DecorateActivities(decoration, detailId);
+        using var foreign = new ActivitySource(OperationalTelemetry.ScopeName);
+        using (foreign.StartActivity(Canary)) { }
+        using var foreignMeter = new Meter(OperationalTelemetry.ScopeName);
+        foreignMeter.CreateCounter<long>(Canary).Add(1, new KeyValuePair<string, object?>(Canary, Canary));
+        foreignMeter.CreateCounter<long>("nightweaver.operations").Add(1, new KeyValuePair<string, object?>(Canary, Canary));
+        telemetry.RecordOperation(OperationalOperation.HostStart, OperationalOutcome.Success, 1, detailId);
+        await receiver.WaitForSignalAsync("logs");
+        await receiver.WaitForSignalAsync("metrics");
+        await telemetry.StopAsync(false);
+        Assert.DoesNotContain(receiver.Captures, capture => capture.Signal == "traces");
+        Assert.All(receiver.Captures, capture => Assert.DoesNotContain(Canary, Encoding.UTF8.GetString(capture.Bytes)));
+        Assert.Contains(diagnostics, value => value.Contains("traces/export", StringComparison.Ordinal));
+    }
+
+    internal static ActivityListener DecorateActivities(string decoration, string detailId)
+    {
+        var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == OperationalTelemetry.ScopeName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
             ActivityStarted = activity =>
             {
+                // Activity listeners are process-wide. Attack only this fixture's record,
+                // retaining normal six-thread execution and other providers' privacy checks.
+                if (!Equals(activity.GetTagItem("detail.id"), detailId)) return;
                 switch (decoration)
                 {
                     case "event": activity.AddEvent(new ActivityEvent(Canary)); break;
@@ -181,18 +202,7 @@ public sealed class OperationalTelemetryTests
             }
         };
         ActivitySource.AddActivityListener(listener);
-        using var foreign = new ActivitySource(OperationalTelemetry.ScopeName);
-        using (foreign.StartActivity(Canary)) { }
-        using var foreignMeter = new Meter(OperationalTelemetry.ScopeName);
-        foreignMeter.CreateCounter<long>(Canary).Add(1, new KeyValuePair<string, object?>(Canary, Canary));
-        foreignMeter.CreateCounter<long>("nightweaver.operations").Add(1, new KeyValuePair<string, object?>(Canary, Canary));
-        telemetry.RecordOperation(OperationalOperation.HostStart, OperationalOutcome.Success, 1);
-        await receiver.WaitForSignalAsync("logs");
-        await receiver.WaitForSignalAsync("metrics");
-        await telemetry.StopAsync(false);
-        Assert.DoesNotContain(receiver.Captures, capture => capture.Signal == "traces");
-        Assert.All(receiver.Captures, capture => Assert.DoesNotContain(Canary, Encoding.UTF8.GetString(capture.Bytes)));
-        Assert.Contains(diagnostics, value => value.Contains("traces/export", StringComparison.Ordinal));
+        return listener;
     }
 
     [Theory]
@@ -266,7 +276,7 @@ public sealed class OperationalTelemetryTests
         clock.Seconds = 1_000_000;
         for (var index = 0; index < 16; index++) Assert.True(admission.TryTake());
         Assert.False(admission.TryTake());
-        Assert.Equal(580, OperationalTelemetry.ProjectedSeries);
+        Assert.Equal(1118, OperationalTelemetry.ProjectedSeries);
         Assert.True(OperationalTelemetry.ProjectedSeries <= 2000);
     }
 
@@ -414,6 +424,21 @@ public sealed class OperationalTelemetryTests
 
         internal async Task<Capture[]> WaitForSignalsAsync() =>
             [await WaitForSignalAsync("traces"), await WaitForSignalAsync("logs"), await WaitForSignalAsync("metrics")];
+
+        internal async Task WaitForWorkflowKindsAsync(string[] expected, IEnumerable<string> diagnostics)
+        {
+            string[] Observed() => Captures.Where(c => c.Signal == "traces")
+                .SelectMany(FirstPathTelemetryTests.DecodeRecords).Select(s => Attributes(s, 9))
+                .Select(tags => tags.GetValueOrDefault("kind", "")).ToArray();
+            try
+            {
+                await WaitUntilAsync(() => expected.All(kind => Observed().Contains(kind)));
+            }
+            catch (OperationCanceledException)
+            {
+                Assert.Fail($"Expected workflow kinds={string.Join(",", expected)}; observed={string.Join(",", Observed())}; losses={string.Join(";", diagnostics)}");
+            }
+        }
 
         public async ValueTask DisposeAsync()
         {

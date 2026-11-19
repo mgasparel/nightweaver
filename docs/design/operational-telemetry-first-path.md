@@ -44,7 +44,7 @@ outcome-classifier maps to classifier; it cannot increment verified merge.
 Attempts have six statuses: completed, failed, cancelled, timed_out,
 launch_failed and unknown. Invocation latency has only role. Verified merge has
 no dimensions; cleanup has four outcomes. All existing queue, payload, sampling,
-loss and shutdown limits apply. The conservative two-host inventory is 390
+loss and shutdown limits apply. With the [execution overhead extension](execution-overhead-telemetry.md), the conservative two-host inventory is 1118
 translated series, including overflow, below the 2,000-series design budget.
 
 ## Dashboard and local proof
@@ -85,7 +85,8 @@ executor tests prove containment; verifier tests prove individual evidence rules
 neither proves exported correlation across both boundaries. Seven deterministic
 finalizer cases cover detailed closure/cleanup decisions without native journeys.
 Backends and browser QA run only through the explicit script, outside the normal
-suite. Classification/verification breakdowns, queue/observation freshness,
+suite. Classification/verification and disjoint occupied-slot breakdowns are
+covered by [execution overhead telemetry](execution-overhead-telemetry.md). Queue/observation freshness,
 provider usage and broad bottleneck dashboards remain deferred.
 
 Configuration sources: [Grafana's disposable LGTM backend](https://grafana.com/docs/opentelemetry/docker-lgtm/),

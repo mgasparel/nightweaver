@@ -2,11 +2,46 @@ using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
+using static Nightweaver.Tests.OperationalTelemetryTests;
 
 namespace Nightweaver.Tests;
 
 public sealed class DeliveryOutcomePublisherTests
 {
+    [Theory]
+    [InlineData("confirmed", "success", true)]
+    [InlineData("reread", "success", true)]
+    [InlineData("refused", "refused", false)]
+    public async Task PublicationTelemetryRequiresAConfirmedReceipt(string mode, string outcome, bool confirmed)
+    {
+        using var fixture = new PublisherFixture(AgentRole.Qa, "stage:qa", AgentOutcomeChoice.Approved)
+        {
+            FailAfterCommittedHandoffWithReceiver = mode == "reread",
+            ChangeAfterEvidenceComment = mode == "refused" ? "owner" : null
+        };
+        await using var receiver = await Receiver.StartAsync();
+        await using var telemetry = new OperationalTelemetry(OperationalHost.Runtime, new(receiver.Endpoint, "", 1),
+            _ => { }, metricIntervalMilliseconds: 100);
+        using var runtime = telemetry.EnterRuntime("0123456789abcdef0123456789abcdef");
+        try
+        {
+            var result = await fixture.Publisher.PublishAsync(fixture.Session, fixture.Invocation,
+                fixture.Classification, false, TestContext.Current.CancellationToken);
+            Assert.NotNull(result.PublicationReceipt);
+        }
+        catch (AgentStageInputException) when (!confirmed) { }
+        await receiver.WaitForSignalsAsync();
+        await telemetry.StopAsync(false);
+        var spans = receiver.Captures.Where(c => c.Signal == "traces").SelectMany(FirstPathTelemetryTests.DecodeRecords)
+            .Select(span => Attributes(span, 9)).ToArray();
+        Assert.Contains(spans, tags => tags.GetValueOrDefault("kind") == "Publication" && tags["outcome"] == outcome);
+        var metrics = receiver.Captures.Where(c => c.Signal == "metrics").SelectMany(FirstPathTelemetryTests.DecodeRecords).ToArray();
+        Assert.Equal(confirmed, metrics.Any(m => m.Only(1).String == "nightweaver.published.outcomes"));
+        Assert.DoesNotContain(metrics, m => m.Only(1).String == "nightweaver.semantic.repairs");
+        Assert.Equal(confirmed ? 1 : 0, fixture.Runner.PublishWriteCount);
+    }
+
     [Fact]
     public async Task QaApprovalAtomicallyPublishesMergeStageAndClaimReleaseFromStructuredUpdateReceipt()
     {

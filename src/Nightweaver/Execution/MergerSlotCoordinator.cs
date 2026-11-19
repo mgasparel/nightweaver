@@ -1,6 +1,7 @@
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 using Nightweaver.Planning;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -99,6 +100,7 @@ internal sealed class MergerSlotCoordinator
         if (string.IsNullOrWhiteSpace(beadId))
             return Result(MergerSlotDisposition.Refused, null, null, false, "Bead ID must be nonblank.");
 
+        using var admissionTiming = WorkflowTiming.EnterPhase(WorkflowPhase.Preparation);
         BeadSnapshot? claimed = null;
         BeadWorkflowState? initialState = null;
         var claimAcquisitionAttempted = false;
@@ -132,6 +134,8 @@ internal sealed class MergerSlotCoordinator
 
             var claimedSnapshot = await reader.ReadSnapshotWithReadinessAsync(repository, project.RecoveryActor,
                 cancellationToken).ConfigureAwait(false);
+            // Admission ends here; later unowned coordination belongs to Other.
+            admissionTiming?.Dispose();
             if (!claimedSnapshot.Inventory.ById.TryGetValue(beadId, out claimed))
                 return await RefuseAfterClaimAsync(project, repository, beadId, null,
                     claimAcquiredHere, "Bead disappeared after Merger admission.").ConfigureAwait(false);
@@ -454,6 +458,15 @@ internal sealed class MergerSlotCoordinator
     }
 
     private async Task<MergerSlotOutcome> RefuseAfterClaimAsync(ProjectConfig project,
+        ValidatedTargetRepository repository, string beadId, BeadSnapshot? claimed, bool claimAcquiredHere, string reason,
+        bool requiredFinalization = false)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.Finalization, WorkflowPhase.Finalization,
+            () => RefuseAfterClaimCoreAsync(project, repository, beadId, claimed, claimAcquiredHere, reason, requiredFinalization),
+            result => WorkflowResult.Refused).ConfigureAwait(false);
+    }
+
+    private async Task<MergerSlotOutcome> RefuseAfterClaimCoreAsync(ProjectConfig project,
         ValidatedTargetRepository repository, string beadId, BeadSnapshot? claimed, bool claimAcquiredHere, string reason,
         bool requiredFinalization = false)
     {

@@ -131,10 +131,14 @@ cancellation. Providers, sources, meters and all three owned HTTP clients are
 disposed when their workers settle. No shutdown path changes workflow authority.
 
 The conservative translated-series inventory for **both** service identities is
-`2 * (6 + 2*11 + 12 + 3 + 1 + 1 + 11 + 1 + 1 + 43 + 8*11 + 1 + 5 + 13 + 4*11 + 19 + 19) = 580`: operations, histogram
+`580 + 2 * (37 + 7 + 22 + 8*11 + 4 + 4*11 + 55 + 12) = 1118`: operations, histogram
 (9 buckets including +Inf, sum, count), drops, failures, one `target_info`, then
 one overflow point per dimensional counter and eleven per histogram, plus the
-invocation, verified merge, cleanup and observation streams including their overflow.
+invocation, verified merge, cleanup and observation streams including their overflow, plus
+confirmed outcomes, semantic repairs, phase allocation, occupied seconds,
+classification duration, diagnostic results and operational retries. The new
+bounded views include their overflow in this conservative inventory. See
+[execution overhead](execution-overhead-telemetry.md) for dimensions and semantics.
 This conservatively assumes both hosts use every stream; only runtime invokes
 the Delivery instrumentation. Fixed service and
 scope labels identify these series without multiplying combinations; the empty
@@ -146,7 +150,7 @@ views, inventory and tests together; unrecognized instruments fail closed.
 At continuous full admission over 30 days, two hosts produce at most approximately
 2.83 GB of protobuf payload **per signal** for traces/logs (plus an initial one-minute
 burst), before transport headers. Normal host lifecycle traffic is far smaller.
-Metrics cap at 5.66 GB/month of payload for two hosts; actual twelve-stream traffic
+Metrics cap at 5.66 GB/month of payload for two hosts; actual bounded traffic
 is smaller and Free metrics allowance is active-series based. These are technical
 ceilings, not billing guarantees or business accounting. Free tier constraints
 remain 50 GB/month each for logs/traces and 14-day retention, as checked in the

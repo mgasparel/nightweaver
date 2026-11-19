@@ -504,6 +504,13 @@ The Web host offers a Project-bound, versioned read model beside the legacy cons
 
 The wire schema and finite budgets are specified in [operational observations v1.2](docs/design/operational-observations-v1.md), with implementation ownership, scheduling and lifecycle documented in [shared operational observations](docs/design/operational-observer.md). Standalone and background-launched Web instances use the same registration and shutdown path. SSE transport and browser synchronization are separate consumers of the shared cache.
 
+Opt-in exported [execution overhead telemetry](docs/design/execution-overhead-telemetry.md)
+allocates each occupied pool reservation once across preparation, Agent execution,
+classification, verification, publication, finalization and other coordination.
+Diagnostic classifier results, confirmed lifecycle publication, operational retries
+and semantic repairs remain separate observations with bounded aggregate dimensions.
+These observations never establish workflow authority.
+
 Catch-Up Digest displays **Merged** for a closed task only when its exact
 `nightweaver-verified-merge-v1` host record and referenced `nightweaver-merge-v1`
 report agree on the PR, checked head and merge commit. Empty `close_reason` is

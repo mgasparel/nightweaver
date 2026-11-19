@@ -3,6 +3,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Execution;
 
@@ -77,6 +78,18 @@ internal sealed class NeedsHumanEscalator
         EscalateAsync(paths, project.Name, repository, request, cancellationToken);
 
     internal async Task<NeedsHumanEscalationResult> EscalateAsync(
+        HostPaths paths,
+        ProjectSlug project,
+        ValidatedTargetRepository repository,
+        NeedsHumanRequest request,
+        CancellationToken cancellationToken)
+    {
+        return await WorkflowTiming.MeasureAsync(WorkflowOperation.Finalization, WorkflowPhase.Finalization,
+            () => EscalateCoreAsync(paths, project, repository, request, cancellationToken),
+            result => result.Succeeded ? WorkflowResult.Success : WorkflowResult.Uncertain).ConfigureAwait(false);
+    }
+
+    private async Task<NeedsHumanEscalationResult> EscalateCoreAsync(
         HostPaths paths,
         ProjectSlug project,
         ValidatedTargetRepository repository,
