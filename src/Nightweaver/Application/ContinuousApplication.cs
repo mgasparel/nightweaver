@@ -53,6 +53,7 @@ internal static class ContinuousApplication
         await telemetry.StartAsync(cancellationToken).ConfigureAwait(false);
         await using var operationalTelemetry = OperationalTelemetry.Start(OperationalHost.Runtime, options.DryRun,
             message => environment.Err.WriteLine("nightweaver: " + message));
+        using var operationalScope = operationalTelemetry?.EnterRuntime(telemetry.RuntimeId);
         if (onRuntimeReady is not null)
             await onRuntimeReady(telemetry, project, hostPaths, repository, cancellationToken).ConfigureAwait(false);
 

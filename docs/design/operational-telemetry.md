@@ -45,7 +45,8 @@ check the actual owned Meter/ActivitySource instances, so another instance with
 the same name cannot export data. No blanket ASP.NET, HttpClient, process,
 runtime or application-log instrumentation is enabled. The dedicated private
 ILogger factory uses EventId 1001 (`OperationalCompletion`) and fixed body
-`Operational operation completed.`; it never receives arbitrary log state,
+`Operational operation completed.`, plus EventId 1002 (`VerifiedMerge`) and
+`Verified merge closure confirmed.`; it never receives arbitrary log state,
 formatted free text, scopes or exceptions.
 
 Resources contain only `service.name`: `nightweaver-runtime` or `nightweaver-web`.
@@ -58,16 +59,16 @@ traces/logs. No Bead, runtime, invocation or service-instance ID becomes a metri
 label. Owned activities decorated by other listeners with unknown tags, events,
 links, baggage, trace state, free-text status or names are dropped at export.
 
-The initial operations are `host.start` and `host.stop`; outcomes are `success`,
+The host operations are `host.start` and `host.stop`; outcomes are `success`,
 `failure` and `cancelled`. Runtime startup measures entry through runtime
 initialization; runtime stop measures cleanup settlement after discovery exits,
 excluding export disposal. Cleanup failure records failure, not successful
 teardown. Web startup measures Main entry through ApplicationStarted; Web stop
 measures ApplicationStopping through ApplicationStopped. Force stop emits no stop
-record and starts no flush. This foundation does **not** measure Agent invocation,
-classification, verification, merge, queue age, cleanup attempts or provider
-usage; those require separately approved ownership seams. In particular, host
-stop is not verified merge success.
+record and starts no flush. The [first Delivery path](operational-telemetry-first-path.md)
+adds invocation settlement and confirmed verified merge closure. Classification
+overhead, verification duration, queue age, cleanup attempts and provider usage
+remain deferred. Host stop is not verified merge success.
 
 | Metric | Approved dimensions | Maximum normal combinations per host |
 | --- | --- | ---: |
@@ -75,10 +76,15 @@ stop is not verified merge success.
 | `nightweaver.operation.duration` (seconds) | operation (2) | 2 |
 | `nightweaver.telemetry.dropped` | signal (3), reason (`budget`, `queue`, `schema`; one reserved reason) | 12 conservative |
 | `nightweaver.telemetry.export.failed` | signal (`traces`, `logs`, `metrics`) | 3 |
+| `nightweaver.invocation.attempts` | role (7), status (6) | 42 |
+| `nightweaver.invocation.duration` (seconds) | role (7) | 7 |
+| `nightweaver.verified_merge` | none | 1 |
+| `nightweaver.merge.cleanup` | outcome (4) | 4 |
 
 Metric views drop unknown instruments/foreign meters and explicitly select tag
-keys. Cardinality limits include one SDK overflow point per stream (7, 3, 13,
-4 respectively). Histograms use cumulative temporality and explicit bounds
+keys. Cardinality limits include one SDK overflow point per dimensional stream
+(7, 3, 13, 4, 43, 8 and 5 respectively); verified merge has no dimensions.
+Histograms use cumulative temporality and explicit bounds
 `[0.1, 1, 5, 30, 120, 600, 1800, 7200]` seconds; exemplars are disabled.
 Metrics collect every 60 seconds and remain unsampled. Locally owned short traces
 use parent-based 10% head sampling, with no ambient parent/baggage inherited by
@@ -88,7 +94,7 @@ their worker; diagnostic events are independent of sampling.
 
 Callers only validate, update bounded counters and try nonblocking queue admission.
 Two fixed channels hold at most 1024 span records and 512 log records, each with
-at most three fields (below the 16-attribute allowance). Records serialize below
+at most eight exported fields (below the 16-attribute allowance). Records serialize below
 2 KiB including fixed resource/scope overhead; the transport rejects any larger
 request. SDK serialization buffers have a fixed configured 750,000-byte cap,
 the upstream minimum, independent of queue size. Each worker exports one record
@@ -99,7 +105,7 @@ Admission for each of traces and logs reserves 2 KiB per record from a monotonic
 32 KiB/minute token bucket, with one minute of burst credit. A second identical
 transport bucket charges each actual attempt, including SDK request retries, so
 retries cannot bypass volume control. No durable or unbounded retry queue exists.
-Metrics have four bounded streams and a 64 KiB request cap. Each HTTP attempt has
+Metrics have eight bounded streams and a 64 KiB request cap. Each HTTP attempt has
 a three-second timeout. Slow, unavailable or rejecting export runs on owned
 workers, independently of Delivery.
 
@@ -119,9 +125,12 @@ cancellation. Providers, sources, meters and all three owned HTTP clients are
 disposed when their workers settle. No shutdown path changes workflow authority.
 
 The conservative translated-series inventory for **both** service identities is
-`2 * (6 + 2*11 + 12 + 3 + 1 + 1 + 11 + 1 + 1) = 116`: operations, histogram
+`2 * (6 + 2*11 + 12 + 3 + 1 + 1 + 11 + 1 + 1 + 43 + 8*11 + 1 + 5) = 390`: operations, histogram
 (9 buckets including +Inf, sum, count), drops, failures, one `target_info`, then
-one overflow point per counter and eleven for the histogram. Fixed service and
+one overflow point per dimensional counter and eleven per histogram, plus the
+new invocation, verified merge and cleanup streams including their overflow.
+This conservatively assumes both hosts use every stream; only runtime invokes
+the Delivery instrumentation. Fixed service and
 scope labels identify these series without multiplying combinations; the empty
 resource builder adds no SDK/version/instance labels or SDK internal instruments.
 This is below the 2,000-series design budget and Grafana Cloud Free's 10,000-series
@@ -131,14 +140,14 @@ views, inventory and tests together; unrecognized instruments fail closed.
 At continuous full admission over 30 days, two hosts produce at most approximately
 2.83 GB of protobuf payload **per signal** for traces/logs (plus an initial one-minute
 burst), before transport headers. Normal host lifecycle traffic is far smaller.
-Metrics cap at 5.66 GB/month of payload for two hosts; actual four-stream traffic
+Metrics cap at 5.66 GB/month of payload for two hosts; actual eight-stream traffic
 is smaller and Free metrics allowance is active-series based. These are technical
 ceilings, not billing guarantees or business accounting. Free tier constraints
 remain 50 GB/month each for logs/traces and 14-day retention, as checked in the
 Product on 2026-11-15. There are no account changes or paid resources here.
-Alloy/Collector is a deferred reliability option rather than an installation
-dependency. Grafana dashboards and an invocation-to-verified-merge journey belong
-to the dependent Plan Bead.
+Alloy/Collector is a deferred production reliability option rather than an
+installation dependency. The disposable first-path fixture includes a test-only
+Collector and a reusable dashboard; no production exporter configuration changes.
 
 ## Verification and sources
 

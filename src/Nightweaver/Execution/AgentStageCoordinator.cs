@@ -25,7 +25,18 @@ internal sealed record AgentStageSession(
     BeadWorkflowState InitialState,
     string? InitialAssignee,
     AgentDispatchContext DispatchContext,
-    bool PreserveInheritedChanges);
+    bool PreserveInheritedChanges)
+{
+    private readonly MergeTelemetryEmission mergeTelemetry = new();
+    internal bool TryRecordMergeTelemetry() => mergeTelemetry.TryRecord();
+
+    // Record copies in the same owned path share the flag without mutable record equality.
+    private sealed class MergeTelemetryEmission
+    {
+        private int recorded;
+        internal bool TryRecord() => Interlocked.Exchange(ref recorded, 1) == 0;
+    }
+}
 
 /// <summary>Coordinates exactly one provision, preparation, execution, and post-exit verification for a Bead stage.</summary>
 internal sealed class AgentStageCoordinator

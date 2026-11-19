@@ -1,0 +1,6 @@
+{
+  "image": "grafana/otel-lgtm@sha256:af7242c1a9608faf6d26e6f235392fd0c32b67258228f9a3cfc96e724974930c",
+  "version": "0.29.2",
+  "ports": [3000, 4318, 9090, 3100, 3200],
+  "scope": "Disposable local QA only; never a production Collector or hosted acceptance"
+}

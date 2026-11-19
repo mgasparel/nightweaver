@@ -1,0 +1,623 @@
+{
+  "merge": {
+    "status": "success",
+    "data": {
+      "resultType": "vector",
+      "result": [
+        {
+          "metric": {
+            "__name__": "nightweaver_verified_merge_total",
+            "job": "nightweaver-runtime",
+            "service_name": "nightweaver-runtime"
+          },
+          "value": [
+            1795125343.996,
+            "1"
+          ]
+        }
+      ]
+    }
+  },
+  "latency": {
+    "status": "success",
+    "data": {
+      "resultType": "vector",
+      "result": [
+        {
+          "metric": {
+            "job": "nightweaver-runtime",
+            "role": "merger",
+            "service_name": "nightweaver-runtime"
+          },
+          "value": [
+            1795125344.004,
+            "0.1683352"
+          ]
+        }
+      ]
+    }
+  },
+  "attempts": {
+    "status": "success",
+    "data": {
+      "resultType": "vector",
+      "result": [
+        {
+          "metric": {
+            "__name__": "nightweaver_invocation_attempts_total",
+            "job": "nightweaver-runtime",
+            "role": "merger",
+            "service_name": "nightweaver-runtime",
+            "status": "completed"
+          },
+          "value": [
+            1795125344.006,
+            "1"
+          ]
+        }
+      ]
+    }
+  },
+  "logs": {
+    "status": "success",
+    "data": {
+      "resultType": "streams",
+      "result": [
+        {
+          "stream": {
+            "bead_id": "stage-1lz",
+            "checked_head": "4470ab61ecfeb75cb1bcaa8352c5dc4b0dc63d49",
+            "detected_level": "info",
+            "invocation_id": "20261119T1200000000000Z-merger",
+            "merge_commit": "4470ab61ecfeb75cb1bcaa8352c5dc4b0dc63d49",
+            "observed_timestamp": "1795125342024557100",
+            "operation": "verified_merge",
+            "outcome": "success",
+            "role": "merger",
+            "runtime_id": "0123456789abcdef0123456789abcdef",
+            "scope_name": "Nightweaver.Operational",
+            "service_name": "nightweaver-runtime",
+            "severity_number": "9",
+            "severity_text": "Information"
+          },
+          "values": [
+            [
+              "1795125342024557100",
+              "Verified merge closure confirmed."
+            ]
+          ]
+        }
+      ],
+      "stats": {
+        "summary": {
+          "bytesProcessedPerSecond": 51294,
+          "linesProcessedPerSecond": 399,
+          "totalBytesProcessed": 257,
+          "totalLinesProcessed": 2,
+          "execTime": 0.00501,
+          "queueTime": 0,
+          "subqueries": 0,
+          "totalEntriesReturned": 1,
+          "splits": 2,
+          "shards": 2,
+          "totalPostFilterLines": 1,
+          "totalStructuredMetadataBytesProcessed": 192
+        },
+        "querier": {
+          "store": {
+            "totalChunksRef": 0,
+            "totalChunksDownloaded": 0,
+            "chunksDownloadTime": 0,
+            "queryReferencedStructuredMetadata": false,
+            "queryUsedV2Engine": false,
+            "chunk": {
+              "headChunkBytes": 0,
+              "headChunkLines": 0,
+              "decompressedBytes": 0,
+              "decompressedLines": 0,
+              "compressedBytes": 0,
+              "totalDuplicates": 0,
+              "postFilterLines": 0,
+              "headChunkStructuredMetadataBytes": 0,
+              "decompressedStructuredMetadataBytes": 0
+            },
+            "chunkRefsFetchTime": 0,
+            "congestionControlLatency": 0,
+            "pipelineWrapperFilteredLines": 0,
+            "dataobj": {
+              "prePredicateDecompressedRows": 0,
+              "prePredicateDecompressedBytes": 0,
+              "prePredicateDecompressedStructuredMetadataBytes": 0,
+              "postPredicateRows": 0,
+              "postPredicateDecompressedBytes": 0,
+              "postPredicateStructuredMetadataBytes": 0,
+              "postFilterRows": 0,
+              "pagesScanned": 0,
+              "pagesDownloaded": 0,
+              "pagesDownloadedBytes": 0,
+              "pageBatches": 0,
+              "totalRowsAvailable": 0,
+              "totalPageDownloadTime": 0
+            }
+          },
+          "querierExecTime": 0.006742
+        },
+        "ingester": {
+          "totalReached": 2,
+          "totalChunksMatched": 1,
+          "totalBatches": 3,
+          "totalLinesSent": 1,
+          "store": {
+            "totalChunksRef": 0,
+            "totalChunksDownloaded": 0,
+            "chunksDownloadTime": 0,
+            "queryReferencedStructuredMetadata": true,
+            "queryUsedV2Engine": false,
+            "chunk": {
+              "headChunkBytes": 257,
+              "headChunkLines": 2,
+              "decompressedBytes": 0,
+              "decompressedLines": 0,
+              "compressedBytes": 0,
+              "totalDuplicates": 0,
+              "postFilterLines": 1,
+              "headChunkStructuredMetadataBytes": 192,
+              "decompressedStructuredMetadataBytes": 0
+            },
+            "chunkRefsFetchTime": 184045,
+            "congestionControlLatency": 0,
+            "pipelineWrapperFilteredLines": 0,
+            "dataobj": {
+              "prePredicateDecompressedRows": 0,
+              "prePredicateDecompressedBytes": 0,
+              "prePredicateDecompressedStructuredMetadataBytes": 0,
+              "postPredicateRows": 0,
+              "postPredicateDecompressedBytes": 0,
+              "postPredicateStructuredMetadataBytes": 0,
+              "postFilterRows": 0,
+              "pagesScanned": 0,
+              "pagesDownloaded": 0,
+              "pagesDownloadedBytes": 0,
+              "pageBatches": 0,
+              "totalRowsAvailable": 0,
+              "totalPageDownloadTime": 0
+            }
+          },
+          "recvWaitTime": 0.001041
+        },
+        "cache": {
+          "chunk": {
+            "entriesFound": 0,
+            "entriesRequested": 0,
+            "entriesStored": 0,
+            "bytesReceived": 0,
+            "bytesSent": 0,
+            "requests": 0,
+            "downloadTime": 0,
+            "queryLengthServed": 0
+          },
+          "index": {
+            "entriesFound": 0,
+            "entriesRequested": 0,
+            "entriesStored": 0,
+            "bytesReceived": 0,
+            "bytesSent": 0,
+            "requests": 0,
+            "downloadTime": 0,
+            "queryLengthServed": 0
+          },
+          "result": {
+            "entriesFound": 0,
+            "entriesRequested": 0,
+            "entriesStored": 0,
+            "bytesReceived": 0,
+            "bytesSent": 0,
+            "requests": 0,
+            "downloadTime": 0,
+            "queryLengthServed": 0
+          },
+          "statsResult": {
+            "entriesFound": 0,
+            "entriesRequested": 1,
+            "entriesStored": 1,
+            "bytesReceived": 0,
+            "bytesSent": 0,
+            "requests": 2,
+            "downloadTime": 16304,
+            "queryLengthServed": 0
+          },
+          "volumeResult": {
+            "entriesFound": 0,
+            "entriesRequested": 0,
+            "entriesStored": 0,
+            "bytesReceived": 0,
+            "bytesSent": 0,
+            "requests": 0,
+            "downloadTime": 0,
+            "queryLengthServed": 0
+          },
+          "seriesResult": {
+            "entriesFound": 0,
+            "entriesRequested": 0,
+            "entriesStored": 0,
+            "bytesReceived": 0,
+            "bytesSent": 0,
+            "requests": 0,
+            "downloadTime": 0,
+            "queryLengthServed": 0
+          },
+          "labelResult": {
+            "entriesFound": 0,
+            "entriesRequested": 0,
+            "entriesStored": 0,
+            "bytesReceived": 0,
+            "bytesSent": 0,
+            "requests": 0,
+            "downloadTime": 0,
+            "queryLengthServed": 0
+          },
+          "instantMetricResult": {
+            "entriesFound": 0,
+            "entriesRequested": 0,
+            "entriesStored": 0,
+            "bytesReceived": 0,
+            "bytesSent": 0,
+            "requests": 0,
+            "downloadTime": 0,
+            "queryLengthServed": 0
+          }
+        },
+        "index": {
+          "totalChunks": 0,
+          "postFilterChunks": 0,
+          "shardsDuration": 0,
+          "usedBloomFilters": false,
+          "totalStreams": 0,
+          "chunkRefsLookupTime": 0,
+          "bloomFilterTime": 0
+        }
+      }
+    }
+  },
+  "traces": {
+    "traces": [
+      {
+        "traceID": "ae41cd84da1985cef15187871c894aba",
+        "rootServiceName": "nightweaver-runtime",
+        "rootTraceName": "verified_merge",
+        "startTimeUnixNano": "1795125342024374400",
+        "spanSet": {
+          "spans": [
+            {
+              "spanID": "055b6c8de04a5802",
+              "startTimeUnixNano": "1795125342024374400",
+              "durationNanos": "100",
+              "attributes": [
+                {
+                  "key": "bead.id",
+                  "value": {
+                    "stringValue": "stage-1lz"
+                  }
+                },
+                {
+                  "key": "runtime.id",
+                  "value": {
+                    "stringValue": "0123456789abcdef0123456789abcdef"
+                  }
+                },
+                {
+                  "key": "invocation.id",
+                  "value": {
+                    "stringValue": "20261119T1200000000000Z-merger"
+                  }
+                },
+                {
+                  "key": "service.name",
+                  "value": {
+                    "stringValue": "nightweaver-runtime"
+                  }
+                }
+              ]
+            }
+          ],
+          "matched": 1
+        },
+        "spanSets": [
+          {
+            "spans": [
+              {
+                "spanID": "055b6c8de04a5802",
+                "startTimeUnixNano": "1795125342024374400",
+                "durationNanos": "100",
+                "attributes": [
+                  {
+                    "key": "bead.id",
+                    "value": {
+                      "stringValue": "stage-1lz"
+                    }
+                  },
+                  {
+                    "key": "runtime.id",
+                    "value": {
+                      "stringValue": "0123456789abcdef0123456789abcdef"
+                    }
+                  },
+                  {
+                    "key": "invocation.id",
+                    "value": {
+                      "stringValue": "20261119T1200000000000Z-merger"
+                    }
+                  },
+                  {
+                    "key": "service.name",
+                    "value": {
+                      "stringValue": "nightweaver-runtime"
+                    }
+                  }
+                ]
+              }
+            ],
+            "matched": 1
+          }
+        ],
+        "serviceStats": {
+          "nightweaver-runtime": {
+            "spanCount": 1
+          }
+        }
+      },
+      {
+        "traceID": "9787e23e1ae4cc2c7b1a17439f7869eb",
+        "rootServiceName": "nightweaver-runtime",
+        "rootTraceName": "invocation",
+        "startTimeUnixNano": "1795125337574367600",
+        "durationMs": 168,
+        "spanSet": {
+          "spans": [
+            {
+              "spanID": "5c457029b67a18a2",
+              "startTimeUnixNano": "1795125337574367600",
+              "durationNanos": "168335200",
+              "attributes": [
+                {
+                  "key": "service.name",
+                  "value": {
+                    "stringValue": "nightweaver-runtime"
+                  }
+                },
+                {
+                  "key": "bead.id",
+                  "value": {
+                    "stringValue": "stage-1lz"
+                  }
+                },
+                {
+                  "key": "runtime.id",
+                  "value": {
+                    "stringValue": "0123456789abcdef0123456789abcdef"
+                  }
+                },
+                {
+                  "key": "invocation.id",
+                  "value": {
+                    "stringValue": "20261119T1200000000000Z-merger"
+                  }
+                }
+              ]
+            }
+          ],
+          "matched": 1
+        },
+        "spanSets": [
+          {
+            "spans": [
+              {
+                "spanID": "5c457029b67a18a2",
+                "startTimeUnixNano": "1795125337574367600",
+                "durationNanos": "168335200",
+                "attributes": [
+                  {
+                    "key": "service.name",
+                    "value": {
+                      "stringValue": "nightweaver-runtime"
+                    }
+                  },
+                  {
+                    "key": "bead.id",
+                    "value": {
+                      "stringValue": "stage-1lz"
+                    }
+                  },
+                  {
+                    "key": "runtime.id",
+                    "value": {
+                      "stringValue": "0123456789abcdef0123456789abcdef"
+                    }
+                  },
+                  {
+                    "key": "invocation.id",
+                    "value": {
+                      "stringValue": "20261119T1200000000000Z-merger"
+                    }
+                  }
+                ]
+              }
+            ],
+            "matched": 1
+          }
+        ],
+        "serviceStats": {
+          "nightweaver-runtime": {
+            "spanCount": 1
+          }
+        }
+      }
+    ],
+    "metrics": {
+      "inspectedBytes": "21907",
+      "completedJobs": 3,
+      "totalJobs": 3
+    }
+  },
+  "traceDetails": [
+    {
+      "batches": [
+        {
+          "resource": {
+            "attributes": [
+              {
+                "key": "service.name",
+                "value": {
+                  "stringValue": "nightweaver-runtime"
+                }
+              }
+            ]
+          },
+          "scopeSpans": [
+            {
+              "scope": {
+                "name": "Nightweaver.Operational"
+              },
+              "spans": [
+                {
+                  "traceId": "rkHNhNoZhc7xUYeHHIlKug==",
+                  "spanId": "BVtsjeBKWAI=",
+                  "name": "verified_merge",
+                  "kind": "SPAN_KIND_INTERNAL",
+                  "startTimeUnixNano": "1795125342024374400",
+                  "endTimeUnixNano": "1795125342024374500",
+                  "attributes": [
+                    {
+                      "key": "operation",
+                      "value": {
+                        "stringValue": "verified_merge"
+                      }
+                    },
+                    {
+                      "key": "outcome",
+                      "value": {
+                        "stringValue": "success"
+                      }
+                    },
+                    {
+                      "key": "role",
+                      "value": {
+                        "stringValue": "merger"
+                      }
+                    },
+                    {
+                      "key": "bead.id",
+                      "value": {
+                        "stringValue": "stage-1lz"
+                      }
+                    },
+                    {
+                      "key": "runtime.id",
+                      "value": {
+                        "stringValue": "0123456789abcdef0123456789abcdef"
+                      }
+                    },
+                    {
+                      "key": "invocation.id",
+                      "value": {
+                        "stringValue": "20261119T1200000000000Z-merger"
+                      }
+                    },
+                    {
+                      "key": "checked.head",
+                      "value": {
+                        "stringValue": "4470ab61ecfeb75cb1bcaa8352c5dc4b0dc63d49"
+                      }
+                    },
+                    {
+                      "key": "merge.commit",
+                      "value": {
+                        "stringValue": "4470ab61ecfeb75cb1bcaa8352c5dc4b0dc63d49"
+                      }
+                    }
+                  ],
+                  "status": {}
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "batches": [
+        {
+          "resource": {
+            "attributes": [
+              {
+                "key": "service.name",
+                "value": {
+                  "stringValue": "nightweaver-runtime"
+                }
+              }
+            ]
+          },
+          "scopeSpans": [
+            {
+              "scope": {
+                "name": "Nightweaver.Operational"
+              },
+              "spans": [
+                {
+                  "traceId": "l4fiPhrkzCx7GhdDn3hp6w==",
+                  "spanId": "XEVwKbZ6GKI=",
+                  "name": "invocation",
+                  "kind": "SPAN_KIND_INTERNAL",
+                  "startTimeUnixNano": "1795125337574367600",
+                  "endTimeUnixNano": "1795125337742702800",
+                  "attributes": [
+                    {
+                      "key": "operation",
+                      "value": {
+                        "stringValue": "invocation"
+                      }
+                    },
+                    {
+                      "key": "outcome",
+                      "value": {
+                        "stringValue": "completed"
+                      }
+                    },
+                    {
+                      "key": "role",
+                      "value": {
+                        "stringValue": "merger"
+                      }
+                    },
+                    {
+                      "key": "bead.id",
+                      "value": {
+                        "stringValue": "stage-1lz"
+                      }
+                    },
+                    {
+                      "key": "runtime.id",
+                      "value": {
+                        "stringValue": "0123456789abcdef0123456789abcdef"
+                      }
+                    },
+                    {
+                      "key": "invocation.id",
+                      "value": {
+                        "stringValue": "20261119T1200000000000Z-merger"
+                      }
+                    }
+                  ],
+                  "status": {}
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "dashboardUid": "nightweaver-first-path",
+  "browserErrors": [],
+  "hostedAcceptance": "not performed"
+}

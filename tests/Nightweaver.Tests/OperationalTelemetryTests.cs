@@ -261,7 +261,7 @@ public sealed class OperationalTelemetryTests
         clock.Seconds = 1_000_000;
         for (var index = 0; index < 16; index++) Assert.True(admission.TryTake());
         Assert.False(admission.TryTake());
-        Assert.Equal(116, OperationalTelemetry.ProjectedSeries);
+        Assert.Equal(390, OperationalTelemetry.ProjectedSeries);
         Assert.True(OperationalTelemetry.ProjectedSeries <= 2000);
     }
 
@@ -301,6 +301,40 @@ public sealed class OperationalTelemetryTests
         }
     }
 
+    [Fact]
+    public async Task InvocationMetricsKeepOnlyBoundedRolesAndStatusesAtZeroSampling()
+    {
+        await using var receiver = await Receiver.StartAsync();
+        await using var telemetry = new OperationalTelemetry(OperationalHost.Runtime, new(receiver.Endpoint, "", 0),
+            _ => { }, metricIntervalMilliseconds: 100);
+        for (var i = 0; i < 1000; i++)
+            telemetry.RecordInvocation("implementer", "completed", 1.25, "ns-" + i,
+                Guid.NewGuid().ToString("N"), $"20261119T1200000000000Z-{i}-implementer");
+        telemetry.RecordInvocation(Canary, "completed", 1, "ns-proof", new string('a', 32), "invocation");
+        telemetry.RecordInvocation("implementer", Canary, 1, "ns-proof", new string('a', 32), "invocation");
+        telemetry.RecordInvocation("implementer", "completed", double.NaN, "ns-proof", new string('a', 32), "invocation");
+        telemetry.RecordVerifiedMerge("unsafe/path", new string('a', 32), "invocation", new string('a', 40), new string('b', 40));
+        await receiver.WaitForSignalAsync("metrics");
+        await telemetry.StopAsync(false);
+        Assert.DoesNotContain(receiver.Captures, capture => capture.Signal == "traces");
+        Assert.Contains(receiver.Captures.Where(c => c.Signal == "metrics").SelectMany(FirstPathTelemetryTests.DecodeRecords),
+            metric => metric.Only(1).String == "nightweaver.invocation.attempts");
+        foreach (var capture in receiver.Captures.Where(c => c.Signal == "metrics"))
+        {
+            var metrics = FirstPathTelemetryTests.DecodeRecords(capture).ToArray();
+            foreach (var metric in metrics.Where(m => m.Only(1).String == "nightweaver.invocation.attempts"))
+            {
+                var sum = Message.Parse(metric.Only(7).Bytes);
+                var point = Message.Parse(sum.Only(1).Bytes);
+                Assert.Equal(new Dictionary<string, string> { ["role"] = "implementer", ["status"] = "completed" }, Attributes(point, 7));
+                Assert.Equal(1000L, BitConverter.ToInt64(point.Only(6).Bytes));
+            }
+            var payload = Encoding.UTF8.GetString(capture.Bytes);
+            foreach (var forbidden in new[] { Canary, "bead.id", "runtime.id", "invocation.id", "checked.head", "merge.commit" })
+                Assert.DoesNotContain(forbidden, payload);
+        }
+    }
+
     private sealed class TestClock : TimeProvider
     {
         internal int Seconds { get; set; }
@@ -314,13 +348,13 @@ public sealed class OperationalTelemetryTests
         while (!condition()) await Task.Delay(10, deadline.Token);
     }
 
-    private static Dictionary<string, string> Attributes(Message message, int field) => message.Fields
+    internal static Dictionary<string, string> Attributes(Message message, int field) => message.Fields
         .Where(item => item.Number == field).Select(item => Message.Parse(item.Bytes))
         .ToDictionary(item => item.Only(1).String, item => Message.Parse(item.Only(2).Bytes).Only(1).String);
 
-    private sealed record Capture(string Signal, string ContentType, byte[] Bytes, bool ExpectedAuthorization);
+    internal sealed record Capture(string Signal, string ContentType, byte[] Bytes, bool ExpectedAuthorization);
 
-    private sealed class Receiver(WebApplication app, Uri endpoint) : IAsyncDisposable
+    internal sealed class Receiver(WebApplication app, Uri endpoint) : IAsyncDisposable
     {
         internal Uri Endpoint { get; } = endpoint;
         internal ConcurrentQueue<Capture> Captures { get; } = new();
@@ -328,8 +362,11 @@ public sealed class OperationalTelemetryTests
         private readonly CancellationTokenSource stop = new();
         private bool disposed;
 
-        internal static async Task<Receiver> StartAsync(int status = 200, bool hold = false)
+        internal static async Task<Receiver> StartAsync(int status = 200, bool hold = false, Uri? forward = null)
         {
+            if (forward is not null && (forward.Scheme != "http" || forward.Host != "127.0.0.1"
+                || !string.IsNullOrEmpty(forward.UserInfo) || !string.IsNullOrEmpty(forward.Query)))
+                throw new ArgumentException("QA forwarding requires numeric loopback without credentials.");
             var builder = WebApplication.CreateSlimBuilder();
             builder.Logging.ClearProviders();
             builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
@@ -341,6 +378,14 @@ public sealed class OperationalTelemetryTests
                 await context.Request.Body.CopyToAsync(bytes);
                 receiver!.Captures.Enqueue(new(signal, context.Request.ContentType ?? "", bytes.ToArray(),
                     context.Request.Headers.Authorization == "Basic isolated-test-value"));
+                if (forward is not null)
+                {
+                    using var client = new HttpClient(new SocketsHttpHandler { UseProxy = false });
+                    using var content = new ByteArrayContent(bytes.ToArray());
+                    content.Headers.ContentType = new("application/x-protobuf");
+                    using var response = await client.PostAsync(new Uri(forward, "v1/" + signal), content);
+                    response.EnsureSuccessStatusCode();
+                }
                 if (hold)
                 {
                     try { await Task.Delay(Timeout.InfiniteTimeSpan, receiver.stop.Token); }
@@ -377,12 +422,12 @@ public sealed class OperationalTelemetryTests
     }
 
     // Minimal wire decoder for the public OTLP protobuf schema. No string-scanning substitutes for decoding.
-    private sealed record Field(int Number, ulong Value, byte[] Bytes)
+    internal sealed record Field(int Number, ulong Value, byte[] Bytes)
     {
         internal string String => Encoding.UTF8.GetString(Bytes);
     }
 
-    private sealed record Message(List<Field> Fields)
+    internal sealed record Message(List<Field> Fields)
     {
         internal Field Only(int number) => Assert.Single(Fields, field => field.Number == number);
 
