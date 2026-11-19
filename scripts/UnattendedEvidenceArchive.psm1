@@ -106,7 +106,7 @@ function Test-UnattendedEvidenceArchive {
         Require ($text.Length -eq 0 -or $text.EndsWith("`n", [StringComparison]::Ordinal))
         $lines = $text.Split("`n")
         $epochs = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
-        $invocationBytes = [Collections.Generic.Dictionary[string,long]]::new([StringComparer]::Ordinal)
+        $invocationBytes = [Collections.Generic.Dictionary[object,long]]::new()
         for ($index = 0; $index -lt ($lines.Count - 1); $index++) {
             $recordNumber = $index + 1
             Require ($recordNumber -le 32768)
@@ -173,8 +173,11 @@ function Test-UnattendedEvidenceArchive {
                 $maximum = if ($sample.sourceKind -ceq 'invocation') { 65536 } else { 1048576 }
                 Payload $sample.payload $maximum
                 if ($sample.sourceKind -ceq 'invocation') {
-                    Require ($sample.sourcePosition.offset + $sample.payload.bytes -le 8388608)
-                    $key = "$($sample.invocationId)/$($sample.sourceId)"
+                    if ($null -ne $sample.sourcePosition) { Require ($sample.sourcePosition.offset + $sample.payload.bytes -le 8388608) }
+                    # Failed reads can retain bytes without knowing their cursor
+                    # or invocation. Charge those bytes to the source's unknown
+                    # invocation bucket rather than inventing attribution.
+                    $key = [Tuple[string,string]]::new($sample.invocationId, $sample.sourceId)
                     if (-not $invocationBytes.ContainsKey($key)) { $invocationBytes[$key] = 0 }
                     $invocationBytes[$key] += $sample.payload.bytes
                     Require ($invocationBytes[$key] -le 8388608)

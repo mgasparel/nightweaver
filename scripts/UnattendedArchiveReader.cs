@@ -66,6 +66,9 @@ namespace Nightweaver.Evidence
                         catch { handle.Dispose(); throw; }
                         try { files.Add(relative, stream); }
                         catch { stream.Dispose(); throw; }
+                        var maximum = relative == "samples.jsonl" ? 32L * 1024 * 1024 : 1024L * 1024;
+                        if (stream.Length > maximum)
+                            throw new InvalidDataException("Archive file size limit exceeded.");
                         TotalBytes = checked(TotalBytes + stream.Length);
                         if (TotalBytes > 256L * 1024 * 1024)
                             throw new InvalidDataException("Archive size limit exceeded.");

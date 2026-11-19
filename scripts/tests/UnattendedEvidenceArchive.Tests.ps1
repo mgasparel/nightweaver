@@ -83,6 +83,12 @@ foreach($outcome in 'timeout','missing','invalid','interrupted','limit','error',
     $r=Valid $f "$outcome sample"
     Check ($r.observationGapCount -eq 1 -and $r.observationGaps[0].code -ceq $outcome) 'Failure sample hidden'
 }
+foreach($known in $false,$true) {
+    $f=Fixture; $f.samples[0].sourceKind='invocation'; $f.samples[0].outcome='timeout'; $f.samples[0].failureCode='fixture-timeout'
+    if ($known) { $f.samples[0].invocationId='fixture-turn'; $f.samples[0].sourcePosition=@{generation='file-1'; offset=0} }
+    $r=Valid $f "Partial invocation timeout, attribution known=$known"
+    Check ($r.observationGapCount -eq 1) 'Partial failed invocation acquired a success claim'
+}
 $f=Fixture; $f.manifest.state='interrupted'; $r=Valid $f 'Interrupted archive'
 Check ($r.observationGaps.code -contains 'archive-interrupted') 'Interrupted state hidden'
 $f=Fixture; $f.manifest.state='open'; $f.manifest.sampleCount=$null; $f.manifest.actualWindow.endUtc=$null; $f.manifest.actualWindow.elapsedMs=$null
@@ -150,6 +156,10 @@ foreach($entry in @(@('manifest.json',1048577),@('samples.jsonl',33554433),@('pa
     }
 }
 $f=Fixture; Invalid $f 'Record size bound' {param($f) [IO.File]::WriteAllText((Join-Path $f.directory 'samples.jsonl'), ('x'*2097153)+"`n", $utf8) }
+$f=Fixture; Invalid $f 'Unreferenced payload size bound' {param($f)
+    $stream=[IO.File]::Open((Join-Path $f.directory 'payloads/extra.bin'), [IO.FileMode]::CreateNew)
+    try { $stream.SetLength(1048577) } finally { $stream.Dispose() }
+}
 
 # Invocation chunk and source budgets are independent of small on-disk reuse.
 $f=Fixture; $chunk=New-Object byte[] 65536; [IO.File]::WriteAllBytes((Join-Path $f.directory 'payloads/log.bin'), $chunk)
@@ -160,6 +170,23 @@ $s=Sample 129 $reference; $s.sourceKind='invocation'; $s.invocationId='fixture-t
 Invalid $f 'Invocation source overflow across generations'
 $f=Fixture; $bytes=New-Object byte[] 1048577; [IO.File]::WriteAllBytes((Join-Path $f.directory 'payloads/large.bin'), $bytes); $f.samples[0].payload=Reference 'payloads/large.bin' $bytes
 Invalid $f 'Payload bound'
+
+# Every payload, including an unreferenced one, fits its per-file bound;
+# aggregate accounting still rejects the first byte above the archive cap.
+$f=Fixture; Save $f
+for($index=0; $index -lt 255; $index++) {
+    $stream=[IO.File]::Open((Join-Path $f.directory "payloads/fill-$index.bin"), [IO.FileMode]::CreateNew)
+    try { $stream.SetLength(1048576) } finally { $stream.Dispose() }
+}
+$current=(Get-ChildItem -LiteralPath $f.directory -Recurse -File | Measure-Object Length -Sum).Sum
+$tail=Join-Path $f.directory 'payloads/tail.bin'; $stream=[IO.File]::Open($tail,[IO.FileMode]::CreateNew)
+try { $stream.SetLength(268435456 - $current) } finally { $stream.Dispose() }
+$r=Test-UnattendedEvidenceArchive $f.directory
+Check ($r.integrityValid -and $r.archiveBytes -eq 268435456) 'Exact archive byte bound rejected'; $cases++
+$stream=[IO.File]::Open($tail,[IO.FileMode]::Open)
+try { $stream.SetLength($stream.Length+1) } finally { $stream.Dispose() }
+$r=Test-UnattendedEvidenceArchive $f.directory
+Check (-not $r.integrityValid) 'Aggregate archive byte overflow accepted'; $cases++
 
 $f=Fixture; Save $f
 $reader=[Nightweaver.Evidence.UnattendedArchiveReader]::new($f.directory)

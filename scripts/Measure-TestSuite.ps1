@@ -51,7 +51,7 @@ try {
         $fixtureWatch = [Diagnostics.Stopwatch]::StartNew()
         try {
             $context.archiveFixtures = & (Join-Path $Checkout 'scripts/tests/UnattendedEvidenceArchive.Tests.ps1') -OutputRoot $destination | ConvertFrom-Json
-            if ($context.archiveFixtures.passed -lt 61 -or $context.archiveFixtures.failed -ne 0 -or $context.archiveFixtures.skipped -ne 0) { throw 'Archive fixture count or result invalid' }
+            if ($context.archiveFixtures.passed -lt 66 -or $context.archiveFixtures.failed -ne 0 -or $context.archiveFixtures.skipped -ne 0) { throw 'Archive fixture count or result invalid' }
         } catch {
             $context.archiveFixtures = @{ failed = 1; error = 'Archive fixture verification failed' }
             $context.measurementErrors += 'Archive fixture verification failed'

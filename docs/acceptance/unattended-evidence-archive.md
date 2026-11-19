@@ -101,6 +101,8 @@ A nonnull `epoch` contains exactly `ownerRunId`, `runtimeId` (32 hex), `processI
 
 Complete invocation records additionally require `invocationId` (nonempty, at most 128 characters) and `sourcePosition: {"generation": "file-identity", "offset": 0}`. Generation is an opaque bounded identity supplied by capture, not a filename heuristic; offset is the byte start of the retained chunk. Preserve generations/offsets and record gaps on rotation/truncation. Parsing provider events, assembling replay or deciding whether records are duplicates belongs to later adapters/evaluation, not this validator.
 
+Failed invocation reads may retain bounded partial bytes with null invocation ID or position. They remain gaps, not attributable invocation output. Their bytes still count toward the 8-MiB source budget: a missing invocation ID uses the source's unknown-invocation group, and a missing position never fabricates a cursor. Known positions must fit the offset bound even on failed reads.
+
 ## Payloads and bounds
 
 A payload reference has exactly `path`, `bytes`, `sha256`. Paths are relative under `payloads/`, use `/`, ASCII letters/digits/dot/underscore/hyphen, at most 240 characters; empty/dot/parent segments, trailing dots, reserved Windows device names, backslashes, colons and rooted paths are invalid. Bytes must match the pinned ordinary file's length and lowercase SHA-256. There is no external payload-file reference: an unavailable larger retained source can be described by a bounded allowlisted metadata payload without reading or exposing its external path. Raw payload contents remain opaque and local.
@@ -115,7 +117,7 @@ A payload reference has exactly `path`, `bytes`, `sha256`. Paths are relative un
 | Captured invocation bytes, per invocation ID and source ID across generations | 8 MiB; each offset + chunk also fits 8 MiB |
 | Root path / relative payload path | 4,096 / 240 characters |
 
-Inventory size is checked before payload hashing, and streams/JSON parsing are bounded. Each file remains read-locked, so repeated references reuse a hash of the same pinned bytes, not a mutable path. Inspection releases only its own handles; it never rewrites, repairs, truncates or removes evidence. Unsupported JSON versions/fields, noninteger metadata, duplicate properties, identity/count/order errors, missing/mismatched payloads and limit violations make integrity false. A low-level unreadable archive is likewise invalid; original source bytes remain available for diagnosis.
+Inventory size and per-file bounds (including unreferenced payloads) are checked before payload hashing, and streams/JSON parsing are bounded. Each file remains read-locked, so repeated references reuse a hash of the same pinned bytes, not a mutable path. Inspection releases only its own handles; it never rewrites, repairs, truncates or removes evidence. Unsupported JSON versions/fields, noninteger metadata, duplicate properties, identity/count/order errors, missing/mismatched payloads and limit violations make integrity false. A low-level unreadable archive is likewise invalid; original source bytes remain available for diagnosis.
 
 The entry bound accommodates eight hours of the contract's runtime/tracker samples plus log chunks; capture should still estimate records, files and bytes in its readiness qualification. Identical payload bytes may reuse a reference while each sample retains its own times/outcome. Reuse does not erase gaps, and a forecast exceeding any cap makes the proposed capture strategy not ready.
 
