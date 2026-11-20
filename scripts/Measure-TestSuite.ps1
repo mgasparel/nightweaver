@@ -59,6 +59,17 @@ try {
             $fixtureWatch.Stop()
             $context.archiveFixtureSeconds = $fixtureWatch.Elapsed.TotalSeconds
         }
+        $collectorWatch = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            $context.collectorFixtures = & (Join-Path $Checkout 'scripts/tests/UnattendedEvidenceCollector.Tests.ps1') -OutputRoot ([IO.Path]::GetTempPath()) | ConvertFrom-Json
+            if ($context.collectorFixtures.passed -lt 56 -or $context.collectorFixtures.failed -ne 0 -or $context.collectorFixtures.skipped -ne 0) { throw 'Collector fixture count or result invalid' }
+        } catch {
+            $context.collectorFixtures = @{ failed = 1; error = 'Collector fixture verification failed' }
+            $context.measurementErrors += 'Collector fixture verification failed'
+        } finally {
+            $collectorWatch.Stop()
+            $context.collectorFixtureSeconds = $collectorWatch.Elapsed.TotalSeconds
+        }
         & dotnet test --solution Nightweaver.slnx --minimum-expected-tests 995 --report-xunit-xml --report-xunit-xml-filename "$id.xml" --show-slowest-tests 20 2>&1 | Tee-Object -FilePath $context.log | Out-Host
         $testExit = $LASTEXITCODE
         $timer.Stop()
