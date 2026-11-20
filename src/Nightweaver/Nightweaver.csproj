@@ -6,6 +6,8 @@
     <UseAppHost>true</UseAppHost>
   </PropertyGroup>
   <ItemGroup>
+    <Content Include="../../scripts/Capture-ResourceIncident.ps1" Link="scripts/Capture-ResourceIncident.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../scripts/TestSuiteMeasurement.psm1" Link="scripts/TestSuiteMeasurement.psm1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <InternalsVisibleTo Include="Nightweaver.Tests" />
     <InternalsVisibleTo Include="Nightweaver.QA.CacheProbe" />

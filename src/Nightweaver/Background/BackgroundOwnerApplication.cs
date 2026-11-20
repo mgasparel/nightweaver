@@ -23,9 +23,6 @@ internal static class BackgroundOwnerApplication
             return ExitCodes.UsageOrConfiguration;
         }
 
-        lock (ProcessTreeJobGate)
-            processTreeJob ??= WindowsProcessLauncher.AttachCurrentProcessToKillOnCloseJob();
-
         HostPaths paths;
         ProjectSlug projectSlug;
         try
@@ -62,7 +59,10 @@ internal static class BackgroundOwnerApplication
             var currentProcess = Process.GetCurrentProcess();
             var initial = new BackgroundOwnerRecord(1, "starting", options.RunId, currentProcess.Id,
                 currentProcess.StartTime.ToUniversalTime(), paths.Root, options.ConfigPath, projectSlug.Value,
-                null, null, options.Urls, "starting", "starting", hostLogPath, webLogPath, null);
+                null, null, options.Urls, "starting", "starting", hostLogPath, webLogPath, null)
+                { ContainmentVersion = 1 };
+            lock (ProcessTreeJobGate)
+                processTreeJob ??= WindowsProcessLauncher.AttachCurrentProcessToKillOnCloseJob(BackgroundContainment.Name(initial));
             var state = new BackgroundOwnerState(initial);
             try
             {
@@ -107,6 +107,9 @@ internal static class BackgroundOwnerApplication
                     CancellationToken, Task> onReady = async (telemetry, readyProject, readyPaths, repository, token) =>
                 {
                     var manifest = BackgroundDeploymentManifest.Load(readyPaths.Root);
+                    state.Update(record => record with { RuntimeId = telemetry.RuntimeId,
+                        TargetRepository = repository.Path, GitCommonDirectory = repository.GitCommonDirectory });
+                    await PersistAsync(recordPath, state).ConfigureAwait(false);
                     var startedWebHost = BackgroundWebHost.Start(manifest.ResolveWebExecutable(readyPaths.Root),
                         readyPaths.Root, readyProject.ConfigFilePath, options.Urls, webLogPath);
                     webHost = startedWebHost;
@@ -117,6 +120,7 @@ internal static class BackgroundOwnerApplication
                     }
                     catch
                     {
+                        await RetainFailureAsync(state, recordPath, "WebFailure").ConfigureAwait(false);
                         await startedWebHost.DisposeAsync().ConfigureAwait(false);
                         webHost = null;
                         throw;
@@ -128,6 +132,7 @@ internal static class BackgroundOwnerApplication
                         State = "running",
                         TargetRepository = repository.Path,
                         RuntimeId = telemetry.RuntimeId,
+                        GitCommonDirectory = repository.GitCommonDirectory,
                         WebHealth = "healthy",
                         RuntimeHealth = "live",
                         Message = null
@@ -142,6 +147,10 @@ internal static class BackgroundOwnerApplication
                     new CliOptions(selector, DryRun: false, Help: false), ownerEnvironment, processRunner,
                     shutdownSignals, cancellationToken, onReady).ConfigureAwait(false);
 
+                if (runtimeCode != ExitCodes.Success && state.Current.Failure is null
+                    && !DeploymentObserver.IsDeliberate(state.Current.StopReason))
+                    await RetainFailureAsync(state, recordPath, "RuntimeFailure").ConfigureAwait(false);
+
                 serverLifetime.Cancel();
                 try { await controlServer.ConfigureAwait(false); }
                 catch (OperationCanceledException) when (serverLifetime.IsCancellationRequested) { }
@@ -150,11 +159,14 @@ internal static class BackgroundOwnerApplication
                 {
                     State = shutdownSignals.Reason is RuntimeShutdownReason.WebFailure or RuntimeShutdownReason.RuntimeFailure
                         ? "degraded" : runtimeCode == ExitCodes.Success ? "stopped" : runtimeWasReady ? "degraded" : "failed",
-                    StopReason = shutdownSignals.IntentPersistenceFailure is not null ? "supervision-unavailable" : (shutdownSignals.Reason == RuntimeShutdownReason.None ? RuntimeShutdownReason.RuntimeFailure : shutdownSignals.Reason).ToString(),
+                    StopReason = shutdownSignals.IntentPersistenceFailure is not null || record.StopReason == "supervision-unavailable"
+                        ? "supervision-unavailable" : (shutdownSignals.Reason == RuntimeShutdownReason.None ? RuntimeShutdownReason.RuntimeFailure : shutdownSignals.Reason).ToString(),
                     WebHealth = "stopped",
                     RuntimeHealth = runtimeCode == ExitCodes.Success ? "stopped" : "unknown",
                     Message = shutdownSignals.IntentPersistenceFailure ?? $"owner exited: {shutdownSignals.Reason}; runtime code {runtimeCode}"
                 });
+                if (state.Current.Failure is null && shutdownSignals.Reason is RuntimeShutdownReason.WebFailure or RuntimeShutdownReason.RuntimeFailure)
+                    await RetainFailureAsync(state, recordPath, "RuntimeFailure").ConfigureAwait(false);
                 await PersistAsync(recordPath, state).ConfigureAwait(false);
                 ownerEnvironment.Out.WriteLine($"Background owner {options.RunId} exited with code {runtimeCode}.");
                 return runtimeCode;
@@ -174,6 +186,8 @@ internal static class BackgroundOwnerApplication
                         ? "supervision-unavailable" : record.StopReason,
                     Message = exception.Message
                 });
+                if (state.Current.Failure is null && shutdownSignals.Reason != RuntimeShutdownReason.OperatorDrain)
+                    await RetainFailureAsync(state, recordPath, "RuntimeFailure").ConfigureAwait(false);
                 await PersistAsync(recordPath, state).ConfigureAwait(false);
                 return ExitCodes.InspectionFailure;
             }
@@ -220,15 +234,14 @@ internal static class BackgroundOwnerApplication
         {
             return new(false, state.Current with { StopReason = "supervision-unavailable" }, exception.Message);
         }
-        var stoppingRecord = state.Current with
+        state.Update(record => record with
         {
             State = "stopping",
             StopReason = request.Maintenance ? "Maintenance" : request.Operation == "force" ? "ForcedStop" : "OperatorDrain",
             Message = request.Operation == "force" ? "force stop requested" : "graceful drain requested"
-        };
-        await BackgroundOwnerRecord.WriteAsync(recordPath, stoppingRecord, cancellationToken).ConfigureAwait(false);
-        state.Update(_ => stoppingRecord);
-        return new BackgroundControlResponse(true, stoppingRecord, null);
+        });
+        await state.PersistAsync(recordPath, cancellationToken).ConfigureAwait(false);
+        return new BackgroundControlResponse(true, state.Current, null);
     }
 
     internal static void ApplyControlAction(BackgroundControlRequest request, string runId,
@@ -248,13 +261,16 @@ internal static class BackgroundOwnerApplication
     private static async Task<BackgroundOwnerRecord> ObserveAsync(HostPaths paths, ProjectConfig project,
         BackgroundOwnerRecord record, BackgroundWebHost? webHost, CancellationToken cancellationToken)
     {
+        record = record with { ObservedAtUtc = DateTimeOffset.UtcNow };
         if (record.RuntimeId is null) return record;
         var runtime = new FactoryTelemetryReader(paths, project).Read();
         var runtimeHealth = runtime.Availability.ToString().ToLowerInvariant();
         var webHealthy = webHost is not null && await webHost.CheckHttpHealthAsync(record.RuntimeId,
             project.Name.Value, project.TargetRepository.Path, cancellationToken).ConfigureAwait(false);
         var webHealth = webHost is null || webHost.HasExited ? "stopped" : webHealthy ? "healthy" : "unhealthy";
-        if (record.State == "running" && (!webHealthy || runtime.Availability != FactoryTelemetryAvailability.Live))
+        if (runtime.Snapshot?.RuntimeId != record.RuntimeId) runtimeHealth = "mismatched";
+        if (record.State == "running" && (!webHealthy || runtime.Availability != FactoryTelemetryAvailability.Live
+            || runtime.Snapshot?.RuntimeId != record.RuntimeId))
         {
             record = record with
             {
@@ -287,28 +303,49 @@ internal static class BackgroundOwnerApplication
                 RuntimeHealth = "stale",
                 Message = $"Web Console exited unexpectedly with code {exitCode}; runtime is stopping and will require manual restart"
             });
-            await BackgroundOwnerRecord.WriteAsync(recordPath, state.Current, CancellationToken.None).ConfigureAwait(false);
+            await RetainFailureAsync(state, recordPath, "WebFailure").ConfigureAwait(false);
             shutdownSignals.RequestGracefulStop(RuntimeShutdownReason.WebFailure);
         }
         catch (Exception exception) when (exception is ObjectDisposedException or IOException) { }
     }
 
-    private static async Task WatchControlServerAsync(Task serverTask, BackgroundOwnerState state,
+    internal static async Task WatchControlServerAsync(Task serverTask, BackgroundOwnerState state,
         string recordPath, RuntimeShutdownSignals shutdownSignals, CancellationToken cancellationToken)
     {
         try
         {
             await serverTask.ConfigureAwait(false);
-            if (cancellationToken.IsCancellationRequested || shutdownSignals.Reason != RuntimeShutdownReason.None) return;
-            state.Update(record => record with { State = "degraded", StopReason = "RuntimeFailure", Message = "local control server stopped unexpectedly" });
-            await BackgroundOwnerRecord.WriteAsync(recordPath, state.Current, CancellationToken.None).ConfigureAwait(false);
-            shutdownSignals.RequestGracefulStop(RuntimeShutdownReason.RuntimeFailure);
         }
-        catch (Exception exception) when (exception is OperationCanceledException or IOException) { }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
+        catch (Exception exception) when (exception is IOException or InvalidDataException) { }
+        if (cancellationToken.IsCancellationRequested || shutdownSignals.Reason != RuntimeShutdownReason.None) return;
+        state.Update(record => record with { State = "degraded", StopReason = "RuntimeFailure", Message = "local control server stopped unexpectedly" });
+        await RetainFailureAsync(state, recordPath, "RuntimeFailure").ConfigureAwait(false);
+        shutdownSignals.RequestGracefulStop(RuntimeShutdownReason.RuntimeFailure);
     }
 
     private static Task PersistAsync(string path, BackgroundOwnerState state) =>
-        BackgroundOwnerRecord.WriteAsync(path, state.Current, CancellationToken.None);
+        state.PersistAsync(path, CancellationToken.None);
+
+    internal static async Task RetainFailureAsync(BackgroundOwnerState state, string recordPath, string reason)
+    {
+        state.Update(record => record with { Failure = record.Failure ?? new(DateTimeOffset.UtcNow, reason,
+            record.RunId, record.RuntimeId, record.ProcessId, record.ProcessStartedAtUtc) });
+        // Keep the first failing runtime even when successful drain later reports stopped.
+        // Failure publication precedes the request to drain or Web disposal.
+        try
+        {
+            await PersistAsync(recordPath, state).ConfigureAwait(false);
+            await DeploymentEvidenceStore.RetainOwnerFailureAsync(state.Current).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException
+            or System.Text.Json.JsonException)
+        {
+            state.Update(record => record with { StopReason = "supervision-unavailable",
+                Message = "Failure evidence persistence unavailable; inspect retained owner and logs before recovery." });
+            await PersistAsync(recordPath, state).ConfigureAwait(false);
+        }
+    }
 
     private static bool PathEquals(string left, string right) =>
         string.Equals(Path.GetFullPath(left), Path.GetFullPath(right),

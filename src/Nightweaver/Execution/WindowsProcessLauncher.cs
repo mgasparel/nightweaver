@@ -159,15 +159,15 @@ internal static class WindowsProcessLauncher
     /// Places the current owner in a kill-on-close process group. The owner keeps the returned handle rooted
     /// until process exit so immediate force termination also closes any helper processes without waiting.
     /// </summary>
-    internal static SafeKernelHandle AttachCurrentProcessToKillOnCloseJob()
+    internal static SafeKernelHandle AttachCurrentProcessToKillOnCloseJob(string? name = null)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Windows Job Objects are required.");
-        var job = CreateJobObjectW(IntPtr.Zero, null);
-        if (job.IsInvalid)
+        var job = CreateJobObjectW(IntPtr.Zero, name);
+        var createError = Marshal.GetLastWin32Error();
+        if (job.IsInvalid || createError == 183)
         {
-            var error = Marshal.GetLastWin32Error();
             job.Dispose();
-            throw new Win32Exception(error, "CreateJobObjectW(background owner)");
+            throw new Win32Exception(createError, "CreateJobObjectW(background owner; existing names are refused)");
         }
 
         try
@@ -189,6 +189,22 @@ internal static class WindowsProcessLauncher
             throw;
         }
     }
+
+    // Only call after the original owner's native process signal (or confirmed PID absence).
+    // No observer job handle may exist while the owner lives: even QUERY handles would
+    // delay kill-on-last-close. Opening after rundown cannot undo the initiated kill.
+    internal static bool? IsExitedOwnerJobEmpty(string name)
+    {
+        using var job = OpenJobObjectW(0x0004, false, name); // JOB_OBJECT_QUERY, never inherit
+        if (job.IsInvalid) return Marshal.GetLastWin32Error() == 2 ? true : null;
+        if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformationClass,
+                out var info, (uint)Marshal.SizeOf<JobObjectBasicAccountingInformation>(), IntPtr.Zero)) return null;
+        return info.ActiveProcesses == 0;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeKernelHandle OpenJobObjectW(uint access,
+        [MarshalAs(UnmanagedType.Bool)] bool inherit, string name);
 
     /// <summary>Starts an owner outside the caller's job, with only NUL standard handles inherited.</summary>
     internal static WindowsDetachedProcess LaunchDetached(string executable, IReadOnlyList<string> arguments,

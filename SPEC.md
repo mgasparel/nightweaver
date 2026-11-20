@@ -514,6 +514,18 @@ launch boundary, with the lock released before waiting for drain so force-stop r
 Intent persistence failure never acknowledges durable stop and retains an unavailable interlock.
 Graceful drain retains ordinary per-role bounds with no overall force deadline.
 
+Background status also exposes a versioned identity-bound observation: fresh matching
+native owner/lock, control, Web and runtime sources confirm Healthy; startup,
+intentional drain/stop, explicit failure and uncertainty remain distinct. Stale
+telemetry, PID reuse, foreign identities and inaccessible sources grant no recovery.
+The first failure retains its historical run/runtime/PID/creation identity before
+drain, including startup failures. Bounded local incident evidence separates continuing
+and recovered incidents. Required resource capture precedes recovery preparation;
+capture errors remain explicit and inhibit readiness for reconciliation. Native owner
+signal plus original named Job settlement is separate from owner-lock release, and
+live observation holds no Job handle that could delay kill-on-close. These observation
+and evidence adapters perform no automatic recovery, installation or Beads writes.
+
 The Web host offers a Project-bound, versioned read model beside the legacy console APIs. One host-owned collector shares tracker inventory and runtime/file observations across subscribers. Every resource carries host epoch, decimal revision, observation/attempt times and independent source health. Cached data is display evidence; guarded commands continue to reread authoritative tracker state and expected workflow identities. External tracker changes are reconciled periodically, including comments, relations and native readiness. Failed observations retain last good data with explicit stale health; initial unavailable is distinct from an empty result. Tracker/runtime revisions do not establish a cross-command transaction.
 
 The wire schema and finite budgets are specified in [operational observations v1.2](docs/design/operational-observations-v1.md), with implementation ownership, scheduling and lifecycle documented in [shared operational observations](docs/design/operational-observer.md). Standalone and background-launched Web instances use the same registration and shutdown path. SSE transport and browser synchronization are separate consumers of the shared cache.

@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json;
 using Nightweaver.Execution;
 using Nightweaver.Telemetry;
+using Nightweaver.Supervision;
 
 namespace Nightweaver.Background;
 
@@ -90,7 +91,7 @@ internal sealed class BackgroundWebHost : IAsyncDisposable
                 if (stateResponse.StatusCode != HttpStatusCode.OK)
                     throw new IOException($"Web Console runtime-state endpoint returned {(int)stateResponse.StatusCode}");
                 await using var body = await stateResponse.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-                using var document = await JsonDocument.ParseAsync(body, cancellationToken: cancellationToken).ConfigureAwait(false);
+                using var document = await ReadBoundedAsync(body, cancellationToken).ConfigureAwait(false);
                 var root = document.RootElement;
                 if (!root.TryGetProperty("availability", out var availability) || availability.GetString() != "live"
                     || !root.TryGetProperty("snapshot", out var snapshot)
@@ -119,26 +120,43 @@ internal sealed class BackgroundWebHost : IAsyncDisposable
         if (exitTask.IsCompleted) return false;
         try
         {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(4));
+            cancellationToken = deadline.Token;
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
             var baseUri = new Uri(url.EndsWith('/') ? url : url + "/", UriKind.Absolute);
-            using var health = await client.GetAsync(new Uri(baseUri, "health"), cancellationToken).ConfigureAwait(false);
+            using var health = await client.GetAsync(new Uri(baseUri, "health"), HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             if (health.StatusCode != HttpStatusCode.OK) return false;
-            using var state = await client.GetAsync(new Uri(baseUri, "api/factory/state"), cancellationToken).ConfigureAwait(false);
+            using var state = await client.GetAsync(new Uri(baseUri, "api/factory/state"), HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             if (state.StatusCode != HttpStatusCode.OK) return false;
             await using var body = await state.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            using var document = await JsonDocument.ParseAsync(body, cancellationToken: cancellationToken).ConfigureAwait(false);
+            using var document = await ReadBoundedAsync(body, cancellationToken).ConfigureAwait(false);
             var root = document.RootElement;
             var snapshot = root.GetProperty("snapshot");
             return root.GetProperty("availability").GetString() == "live"
                 && snapshot.GetProperty("runtime_id").GetString() == expectedRuntimeId
                 && snapshot.GetProperty("project").GetString() == project
-                && PathEquals(snapshot.GetProperty("target_repository").GetString(), targetRepository);
+                && PathEquals(snapshot.GetProperty("target_repository").GetString(), targetRepository)
+                && DeploymentObserver.Fresh(snapshot.GetProperty("observed_at").GetDateTimeOffset(), DateTimeOffset.UtcNow);
         }
         catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException
-            or IOException or JsonException or KeyNotFoundException or InvalidOperationException)
+            or IOException or JsonException or KeyNotFoundException or InvalidOperationException or ArgumentException)
         {
             return false;
         }
+    }
+
+    internal static async Task<JsonDocument> ReadBoundedAsync(Stream stream, CancellationToken token)
+    {
+        var bytes = new byte[1024 * 1024 + 1];
+        var count = 0;
+        while (count < bytes.Length)
+        {
+            var read = await stream.ReadAsync(bytes.AsMemory(count), token).ConfigureAwait(false);
+            if (read == 0) return JsonDocument.Parse(bytes.AsMemory(0, count), new() { MaxDepth = 32 });
+            count += read;
+        }
+        throw new InvalidDataException("Web observation exceeds its byte budget.");
     }
 
     public async ValueTask DisposeAsync()

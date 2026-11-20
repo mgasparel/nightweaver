@@ -38,6 +38,17 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Identity-bound supervision adds cheap injected process/control/runtime/clock and
+collector cases for healthy/start/drain/failure/uncertainty, source identity and
+freshness, PID reuse, owner replacement, capture ordering/errors, bounded history,
+privacy and failed persistence. The existing detached-owner containment journey
+now names its Job and probes through the production observer before and after
+owner death. Its original owner/child launches, caller-policy checks and deadlines
+remain; no native journey or publish is added. This proves the uncovered Windows
+boundary that live observation holds no Job handle delaying kill-on-close and
+that original native exit plus Job accounting can establish descendant settlement.
+Report its measured cost against retained baseline XML with the full candidate run.
+
 Journal cancellation/deadline tests assert native process signaling before
 return and disposable-file teardown. Their 16 iterations per path cover Windows
 process rundown, where a managed exit notification can precede native settlement;

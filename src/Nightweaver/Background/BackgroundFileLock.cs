@@ -36,4 +36,19 @@ internal static class BackgroundFileLock
         catch (UnauthorizedAccessException) { return true; }
         catch (InvalidDataException) { return true; }
     }
+
+    internal static bool? ObserveOwner(HostPaths paths, ProjectSlug project)
+    {
+        try
+        {
+            using var probe = InvocationRuntimeFiles.OpenExclusiveRuntimeFile(OwnerLockPath(paths, project), false);
+            return false;
+        }
+        catch (IOException exception) when (exception is FileNotFoundException or DirectoryNotFoundException
+            || exception.InnerException is System.ComponentModel.Win32Exception { NativeErrorCode: 2 or 3 }) { return false; }
+        catch (IOException exception) when (exception.InnerException is System.ComponentModel.Win32Exception { NativeErrorCode: 32 or 33 }
+            || (exception.HResult & 0xffff) is 32 or 33) { return true; }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        { return null; }
+    }
 }

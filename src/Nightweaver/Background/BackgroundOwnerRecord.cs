@@ -23,6 +23,10 @@ internal sealed record BackgroundOwnerRecord(
     string? Message)
 {
     public string? StopReason { get; init; }
+    public string? GitCommonDirectory { get; init; }
+    public int ContainmentVersion { get; init; }
+    public DateTimeOffset? ObservedAtUtc { get; init; }
+    public BackgroundFailure? Failure { get; init; }
     public Nightweaver.Supervision.SupervisionRead? Supervision { get; init; }
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -60,14 +64,27 @@ internal sealed record BackgroundOwnerRecord(
     }
 }
 
-internal sealed class BackgroundOwnerState(BackgroundOwnerRecord initial)
+internal sealed record BackgroundFailure(DateTimeOffset Utc, string Reason, string RunId, string? RuntimeId,
+    int ProcessId, DateTimeOffset ProcessStartedAtUtc);
+
+internal sealed class BackgroundOwnerState(BackgroundOwnerRecord initial) : IDisposable
 {
     private readonly object sync = new();
     private BackgroundOwnerRecord current = initial;
+    private readonly SemaphoreSlim persistence = new(1, 1);
 
     internal BackgroundOwnerRecord Current { get { lock (sync) return current; } }
     internal void Update(Func<BackgroundOwnerRecord, BackgroundOwnerRecord> update)
     {
         lock (sync) current = update(current);
     }
+
+    internal async Task PersistAsync(string path, CancellationToken token)
+    {
+        await persistence.WaitAsync(token).ConfigureAwait(false);
+        try { await BackgroundOwnerRecord.WriteAsync(path, Current, token).ConfigureAwait(false); }
+        finally { persistence.Release(); }
+    }
+
+    public void Dispose() => persistence.Dispose();
 }
