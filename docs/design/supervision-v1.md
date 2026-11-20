@@ -279,6 +279,10 @@ results, interruption and timeout as Failed capture even with process exit 0.
 The collector records Target Repository source identity plus separate installation
 identity. It does not copy secret command lines, environment or configuration bytes.
 Capture failures remain inspectable and block readiness for reconciliation; the
+failed/pending capture interlock survives quiet ticks, later failures and observer
+restart. It is retained for inspection without automatic capture retries; a new
+incident cannot downgrade it to NotRequired. A confirmed Healthy observation can
+record recovery separately without erasing the historical failed capture. The
 preparation API performs no restart, kill, cleanup or tracker writes.
 
 Future recovery consumers must still serialize the tick, hold repository exclusion,

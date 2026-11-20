@@ -55,7 +55,9 @@ internal sealed class DeploymentEvidenceStore(HostPaths paths, ProjectSlug proje
         if (incident is not null)
             history = history.Where(item => item.Id != incident.Id).Append(incident).ToArray();
         var overflow = Math.Max(0, history.Length - SupervisionPolicy.MaximumHistory);
-        var continuing = incident ?? old?.ContinuingIncident;
+        var blocked = old?.ContinuingIncident is { Capture.State: IncidentCaptureState.Failed or IncidentCaptureState.Pending };
+        var continuing = blocked && incident?.Id != old!.ContinuingIncident!.Id
+            ? old!.ContinuingIncident : incident ?? old?.ContinuingIncident;
         var recovered = old?.RecoveredIncident;
         if (observation.Health == DeploymentHealth.Healthy && continuing is not null)
         {
@@ -135,6 +137,14 @@ internal sealed class DeploymentIncidentRecorder(HostPaths paths, ProjectSlug pr
     internal async Task<RecoveryEvidence> PrepareAsync(DeploymentObservation observation, int attempts,
         ResourceIncidentSignal signal, CancellationToken token)
     {
+        // A later quiet tick, changed failure or process restart cannot erase a required
+        // capture that failed or was interrupted. Retain it for inspection rather than
+        // silently downgrading the requirement to NotRequired or retrying until green.
+        if (store.Read()?.ContinuingIncident is { Capture.State: IncidentCaptureState.Failed or IncidentCaptureState.Pending } blocked)
+        {
+            await store.RetainAsync(observation, null, token).ConfigureAwait(false);
+            return new(blocked, false);
+        }
         var incident = DeploymentEvidenceStore.NewIncident(paths, project, observation, attempts, signal,
             new(signal == ResourceIncidentSignal.None ? IncidentCaptureState.NotRequired : IncidentCaptureState.Pending, null, null));
         // The triggering observation survives interrupted/failed capture, and capture always

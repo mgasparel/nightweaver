@@ -196,6 +196,33 @@ public sealed class DeploymentEvidenceTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task FailedOrInterruptedCaptureCannotBeDowngradedByLaterTickOrFailure(bool interrupted)
+    {
+        using var directory = new TempDirectory();
+        var paths = new HostPaths(directory.Path);
+        var project = ProjectSlug.Parse("demo");
+        var identity = DeploymentObservationTests.Identity(directory.Path);
+        var observation = Observation(identity);
+        var store = new DeploymentEvidenceStore(paths, project, identity);
+        var blocked = DeploymentEvidenceStore.NewIncident(paths, project, observation, 1, ResourceIncidentSignal.NativeTimeouts,
+            new(interrupted ? IncidentCaptureState.Pending : IncidentCaptureState.Failed, null, "capture-unavailable"));
+        await store.RetainAsync(observation, blocked, TestContext.Current.CancellationToken);
+        var recorder = new DeploymentIncidentRecorder(paths, project, new(paths, project, identity),
+            (_, _) => throw new InvalidOperationException("No automatic capture retry"));
+        var result = await recorder.PrepareAsync(observation, 1, ResourceIncidentSignal.None, TestContext.Current.CancellationToken);
+        Assert.False(result.ReadyForReconciliation);
+        Assert.Equal(blocked.Id, result.Incident.Id);
+        using var ownerState = new BackgroundOwnerState(observation.Owner!);
+        await BackgroundOwnerApplication.RetainFailureAsync(ownerState, BackgroundOwnerRecord.PathFor(paths, project), "WebFailure");
+        Assert.Equal(blocked.Id, store.Read()!.ContinuingIncident!.Id);
+        result = await recorder.PrepareAsync(observation, 1, ResourceIncidentSignal.NativeTimeouts, TestContext.Current.CancellationToken);
+        Assert.False(result.ReadyForReconciliation);
+        Assert.Equal(blocked.Id, store.Read()!.ContinuingIncident!.Id);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task UnexpectedControlExitOrFaultRetainsFailureBeforeRequestingDrain(bool fault)
     {
         using var directory = new TempDirectory();
