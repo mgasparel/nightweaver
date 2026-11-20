@@ -86,12 +86,12 @@ public sealed class PoolObservationTests
         var observation = new PoolObservation("delivery", 1, clock, completed.Add, (_, _) => { });
         observation.Observe([]); // establish coverage before newly eligible work
         observation.Observe(["a"]);
-        clock.Advance(10);
+        clock.Advance(31); // normal 30-second discovery plus native read latency
         observation.Observe(["a"]);
         clock.Advance(5);
-        Assert.Equal(15, Assert.Single(observation.Read("oldest")).Value);
+        Assert.Equal(36, Assert.Single(observation.Read("oldest")).Value);
         observation.Reserve("a", null);
-        Assert.Equal(15, Assert.Single(completed));
+        Assert.Equal(36, Assert.Single(completed));
         observation.Observe(["a"]); // local active reservation is excluded
         Assert.Equal(0, Assert.Single(observation.Read("queued")).Value);
         Assert.Equal(1, observation.Read("occupied").Sum(item => item.Value));
@@ -131,7 +131,7 @@ public sealed class PoolObservationTests
         var observation = new PoolObservation("merger", 1, clock, completed.Add, (_, _) => { });
         observation.Observe([]);
         observation.Observe(["a"]);
-        clock.Advance(31);
+        clock.Advance(61);
         Assert.Empty(observation.Read("oldest"));
         observation.Observe(["a"]);
         observation.Reserve("a", null);

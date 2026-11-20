@@ -12,7 +12,7 @@ separately and its candidates do not enter the capacity-wait queue.
 | `nightweaver.pool.occupied` | pool, phase | Live owned reservations, one phase per reservation |
 | `nightweaver.pool.queued` | pool | Observed eligible unreserved count; absent when unknown/incomplete |
 | `nightweaver.pool.oldest` | pool | Oldest observed queued interval in seconds; absent when unknown/incomplete |
-| `nightweaver.pool.fresh` | pool | 1 for a successful observation no older than 30 monotonic seconds; otherwise 0 |
+| `nightweaver.pool.fresh` | pool | 1 for a successful observation no older than 60 monotonic seconds; otherwise 0 |
 | `nightweaver.pool.coverage` | pool | 1 for fresh complete retained membership, otherwise 0 |
 | `nightweaver.pool.age` | pool | Monotonic seconds since the last successful observation; absent before any success |
 | `nightweaver.pool.backpressure` | pool | Planning admission gate closed (1); absent when stale |
@@ -37,14 +37,15 @@ handoff starts a new interval in the receiving pool and never carries elapsed ti
 Startup/restart and recovery from failed or stale reads are left-censored: records
 present in the first successful observation cannot produce complete durations.
 Later newly eligible records may complete. Failure clears intervals immediately.
-A gap over 30 seconds clears them before either export, reservation or recovery;
+A gap over 60 seconds clears them before either export, reservation or recovery;
 unobserved time never enters a complete sample. Shutdown closes waiting coverage
 when the next collection sees the existing stop gate, while draining owned slots
 remain occupied. Process termination loses unfinished observations.
 
 Discovery normally quantizes eligibility by up to 30 seconds, plus native read
-latency; failures add further delay. A slow normal discovery turn may therefore
-conservatively become stale and restart left-censored. Time between successful
+latency; failures add further delay. The 60-second freshness limit allows one normal cadence
+plus bounded read/scheduling latency. Longer gaps conservatively become stale
+and restart left-censored. Time between successful
 polls is approximate observed eligibility, not proof of continuous business
 eligibility. Even fresh zero is an observation, never an authorization.
 

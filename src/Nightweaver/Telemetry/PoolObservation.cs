@@ -18,7 +18,8 @@ internal sealed class PoolObservation(
     private bool covered;
     private bool backpressure;
     private bool stopped;
-    private static readonly TimeSpan FreshFor = TimeSpan.FromSeconds(30);
+    // Two normal discovery cadences allow bounded read/scheduling latency.
+    private static readonly TimeSpan FreshFor = TimeSpan.FromSeconds(60);
 
     internal void Observe(IEnumerable<string> eligible, bool admissionBackpressure = false)
     {
