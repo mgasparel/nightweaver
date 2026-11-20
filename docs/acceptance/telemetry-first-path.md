@@ -1,10 +1,12 @@
 # Local invocation-to-verified-merge proof
 
-On 2026-11-19 the disposable pinned Grafana LGTM fixture imported the exact
+On 2026-11-19 the disposable pinned Grafana LGTM fixture imported version 1 of the
 [dashboard JSON](../../observability/first-path-dashboard.json), received all
 three OTLP HTTP/protobuf signals from the native fixture, and rendered queryable
 results with working operational-ID correlation. This is local acceptance only.
 Hosted Grafana acceptance and production deployment were not performed.
+The same UID now carries the version 2
+[bottleneck extension and its separate local evidence](grafana-bottlenecks.md).
 
 The controlled Agent ran through the actual Windows executor and settled its
 process/job. Native Git and isolated bd supplied the independent Merger proof

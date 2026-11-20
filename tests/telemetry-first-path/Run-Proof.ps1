@@ -14,6 +14,8 @@ foreach ($key in $names) { $saved[$key] = [Environment]::GetEnvironmentVariable(
 $container = $null
 Push-Location $checkout
 try {
+    & node (Join-Path $checkout 'tests/telemetry-first-path/approval-ratio-proof.mjs') (Join-Path $output 'approval-ratio')
+    if ($LASTEXITCODE -ne 0) { throw 'Deterministic approval ratio proof failed.' }
     $dockerArgs = @('run','--detach','--name',$name,'--label','nightweaver.fixture=first-path',
         '--env','GF_AUTH_ANONYMOUS_ENABLED=true','--env','GF_AUTH_ANONYMOUS_ORG_ROLE=Admin',
         '--env','GF_ANALYTICS_REPORTING_ENABLED=false','--env','GF_ANALYTICS_CHECK_FOR_UPDATES=false')
@@ -40,6 +42,8 @@ try {
     }
     & dotnet test --solution Nightweaver.slnx --filter-method Nightweaver.Tests.FirstPathTelemetryTests.NativeInvocationAndIndependentlyVerifiedClosureExportCorrelatedSignals --minimum-expected-tests 1 --report-xunit-xml --report-xunit-xml-filename first-path-grafana.xml 2>&1 | Tee-Object (Join-Path $output 'native-smoke.log') | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Native OTLP proof failed.' }
+    & dotnet test --solution Nightweaver.slnx --filter-class Nightweaver.Tests.DashboardTelemetryTests --minimum-expected-tests 2 --report-xunit-xml --report-xunit-xml-filename dashboard-load.xml 2>&1 | Tee-Object (Join-Path $output 'component-load.log') | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'Paired load/unavailable proof failed.' }
     & node (Join-Path $checkout 'tests/Nightweaver.QA.AppHost/first-path-grafana-qa.mjs') $output
     if ($LASTEXITCODE -ne 0) { throw 'Grafana query/browser proof failed.' }
     @{ image = $fixture.image; container = $container; hostedAcceptance = 'not performed'; accountChanges = $false } |

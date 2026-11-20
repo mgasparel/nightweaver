@@ -571,3 +571,9 @@ native admission selection to expose approximate eligible waiting, independent
 freshness/coverage and live reservation occupancy by phase. Unknown observations
 are censored rather than reported as completed waits or healthy empty queues.
 These metrics do not change scheduling, backpressure or workflow authority.
+
+The versioned [Grafana bottleneck dashboard](docs/design/grafana-bottlenecks.md)
+consumes these bounded signals with freshness/coverage gates and detail-only
+operational IDs. Its paired-runtime/Web budget includes translated histogram
+series and receiver-measured protobuf envelopes. Local acceptance never implies
+hosted account mutation, production deployment or durable business accounting.
