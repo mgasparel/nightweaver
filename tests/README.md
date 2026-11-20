@@ -49,6 +49,11 @@ boundary that live observation holds no Job handle delaying kill-on-close and
 that original native exit plus Job accounting can establish descendant settlement.
 Report its measured cost against retained baseline XML with the full candidate run.
 
+Disposable capture-journal mutations cover missing/null required members, invalid
+enums and observation identity, duplicate/unknown fields and inconsistent incident
+history/capture state. Reads and preparation must reject them, invoke no collector
+and preserve the original bytes. These deterministic cases add no native journey.
+
 `OwnerFailurePublicationTests` inject sharing denial and publication cancellation
 for stop/force/maintenance, concurrent owner failure, and discovery/timer/completion
 infrastructure termination with a blocked pool drain. These cheap cases verify

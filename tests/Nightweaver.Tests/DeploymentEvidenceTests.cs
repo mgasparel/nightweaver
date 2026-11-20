@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Nightweaver.Background;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
@@ -10,6 +11,78 @@ namespace Nightweaver.Tests;
 
 public sealed class DeploymentEvidenceTests
 {
+    [Theory]
+    [InlineData(false, "missing-incident")]
+    [InlineData(true, "missing-incident")]
+    [InlineData(false, "missing-state")]
+    [InlineData(true, "missing-state")]
+    [InlineData(false, "undefined-state")]
+    [InlineData(true, "undefined-state")]
+    [InlineData(false, "null-capture")]
+    [InlineData(false, "missing-observation")]
+    [InlineData(false, "foreign-observation")]
+    [InlineData(false, "undefined-health")]
+    [InlineData(false, "undefined-process")]
+    [InlineData(false, "negative-attempts")]
+    [InlineData(false, "inconsistent-capture")]
+    [InlineData(false, "inconsistent-history")]
+    [InlineData(false, "null-history-entry")]
+    [InlineData(false, "missing-owner-identity")]
+    [InlineData(false, "null-incident")]
+    [InlineData(true, "null-incident")]
+    [InlineData(false, "missing-nullable-capture-field")]
+    [InlineData(false, "duplicate-field")]
+    [InlineData(false, "unknown-field")]
+    public async Task CorruptCaptureJournalIsRejectedWithoutOverwritingEvidence(bool pending, string corruption)
+    {
+        using var directory = new TempDirectory();
+        var paths = new HostPaths(directory.Path);
+        var project = ProjectSlug.Parse("demo");
+        var identity = DeploymentObservationTests.Identity(directory.Path);
+        var observation = Observation(identity);
+        var store = new DeploymentEvidenceStore(paths, project, identity);
+        var incident = DeploymentEvidenceStore.NewIncident(paths, project, observation, 1,
+            ResourceIncidentSignal.NativeTimeouts,
+            new(pending ? IncidentCaptureState.Pending : IncidentCaptureState.Failed, null, "capture-unavailable"));
+        await store.RetainAsync(observation, incident, TestContext.Current.CancellationToken);
+        var journal = JsonNode.Parse(await File.ReadAllTextAsync(store.Path, TestContext.Current.CancellationToken))!;
+        var continuing = journal["continuingIncident"]!;
+        switch (corruption)
+        {
+            case "missing-incident": journal.AsObject().Remove("continuingIncident"); break;
+            case "missing-state": continuing["capture"]!.AsObject().Remove("state"); break;
+            case "undefined-state": continuing["capture"]!["state"] = 999; break;
+            case "null-capture": continuing["capture"] = null; break;
+            case "missing-observation": journal.AsObject().Remove("lastObservation"); break;
+            case "foreign-observation": continuing["observation"]!["installation"]!["project"] = "foreign"; break;
+            case "undefined-health": continuing["observation"]!["health"] = 999; break;
+            case "undefined-process": continuing["observation"]!["process"]!["state"] = 999; break;
+            case "negative-attempts": continuing["attempts"] = -1; break;
+            case "inconsistent-capture": continuing["capture"]!["state"] = "NotRequired"; break;
+            case "inconsistent-history": journal["history"]![0]!["attempts"] = 2; break;
+            case "null-history-entry": journal["history"]![0] = null; break;
+            case "missing-owner-identity": continuing["observation"]!["owner"]!.AsObject().Remove("runId"); break;
+            case "null-incident": journal["continuingIncident"] = null; break;
+            case "missing-nullable-capture-field": continuing["capture"]!.AsObject().Remove("directory"); break;
+            case "unknown-field": continuing["capture"]!["unexpected"] = true; break;
+        }
+        var json = journal.ToJsonString();
+        if (corruption == "duplicate-field") json = json.Replace("\"version\":1", "\"version\":1,\"version\":1", StringComparison.Ordinal);
+        var original = Encoding.UTF8.GetBytes(json);
+        await File.WriteAllBytesAsync(store.Path, original, TestContext.Current.CancellationToken);
+        Assert.Throws<InvalidDataException>(() => store.Read());
+        var calls = 0;
+        var recorder = new DeploymentIncidentRecorder(paths, project, store, (_, _) =>
+        {
+            calls++;
+            return Task.FromResult(new IncidentCapture(IncidentCaptureState.Captured, directory.Path, null));
+        });
+        await Assert.ThrowsAsync<InvalidDataException>(() => recorder.PrepareAsync(observation, 1,
+            ResourceIncidentSignal.None, TestContext.Current.CancellationToken));
+        Assert.Equal(0, calls);
+        Assert.Equal(original, await File.ReadAllBytesAsync(store.Path, TestContext.Current.CancellationToken));
+    }
+
     private static DeploymentObservation Observation(DeploymentIdentity identity) => new(1, DateTimeOffset.UtcNow,
         Guid.NewGuid().ToString("N"), 123, identity, DeploymentObservationTests.Owner(identity) with { Message = "SECRET_CANARY" },
         DeploymentHealth.Failed, "owner-exited", false, new(OwnerProcessState.Exited, true), null, null);
@@ -218,6 +291,10 @@ public sealed class DeploymentEvidenceTests
         result = await recorder.PrepareAsync(observation, 1, ResourceIncidentSignal.NativeTimeouts, TestContext.Current.CancellationToken);
         Assert.False(result.ReadyForReconciliation);
         Assert.Equal(blocked.Id, store.Read()!.ContinuingIncident!.Id);
+        await store.RetainAsync(observation with { Health = DeploymentHealth.Healthy }, null, TestContext.Current.CancellationToken);
+        await store.RetainAsync(observation with { Health = DeploymentHealth.Unknown }, null, TestContext.Current.CancellationToken);
+        Assert.Null(store.Read()!.ContinuingIncident);
+        Assert.Equal(blocked.Id, store.Read()!.RecoveredIncident!.Id);
     }
 
     [Theory]

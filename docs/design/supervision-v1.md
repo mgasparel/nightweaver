@@ -262,7 +262,11 @@ observation, continuing incident, recovered incident, attempts, fixed reason,
 capture status/errors, local log paths and inspection instructions. Its history is
 bounded to 32 with a discarded count and a 256 KiB byte ceiling. Atomic no-reparse
 files and an exclusive writer lock preserve foreign/corrupt/unavailable evidence;
-persistence failure retains `supervision-unavailable` on the owner and grants no
+reads require every serialized field, including explicit nullable incident/capture
+members, and reject duplicate/unknown fields, invalid enums, malformed identities
+and inconsistent incident/history/capture state before any replacement or collector
+call. Rejected journals remain byte-for-byte intact for inspection.
+Persistence failure retains `supervision-unavailable` on the owner and grants no
 automatic recovery permission. Uncertainty never clears a continuing incident;
 only a later confirmed Healthy observation records recovery separately.
 

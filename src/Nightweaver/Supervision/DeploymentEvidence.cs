@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using Nightweaver.Background;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
@@ -25,7 +26,20 @@ internal sealed class DeploymentEvidenceStore(HostPaths paths, ProjectSlug proje
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
     {
         MaxDepth = 12,
-        Converters = { new JsonStringEnumConverter() }
+        RespectNullableAnnotations = true,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        AllowDuplicateProperties = false,
+        // Nullable fields must still be present. Missing capture/incident fields
+        // must never silently become NotRequired/null and erase an interlock.
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver
+        {
+            Modifiers = { info =>
+            {
+                if (info.Kind == JsonTypeInfoKind.Object)
+                    foreach (var property in info.Properties) property.IsRequired = true;
+            } }
+        },
+        Converters = { new JsonStringEnumConverter(allowIntegerValues: false) }
     };
     internal string Path => System.IO.Path.Combine(paths.BackgroundRoot(project), "observations.json");
 
@@ -35,12 +49,67 @@ internal sealed class DeploymentEvidenceStore(HostPaths paths, ProjectSlug proje
         try { bytes = InvocationRuntimeFiles.ReadRuntimeFileBounded(Path, MaximumBytes); }
         catch (IOException exception) when (exception is FileNotFoundException or DirectoryNotFoundException
             || exception.InnerException is System.ComponentModel.Win32Exception { NativeErrorCode: 2 or 3 }) { return null; }
-        var value = JsonSerializer.Deserialize<DeploymentEvidence>(bytes, Options);
-        if (value is not { Version: 1 } || value.Installation != identity || value.History is null
-            || value.History.Length > SupervisionPolicy.MaximumHistory || value.Discarded < 0)
-            throw new InvalidDataException("Deployment evidence is invalid or belongs to another installation.");
+        DeploymentEvidence? value;
+        try { value = JsonSerializer.Deserialize<DeploymentEvidence>(bytes, Options); }
+        catch (JsonException exception) { throw new InvalidDataException("Deployment evidence schema is invalid.", exception); }
+        Validate(value);
         return value;
     }
+
+    private void Validate(DeploymentEvidence? value)
+    {
+        if (value is not { Version: 1 } || value.Installation != identity || value.History is null
+            || value.History.Length > SupervisionPolicy.MaximumHistory || value.Discarded < 0
+            || !ValidObservation(value.LastObservation)
+            || value.History.Any(item => !ValidIncident(item))
+            || value.History.Select(item => item.Id).Distinct(StringComparer.Ordinal).Count() != value.History.Length
+            || value.ContinuingIncident is { } continuing && !ValidIncident(continuing)
+            || value.RecoveredIncident is { } recovered && !ValidIncident(recovered))
+            throw new InvalidDataException("Deployment evidence is invalid or belongs to another installation.");
+
+        foreach (var incident in new[] { value.ContinuingIncident, value.RecoveredIncident })
+            if (incident is not null && value.History.Any(item => item.Id == incident.Id && item != incident))
+                throw new InvalidDataException("Deployment incident disagrees with its retained history.");
+        if (value.ContinuingIncident is { } active && (value.LastObservation.Health == DeploymentHealth.Healthy
+            || value.RecoveredIncident?.Id == active.Id))
+            throw new InvalidDataException("Deployment incident lifecycle is inconsistent.");
+        if (value.ContinuingIncident is null && value.History.Length > 0 && value.RecoveredIncident is null)
+            throw new InvalidDataException("Deployment incident has no continuing or recovered record.");
+    }
+
+    private bool ValidIncident(DeploymentIncident? incident) => incident is not null
+        && Guid.TryParseExact(incident.Id, "N", out _) && incident.Attempts >= 0
+        && Enum.IsDefined(incident.ResourceSignal) && ValidObservation(incident.Observation)
+        && incident.HostLogPath == System.IO.Path.Combine(paths.LogsRoot(project), "background-host.log")
+        && incident.WebLogPath == System.IO.Path.Combine(paths.LogsRoot(project), "background-web.log")
+        && !string.IsNullOrWhiteSpace(incident.Instructions)
+        && incident.Capture is { } capture && Enum.IsDefined(capture.State)
+        && (capture.State == IncidentCaptureState.NotRequired
+            ? incident.ResourceSignal == ResourceIncidentSignal.None && capture.Directory is null && capture.Error is null
+            : incident.ResourceSignal != ResourceIncidentSignal.None && (capture.State switch
+            {
+                IncidentCaptureState.Captured => !string.IsNullOrWhiteSpace(capture.Directory) && capture.Error is null,
+                IncidentCaptureState.Failed => !string.IsNullOrWhiteSpace(capture.Error),
+                IncidentCaptureState.Pending => true,
+                _ => false
+            }));
+
+    private bool ValidObservation(DeploymentObservation? observation) => observation is { Version: 1 }
+        && observation.Installation == identity && observation.Utc != default
+        && !string.IsNullOrWhiteSpace(observation.Epoch) && observation.MonotonicTicks >= 0
+        && Enum.IsDefined(observation.Health) && !string.IsNullOrWhiteSpace(observation.Reason)
+        && (observation.Process is null || Enum.IsDefined(observation.Process.State))
+        && (observation.Owner is null || ValidOwner(observation.Owner));
+
+    private static bool ValidOwner(BackgroundOwnerRecord owner) => owner.SchemaVersion == 1
+        && owner.State is "starting" or "running" or "stopping" or "stopped" or "degraded" or "failed"
+        && owner.ProcessId > 0 && owner.ProcessStartedAtUtc != default && Guid.TryParseExact(owner.RunId, "N", out _)
+        && !string.IsNullOrWhiteSpace(owner.Root) && !string.IsNullOrWhiteSpace(owner.ConfigPath)
+        && !string.IsNullOrWhiteSpace(owner.Project)
+        && (owner.Failure is null || owner.Failure is { } failure && failure.Utc != default
+            && !string.IsNullOrWhiteSpace(failure.Reason) && failure.RunId == owner.RunId
+            && failure.RuntimeId == owner.RuntimeId && failure.ProcessId == owner.ProcessId
+            && failure.ProcessStartedAtUtc == owner.ProcessStartedAtUtc);
 
     internal async Task RetainAsync(DeploymentObservation observation, DeploymentIncident? incident, CancellationToken token)
     {
@@ -66,6 +135,7 @@ internal sealed class DeploymentEvidenceStore(HostPaths paths, ProjectSlug proje
         }
         var next = new DeploymentEvidence(1, identity, observation, continuing, recovered,
             history.Skip(overflow).ToArray(), checked((old?.Discarded ?? 0) + overflow));
+        Validate(next);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(next, Options);
         if (bytes.Length > MaximumBytes) throw new InvalidDataException("Deployment evidence exceeds its byte budget.");
         await InvocationRuntimeFiles.WriteRuntimeFileAtomicallyAsync(Path, bytes, token).ConfigureAwait(false);
