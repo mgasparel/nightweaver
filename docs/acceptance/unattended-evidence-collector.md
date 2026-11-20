@@ -180,7 +180,7 @@ with no Agent or production lifecycle. It records
 source hashes before/after, collector CPU/IO counters, read elapsed time, command
 counts, actual samples/gaps, finalization, archive hashes and a per-source-kind
 eight-hour footprint projection. Projection assumptions are explicit: changing
-payload sizes and future invocations can exhaust caps. Its missing tracker and
+payload sizes and future invocations can exhaust caps. Missing host logs and a
 nonrenewed synthetic heartbeat are intentional gaps. Required production readiness,
 real-run qualification, incident diagnosis, semantic evaluation and ns-ke8 remain
 separate work.
