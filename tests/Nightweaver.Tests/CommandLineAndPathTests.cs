@@ -138,7 +138,7 @@ public sealed class CommandLineAndPathTests
 
         var cases = new (string[] Args, string Error)[]
         {
-            (["background"], "requires start, status, stop, or restart"),
+            (["background"], "requires start, status, stop, restart, or maintenance"),
             (["background", "start"], "one of '--project"),
             (["background", "status", "--project", "demo", "--force"], "only valid with 'background stop'"),
             (["background", "status", "--project", "demo", "--urls", "http://127.0.0.1:5"], "only valid with 'background start'"),

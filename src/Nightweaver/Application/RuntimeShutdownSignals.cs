@@ -8,6 +8,21 @@ internal sealed class RuntimeShutdownSignals : IDisposable
     private readonly CancellationTokenSource firstStop = new();
     private readonly Action<int> terminateProcess;
     private readonly Action? gracefulStopAccepted;
+    private readonly object intentGate = new();
+    private Action? persistIntentionalStop;
+    private bool intentionalStopPending;
+    private bool intentPersistenceStarted;
+    internal Action? PersistIntentionalStop
+    {
+        set
+        {
+            lock (intentGate) persistIntentionalStop = value;
+            PersistPendingIntentionalStop();
+        }
+    }
+    internal string? IntentPersistenceFailure { get; private set; }
+    private int reason;
+    internal RuntimeShutdownReason Reason => (RuntimeShutdownReason)Volatile.Read(ref reason);
     private int signalCount;
     private int forceStopStarted;
 
@@ -24,7 +39,7 @@ internal sealed class RuntimeShutdownSignals : IDisposable
     {
         if (Interlocked.CompareExchange(ref signalCount, 1, 0) == 0)
         {
-            BeginGracefulStop();
+            BeginGracefulStop(RuntimeShutdownReason.OperatorDrain, false);
             return;
         }
 
@@ -32,10 +47,10 @@ internal sealed class RuntimeShutdownSignals : IDisposable
     }
 
     /// <summary>Requests a graceful drain once without interpreting duplicate owner events as force signals.</summary>
-    internal void RequestGracefulStop()
+    internal void RequestGracefulStop(RuntimeShutdownReason stopReason = RuntimeShutdownReason.OperatorDrain, bool intentAlreadyPersisted = false)
     {
         if (Interlocked.CompareExchange(ref signalCount, 1, 0) != 0) return;
-        BeginGracefulStop();
+        BeginGracefulStop(stopReason, intentAlreadyPersisted);
     }
 
     /// <summary>Closes active Agent Jobs immediately, preserving the nonwaiting force-stop path.</summary>
@@ -45,17 +60,39 @@ internal sealed class RuntimeShutdownSignals : IDisposable
         if (Interlocked.CompareExchange(ref forceStopStarted, 1, 0) != 0)
             return;
 
+        Interlocked.Exchange(ref reason, (int)RuntimeShutdownReason.ForcedStop);
         _ = StopGate.RequestForceStop();
         TryStartDeferredRecoveryDiagnostic();
         terminateProcess(ExitCodes.InspectionFailure);
     }
 
-    private void BeginGracefulStop()
+    private void BeginGracefulStop(RuntimeShutdownReason stopReason, bool intentAlreadyPersisted)
     {
+        // Close admission before potentially blocking intent IO; cancellation still follows persistence.
         StopGate.RequestStop();
+        Interlocked.CompareExchange(ref reason, (int)stopReason, 0);
+        if (stopReason == RuntimeShutdownReason.OperatorDrain && !intentAlreadyPersisted)
+        {
+            lock (intentGate) intentionalStopPending = true;
+            PersistPendingIntentionalStop();
+        }
         firstStop.Cancel();
         try { gracefulStopAccepted?.Invoke(); }
         catch (Exception) { }
+    }
+
+    private void PersistPendingIntentionalStop()
+    {
+        Action persist;
+        lock (intentGate)
+        {
+            if (!intentionalStopPending || intentPersistenceStarted || persistIntentionalStop is null
+                || Volatile.Read(ref forceStopStarted) != 0) return;
+            intentPersistenceStarted = true;
+            persist = persistIntentionalStop;
+        }
+        try { persist(); }
+        catch (Exception exception) { IntentPersistenceFailure = exception.Message; }
     }
 
     private static void TryStartDeferredRecoveryDiagnostic()
@@ -84,3 +121,5 @@ internal sealed class RuntimeShutdownSignals : IDisposable
         firstStop.Dispose();
     }
 }
+
+internal enum RuntimeShutdownReason { None, OperatorDrain, ForcedStop, Maintenance, WebFailure, RuntimeFailure }

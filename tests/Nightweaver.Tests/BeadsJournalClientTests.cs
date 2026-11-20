@@ -101,39 +101,43 @@ public sealed class BeadsJournalClientTests
     [InlineData(true)]
     public async Task CommandDeadlineAndCancellationKillAndSettleActualChild(bool expireDeadline)
     {
-        using var temp = new TempDirectory();
-        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var clock = new InvocationDeadlineClock();
-        var pid = Path.Combine(temp.Path, "held.pid");
-        using var retained = new RetainedProcess();
-        var client = new BeadsJournalClient(new SystemProcessRunner(), request =>
+        for (var iteration = 0; iteration < 16; iteration++)
         {
-            Assert.Equal(TimeSpan.FromSeconds(30), request.Timeout);
-            var started = StartFixture(request, ["never-read", pid]);
-            retained.Attach(started.Id);
-            return started;
-        }, clock);
-        var read = client.ReadBatchAsync(new(temp.Path, "main"), 0, 256, lifetime.Token);
-        try
-        {
-            var ready = Stopwatch.StartNew();
-            while (!File.Exists(pid))
+            using var temp = new TempDirectory();
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            var clock = new InvocationDeadlineClock();
+            var pid = Path.Combine(temp.Path, "held.pid");
+            using var retained = new RetainedProcess();
+            var client = new BeadsJournalClient(new SystemProcessRunner(), request =>
             {
-                Assert.False(retained.Process!.HasExited);
-                Assert.True(ready.Elapsed < TimeSpan.FromSeconds(10), "Child did not publish readiness.");
-                await Task.Delay(10, TestContext.Current.CancellationToken);
+                Assert.Equal(TimeSpan.FromSeconds(30), request.Timeout);
+                var started = StartFixture(request, ["never-read", pid]);
+                retained.Attach(started.Id);
+                return started;
+            }, clock);
+            var read = client.ReadBatchAsync(new(temp.Path, "main"), 0, 256, lifetime.Token);
+            try
+            {
+                var ready = Stopwatch.StartNew();
+                while (!File.Exists(pid))
+                {
+                    Assert.False(retained.Process!.HasExited);
+                    Assert.True(ready.Elapsed < TimeSpan.FromSeconds(10), "Child did not publish readiness.");
+                    await Task.Delay(10, TestContext.Current.CancellationToken);
+                }
+                if (expireDeadline) clock.Advance(TimeSpan.FromSeconds(30));
+                else lifetime.Cancel();
+                if (expireDeadline) await Assert.ThrowsAsync<TimeoutException>(() => read);
+                else await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
+                Assert.True(retained.Process!.HasExited);
+                Assert.True(retained.Process.WaitForExit(0), $"Journal returned before native child settlement; iteration={iteration}.");
             }
-            if (expireDeadline) clock.Advance(TimeSpan.FromSeconds(30));
-            else lifetime.Cancel();
-            if (expireDeadline) await Assert.ThrowsAsync<TimeoutException>(() => read);
-            else await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read);
-            Assert.True(retained.Process!.HasExited);
-        }
-        finally
-        {
-            lifetime.Cancel();
-            try { await read; }
-            catch (Exception exception) when (exception is OperationCanceledException or TimeoutException) { }
+            finally
+            {
+                lifetime.Cancel();
+                try { await read; }
+                catch (Exception exception) when (exception is OperationCanceledException or TimeoutException) { }
+            }
         }
     }
 
@@ -165,7 +169,11 @@ public sealed class BeadsJournalClientTests
     private sealed class RetainedProcess : IDisposable
     {
         internal Process? Process { get; private set; }
-        internal void Attach(int id) => Process = System.Diagnostics.Process.GetProcessById(id);
+        internal void Attach(int id)
+        {
+            Process = System.Diagnostics.Process.GetProcessById(id);
+            _ = Process.SafeHandle; // Pin the actual child before cancellation or exit.
+        }
         public void Dispose() => Process?.Dispose();
     }
 }

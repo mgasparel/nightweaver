@@ -13,7 +13,9 @@ internal sealed record BackgroundCommandOptions(
     ProjectSelector? Selector,
     string? Urls = null,
     bool Force = false,
-    BackgroundOwnerOptions? Owner = null);
+    BackgroundOwnerOptions? Owner = null,
+    string? MaintenanceToken = null,
+    long? Revision = null);
 
 internal sealed record BackgroundOwnerOptions(
     string Root,
@@ -22,4 +24,4 @@ internal sealed record BackgroundOwnerOptions(
     string RunId,
     string Urls);
 
-internal enum BackgroundAction { Start, Status, Stop, Restart, Owner }
+internal enum BackgroundAction { Start, Status, Stop, Restart, Owner, MaintenanceEnter, MaintenanceStatus, MaintenanceLeave }

@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Nightweaver.Background;
 
-internal sealed record BackgroundControlRequest(string Operation, string RunId, bool Force = false);
+internal sealed record BackgroundControlRequest(string Operation, string RunId, bool Force = false, bool Maintenance = false);
 internal sealed record BackgroundControlResponse(bool Accepted, BackgroundOwnerRecord? Owner, string? Error);
 
 internal static class BackgroundControlProtocol

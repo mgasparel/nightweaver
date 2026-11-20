@@ -38,6 +38,12 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Journal cancellation/deadline tests assert native process signaling before
+return and disposable-file teardown. Their 16 iterations per path cover Windows
+process rundown, where a managed exit notification can precede native settlement;
+the journal shares the process runner's native wait within its existing command
+and five-second cleanup budgets. No teardown sharing-error retry is added.
+
 Supervision v1 adds deterministic state/clock/backoff fixtures and small local
 store fixtures for revision guards, crash reservations, corrupt/foreign state,
 sharing denial, bounded serialization and sentinel-preserving unsafe-path checks.
@@ -396,3 +402,11 @@ and one in-process OTLP wire/privacy check. Existing native
 `PoolConcurrencyIntegrationTests` retain the process/tool boundary; no native
 journey, additional tracker command or scheduling change is added. See
 [pool observation semantics](../docs/design/pool-observation-telemetry.md).
+
+Background lifecycle intent adds cheap store/transition/command-parser/signal fixtures
+for durable absent-owner stop, lost-response crash points, pending reservations,
+maintenance token/revision release, intervening stop/disable, command-lock contention,
+failed-write interlocks and direct-stop versus internal-failure reasons. The second
+signal is checked while persistence is deliberately blocked. These add no native
+runtime, Agent, scheduler or publish journey; existing control-pipe tests retain the
+peer deadline/disconnect boundary and existing background/native hosting coverage remains.
