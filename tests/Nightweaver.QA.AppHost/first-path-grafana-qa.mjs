@@ -41,8 +41,7 @@ console.log('Confirmed local verified-merge metric.');
 const latency = await metric('nightweaver_invocation_duration_seconds_sum / nightweaver_invocation_duration_seconds_count');
 assert(Number(latency.data.result[0].value[1]) > 0);
 const attempts = await metric('nightweaver_invocation_attempts_total');
-assert.equal(attempts.data.result[0].metric.role, 'merger');
-assert.equal(attempts.data.result[0].metric.status, 'completed');
+assert(attempts.data.result.some(row => row.metric.role === 'merger' && row.metric.status === 'completed'));
 const logQuery = `{service_name="nightweaver-runtime"} | operation="verified_merge" | bead_id="${signals.beadId}" | runtime_id="${signals.runtimeId}" | invocation_id="${signals.invocationId}"`;
 const logs = await eventually(async () => {
   const result = await json(`${loki}/loki/api/v1/query_range?query=${encodeURIComponent(logQuery)}&limit=10`);
@@ -60,18 +59,68 @@ const traceDetails = await Promise.all(traces.traces.map(trace => json(`${tempo}
 const dashboard = JSON.parse(await readFile(new URL('../../observability/first-path-dashboard.json', import.meta.url), 'utf8'));
 await json(`${grafana}/api/dashboards/db`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dashboard, overwrite: false }) });
 const imported = await json(`${grafana}/api/dashboards/uid/${dashboard.uid}`);
-assert.equal(imported.dashboard.panels.length, 5);
+assert.equal(imported.dashboard.panels.length, 29);
+// This fixture collects at 100ms, unlike the normal 60s exporter. Its datasource
+// must not round a subsecond observation down to the previous one-minute step.
+const fixtureDatasource = await json(`${grafana}/api/datasources/uid/prometheus`);
+await json(`${grafana}/api/datasources/uid/prometheus`, {
+  method: 'PUT', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ ...fixtureDatasource, jsonData: { ...fixtureDatasource.jsonData, timeInterval: '1s' } })
+});
+// Query every imported PromQL target through the real translation backend, including expected no-data.
+const panelQueries = [];
+for (const panel of dashboard.panels.filter(p => p.datasource.type === 'prometheus')) {
+  for (const target of panel.targets) {
+    const expr = target.expr.replaceAll('$__rate_interval', '1m').replaceAll('$__range', '1h');
+    const result = await metric(expr);
+    assert.equal(result.status, 'success', panel.title);
+    panelQueries.push({ title: panel.title, expr, result });
+  }
+}
+const names = await json(`${prometheus}/api/v1/label/__name__/values`);
+await writeFile(join(output, 'metric-names.json'), JSON.stringify(names, null, 2));
+for (const name of ['nightweaver_phase_seconds_total', 'nightweaver_pool_oldest_seconds',
+  'nightweaver_observation_age_seconds', 'nightweaver_human_wait_duration_seconds_count',
+  'nightweaver_approvals_total', 'nightweaver_telemetry_dropped_total']) assert(names.data.includes(name), name);
+const queue = await metric('nightweaver_pool_queued and on(pool,job,instance) (nightweaver_pool_fresh == 0)');
+// The backend can retain the earlier queue gauge after the exporter omits it.
+// The dashboard's positive freshness gate must exclude that retained gauge.
+const gatedQueue = await metric('nightweaver_pool_queued and on(pool,job,instance) (nightweaver_pool_fresh == 1) and on(pool,job,instance) (nightweaver_pool_coverage == 1)');
+assert.equal(gatedQueue.data.result.length, 0);
+const freshness = await metric('nightweaver_pool_fresh');
+assert.equal(freshness.data.result.length, 3);
+assert(freshness.data.result.every(row => Number(row.value[1]) === 0));
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
   const errors = [];
+  const datasourceResponses = [];
+  const datasourceDetails = [];
   page.on('pageerror', error => errors.push(error.message));
-  const vars = new URLSearchParams({ 'var-bead': signals.beadId, 'var-runtime': signals.runtimeId, 'var-invocation': signals.invocationId });
+  page.on('response', response => {
+    if (response.url().includes('/api/ds/query')) {
+      datasourceResponses.push(response.status());
+      datasourceDetails.push(response.json().then(result => ({ request: JSON.parse(response.request().postData()), result })));
+    }
+  });
+  const vars = new URLSearchParams({ 'var-bead': signals.beadId, 'var-runtime': signals.runtimeId, 'var-invocation': signals.invocationId, from: 'now-5m', to: 'now' });
   const dashboardUrl = `${grafana}/d/${dashboard.uid}?${vars}`;
   await page.goto(dashboardUrl, { waitUntil: 'networkidle' });
   await page.getByText('Observed invocation duration', { exact: true }).waitFor();
+  // Grafana virtualizes panels; scroll the imported detail row into view before inspecting it.
+  await page.getByText('Lifecycle events - operational IDs', { exact: true }).scrollIntoViewIfNeeded();
   await page.getByText('Verified merge closure confirmed.', { exact: true }).waitFor({ timeout: 30_000 });
-  assert.equal(await page.getByText('No data', { exact: true }).count(), 0);
+  // Missing complete intervals and never-observed publications must remain no data.
+  await page.getByText('Observed eligible queue', { exact: true }).scrollIntoViewIfNeeded();
+  await page.waitForTimeout(2000); // Allow Grafana's lazy range panels to render after scroll.
+  await page.waitForLoadState('networkidle');
+  await page.getByText('planning', { exact: true }).first().waitFor();
+  await page.screenshot({ path: join(output, 'overview.png') });
+  await page.getByText('Known-history first-pass approvals', { exact: true }).scrollIntoViewIfNeeded();
+  await page.waitForTimeout(2000);
+  await page.waitForLoadState('networkidle');
+  await page.screenshot({ path: join(output, 'rework.png') });
+  await writeFile(join(output, 'grafana-query-details.json'), JSON.stringify(await Promise.all(datasourceDetails), null, 2));
   await page.screenshot({ path: join(output, 'dashboard.png'), fullPage: true });
   // Follow the imported dashboard's actual links; their queries must retain all operational IDs.
   for (const [title, name] of [['Explore correlated traces', 'traces'], ['Explore verified events', 'events']]) {
@@ -89,5 +138,7 @@ try {
     console.log(`Verified imported dashboard Explore link: ${name}.`);
   }
   assert.deepEqual(errors, []);
-  await writeFile(join(output, 'queries.json'), JSON.stringify({ merge, latency, attempts, logs, traces, traceDetails, dashboardUid: dashboard.uid, browserErrors: errors, hostedAcceptance: 'not performed' }, null, 2));
+  assert(datasourceResponses.length > 0);
+  assert(datasourceResponses.every(status => status === 200), `Grafana datasource statuses: ${datasourceResponses}`);
+  await writeFile(join(output, 'queries.json'), JSON.stringify({ merge, latency, attempts, logs, traces, traceDetails, panelQueries, names, queue, gatedQueue, freshness, datasourceResponses, dashboardUid: dashboard.uid, browserErrors: errors, hostedAcceptance: 'not performed' }, null, 2));
 } finally { await browser.close(); }

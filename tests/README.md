@@ -30,6 +30,14 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Dashboard acceptance reuses the native first-path Git/bd/Agent correlation smoke.
+Two bounded paired-runtime/Web loopback component cases add parallel arrival
+pressure, actual encoded byte/record measurement and unavailable receiver checks;
+no native journey or fixture publish is added. Disposable Grafana import, every
+panel query, freshness gating and Playwright links run outside the default suite
+through `tests/telemetry-first-path/Run-Proof.ps1`. See the
+[dashboard contract](../docs/design/grafana-bottlenecks.md).
+
 Lifecycle observation adds deterministic monotonic-clock coverage of first-pass
 known/unknown visits, semantic repair versus retry attempts, pause labels, notes,
 abort, deletion/reopen, restart, stale reads, UTC jumps and the shared cache bound.

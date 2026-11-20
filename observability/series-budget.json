@@ -1,0 +1,372 @@
+{
+  "schema": "nightweaver-series-budget-v1",
+  "services": [
+    "nightweaver-runtime",
+    "nightweaver-web"
+  ],
+  "resourceLabels": [
+    "service.name"
+  ],
+  "targetInfoPerService": 1,
+  "histogramBounds": [
+    0.1,
+    1,
+    5,
+    30,
+    120,
+    600,
+    1800,
+    7200
+  ],
+  "histogramSeries": "9 buckets including +Inf, sum and count",
+  "instruments": [
+    {
+      "instrument": "nightweaver.approvals",
+      "sdkPointsIncludingOverflow": 19,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "role",
+        "coverage"
+      ],
+      "seriesPerService": 19
+    },
+    {
+      "instrument": "nightweaver.human_wait.duration",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 11,
+      "labels": [
+        "pause"
+      ],
+      "seriesPerService": 44
+    },
+    {
+      "instrument": "nightweaver.lifecycle.censored",
+      "sdkPointsIncludingOverflow": 9,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "reason"
+      ],
+      "seriesPerService": 9
+    },
+    {
+      "instrument": "nightweaver.lifecycle.paused",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "pause"
+      ],
+      "seriesPerService": 4
+    },
+    {
+      "instrument": "nightweaver.lifecycle.oldest",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "pause"
+      ],
+      "seriesPerService": 4
+    },
+    {
+      "instrument": "nightweaver.lifecycle.fresh",
+      "sdkPointsIncludingOverflow": 1,
+      "translatedSeriesPerPoint": 1,
+      "labels": [],
+      "seriesPerService": 1
+    },
+    {
+      "instrument": "nightweaver.lifecycle.coverage",
+      "sdkPointsIncludingOverflow": 1,
+      "translatedSeriesPerPoint": 1,
+      "labels": [],
+      "seriesPerService": 1
+    },
+    {
+      "instrument": "nightweaver.lifecycle.age",
+      "sdkPointsIncludingOverflow": 1,
+      "translatedSeriesPerPoint": 1,
+      "labels": [],
+      "seriesPerService": 1
+    },
+    {
+      "instrument": "nightweaver.eligible_wait.duration",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 11,
+      "labels": [
+        "pool"
+      ],
+      "seriesPerService": 44
+    },
+    {
+      "instrument": "nightweaver.eligible_wait.censored",
+      "sdkPointsIncludingOverflow": 22,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "pool",
+        "reason"
+      ],
+      "seriesPerService": 22
+    },
+    {
+      "instrument": "nightweaver.pool.occupied",
+      "sdkPointsIncludingOverflow": 22,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "pool",
+        "phase"
+      ],
+      "seriesPerService": 22
+    },
+    {
+      "instrument": "nightweaver.pool.capacity",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "pool"
+      ],
+      "seriesPerService": 4
+    },
+    {
+      "instrument": "nightweaver.pool.fresh",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "pool"
+      ],
+      "seriesPerService": 4
+    },
+    {
+      "instrument": "nightweaver.pool.coverage",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "pool"
+      ],
+      "seriesPerService": 4
+    },
+    {
+      "instrument": "nightweaver.pool.age",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "pool"
+      ],
+      "seriesPerService": 4
+    },
+    {
+      "instrument": "nightweaver.pool.backpressure",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "pool"
+      ],
+      "seriesPerService": 4
+    },
+    {
+      "instrument": "nightweaver.pool.queued",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "pool"
+      ],
+      "seriesPerService": 4
+    },
+    {
+      "instrument": "nightweaver.pool.oldest",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "pool"
+      ],
+      "seriesPerService": 4
+    },
+    {
+      "instrument": "nightweaver.operations",
+      "sdkPointsIncludingOverflow": 7,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "operation",
+        "outcome"
+      ],
+      "seriesPerService": 7
+    },
+    {
+      "instrument": "nightweaver.operation.duration",
+      "sdkPointsIncludingOverflow": 3,
+      "translatedSeriesPerPoint": 11,
+      "labels": [
+        "operation"
+      ],
+      "seriesPerService": 33
+    },
+    {
+      "instrument": "nightweaver.invocation.attempts",
+      "sdkPointsIncludingOverflow": 43,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "role",
+        "status"
+      ],
+      "seriesPerService": 43
+    },
+    {
+      "instrument": "nightweaver.invocation.duration",
+      "sdkPointsIncludingOverflow": 8,
+      "translatedSeriesPerPoint": 11,
+      "labels": [
+        "role"
+      ],
+      "seriesPerService": 88
+    },
+    {
+      "instrument": "nightweaver.verified_merge",
+      "sdkPointsIncludingOverflow": 1,
+      "translatedSeriesPerPoint": 1,
+      "labels": [],
+      "seriesPerService": 1
+    },
+    {
+      "instrument": "nightweaver.merge.cleanup",
+      "sdkPointsIncludingOverflow": 5,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "outcome"
+      ],
+      "seriesPerService": 5
+    },
+    {
+      "instrument": "nightweaver.phase.seconds",
+      "sdkPointsIncludingOverflow": 22,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "pool",
+        "phase"
+      ],
+      "seriesPerService": 22
+    },
+    {
+      "instrument": "nightweaver.phase.duration",
+      "sdkPointsIncludingOverflow": 8,
+      "translatedSeriesPerPoint": 11,
+      "labels": [
+        "phase"
+      ],
+      "seriesPerService": 88
+    },
+    {
+      "instrument": "nightweaver.slot.occupied",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "pool"
+      ],
+      "seriesPerService": 4
+    },
+    {
+      "instrument": "nightweaver.classification.duration",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 11,
+      "labels": [
+        "kind"
+      ],
+      "seriesPerService": 44
+    },
+    {
+      "instrument": "nightweaver.workflow.results",
+      "sdkPointsIncludingOverflow": 55,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "kind",
+        "outcome"
+      ],
+      "seriesPerService": 55
+    },
+    {
+      "instrument": "nightweaver.published.outcomes",
+      "sdkPointsIncludingOverflow": 37,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "role",
+        "outcome"
+      ],
+      "seriesPerService": 37
+    },
+    {
+      "instrument": "nightweaver.semantic.repairs",
+      "sdkPointsIncludingOverflow": 7,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "role"
+      ],
+      "seriesPerService": 7
+    },
+    {
+      "instrument": "nightweaver.operational.retries",
+      "sdkPointsIncludingOverflow": 12,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "reason"
+      ],
+      "seriesPerService": 12
+    },
+    {
+      "instrument": "nightweaver.telemetry.dropped",
+      "sdkPointsIncludingOverflow": 13,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "signal",
+        "reason"
+      ],
+      "seriesPerService": 13
+    },
+    {
+      "instrument": "nightweaver.telemetry.export.failed",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "signal"
+      ],
+      "seriesPerService": 4
+    },
+    {
+      "instrument": "nightweaver.observation.attempts",
+      "sdkPointsIncludingOverflow": 13,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "source",
+        "outcome"
+      ],
+      "seriesPerService": 13
+    },
+    {
+      "instrument": "nightweaver.observation.duration",
+      "sdkPointsIncludingOverflow": 4,
+      "translatedSeriesPerPoint": 11,
+      "labels": [
+        "source"
+      ],
+      "seriesPerService": 44
+    },
+    {
+      "instrument": "nightweaver.observation.health",
+      "sdkPointsIncludingOverflow": 19,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "source",
+        "health"
+      ],
+      "seriesPerService": 19
+    },
+    {
+      "instrument": "nightweaver.observation.age",
+      "sdkPointsIncludingOverflow": 19,
+      "translatedSeriesPerPoint": 1,
+      "labels": [
+        "source",
+        "health"
+      ],
+      "seriesPerService": 19
+    }
+  ],
+  "total": 1516,
+  "limit": 2000
+}

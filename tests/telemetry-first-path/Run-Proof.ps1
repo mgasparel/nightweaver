@@ -40,6 +40,8 @@ try {
     }
     & dotnet test --solution Nightweaver.slnx --filter-method Nightweaver.Tests.FirstPathTelemetryTests.NativeInvocationAndIndependentlyVerifiedClosureExportCorrelatedSignals --minimum-expected-tests 1 --report-xunit-xml --report-xunit-xml-filename first-path-grafana.xml 2>&1 | Tee-Object (Join-Path $output 'native-smoke.log') | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Native OTLP proof failed.' }
+    & dotnet test --solution Nightweaver.slnx --filter-class Nightweaver.Tests.DashboardTelemetryTests --minimum-expected-tests 2 --report-xunit-xml --report-xunit-xml-filename dashboard-load.xml 2>&1 | Tee-Object (Join-Path $output 'component-load.log') | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'Paired load/unavailable proof failed.' }
     & node (Join-Path $checkout 'tests/Nightweaver.QA.AppHost/first-path-grafana-qa.mjs') $output
     if ($LASTEXITCODE -ne 0) { throw 'Grafana query/browser proof failed.' }
     @{ image = $fixture.image; container = $container; hostedAcceptance = 'not performed'; accountChanges = $false } |

@@ -4,6 +4,10 @@ Optional operational export for the runtime and Web host is documented in
 [Operational telemetry v1](docs/design/operational-telemetry.md). Export is off by
 default and never replaces local Factory snapshots or invocation logs.
 
+The [Grafana bottleneck dashboard and safe setup](docs/design/grafana-bottlenecks.md)
+cover observed allocation, capacity, waiting, rework and data quality, with a
+closed series budget and a separately authorized hosted acceptance checklist.
+
 Nightweaver is a discovery-driven software factory for Beads (`bd`) work. It is under active development. The CLI supports a read-only `--dry-run`, a continuous Planning, Delivery and singleton Merger runtime, and `dispatch` for one explicitly selected lifecycle stage. Planning requires explicit Product readiness; manually authored Plan Beads remain directly eligible for Delivery.
 
 ## Local prerequisites

@@ -1,0 +1,5422 @@
+[
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(role) (rate(nightweaver_invocation_duration_seconds_sum[$__rate_interval])) / sum by(role) (rate(nightweaver_invocation_duration_seconds_count[$__rate_interval]))",
+          "instant": true,
+          "legendFormat": "{{role}}",
+          "exemplar": false,
+          "requestId": "1A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 342
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "typeVersion": [
+                    0,
+                    0
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000
+                  },
+                  "executedQueryString": "Expr: sum by(role) (rate(nightweaver_invocation_duration_seconds_sum[4s])) / sum by(role) (rate(nightweaver_invocation_duration_seconds_count[4s]))\nStep: 1s"
+                },
+                "fields": []
+              },
+              "data": {
+                "values": []
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(nightweaver_verified_merge_total[$__range]))",
+          "instant": true,
+          "exemplar": false,
+          "requestId": "2A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "legendFormat": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 342
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "numeric-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "vector"
+                  },
+                  "executedQueryString": "Expr: sum(increase(nightweaver_verified_merge_total[300s]))\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {},
+                    "config": {
+                      "displayNameFromDS": "sum(increase(nightweaver_verified_merge_total[300s]))"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139999807
+                  ],
+                  [
+                    0
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(outcome) (increase(nightweaver_merge_cleanup_total[$__range]))",
+          "instant": true,
+          "legendFormat": "{{outcome}}",
+          "exemplar": false,
+          "requestId": "3A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 342
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "numeric-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "vector"
+                  },
+                  "executedQueryString": "Expr: sum by(outcome) (increase(nightweaver_merge_cleanup_total[300s]))\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "outcome": "queued"
+                    },
+                    "config": {
+                      "displayNameFromDS": "queued"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139999807
+                  ],
+                  [
+                    0
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(pool,phase) (rate(nightweaver_phase_seconds_total[$__rate_interval]))",
+          "instant": false,
+          "legendFormat": "{{pool}} / {{phase}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "6A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: sum by(pool,phase) (rate(nightweaver_phase_seconds_total[4s]))\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "phase": "agent",
+                      "pool": "delivery"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery / agent"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "phase": "classification",
+                      "pool": "delivery"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery / classification"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "phase": "finalization",
+                      "pool": "delivery"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery / finalization"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "phase": "other",
+                      "pool": "delivery"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery / other"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "phase": "preparation",
+                      "pool": "delivery"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery / preparation"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "phase": "publication",
+                      "pool": "delivery"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery / publication"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "phase": "verification",
+                      "pool": "delivery"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery / verification"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(pool) (nightweaver_pool_occupied) / sum by(pool) (nightweaver_pool_capacity)",
+          "instant": false,
+          "legendFormat": "{{pool}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "7A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: sum by(pool) (nightweaver_pool_occupied) / sum by(pool) (nightweaver_pool_capacity)\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "pool": "delivery"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "pool": "merger"
+                    },
+                    "config": {
+                      "displayNameFromDS": "merger"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "pool": "planning"
+                    },
+                    "config": {
+                      "displayNameFromDS": "planning"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333,
+                    0.3333333333333333
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "nightweaver_pool_queued and on(pool,job,instance) ((nightweaver_pool_fresh == 1) and on(pool,job,instance) (nightweaver_pool_coverage == 1))",
+          "instant": false,
+          "legendFormat": "{{pool}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "8A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: nightweaver_pool_queued and on(pool,job,instance) ((nightweaver_pool_fresh == 1) and on(pool,job,instance) (nightweaver_pool_coverage == 1))\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_queued",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_queued",
+                      "job": "nightweaver-runtime",
+                      "pool": "delivery",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000
+                  ],
+                  [
+                    1
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_queued",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_queued",
+                      "job": "nightweaver-runtime",
+                      "pool": "merger",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "merger"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000
+                  ],
+                  [
+                    1
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_queued",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_queued",
+                      "job": "nightweaver-runtime",
+                      "pool": "planning",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "planning"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000
+                  ],
+                  [
+                    1
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "nightweaver_pool_oldest_seconds and on(pool,job,instance) ((nightweaver_pool_fresh == 1) and on(pool,job,instance) (nightweaver_pool_coverage == 1))",
+          "instant": false,
+          "legendFormat": "{{pool}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "9A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: nightweaver_pool_oldest_seconds and on(pool,job,instance) ((nightweaver_pool_fresh == 1) and on(pool,job,instance) (nightweaver_pool_coverage == 1))\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_oldest_seconds",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_oldest_seconds",
+                      "job": "nightweaver-runtime",
+                      "pool": "delivery",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000
+                  ],
+                  [
+                    0.1008658
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_oldest_seconds",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_oldest_seconds",
+                      "job": "nightweaver-runtime",
+                      "pool": "merger",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "merger"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000
+                  ],
+                  [
+                    0.1008583
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_oldest_seconds",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_oldest_seconds",
+                      "job": "nightweaver-runtime",
+                      "pool": "planning",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "planning"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000
+                  ],
+                  [
+                    0.1008678
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "{__name__=~\"nightweaver_pool_(fresh|coverage|backpressure)\"}",
+          "instant": false,
+          "legendFormat": "{{pool}} / {{__name__}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "10A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: {__name__=~\"nightweaver_pool_(fresh|coverage|backpressure)\"}\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_backpressure",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_backpressure",
+                      "job": "nightweaver-runtime",
+                      "pool": "delivery",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery / nightweaver_pool_backpressure"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_backpressure",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_backpressure",
+                      "job": "nightweaver-runtime",
+                      "pool": "merger",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "merger / nightweaver_pool_backpressure"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_backpressure",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_backpressure",
+                      "job": "nightweaver-runtime",
+                      "pool": "planning",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "planning / nightweaver_pool_backpressure"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_coverage",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_coverage",
+                      "job": "nightweaver-runtime",
+                      "pool": "delivery",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery / nightweaver_pool_coverage"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_coverage",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_coverage",
+                      "job": "nightweaver-runtime",
+                      "pool": "merger",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "merger / nightweaver_pool_coverage"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_coverage",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_coverage",
+                      "job": "nightweaver-runtime",
+                      "pool": "planning",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "planning / nightweaver_pool_coverage"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_fresh",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_fresh",
+                      "job": "nightweaver-runtime",
+                      "pool": "delivery",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery / nightweaver_pool_fresh"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_fresh",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_fresh",
+                      "job": "nightweaver-runtime",
+                      "pool": "merger",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "merger / nightweaver_pool_fresh"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_fresh",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_fresh",
+                      "job": "nightweaver-runtime",
+                      "pool": "planning",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "planning / nightweaver_pool_fresh"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "nightweaver_pool_age_seconds",
+          "instant": false,
+          "legendFormat": "{{pool}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "11A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: nightweaver_pool_age_seconds\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_age_seconds",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_age_seconds",
+                      "job": "nightweaver-runtime",
+                      "pool": "delivery",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "delivery"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0.1008421,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998,
+                    0.2404998
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_age_seconds",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_age_seconds",
+                      "job": "nightweaver-runtime",
+                      "pool": "merger",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "merger"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0.1008342,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928,
+                    0.2404928
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_pool_age_seconds",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_pool_age_seconds",
+                      "job": "nightweaver-runtime",
+                      "pool": "planning",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "planning"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0.1008454,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002,
+                    0.2405002
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "nightweaver_lifecycle_paused and on(job,instance) (nightweaver_lifecycle_fresh == 1) and on(job,instance) (nightweaver_lifecycle_coverage == 1)",
+          "instant": false,
+          "legendFormat": "{{pause}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "26A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: nightweaver_lifecycle_paused and on(job,instance) (nightweaver_lifecycle_fresh == 1) and on(job,instance) (nightweaver_lifecycle_coverage == 1)\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_lifecycle_paused",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_lifecycle_paused",
+                      "job": "nightweaver-runtime",
+                      "pause": "Combined",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "Combined"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000
+                  ],
+                  [
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_lifecycle_paused",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_lifecycle_paused",
+                      "job": "nightweaver-runtime",
+                      "pause": "NeedsHuman",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "NeedsHuman"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000
+                  ],
+                  [
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_lifecycle_paused",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_lifecycle_paused",
+                      "job": "nightweaver-runtime",
+                      "pause": "ProductDecision",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "ProductDecision"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000
+                  ],
+                  [
+                    0
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(kind) (rate(nightweaver_classification_duration_seconds_sum[$__rate_interval])) / sum by(kind) (rate(nightweaver_classification_duration_seconds_count[$__rate_interval]))",
+          "instant": false,
+          "legendFormat": "{{kind}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "27A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: sum by(kind) (rate(nightweaver_classification_duration_seconds_sum[4s])) / sum by(kind) (rate(nightweaver_classification_duration_seconds_count[4s]))\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "kind": "LifecyclePrimary"
+                    },
+                    "config": {
+                      "displayNameFromDS": "LifecyclePrimary"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000
+                  ],
+                  [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                ],
+                "entities": [
+                  null,
+                  {
+                    "NaN": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(role,outcome) (increase(nightweaver_published_outcomes_total[$__range]))",
+          "instant": false,
+          "legendFormat": "{{role}} / {{outcome}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "28A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: sum by(role,outcome) (increase(nightweaver_published_outcomes_total[300s]))\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "outcome": "Approved",
+                      "role": "reviewer"
+                    },
+                    "config": {
+                      "displayNameFromDS": "reviewer / Approved"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "outcome": "ChangesRequired",
+                      "role": "reviewer"
+                    },
+                    "config": {
+                      "displayNameFromDS": "reviewer / ChangesRequired"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(reason) (increase(nightweaver_lifecycle_censored_total[$__range]))",
+          "instant": false,
+          "legendFormat": "{{reason}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "29A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "typeVersion": [
+                    0,
+                    0
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000
+                  },
+                  "executedQueryString": "Expr: sum by(reason) (increase(nightweaver_lifecycle_censored_total[300s]))\nStep: 1s"
+                },
+                "fields": []
+              },
+              "data": {
+                "values": []
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{service_name=\"nightweaver-runtime\"} | bead_id=~\"stage-spn\" | runtime_id=~\"0123456789abcdef0123456789abcdef\" | invocation_id=~\"20261119T1200000000000Z-merger\"",
+          "queryType": "range",
+          "maxLines": 1000,
+          "step": "",
+          "legendFormat": "",
+          "datasourceId": 3,
+          "intervalMs": 200,
+          "maxDataPoints": 1042
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "typeVersion": [
+                    0,
+                    0
+                  ],
+                  "custom": {
+                    "frameType": "LabeledTimeValues"
+                  },
+                  "stats": [
+                    {
+                      "displayName": "Summary: bytes processed per second",
+                      "unit": "Bps",
+                      "value": 559216
+                    },
+                    {
+                      "displayName": "Summary: lines processed per second",
+                      "value": 4856
+                    },
+                    {
+                      "displayName": "Summary: total bytes processed",
+                      "unit": "decbytes",
+                      "value": 2533
+                    },
+                    {
+                      "displayName": "Summary: total lines processed",
+                      "value": 22
+                    },
+                    {
+                      "displayName": "Summary: exec time",
+                      "unit": "s",
+                      "value": 0.00453
+                    },
+                    {
+                      "displayName": "Ingester: total reached",
+                      "value": 1
+                    },
+                    {
+                      "displayName": "Ingester: total chunks matched",
+                      "value": 1
+                    },
+                    {
+                      "displayName": "Ingester: total batches",
+                      "value": 2
+                    },
+                    {
+                      "displayName": "Ingester: total lines sent",
+                      "value": 2
+                    },
+                    {
+                      "displayName": "Ingester: head chunk bytes",
+                      "unit": "decbytes",
+                      "value": 0
+                    },
+                    {
+                      "displayName": "Ingester: head chunk lines",
+                      "value": 0
+                    },
+                    {
+                      "displayName": "Ingester: decompressed bytes",
+                      "unit": "decbytes",
+                      "value": 0
+                    },
+                    {
+                      "displayName": "Ingester: decompressed lines",
+                      "value": 0
+                    },
+                    {
+                      "displayName": "Ingester: compressed bytes",
+                      "unit": "decbytes",
+                      "value": 0
+                    },
+                    {
+                      "displayName": "Ingester: total duplicates",
+                      "value": 0
+                    }
+                  ],
+                  "executedQueryString": "Expr: {service_name=\"nightweaver-runtime\"} | bead_id=~\"stage-spn\" | runtime_id=~\"0123456789abcdef0123456789abcdef\" | invocation_id=~\"20261119T1200000000000Z-merger\""
+                },
+                "fields": [
+                  {
+                    "name": "labels",
+                    "type": "other",
+                    "typeInfo": {
+                      "frame": "json.RawMessage"
+                    }
+                  },
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    }
+                  },
+                  {
+                    "name": "Line",
+                    "type": "string",
+                    "typeInfo": {
+                      "frame": "string"
+                    }
+                  },
+                  {
+                    "name": "tsNs",
+                    "type": "string",
+                    "typeInfo": {
+                      "frame": "string"
+                    }
+                  },
+                  {
+                    "name": "labelTypes",
+                    "type": "other",
+                    "typeInfo": {
+                      "frame": "json.RawMessage"
+                    },
+                    "config": {
+                      "custom": {
+                        "hidden": true
+                      }
+                    }
+                  },
+                  {
+                    "name": "id",
+                    "type": "string",
+                    "typeInfo": {
+                      "frame": "string"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    {
+                      "bead_id": "stage-spn",
+                      "checked_head": "cb592ebfc3932fae8db8b3156301514c3b449555",
+                      "detected_level": "info",
+                      "invocation_id": "20261119T1200000000000Z-merger",
+                      "merge_commit": "cb592ebfc3932fae8db8b3156301514c3b449555",
+                      "observed_timestamp": "1795139967487019400",
+                      "operation": "verified_merge",
+                      "outcome": "success",
+                      "role": "merger",
+                      "runtime_id": "0123456789abcdef0123456789abcdef",
+                      "scope_name": "Nightweaver.Operational",
+                      "service_name": "nightweaver-runtime",
+                      "severity_number": "9",
+                      "severity_text": "Information"
+                    },
+                    {
+                      "bead_id": "stage-spn",
+                      "detected_level": "info",
+                      "invocation_id": "20261119T1200000000000Z-merger",
+                      "observed_timestamp": "1795139962745165100",
+                      "operation": "invocation",
+                      "outcome": "completed",
+                      "role": "merger",
+                      "runtime_id": "0123456789abcdef0123456789abcdef",
+                      "scope_name": "Nightweaver.Operational",
+                      "service_name": "nightweaver-runtime",
+                      "severity_number": "9",
+                      "severity_text": "Information"
+                    }
+                  ],
+                  [
+                    1795139967487,
+                    1795139962745
+                  ],
+                  [
+                    "Verified merge closure confirmed.",
+                    "Operational operation completed."
+                  ],
+                  [
+                    "1795139967487019400",
+                    "1795139962745165100"
+                  ],
+                  [
+                    {
+                      "bead_id": "S",
+                      "checked_head": "S",
+                      "detected_level": "S",
+                      "invocation_id": "S",
+                      "merge_commit": "S",
+                      "observed_timestamp": "S",
+                      "operation": "S",
+                      "outcome": "S",
+                      "role": "S",
+                      "runtime_id": "S",
+                      "scope_name": "S",
+                      "service_name": "I",
+                      "severity_number": "S",
+                      "severity_text": "S"
+                    },
+                    {
+                      "bead_id": "S",
+                      "detected_level": "S",
+                      "invocation_id": "S",
+                      "observed_timestamp": "S",
+                      "operation": "S",
+                      "outcome": "S",
+                      "role": "S",
+                      "runtime_id": "S",
+                      "scope_name": "S",
+                      "service_name": "I",
+                      "severity_number": "S",
+                      "severity_text": "S"
+                    }
+                  ],
+                  [
+                    "1795139967487019400_71b88790",
+                    "1795139962745165100_ffe27ac"
+                  ]
+                ],
+                "nanos": [
+                  null,
+                  [
+                    19400,
+                    165100
+                  ],
+                  null,
+                  null,
+                  null,
+                  null
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "limit": 20,
+          "query": "{ resource.service.name = \"nightweaver-runtime\" && span.bead.id =~ \"stage-spn\" && span.runtime.id =~ \"0123456789abcdef0123456789abcdef\" && span.invocation.id =~ \"20261119T1200000000000Z-merger\" }",
+          "queryType": "traceql",
+          "tableType": "traces",
+          "serviceMapQuery": "",
+          "datasourceId": 2,
+          "intervalMs": 200,
+          "maxDataPoints": 1042
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "name": "Traces",
+                "refId": "A",
+                "meta": {
+                  "typeVersion": [
+                    0,
+                    0
+                  ],
+                  "preferredVisualisationType": "table",
+                  "uniqueRowIdFields": [
+                    0
+                  ]
+                },
+                "fields": [
+                  {
+                    "name": "traceID",
+                    "type": "string",
+                    "typeInfo": {
+                      "frame": "string"
+                    },
+                    "config": {
+                      "displayNameFromDS": "Trace ID",
+                      "links": [
+                        {
+                          "title": "Trace: ${__value.raw}",
+                          "internal": {
+                            "query": {
+                              "query": "${__value.raw}",
+                              "queryType": "traceql"
+                            },
+                            "datasourceUid": "tempo",
+                            "datasourceName": "Tempo"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "name": "startTime",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "displayNameFromDS": "Start time"
+                    }
+                  },
+                  {
+                    "name": "traceService",
+                    "type": "string",
+                    "typeInfo": {
+                      "frame": "string"
+                    },
+                    "config": {
+                      "displayNameFromDS": "Service"
+                    }
+                  },
+                  {
+                    "name": "traceName",
+                    "type": "string",
+                    "typeInfo": {
+                      "frame": "string"
+                    },
+                    "config": {
+                      "displayNameFromDS": "Name"
+                    }
+                  },
+                  {
+                    "name": "traceDuration",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64",
+                      "nullable": true
+                    },
+                    "config": {
+                      "displayNameFromDS": "Duration",
+                      "unit": "ms",
+                      "noValue": "<1 ms"
+                    }
+                  },
+                  {
+                    "name": "nested",
+                    "type": "other",
+                    "typeInfo": {
+                      "frame": "json.RawMessage"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    "97620a6a2e9185be6b700c26044a770d",
+                    "a328e0df82afdb8f4ce486c7896c6de"
+                  ],
+                  [
+                    1795139967486,
+                    1795139962522
+                  ],
+                  [
+                    "nightweaver-runtime",
+                    "nightweaver-runtime"
+                  ],
+                  [
+                    "verified_merge",
+                    "invocation"
+                  ],
+                  [
+                    null,
+                    218
+                  ],
+                  [
+                    [
+                      {
+                        "schema": {
+                          "name": "Spans",
+                          "meta": {
+                            "typeVersion": [
+                              0,
+                              0
+                            ],
+                            "preferredVisualisationType": "table"
+                          },
+                          "fields": [
+                            {
+                              "name": "traceIdHidden",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string"
+                              },
+                              "config": {
+                                "custom": {
+                                  "hideFrom": {
+                                    "viz": true
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "name": "spanID",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string"
+                              },
+                              "config": {
+                                "displayNameFromDS": "Span ID",
+                                "unit": "string",
+                                "links": [
+                                  {
+                                    "title": "Span: ${__value.raw}",
+                                    "internal": {
+                                      "query": {
+                                        "query": "${__data.fields.traceIdHidden}",
+                                        "queryType": "traceql"
+                                      },
+                                      "datasourceUid": "tempo",
+                                      "datasourceName": "Tempo",
+                                      "panelsState": {
+                                        "trace": {
+                                          "spanId": "${__value.raw}"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ],
+                                "custom": {
+                                  "width": 200
+                                }
+                              }
+                            },
+                            {
+                              "name": "time",
+                              "type": "time",
+                              "typeInfo": {
+                                "frame": "time.Time"
+                              },
+                              "config": {
+                                "displayNameFromDS": "Start time",
+                                "custom": {
+                                  "width": 200
+                                }
+                              }
+                            },
+                            {
+                              "name": "name",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string"
+                              },
+                              "config": {
+                                "displayNameFromDS": "Name",
+                                "custom": {
+                                  "hideFrom": {
+                                    "viz": true
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "name": "bead.id",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string",
+                                "nullable": true
+                              },
+                              "config": {
+                                "displayNameFromDS": "bead.id"
+                              }
+                            },
+                            {
+                              "name": "invocation.id",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string",
+                                "nullable": true
+                              },
+                              "config": {
+                                "displayNameFromDS": "invocation.id"
+                              }
+                            },
+                            {
+                              "name": "runtime.id",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string",
+                                "nullable": true
+                              },
+                              "config": {
+                                "displayNameFromDS": "runtime.id"
+                              }
+                            },
+                            {
+                              "name": "service.name",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string",
+                                "nullable": true
+                              },
+                              "config": {
+                                "displayNameFromDS": "service.name"
+                              }
+                            },
+                            {
+                              "name": "duration",
+                              "type": "number",
+                              "typeInfo": {
+                                "frame": "float64"
+                              },
+                              "config": {
+                                "displayNameFromDS": "Duration",
+                                "unit": "ns",
+                                "custom": {
+                                  "width": 120
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "data": {
+                          "values": [
+                            [
+                              "97620a6a2e9185be6b700c26044a770d"
+                            ],
+                            [
+                              "dc38f001cc51916f"
+                            ],
+                            [
+                              1795139967486
+                            ],
+                            [
+                              ""
+                            ],
+                            [
+                              "stage-spn"
+                            ],
+                            [
+                              "20261119T1200000000000Z-merger"
+                            ],
+                            [
+                              "0123456789abcdef0123456789abcdef"
+                            ],
+                            [
+                              "nightweaver-runtime"
+                            ],
+                            [
+                              100
+                            ]
+                          ],
+                          "nanos": [
+                            null,
+                            null,
+                            [
+                              955500
+                            ],
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null
+                          ]
+                        }
+                      }
+                    ],
+                    [
+                      {
+                        "schema": {
+                          "name": "Spans",
+                          "meta": {
+                            "typeVersion": [
+                              0,
+                              0
+                            ],
+                            "preferredVisualisationType": "table"
+                          },
+                          "fields": [
+                            {
+                              "name": "traceIdHidden",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string"
+                              },
+                              "config": {
+                                "custom": {
+                                  "hideFrom": {
+                                    "viz": true
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "name": "spanID",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string"
+                              },
+                              "config": {
+                                "displayNameFromDS": "Span ID",
+                                "unit": "string",
+                                "links": [
+                                  {
+                                    "title": "Span: ${__value.raw}",
+                                    "internal": {
+                                      "query": {
+                                        "query": "${__data.fields.traceIdHidden}",
+                                        "queryType": "traceql"
+                                      },
+                                      "datasourceUid": "tempo",
+                                      "datasourceName": "Tempo",
+                                      "panelsState": {
+                                        "trace": {
+                                          "spanId": "${__value.raw}"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ],
+                                "custom": {
+                                  "width": 200
+                                }
+                              }
+                            },
+                            {
+                              "name": "time",
+                              "type": "time",
+                              "typeInfo": {
+                                "frame": "time.Time"
+                              },
+                              "config": {
+                                "displayNameFromDS": "Start time",
+                                "custom": {
+                                  "width": 200
+                                }
+                              }
+                            },
+                            {
+                              "name": "name",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string"
+                              },
+                              "config": {
+                                "displayNameFromDS": "Name",
+                                "custom": {
+                                  "hideFrom": {
+                                    "viz": true
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "name": "bead.id",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string",
+                                "nullable": true
+                              },
+                              "config": {
+                                "displayNameFromDS": "bead.id"
+                              }
+                            },
+                            {
+                              "name": "invocation.id",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string",
+                                "nullable": true
+                              },
+                              "config": {
+                                "displayNameFromDS": "invocation.id"
+                              }
+                            },
+                            {
+                              "name": "runtime.id",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string",
+                                "nullable": true
+                              },
+                              "config": {
+                                "displayNameFromDS": "runtime.id"
+                              }
+                            },
+                            {
+                              "name": "service.name",
+                              "type": "string",
+                              "typeInfo": {
+                                "frame": "string",
+                                "nullable": true
+                              },
+                              "config": {
+                                "displayNameFromDS": "service.name"
+                              }
+                            },
+                            {
+                              "name": "duration",
+                              "type": "number",
+                              "typeInfo": {
+                                "frame": "float64"
+                              },
+                              "config": {
+                                "displayNameFromDS": "Duration",
+                                "unit": "ns",
+                                "custom": {
+                                  "width": 120
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "data": {
+                          "values": [
+                            [
+                              "a328e0df82afdb8f4ce486c7896c6de"
+                            ],
+                            [
+                              "83057eabe7cd556b"
+                            ],
+                            [
+                              1795139962522
+                            ],
+                            [
+                              ""
+                            ],
+                            [
+                              "stage-spn"
+                            ],
+                            [
+                              "20261119T1200000000000Z-merger"
+                            ],
+                            [
+                              "0123456789abcdef0123456789abcdef"
+                            ],
+                            [
+                              "nightweaver-runtime"
+                            ],
+                            [
+                              218811300
+                            ]
+                          ],
+                          "nanos": [
+                            null,
+                            null,
+                            [
+                              546800
+                            ],
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null
+                          ]
+                        }
+                      }
+                    ]
+                  ]
+                ],
+                "nanos": [
+                  null,
+                  [
+                    955500,
+                    546800
+                  ],
+                  null,
+                  null,
+                  null,
+                  null
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(role,status) (increase(nightweaver_invocation_attempts_total[$__range]))",
+          "instant": false,
+          "legendFormat": "{{role}} / {{status}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "14A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: sum by(role,status) (increase(nightweaver_invocation_attempts_total[300s]))\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "role": "implementer",
+                      "status": "completed"
+                    },
+                    "config": {
+                      "displayNameFromDS": "implementer / completed"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "role": "merger",
+                      "status": "completed"
+                    },
+                    "config": {
+                      "displayNameFromDS": "merger / completed"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139963000,
+                    1795139964000,
+                    1795139965000,
+                    1795139966000,
+                    1795139967000,
+                    1795139968000,
+                    1795139969000,
+                    1795139970000,
+                    1795139971000,
+                    1795139972000,
+                    1795139973000,
+                    1795139974000,
+                    1795139975000,
+                    1795139976000,
+                    1795139977000,
+                    1795139978000,
+                    1795139979000,
+                    1795139980000,
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(reason) (increase(nightweaver_operational_retries_total[$__range]))",
+          "instant": false,
+          "legendFormat": "{{reason}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "16A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: sum by(reason) (increase(nightweaver_operational_retries_total[300s]))\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "reason": "TimedOut"
+                    },
+                    "config": {
+                      "displayNameFromDS": "TimedOut"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(role) (increase(nightweaver_semantic_repairs_total[$__range]))",
+          "instant": false,
+          "legendFormat": "{{role}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "17A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: sum by(role) (increase(nightweaver_semantic_repairs_total[300s]))\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "role": "reviewer"
+                    },
+                    "config": {
+                      "displayNameFromDS": "reviewer"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(role) (increase(nightweaver_approvals_total{coverage=\"FirstPass\"}[$__range])) / sum by(role) (increase(nightweaver_approvals_total{coverage=~\"FirstPass|LaterPass\"}[$__range]))",
+          "instant": false,
+          "legendFormat": "{{role}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "18A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "typeVersion": [
+                    0,
+                    0
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000
+                  },
+                  "executedQueryString": "Expr: sum by(role) (increase(nightweaver_approvals_total{coverage=\"FirstPass\"}[300s])) / sum by(role) (increase(nightweaver_approvals_total{coverage=~\"FirstPass|LaterPass\"}[300s]))\nStep: 1s"
+                },
+                "fields": []
+              },
+              "data": {
+                "values": []
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(kind,outcome) (increase(nightweaver_workflow_results_total[$__range]))",
+          "instant": false,
+          "legendFormat": "{{kind}} / {{outcome}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "15A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: sum by(kind,outcome) (increase(nightweaver_workflow_results_total[300s]))\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "kind": "Finalization",
+                      "outcome": "success"
+                    },
+                    "config": {
+                      "displayNameFromDS": "Finalization / success"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139969000,
+                    1795139970000,
+                    1795139971000,
+                    1795139972000,
+                    1795139973000,
+                    1795139974000,
+                    1795139975000,
+                    1795139976000,
+                    1795139977000,
+                    1795139978000,
+                    1795139979000,
+                    1795139980000,
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "kind": "LifecyclePrimary",
+                      "outcome": "success"
+                    },
+                    "config": {
+                      "displayNameFromDS": "LifecyclePrimary / success"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "kind": "OutcomeVerification",
+                      "outcome": "success"
+                    },
+                    "config": {
+                      "displayNameFromDS": "OutcomeVerification / success"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139966000,
+                    1795139967000,
+                    1795139968000,
+                    1795139969000,
+                    1795139970000,
+                    1795139971000,
+                    1795139972000,
+                    1795139973000,
+                    1795139974000,
+                    1795139975000,
+                    1795139976000,
+                    1795139977000,
+                    1795139978000,
+                    1795139979000,
+                    1795139980000,
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "kind": "PostExitVerification",
+                      "outcome": "success"
+                    },
+                    "config": {
+                      "displayNameFromDS": "PostExitVerification / success"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139964000,
+                    1795139965000,
+                    1795139966000,
+                    1795139967000,
+                    1795139968000,
+                    1795139969000,
+                    1795139970000,
+                    1795139971000,
+                    1795139972000,
+                    1795139973000,
+                    1795139974000,
+                    1795139975000,
+                    1795139976000,
+                    1795139977000,
+                    1795139978000,
+                    1795139979000,
+                    1795139980000,
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "kind": "Publication",
+                      "outcome": "success"
+                    },
+                    "config": {
+                      "displayNameFromDS": "Publication / success"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139969000,
+                    1795139970000,
+                    1795139971000,
+                    1795139972000,
+                    1795139973000,
+                    1795139974000,
+                    1795139975000,
+                    1795139976000,
+                    1795139977000,
+                    1795139978000,
+                    1795139979000,
+                    1795139980000,
+                    1795139981000,
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(role,coverage) (increase(nightweaver_approvals_total[$__range]))",
+          "instant": false,
+          "legendFormat": "{{role}} / {{coverage}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "19A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: sum by(role,coverage) (increase(nightweaver_approvals_total[300s]))\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "coverage": "Unknown",
+                      "role": "reviewer"
+                    },
+                    "config": {
+                      "displayNameFromDS": "reviewer / Unknown"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000,
+                    1795139986000,
+                    1795139987000,
+                    1795139988000,
+                    1795139989000,
+                    1795139990000,
+                    1795139991000,
+                    1795139992000,
+                    1795139993000,
+                    1795139994000,
+                    1795139995000,
+                    1795139996000,
+                    1795139997000,
+                    1795139998000,
+                    1795139999000
+                  ],
+                  [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "nightweaver_lifecycle_oldest_seconds and on(job,instance) (nightweaver_lifecycle_fresh == 1) and on(job,instance) (nightweaver_lifecycle_coverage == 1)",
+          "instant": false,
+          "legendFormat": "{{pause}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "20A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: nightweaver_lifecycle_oldest_seconds and on(job,instance) (nightweaver_lifecycle_fresh == 1) and on(job,instance) (nightweaver_lifecycle_coverage == 1)\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_lifecycle_oldest_seconds",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_lifecycle_oldest_seconds",
+                      "job": "nightweaver-runtime",
+                      "pause": "Combined",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "Combined"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000
+                  ],
+                  [
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_lifecycle_oldest_seconds",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_lifecycle_oldest_seconds",
+                      "job": "nightweaver-runtime",
+                      "pause": "NeedsHuman",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "NeedsHuman"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000
+                  ],
+                  [
+                    0
+                  ]
+                ]
+              }
+            },
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "resultType": "matrix"
+                  }
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "nightweaver_lifecycle_oldest_seconds",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "__name__": "nightweaver_lifecycle_oldest_seconds",
+                      "job": "nightweaver-runtime",
+                      "pause": "ProductDecision",
+                      "service_name": "nightweaver-runtime"
+                    },
+                    "config": {
+                      "displayNameFromDS": "ProductDecision"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139981000
+                  ],
+                  [
+                    0
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "queries": [
+        {
+          "refId": "A",
+          "hide": false,
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(pause) (rate(nightweaver_human_wait_duration_seconds_sum[$__rate_interval])) / sum by(pause) (rate(nightweaver_human_wait_duration_seconds_count[$__rate_interval]))",
+          "instant": false,
+          "legendFormat": "{{pause}}",
+          "range": true,
+          "exemplar": false,
+          "requestId": "21A",
+          "utcOffsetSec": -18000,
+          "interval": "",
+          "datasourceId": 1,
+          "intervalMs": 1000,
+          "maxDataPoints": 517
+        }
+      ],
+      "from": "1795139699807",
+      "to": "1795139999807"
+    },
+    "result": {
+      "results": {
+        "A": {
+          "status": 200,
+          "frames": [
+            {
+              "schema": {
+                "refId": "A",
+                "meta": {
+                  "type": "timeseries-multi",
+                  "typeVersion": [
+                    0,
+                    1
+                  ],
+                  "custom": {
+                    "calculatedMinStep": 1000,
+                    "resultType": "matrix"
+                  },
+                  "executedQueryString": "Expr: sum by(pause) (rate(nightweaver_human_wait_duration_seconds_sum[4s])) / sum by(pause) (rate(nightweaver_human_wait_duration_seconds_count[4s]))\nStep: 1s"
+                },
+                "fields": [
+                  {
+                    "name": "Time",
+                    "type": "time",
+                    "typeInfo": {
+                      "frame": "time.Time"
+                    },
+                    "config": {
+                      "interval": 1000
+                    }
+                  },
+                  {
+                    "name": "Value",
+                    "type": "number",
+                    "typeInfo": {
+                      "frame": "float64"
+                    },
+                    "labels": {
+                      "pause": "NeedsHuman"
+                    },
+                    "config": {
+                      "displayNameFromDS": "NeedsHuman"
+                    }
+                  }
+                ]
+              },
+              "data": {
+                "values": [
+                  [
+                    1795139982000,
+                    1795139983000,
+                    1795139984000,
+                    1795139985000
+                  ],
+                  [
+                    null,
+                    null,
+                    null,
+                    null
+                  ]
+                ],
+                "entities": [
+                  null,
+                  {
+                    "NaN": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+]
