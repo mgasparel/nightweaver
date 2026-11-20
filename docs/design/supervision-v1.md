@@ -245,7 +245,13 @@ rapid duplicates and changed owners without refunding attempts.
 
 Owner Web/control/runtime failure publishes the first failure identity before
 requesting graceful drain or disposing Web. Successful later drain does not erase
-the failing runtime. `run/<Project>/background/owner-failures.json` retains at most
+the failing runtime. Discovery, timer and completion-stream infrastructure failure
+notifies the owner before active pool drain begins, even while live telemetry
+continues during that drain. A deliberate cancellation publishes no such failure.
+Control stop proposals share owner-state writer serialization with failure updates;
+only successful owner-record publication commits stopping state. A rejected or
+canceled publication leaves the prior state visible and accepts no shutdown action.
+`run/<Project>/background/owner-failures.json` retains at most
 32 historical failures, including failures before repository/runtime readiness.
 `observations.json` is a compact versioned local consumer surface with last
 observation, continuing incident, recovered incident, attempts, fixed reason,

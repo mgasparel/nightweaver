@@ -16,7 +16,8 @@ internal static class ContinuousApplication
         IProcessRunner processRunner,
         RuntimeShutdownSignals? shutdownSignals,
         CancellationToken cancellationToken,
-        Func<FactoryTelemetryPublisher, ProjectConfig, HostPaths, ValidatedTargetRepository, CancellationToken, Task>? onRuntimeReady = null)
+        Func<FactoryTelemetryPublisher, ProjectConfig, HostPaths, ValidatedTargetRepository, CancellationToken, Task>? onRuntimeReady = null,
+        Func<Task>? onRuntimeFailure = null)
     {
         var startupTimestamp = Stopwatch.GetTimestamp();
         var selector = options.Selector ?? throw new InvalidOperationException("A Project selector is required");
@@ -130,7 +131,7 @@ internal static class ContinuousApplication
             journalWatcher: (requestDiscovery, token) => new BeadsJournalWatcher(
                 new BeadsJournalClient(processRunner), requestDiscovery, environment.Err)
                 .RunAsync(repository, token),
-            stopGate: stopGate, onDiscoveryRequested: cleanup.Wake);
+            stopGate: stopGate, onDiscoveryRequested: cleanup.Wake, onInfrastructureFailure: onRuntimeFailure);
 
         environment.Out.WriteLine($"Continuous Planning and Delivery runtime starting with singleton Merger for Project '{project.Name.Value}' and Target Repository '{repository.Path}'.");
         environment.Out.WriteLine($"Planning capacity: {planningPool.CapacityLimit}; Delivery capacity: {pool.CapacityLimit}; Merger capacity: {mergerPool.CapacityLimit}; periodic discovery: 30 seconds; press Ctrl+C to stop.");

@@ -15,7 +15,8 @@ internal sealed class ContinuousDiscoveryCoordinator(
     DiscoveryTimerTicks? timerTicks = null,
     Func<Action, CancellationToken, Task>? journalWatcher = null,
     ContinuousStopGate? stopGate = null,
-    Action? onDiscoveryRequested = null)
+    Action? onDiscoveryRequested = null,
+    Func<Task>? onInfrastructureFailure = null)
 {
     internal static readonly TimeSpan DiscoveryInterval = TimeSpan.FromSeconds(30);
 
@@ -81,6 +82,15 @@ internal sealed class ContinuousDiscoveryCoordinator(
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+        }
+        catch (Exception)
+        {
+            // Retain the original failure before draining pools. Deliberate stop
+            // takes the cancellation branch above and publishes no failure.
+            stopGate?.RequestStop();
+            if (onInfrastructureFailure is not null)
+                await onInfrastructureFailure().ConfigureAwait(false);
+            throw;
         }
         finally
         {

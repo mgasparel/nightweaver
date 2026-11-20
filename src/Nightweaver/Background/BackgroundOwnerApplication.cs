@@ -145,7 +145,8 @@ internal static class BackgroundOwnerApplication
                 var selector = new ProjectSelector.ByConfigPath(projectConfig.ConfigFilePath);
                 var runtimeCode = await ContinuousApplication.RunAsync(
                     new CliOptions(selector, DryRun: false, Help: false), ownerEnvironment, processRunner,
-                    shutdownSignals, cancellationToken, onReady).ConfigureAwait(false);
+                    shutdownSignals, cancellationToken, onReady,
+                    () => RetainFailureAsync(state, recordPath, "RuntimeFailure")).ConfigureAwait(false);
 
                 if (runtimeCode != ExitCodes.Success && state.Current.Failure is null
                     && !DeploymentObserver.IsDeliberate(state.Current.StopReason))
@@ -234,13 +235,12 @@ internal static class BackgroundOwnerApplication
         {
             return new(false, state.Current with { StopReason = "supervision-unavailable" }, exception.Message);
         }
-        state.Update(record => record with
+        await state.PublishAsync(recordPath, record => record with
         {
             State = "stopping",
             StopReason = request.Maintenance ? "Maintenance" : request.Operation == "force" ? "ForcedStop" : "OperatorDrain",
             Message = request.Operation == "force" ? "force stop requested" : "graceful drain requested"
-        });
-        await state.PersistAsync(recordPath, cancellationToken).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
         return new BackgroundControlResponse(true, state.Current, null);
     }
 

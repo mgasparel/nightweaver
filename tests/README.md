@@ -49,6 +49,12 @@ boundary that live observation holds no Job handle delaying kill-on-close and
 that original native exit plus Job accounting can establish descendant settlement.
 Report its measured cost against retained baseline XML with the full candidate run.
 
+`OwnerFailurePublicationTests` inject sharing denial and publication cancellation
+for stop/force/maintenance, concurrent owner failure, and discovery/timer/completion
+infrastructure termination with a blocked pool drain. These cheap cases verify
+truthful control state and retained failure identity before drain without adding
+native journeys or fixture publishing. Deliberate cancellation remains distinct.
+
 Journal cancellation/deadline tests assert native process signaling before
 return and disposable-file teardown. Their 16 iterations per path cover Windows
 process rundown, where a managed exit notification can precede native settlement;
