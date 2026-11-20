@@ -311,9 +311,10 @@ public sealed class PlanningPoolCoordinatorTests
     public async Task BackpressureCountsEveryNonclosedNonpausedTaskAndLetsAdmittedWorkSettle(string status, string? owner)
     {
         var current = Snapshot([Row("product")], ["product"]);
+        var observation = new PoolObservation("planning", 2, new WorkflowTimingTests.Clock(), _ => { }, (_, _) => { });
         var release = NewSignal();
         var pool = CreatePool(2, () => Task.FromResult(current), async (_, _, _, _, _) =>
-        { await release.Task; return SlotOutcome(PlanningSlotDisposition.Published, true); }, maxActive: 1);
+        { await release.Task; return SlotOutcome(PlanningSlotDisposition.Published, true); }, maxActive: 1, observation: observation);
         var first = Assert.Single((await pool.EvaluateAsync(TestContext.Current.CancellationToken)).Admitted);
         current = Snapshot([Row("product"), Row("next"), Row("task", status: status, issueType: "task", assignee: owner, labels: ["stage:merge"])],
             ["product", "next"]);
@@ -321,6 +322,8 @@ public sealed class PlanningPoolCoordinatorTests
         {
             Assert.Empty((await pool.EvaluateAsync(TestContext.Current.CancellationToken)).Admitted);
             Assert.Single(pool.ActiveReservations);
+            Assert.Equal(1, Assert.Single(observation.Read("backpressure")).Value);
+            Assert.Equal(0, Assert.Single(observation.Read("queued")).Value);
         }
         finally { release.TrySetResult(true); await first.Completion; }
         Assert.Empty(pool.ActiveReservations);
@@ -341,11 +344,49 @@ public sealed class PlanningPoolCoordinatorTests
         await barrier;
     }
 
+    [Fact]
+    public async Task WaitingObservationUsesAdmissionSelectionAndBreaksOnReadFailure()
+    {
+        var clock = new WorkflowTimingTests.Clock();
+        List<double> samples = [];
+        var observation = new PoolObservation("planning", 1, clock, samples.Add, (_, _) => { });
+        var current = Snapshot([Row("a"), Row("b"),
+            Row("paused", labels: ["needs-human"]), Row("held", authorized: false)], ["a", "b", "paused", "held"]);
+        var release = NewSignal();
+        var reads = 0;
+        var fail = false;
+        var pool = CreatePool(1, () =>
+        {
+            reads++;
+            if (fail) throw new IOException("controlled tracker failure");
+            return Task.FromResult(current);
+        }, async (_, _, _, _, _) => { await release.Task; return SlotOutcome(PlanningSlotDisposition.Refused); }, observation: observation);
+        var first = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            Assert.Equal("a", Assert.Single(first.Admitted).BeadId);
+            Assert.Equal(1, Assert.Single(observation.Read("queued")).Value);
+            clock.Advance(5);
+            await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(5, Assert.Single(observation.Read("oldest")).Value);
+            fail = true;
+            await Assert.ThrowsAsync<IOException>(() => pool.EvaluateAsync(TestContext.Current.CancellationToken));
+            Assert.Empty(observation.Read("queued"));
+            fail = false;
+            current = Snapshot([Row("b")], []); // lost native readiness/dependency change
+            await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(0, Assert.Single(observation.Read("queued")).Value);
+            Assert.Equal(4, reads);
+            Assert.Empty(samples);
+        }
+        finally { release.TrySetResult(true); await Task.WhenAll(first.Admitted.Select(item => item.Completion)); }
+    }
+
     private static PlanningPoolCoordinator CreatePool(
         int capacity,
         Func<Task<PlanningPoolSnapshot>> snapshotReader,
         PlanningPoolSlotRunner slotRunner,
-        CancellationTokenSource? lifetime = null, int maxActive = 100, ContinuousStopGate? stopGate = null)
+        CancellationTokenSource? lifetime = null, int maxActive = 100, ContinuousStopGate? stopGate = null, PoolObservation? observation = null)
     {
         var host = new HostPaths(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "planning-pool-host")));
         var target = new ValidatedTargetRepository(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "planning-pool-target")), "main");
@@ -355,7 +396,7 @@ public sealed class PlanningPoolCoordinatorTests
             new RoleSettings(roles));
         var processRunner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(0, "", "")));
         return new PlanningPoolCoordinator(host, project, target, processRunner,
-            (_, _, _) => snapshotReader(), slotRunner, stopGate: stopGate, slotLifetimeToken: lifetime?.Token ?? CancellationToken.None);
+            (_, _, _) => snapshotReader(), slotRunner, observation: observation, stopGate: stopGate, slotLifetimeToken: lifetime?.Token ?? CancellationToken.None);
     }
 
     private static PlanningPoolSnapshot Snapshot(IEnumerable<string> rows, IEnumerable<string> nativeReady)

@@ -28,7 +28,7 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     // Two hosts: 6 operation counters + 2 * (9 buckets + sum + count) +
     // 3 signals * 4 drop reasons + 3 export failure counters + one target_info each.
     // Includes one SDK overflow series per stream (histogram overflow costs 11 series).
-    internal const int ProjectedSeries = 2 * (37 + 7 + 22 + 8 * 11 + 4 + 4 * 11 + 55 + 12 + 6 + 2 * 11 + 12 + 3 + 1 + 1 + 11 + 1 + 1 + 43 + 8 * 11 + 1 + 5 + 13 + 4 * 11 + 19 + 19);
+    internal const int ProjectedSeries = 2 * (4 * 11 + 22 + 22 + 7 * 4 + 37 + 7 + 22 + 8 * 11 + 4 + 4 * 11 + 55 + 12 + 6 + 2 * 11 + 12 + 3 + 1 + 1 + 11 + 1 + 1 + 43 + 8 * 11 + 1 + 5 + 13 + 4 * 11 + 19 + 19);
     private readonly ActivitySource source = new(ScopeName);
     private readonly Meter meter = new(ScopeName);
     private readonly CancellationTokenSource stop = new();
@@ -54,6 +54,9 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     private readonly Counter<long> operationalRetries;
     private readonly Counter<long> publishedOutcomes;
     private readonly Counter<long> semanticRepairs;
+    private readonly Dictionary<string, PoolObservation> pools = new(StringComparer.Ordinal);
+    private readonly Histogram<double> eligibleWait;
+    private readonly Counter<long> waitCensored;
     private readonly Counter<long> drops;
     private readonly Counter<long> failures;
     private readonly Counter<long> observationAttempts;
@@ -138,6 +141,14 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
         operationalRetries = meter.CreateCounter<long>("nightweaver.operational.retries");
         publishedOutcomes = meter.CreateCounter<long>("nightweaver.published.outcomes");
         semanticRepairs = meter.CreateCounter<long>("nightweaver.semantic.repairs");
+        eligibleWait = meter.CreateHistogram<double>("nightweaver.eligible_wait.duration", "s");
+        waitCensored = meter.CreateCounter<long>("nightweaver.eligible_wait.censored");
+        foreach (var name in new[] { "capacity", "occupied", "fresh", "coverage", "age", "backpressure", "queued", "oldest" })
+        {
+            var key = name;
+            meter.CreateObservableGauge("nightweaver.pool." + name, () => ReadPools(key),
+                name is "age" or "oldest" ? "s" : null);
+        }
         drops = meter.CreateCounter<long>("nightweaver.telemetry.dropped");
         failures = meter.CreateCounter<long>("nightweaver.telemetry.export.failed");
         observationAttempts = meter.CreateCounter<long>("nightweaver.observation.attempts");
@@ -158,6 +169,16 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
                     if (!ReferenceEquals(instrument.Meter, meter)) return MetricStreamConfiguration.Drop;
                     return instrument.Name switch
                     {
+                        "nightweaver.eligible_wait.duration" => new ExplicitBucketHistogramConfiguration
+                            { TagKeys = ["pool"], Boundaries = DurationBuckets, CardinalityLimit = 4 },
+                        "nightweaver.eligible_wait.censored" => new MetricStreamConfiguration
+                            { TagKeys = ["pool", "reason"], CardinalityLimit = 22 },
+                        "nightweaver.pool.occupied" => new MetricStreamConfiguration
+                            { TagKeys = ["pool", "phase"], CardinalityLimit = 22 },
+                        "nightweaver.pool.capacity" or "nightweaver.pool.fresh" or "nightweaver.pool.coverage"
+                            or "nightweaver.pool.age" or "nightweaver.pool.backpressure" or "nightweaver.pool.queued"
+                            or "nightweaver.pool.oldest" => new MetricStreamConfiguration
+                            { TagKeys = ["pool"], CardinalityLimit = 4 },
                         "nightweaver.operations" => new MetricStreamConfiguration
                             { TagKeys = ["operation", "outcome"], CardinalityLimit = 7 },
                         "nightweaver.operation.duration" => new ExplicitBucketHistogramConfiguration
@@ -265,6 +286,27 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     private static bool IsRevision(string value) => value.Length is 40 or 64 && value.All(char.IsAsciiHexDigit);
     private static bool IsRole(string? value) => value is "planner" or "plan-challenger" or "implementer"
         or "reviewer" or "qa" or "merger" or "classifier";
+
+    internal PoolObservation ObservePool(string pool, int capacity, Func<bool> stopping)
+    {
+        if (pool is not ("planning" or "delivery" or "merger")) throw new ArgumentException("Invalid pool.", nameof(pool));
+        lock (pools)
+        {
+            if (pools.TryGetValue(pool, out var existing)) return existing;
+            var observation = new PoolObservation(pool, capacity, TimeProvider.System,
+                seconds => eligibleWait.Record(seconds, new KeyValuePair<string, object?>("pool", pool)),
+                (reason, count) => waitCensored.Add(count, new("pool", pool), new("reason", reason.ToString())), stopping);
+            pools.Add(pool, observation);
+            return observation;
+        }
+    }
+
+    private Measurement<double>[] ReadPools(string instrument)
+    {
+        PoolObservation[] snapshot;
+        lock (pools) snapshot = pools.Values.ToArray();
+        return snapshot.SelectMany(pool => pool.Read(instrument)).ToArray();
+    }
 
     private static bool IsObservationSource(string value) => value is "tracker" or "runtime" or "cleanup";
     private static readonly string[] ObservationStates = ["healthy", "stale", "unavailable", "idle", "stopped", "pending"];

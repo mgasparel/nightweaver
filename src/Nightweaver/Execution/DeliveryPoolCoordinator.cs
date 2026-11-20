@@ -100,6 +100,7 @@ internal sealed class DeliveryPoolCoordinator
     private readonly FactoryTelemetryPublisher? telemetry;
     private readonly DeliveryPoolSnapshotReader readSnapshot;
     private readonly DeliveryPoolSlotRunner runSlot;
+    private readonly PoolObservation? observation;
     private readonly object admissionSync = new();
     private Task admissionTail = Task.CompletedTask;
     private readonly object stateGate = new();
@@ -117,6 +118,7 @@ internal sealed class DeliveryPoolCoordinator
         ContinuousStopGate? stopGate = null,
         FactoryTelemetryPublisher? telemetry = null,
         EnvironmentReservations? environments = null,
+        PoolObservation? observation = null,
         CancellationToken slotLifetimeToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
@@ -131,6 +133,8 @@ internal sealed class DeliveryPoolCoordinator
         this.stopGate = stopGate;
         this.environments = environments;
         this.telemetry = telemetry;
+        this.observation = observation ?? OperationalTelemetry.Current?.Telemetry.ObservePool("delivery", project.Concurrency.MaxConcurrentDelivery,
+            () => stopGate?.IsStopRequested == true);
         capacityLimit = project.Concurrency.MaxConcurrentDelivery;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacityLimit);
 
@@ -183,11 +187,21 @@ internal sealed class DeliveryPoolCoordinator
         using var admission = await EnterAdmissionAsync(cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         // Never carry a preceding evaluation's tracker state across this gate.
-        var snapshot = await readSnapshot(repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
+        DeliveryPoolSnapshot snapshot;
+        try
+        {
+            snapshot = await readSnapshot(repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch
+        {
+            observation?.Unknown(WaitCensor.Failure);
+            throw;
+        }
 
         var diagnostics = new List<DeliveryPoolDiagnostic>();
         var eligible = SelectEligible(snapshot, diagnostics);
+        lock (stateGate) observation?.Observe(eligible.Select(bead => bead.Id));
         var admitted = new List<DeliveryPoolAdmission>();
         for (var index = 0; index < eligible.Count; index++)
         {
@@ -196,6 +210,8 @@ internal sealed class DeliveryPoolCoordinator
             var reservation = TryReserve(bead.Id, out var reservationDiagnostic);
             if (reservation is null)
             {
+                if (reservationDiagnostic!.Code == DeliveryPoolDiagnosticCode.AlreadyReserved)
+                    observation?.ExcludeReserved(bead.Id);
                 diagnostics.Add(reservationDiagnostic!);
                 if (reservationDiagnostic!.Code == DeliveryPoolDiagnosticCode.CapacityReached)
                 {
@@ -311,6 +327,7 @@ internal sealed class DeliveryPoolCoordinator
                     ?? $"delivery-{Enumerable.Range(1, capacityLimit).First(index => reservations.Values.All(active => active.SlotId != $"delivery-{index}"))}";
                 reservation = new ReservationState(beadId, slotId) { EnvironmentLease = environmentLease, Timing = WorkflowTiming.Reserve("delivery", beadId) };
                 reservations.Add(beadId, reservation);
+                observation?.Reserve(beadId, reservation.Timing);
                 telemetry?.Reserve("delivery", slotId, beadId);
                 return true;
             }
@@ -394,6 +411,7 @@ internal sealed class DeliveryPoolCoordinator
             reservation.Timing?.Dispose();
             telemetry?.Release("delivery", reservation.SlotId, reservation.BeadId);
             reservations.Remove(reservation.BeadId);
+            observation?.Release(reservation.BeadId);
             reservation.EnvironmentLease?.Dispose();
             // Capacity is released before notification. Keep that transition and publication under
             // one lock so a drain cannot observe an empty reservation set before this result exists.

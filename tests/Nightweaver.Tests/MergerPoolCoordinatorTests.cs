@@ -547,15 +547,53 @@ public sealed class MergerPoolCoordinatorTests
         Assert.Empty(merger.ActiveReservations);
     }
 
+    [Fact]
+    public async Task WaitingObservationUsesAdmissionSelectionAndBreaksOnReadFailure()
+    {
+        var clock = new WorkflowTimingTests.Clock();
+        List<double> samples = [];
+        var observation = new PoolObservation("merger", 1, clock, samples.Add, (_, _) => { });
+        var current = Snapshot([Row("a", labels: ["stage:merge"]), Row("b", labels: ["stage:merge"]),
+            Row("paused", labels: ["needs-human"]), Row("held", labels: ["plan-unpublished"])], ["a", "b", "paused", "held"]);
+        var release = NewSignal();
+        var reads = 0;
+        var fail = false;
+        var pool = CreatePool(() =>
+        {
+            reads++;
+            if (fail) throw new IOException("controlled tracker failure");
+            return Task.FromResult(current);
+        }, async (_, _, _, _, _, _) => { await release.Task; return Outcome(MergerSlotDisposition.Refused); }, observation: observation);
+        var first = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            Assert.Equal("a", Assert.Single(first.Admitted).BeadId);
+            Assert.Equal(1, Assert.Single(observation.Read("queued")).Value);
+            clock.Advance(5);
+            await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(5, Assert.Single(observation.Read("oldest")).Value);
+            fail = true;
+            await Assert.ThrowsAsync<IOException>(() => pool.EvaluateAsync(TestContext.Current.CancellationToken));
+            Assert.Empty(observation.Read("queued"));
+            fail = false;
+            current = Snapshot([Row("b", labels: ["stage:merge"])], []); // lost native readiness/dependency change
+            await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(0, Assert.Single(observation.Read("queued")).Value);
+            Assert.Equal(4, reads);
+            Assert.Empty(samples);
+        }
+        finally { release.TrySetResult(true); await Task.WhenAll(first.Admitted.Select(item => item.Completion)); }
+    }
+
     private static MergerPoolCoordinator CreatePool(Func<Task<MergerPoolSnapshot>> snapshotReader,
-        MergerPoolSlotRunner slotRunner, int maxConcurrentDelivery = 1, ContinuousStopGate? stopGate = null)
+        MergerPoolSlotRunner slotRunner, int maxConcurrentDelivery = 1, ContinuousStopGate? stopGate = null, PoolObservation? observation = null)
     {
         var host = new HostPaths(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "merger-pool-host")));
         var target = new ValidatedTargetRepository(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "merger-pool-target")), "main");
         var project = CreateProject(target, maxConcurrentDelivery);
         var runner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(0, "", "")));
         return new MergerPoolCoordinator(host, project, target, runner,
-            (_, _, _) => snapshotReader(), slotRunner, stopGate: stopGate);
+            (_, _, _) => snapshotReader(), slotRunner, observation: observation, stopGate: stopGate);
     }
 
     private static ProjectConfig CreateProject(ValidatedTargetRepository target, int maxConcurrentDelivery)

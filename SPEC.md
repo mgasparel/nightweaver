@@ -557,3 +557,9 @@ acceptance evidence](docs/acceptance/studio-cutover.md).
 - **Multi-Project Management UI**: A project-agnostic UI for creating/editing **Project** configurations, viewing/interacting with each **Project**'s `bd` tracker, and starting/monitoring/stopping per-**Project** **Orchestrator** processes is deferred to a separate effort.
 - **Internal C# Module & Interface Layout**: File-level C# class/interface decompositions and method signatures are deferred to implementation planning.
 - **Final Prose of Role Prompts**: The exact prose wording of `prompts/*.md` will be authored during implementation of the role prompt templates.
+
+Opt-in [pool observations](docs/design/pool-observation-telemetry.md) reuse fresh
+native admission selection to expose approximate eligible waiting, independent
+freshness/coverage and live reservation occupancy by phase. Unknown observations
+are censored rather than reported as completed waits or healthy empty queues.
+These metrics do not change scheduling, backpressure or workflow authority.

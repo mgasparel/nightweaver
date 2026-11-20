@@ -87,8 +87,7 @@ checks its own sampling decision before serialization, preventing another provid
 listening on the same fixed ActivitySource name from upgrading zero sampling.
 
 Granular Git/bd command, subprocess argument, lock wait and Agent sub-tool timing
-remain deferred. Remote CI waiting inside Merger is Agent time in v1. Eligibility
-waiting, provider usage and broad bottleneck dashboards belong to later slices;
+remain deferred. Remote CI waiting inside Merger is Agent time in v1. Provider usage and broad bottleneck dashboards belong to later slices;
 there is no new Studio UI or production/hosted account setup in this slice.
 
 `WorkflowTimingTests` uses an injected monotonic clock for nesting, concurrent
@@ -105,3 +104,7 @@ must remain observable. Decorated owned records still fail closed. Export queues
 shutdown budgets and the six-thread test schedule are unchanged.
 Existing executor, retry, Planning, verifier and pool suites retain native timeout,
 launch, publication and cleanup boundaries. No native journey is added.
+
+Live pool capacity, phase occupancy and approximate eligibility waiting now use
+[pool observations](pool-observation-telemetry.md); completed allocation totals
+above keep their existing release-time semantics.

@@ -102,6 +102,7 @@ internal sealed class PlanningPoolCoordinator
     private readonly FactoryTelemetryPublisher? telemetry;
     private readonly PlanningPoolSnapshotReader readSnapshot;
     private readonly PlanningPoolSlotRunner runSlot;
+    private readonly PoolObservation? observation;
     private readonly object admissionSync = new();
     private Task admissionTail = Task.CompletedTask;
     private readonly object stateGate = new();
@@ -120,6 +121,7 @@ internal sealed class PlanningPoolCoordinator
         FactoryTelemetryPublisher? telemetry = null,
         EnvironmentReservations? environments = null,
         Action<string>? onPublished = null,
+        PoolObservation? observation = null,
         CancellationToken slotLifetimeToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
@@ -135,6 +137,8 @@ internal sealed class PlanningPoolCoordinator
         this.stopGate = stopGate;
         this.environments = environments;
         this.telemetry = telemetry;
+        this.observation = observation ?? OperationalTelemetry.Current?.Telemetry.ObservePool("planning", project.Concurrency.MaxConcurrentPlanning,
+            () => stopGate?.IsStopRequested == true);
         capacityLimit = project.Concurrency.MaxConcurrentPlanning;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacityLimit);
 
@@ -185,11 +189,22 @@ internal sealed class PlanningPoolCoordinator
         using var admission = await EnterAdmissionAsync(cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         // Never carry a preceding evaluation's tracker state across this gate.
-        var snapshot = await readSnapshot(repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
+        PlanningPoolSnapshot snapshot;
+        try
+        {
+            snapshot = await readSnapshot(repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch
+        {
+            observation?.Unknown(WaitCensor.Failure);
+            throw;
+        }
 
         var diagnostics = new List<PlanningPoolDiagnostic>();
         var eligible = SelectEligible(snapshot, diagnostics);
+        lock (stateGate) observation?.Observe(eligible.Select(bead => bead.Id),
+            PlanningPoolPlanner.CountActiveTasks(snapshot.Inventory) >= project.Concurrency.MaxActivePlanBeads);
         var admitted = new List<PlanningPoolAdmission>();
         for (var index = 0; index < eligible.Count; index++)
         {
@@ -198,6 +213,8 @@ internal sealed class PlanningPoolCoordinator
             var reservation = TryReserve(bead.Id, out var reservationDiagnostic);
             if (reservation is null)
             {
+                if (reservationDiagnostic!.Code == PlanningPoolDiagnosticCode.AlreadyReserved)
+                    observation?.ExcludeReserved(bead.Id);
                 diagnostics.Add(reservationDiagnostic!);
                 if (reservationDiagnostic!.Code == PlanningPoolDiagnosticCode.CapacityReached)
                 {
@@ -321,6 +338,7 @@ internal sealed class PlanningPoolCoordinator
                     ?? $"planning-{Enumerable.Range(1, capacityLimit).First(index => reservations.Values.All(active => active.SlotId != $"planning-{index}"))}";
                 reservation = new ReservationState(beadId, slotId) { EnvironmentLease = environmentLease, Timing = WorkflowTiming.Reserve("planning", beadId) };
                 reservations.Add(beadId, reservation);
+                observation?.Reserve(beadId, reservation.Timing);
                 telemetry?.Reserve("planning", slotId, beadId);
                 return true;
             }
@@ -410,6 +428,7 @@ internal sealed class PlanningPoolCoordinator
             reservation.Timing?.Dispose();
             telemetry?.Release("planning", reservation.SlotId, reservation.BeadId);
             reservations.Remove(reservation.BeadId);
+            observation?.Release(reservation.BeadId);
             reservation.EnvironmentLease?.Dispose();
             // Capacity is released before notification. Keep that transition and publication under
             // one lock so a drain cannot observe an empty reservation set before this result exists.

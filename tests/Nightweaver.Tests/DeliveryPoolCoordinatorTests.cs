@@ -501,11 +501,49 @@ public sealed class DeliveryPoolCoordinatorTests
         Assert.Empty(pool.ActiveReservations);
     }
 
+    [Fact]
+    public async Task WaitingObservationUsesAdmissionSelectionAndBreaksOnReadFailure()
+    {
+        var clock = new WorkflowTimingTests.Clock();
+        List<double> samples = [];
+        var observation = new PoolObservation("delivery", 1, clock, samples.Add, (_, _) => { });
+        var current = Snapshot([Row("a"), Row("b"),
+            Row("paused", labels: ["needs-human"]), Row("held", labels: ["plan-unpublished"])], ["a", "b", "paused", "held"]);
+        var release = NewSignal();
+        var reads = 0;
+        var fail = false;
+        var pool = CreatePool(1, () =>
+        {
+            reads++;
+            if (fail) throw new IOException("controlled tracker failure");
+            return Task.FromResult(current);
+        }, async (_, _, _, _, _) => { await release.Task; return SlotOutcome(DeliverySlotDisposition.Refused); }, observation: observation);
+        var first = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            Assert.Equal("a", Assert.Single(first.Admitted).BeadId);
+            Assert.Equal(1, Assert.Single(observation.Read("queued")).Value);
+            clock.Advance(5);
+            await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(5, Assert.Single(observation.Read("oldest")).Value);
+            fail = true;
+            await Assert.ThrowsAsync<IOException>(() => pool.EvaluateAsync(TestContext.Current.CancellationToken));
+            Assert.Empty(observation.Read("queued"));
+            fail = false;
+            current = Snapshot([Row("b")], []); // lost native readiness/dependency change
+            await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(0, Assert.Single(observation.Read("queued")).Value);
+            Assert.Equal(4, reads);
+            Assert.Empty(samples);
+        }
+        finally { release.TrySetResult(true); await Task.WhenAll(first.Admitted.Select(item => item.Completion)); }
+    }
+
     private static DeliveryPoolCoordinator CreatePool(
         int capacity,
         Func<Task<DeliveryPoolSnapshot>> snapshotReader,
         DeliveryPoolSlotRunner slotRunner,
-        CancellationTokenSource? lifetime = null)
+        CancellationTokenSource? lifetime = null, PoolObservation? observation = null)
     {
         var host = new HostPaths(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "delivery-pool-host")));
         var target = new ValidatedTargetRepository(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "delivery-pool-target")), "main");
@@ -515,7 +553,7 @@ public sealed class DeliveryPoolCoordinatorTests
             new RoleSettings(roles));
         var processRunner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(0, "", "")));
         return new DeliveryPoolCoordinator(host, project, target, processRunner,
-            (_, _, _) => snapshotReader(), slotRunner, slotLifetimeToken: lifetime?.Token ?? CancellationToken.None);
+            (_, _, _) => snapshotReader(), slotRunner, observation: observation, slotLifetimeToken: lifetime?.Token ?? CancellationToken.None);
     }
 
     private static DeliveryPoolSnapshot Snapshot(IEnumerable<string> rows, IEnumerable<string> nativeReady)
