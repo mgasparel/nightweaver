@@ -248,6 +248,10 @@ requesting graceful drain or disposing Web. Successful later drain does not eras
 the failing runtime. Discovery, timer and completion-stream infrastructure failure
 notifies the owner before active pool drain begins, even while live telemetry
 continues during that drain. A deliberate cancellation publishes no such failure.
+The same distinction applies while waiting for Web readiness: caller-requested
+cancellation disposes Web and preserves stop/maintenance intent and any prior
+failure or incident without creating another. Real readiness errors, timeouts and
+unrequested cancellation retain the first failure before Web disposal.
 Control stop proposals share owner-state writer serialization with failure updates;
 only successful owner-record publication commits stopping state. A rejected or
 canceled publication leaves the prior state visible and accepts no shutdown action.

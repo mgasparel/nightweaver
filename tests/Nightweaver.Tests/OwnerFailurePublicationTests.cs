@@ -12,6 +12,109 @@ namespace Nightweaver.Tests;
 public sealed class OwnerFailurePublicationTests
 {
     [Theory]
+    [InlineData("stop", false)]
+    [InlineData("maintenance", false)]
+    [InlineData("console", false)]
+    [InlineData("stop", true)]
+    [InlineData("maintenance", true)]
+    [InlineData("console", true)]
+    public async Task DeliberateStopDuringWebReadinessDisposesWithoutNewFailure(string action, bool priorFailure)
+    {
+        using var directory = new TempDirectory();
+        var identity = DeploymentObservationTests.Identity(directory.Path);
+        var owner = DeploymentObservationTests.Owner(identity) with { State = "starting" };
+        using var state = new BackgroundOwnerState(owner);
+        var paths = new HostPaths(directory.Path);
+        var project = ProjectSlug.Parse("demo");
+        var path = BackgroundOwnerRecord.PathFor(paths, project);
+        await state.PersistAsync(path, TestContext.Current.CancellationToken);
+        if (priorFailure) await BackgroundOwnerApplication.RetainFailureAsync(state, path, "RuntimeFailure");
+        var failure = state.Current.Failure;
+        var evidence = new DeploymentEvidenceStore(paths, project, identity);
+        var before = evidence.Read();
+        var historyPath = Path.Combine(paths.BackgroundRoot(project), "owner-failures.json");
+        var history = priorFailure ? await File.ReadAllTextAsync(historyPath, TestContext.Current.CancellationToken) : null;
+        using var shutdown = new RuntimeShutdownSignals();
+        shutdown.PersistIntentionalStop = () => state.PublishAsync(path,
+            record => record with { State = "stopping", StopReason = "OperatorDrain" }, CancellationToken.None)
+            .GetAwaiter().GetResult();
+        var waiting = Signal();
+        var disposals = 0;
+        var readiness = BackgroundOwnerApplication.CheckWebReadinessAsync(async token =>
+        {
+            waiting.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        }, () => { disposals++; return ValueTask.CompletedTask; }, state, path, shutdown.FirstStopToken);
+        await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        if (action == "console") shutdown.RequestStop();
+        else
+        {
+            var reason = action == "maintenance" ? "Maintenance" : "OperatorDrain";
+            await state.PublishAsync(path, record => record with { State = "stopping", StopReason = reason },
+                TestContext.Current.CancellationToken);
+            BackgroundOwnerApplication.ApplyControlAction(new("stop", owner.RunId, Maintenance: action == "maintenance"),
+                owner.RunId, shutdown);
+        }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => readiness);
+        Assert.Equal(1, disposals);
+        Assert.Equal(action == "maintenance" ? RuntimeShutdownReason.Maintenance : RuntimeShutdownReason.OperatorDrain,
+            shutdown.Reason);
+        Assert.Equal("stopping", state.Current.State);
+        Assert.Equal(shutdown.Reason.ToString(), state.Current.StopReason);
+        Assert.Equal(failure, state.Current.Failure);
+        Assert.Equal(state.Current, BackgroundOwnerRecord.TryRead(path));
+        if (priorFailure)
+        {
+            Assert.Equal(history, await File.ReadAllTextAsync(historyPath, TestContext.Current.CancellationToken));
+            Assert.Equal(before!.ContinuingIncident!.Id, evidence.Read()!.ContinuingIncident!.Id);
+            Assert.Single(evidence.Read()!.History);
+        }
+        else
+        {
+            Assert.False(File.Exists(historyPath));
+            Assert.Null(evidence.Read());
+        }
+    }
+
+    [Theory]
+    [InlineData("exit")]
+    [InlineData("timeout")]
+    [InlineData("malformed")]
+    [InlineData("unrequested-cancellation")]
+    public async Task GenuineWebReadinessFailureIsRetainedBeforeDisposal(string source)
+    {
+        using var directory = new TempDirectory();
+        var identity = DeploymentObservationTests.Identity(directory.Path);
+        using var state = new BackgroundOwnerState(DeploymentObservationTests.Owner(identity) with { State = "starting" });
+        var paths = new HostPaths(directory.Path);
+        var project = ProjectSlug.Parse("demo");
+        var path = BackgroundOwnerRecord.PathFor(paths, project);
+        Exception failure = source switch
+        {
+            "exit" => new IOException("Web exited or unhealthy"),
+            "timeout" => new TimeoutException("readiness deadline"),
+            "malformed" => new JsonException("invalid readiness"),
+            _ => new OperationCanceledException("independent cancellation")
+        };
+        var disposed = false;
+        var thrown = await Record.ExceptionAsync(() => BackgroundOwnerApplication.CheckWebReadinessAsync(
+            _ => Task.FromException(failure), () =>
+            {
+                Assert.Equal("WebFailure", BackgroundOwnerRecord.TryRead(path)!.Failure!.Reason);
+                Assert.Equal("WebFailure", new DeploymentEvidenceStore(paths, project, identity)
+                    .Read()!.ContinuingIncident!.Observation.Reason);
+                disposed = true;
+                return ValueTask.CompletedTask;
+            }, state, path, TestContext.Current.CancellationToken));
+        Assert.Same(failure, thrown);
+        Assert.True(disposed);
+        Assert.Equal(state.Current.RunId, state.Current.Failure!.RunId);
+        Assert.Equal(state.Current.RuntimeId, state.Current.Failure.RuntimeId);
+        Assert.Equal(state.Current.ProcessId, state.Current.Failure.ProcessId);
+        Assert.Equal(state.Current.ProcessStartedAtUtc, state.Current.Failure.ProcessStartedAtUtc);
+    }
+
+    [Theory]
     [InlineData("stop", false, false)]
     [InlineData("force", false, false)]
     [InlineData("stop", true, false)]

@@ -113,18 +113,13 @@ internal static class BackgroundOwnerApplication
                     var startedWebHost = BackgroundWebHost.Start(manifest.ResolveWebExecutable(readyPaths.Root),
                         readyPaths.Root, readyProject.ConfigFilePath, options.Urls, webLogPath);
                     webHost = startedWebHost;
-                    try
-                    {
-                        await startedWebHost.CheckReadyAsync(telemetry, readyProject.Name.Value, repository.Path, token)
-                            .ConfigureAwait(false);
-                    }
-                    catch
-                    {
-                        await RetainFailureAsync(state, recordPath, "WebFailure").ConfigureAwait(false);
-                        await startedWebHost.DisposeAsync().ConfigureAwait(false);
-                        webHost = null;
-                        throw;
-                    }
+                    await CheckWebReadinessAsync(
+                        readyToken => startedWebHost.CheckReadyAsync(telemetry, readyProject.Name.Value, repository.Path, readyToken),
+                        async () =>
+                        {
+                            try { await startedWebHost.DisposeAsync().ConfigureAwait(false); }
+                            finally { webHost = null; }
+                        }, state, recordPath, token).ConfigureAwait(false);
 
                     runtimeWasReady = true;
                     state.Update(record => record with
@@ -192,6 +187,24 @@ internal static class BackgroundOwnerApplication
                 await PersistAsync(recordPath, state).ConfigureAwait(false);
                 return ExitCodes.InspectionFailure;
             }
+        }
+    }
+
+    internal static async Task CheckWebReadinessAsync(Func<CancellationToken, Task> checkReady,
+        Func<ValueTask> disposeWeb, BackgroundOwnerState state, string recordPath, CancellationToken token)
+    {
+        try { await checkReady(token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // Caller shutdown is deliberate; keep its intent and existing incident unchanged.
+            await disposeWeb().ConfigureAwait(false);
+            throw;
+        }
+        catch
+        {
+            try { await RetainFailureAsync(state, recordPath, "WebFailure").ConfigureAwait(false); }
+            finally { await disposeWeb().ConfigureAwait(false); }
+            throw;
         }
     }
 

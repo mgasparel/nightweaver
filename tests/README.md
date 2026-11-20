@@ -54,6 +54,10 @@ for stop/force/maintenance, concurrent owner failure, and discovery/timer/comple
 infrastructure termination with a blocked pool drain. These cheap cases verify
 truthful control state and retained failure identity before drain without adding
 native journeys or fixture publishing. Deliberate cancellation remains distinct.
+Blocked Web-readiness cases cover control stop, maintenance and console stop,
+with and without prior failure evidence. They verify disposal and unchanged
+failure/incident history; genuine readiness errors still publish before disposal.
+These use injected operations without adding native launches or fixture publishing.
 
 Journal cancellation/deadline tests assert native process signaling before
 return and disposable-file teardown. Their 16 iterations per path cover Windows
