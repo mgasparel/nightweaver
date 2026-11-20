@@ -30,6 +30,13 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Lifecycle observation adds deterministic monotonic-clock coverage of first-pass
+known/unknown visits, semantic repair versus retry attempts, pause labels, notes,
+abort, deletion/reopen, restart, stale reads, UTC jumps and the shared cache bound.
+Existing confirmed/reread/refused Delivery publisher fixtures and a Planning
+publication fixture check lifecycle wire records without another native journey.
+See [the lifecycle contract](../docs/design/lifecycle-observation-telemetry.md).
+
 Web observation telemetry adds four cheap decoder/loopback/component cases for shared
 subscriber collection, scheduled no-op suppression, monotonic retained age,
 timeout/unavailable/idle/stopped states and exported canary exclusion. Existing

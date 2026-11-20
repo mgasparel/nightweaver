@@ -4,11 +4,35 @@ using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
 using Nightweaver.Planning;
+using Nightweaver.Telemetry;
 
 namespace Nightweaver.Tests;
 
 public sealed class PlanningPublicationTests
 {
+    [Fact]
+    public async Task ConfirmedGraphPublicationExportsMilestoneWithoutCountingASecondApproval()
+    {
+        using var fixture = new Fixture(largeGraph: true) { LoseResponseAt = 8 };
+        await using var receiver = await OperationalTelemetryTests.Receiver.StartAsync();
+        await using var telemetry = new OperationalTelemetry(OperationalHost.Runtime, new(receiver.Endpoint, "", 1),
+            _ => { }, metricIntervalMilliseconds: 100);
+        using var runtime = telemetry.EnterRuntime("0123456789abcdef0123456789abcdef");
+        Assert.True((await fixture.Publish()).VerifiedState!.Planned);
+        await receiver.WaitForSignalsAsync();
+        await telemetry.StopAsync(false);
+        var spans = receiver.Captures.Where(c => c.Signal == "traces").SelectMany(FirstPathTelemetryTests.DecodeRecords)
+            .Select(span => OperationalTelemetryTests.Attributes(span, 9)).ToArray();
+        Assert.Contains(spans, tags => tags.GetValueOrDefault("operation") == "lifecycle"
+            && tags.GetValueOrDefault("outcome") == "planning_published"
+            && tags.GetValueOrDefault("source") == "confirmed_publication"
+            && tags.ContainsKey("observed.utc"));
+        var names = receiver.Captures.Where(c => c.Signal == "metrics").SelectMany(FirstPathTelemetryTests.DecodeRecords)
+            .Select(m => m.Only(1).String).ToArray();
+        Assert.Contains("nightweaver.published.outcomes", names);
+        Assert.DoesNotContain("nightweaver.approvals", names);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData(8)]

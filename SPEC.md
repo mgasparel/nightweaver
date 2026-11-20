@@ -511,6 +511,14 @@ Diagnostic classifier results, confirmed lifecycle publication, operational retr
 and semantic repairs remain separate observations with bounded aggregate dimensions.
 These observations never establish workflow authority.
 
+Exported [lifecycle observations](docs/design/lifecycle-observation-telemetry.md)
+separate confirmed Planning/Delivery publications and semantic repairs from
+operational retries. First-pass approval ratios expose unknown history. Human
+waiting follows observed pause labels, with monotonic durations only for complete
+same-runtime segments; notes, aborts, gaps and restarts cannot synthesize Resume
+or total Bead lead time. Eligibility and lifecycle observation share a bounded
+10,000-record runtime budget; Beads remains the sole lifecycle authority.
+
 Catch-Up Digest displays **Merged** for a closed task only when its exact
 `nightweaver-verified-merge-v1` host record and referenced `nightweaver-merge-v1`
 report agree on the PR, checked head and merge commit. Empty `close_reason` is

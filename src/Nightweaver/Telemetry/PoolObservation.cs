@@ -7,7 +7,8 @@ internal enum WaitCensor { Ineligible, Failure, Stale, Capacity, Shutdown, Reser
 /// <summary>Bounded observation only; admission remains entirely with the pool.</summary>
 internal sealed class PoolObservation(
     string pool, int capacity, TimeProvider clock, Action<double> complete,
-    Action<WaitCensor, int> censor, Func<bool>? stopping = null, int recordLimit = 3333)
+    Action<WaitCensor, int> censor, Func<bool>? stopping = null, int recordLimit = 3333,
+    ObservationBudget? budget = null)
 {
     // Three pools retain at most 9,999 identities per runtime, below the 10,000 cap.
     private readonly object gate = new();
@@ -31,6 +32,7 @@ internal sealed class PoolObservation(
             foreach (var id in waiting.Keys.Where(id => !ids.Contains(id)).ToArray())
             {
                 waiting.Remove(id);
+                budget?.Release();
                 censor(WaitCensor.Ineligible, 1);
             }
             var previouslyCovered = covered;
@@ -38,7 +40,7 @@ internal sealed class PoolObservation(
             foreach (var id in ids)
             {
                 if (waiting.ContainsKey(id)) continue;
-                if (waiting.Count >= recordLimit)
+                if (waiting.Count >= recordLimit || budget?.Acquire() == false)
                 {
                     covered = false;
                     censor(WaitCensor.Capacity, 1);
@@ -57,6 +59,7 @@ internal sealed class PoolObservation(
         lock (gate)
         {
             if (waiting.Count > 0) censor(reason, waiting.Count);
+            budget?.Release(waiting.Count);
             waiting.Clear();
             continuous = covered = false;
             if (reason == WaitCensor.Shutdown) stopped = true;
@@ -70,6 +73,7 @@ internal sealed class PoolObservation(
             Expire();
             if (waiting.Remove(id, out var interval))
             {
+                budget?.Release();
                 if (interval.Complete) complete(clock.GetElapsedTime(interval.Start).TotalSeconds);
                 else censor(WaitCensor.LeftCensored, 1);
             }
@@ -80,7 +84,11 @@ internal sealed class PoolObservation(
     internal void ExcludeReserved(string id)
     {
         lock (gate)
-            if (waiting.Remove(id)) censor(WaitCensor.ReservedElsewhere, 1);
+            if (waiting.Remove(id))
+            {
+                budget?.Release();
+                censor(WaitCensor.ReservedElsewhere, 1);
+            }
     }
 
     internal void Release(string id) { lock (gate) active.Remove(id); }

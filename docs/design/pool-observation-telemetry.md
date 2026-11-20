@@ -49,8 +49,9 @@ and restart left-censored. Time between successful
 polls is approximate observed eligibility, not proof of continuous business
 eligibility. Even fresh zero is an observation, never an authorization.
 
-Each runtime retains at most 3,333 waiting records per pool (9,999 total, below
-the 10,000 ceiling). At capacity it keeps existing intervals and rejects additional
+Each runtime retains at most 3,333 waiting records per pool (9,999 total), sharing
+one 10,000-record ceiling with [lifecycle observations](lifecycle-observation-telemetry.md).
+At capacity it keeps existing intervals and rejects additional
 records, counts Capacity loss, and omits queue/oldest values until a complete fresh
 membership fits. No eviction can fabricate a completion. Censor reasons are the
 finite enum Ineligible, Failure, Stale, Capacity, Shutdown, ReservedElsewhere and
@@ -60,7 +61,8 @@ these counts are diagnostic observations, not unique Bead accounting.
 These streams use the existing bounded OTLP HTTP/protobuf exporter and are
 unsampled. No Bead, runtime, invocation or slot ID is a metric dimension. The
 additional conservative series budget for both service identities is
-`2 * (4*11 + 22 + 22 + 7*4) = 232`, including overflow, for 1,350 total.
+`2 * (4*11 + 22 + 22 + 7*4) = 232`, including overflow. Lifecycle observation
+adds 166 more, for 1,516 total.
 
 Grafana Explore can compare `sum by (pool) (nightweaver_pool_occupied)` with
 `nightweaver_pool_capacity`, break occupancy down by phase, and inspect queued and

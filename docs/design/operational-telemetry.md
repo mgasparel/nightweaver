@@ -131,7 +131,8 @@ cancellation. Providers, sources, meters and all three owned HTTP clients are
 disposed when their workers settle. No shutdown path changes workflow authority.
 
 The conservative translated-series inventory for **both** service identities is
-`580 + 2 * (37 + 7 + 22 + 8*11 + 4 + 4*11 + 55 + 12) = 1118`, plus 232 for [pool observations](pool-observation-telemetry.md), totaling 1,350: operations, histogram
+`580 + 2 * (37 + 7 + 22 + 8*11 + 4 + 4*11 + 55 + 12) = 1118`, plus 232 for [pool observations](pool-observation-telemetry.md)
+and 166 for [lifecycle observations](lifecycle-observation-telemetry.md), totaling 1,516: operations, histogram
 (9 buckets including +Inf, sum, count), drops, failures, one `target_info`, then
 one overflow point per dimensional counter and eleven per histogram, plus the
 invocation, verified merge, cleanup and observation streams including their overflow, plus
