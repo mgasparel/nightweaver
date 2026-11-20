@@ -67,7 +67,7 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient, IBeadsInvalidati
             long? truncatedHead = null;
             try { sequences = await ParseInvalidationsAsync(process.StandardOutput, maxRecords, linked.Token).ConfigureAwait(false); }
             catch (BeadsJournalTruncatedException exception) { truncatedHead = exception.Head; }
-            await process.WaitForExitAsync(linked.Token).ConfigureAwait(false);
+            await SystemProcessRunner.WaitForSettlementAsync(process, linked.Token).ConfigureAwait(false);
             var diagnostic = await standardError.ConfigureAwait(false);
             linked.Token.ThrowIfCancellationRequested();
             if (truncatedHead is { } reportedHead) throw new BeadsJournalTruncatedException(reportedHead);
@@ -348,7 +348,7 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient, IBeadsInvalidati
     {
         try
         {
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            if (!SystemProcessRunner.HasSettled(process)) process.Kill(entireProcessTree: true);
         }
         catch (InvalidOperationException)
         {
@@ -361,9 +361,10 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient, IBeadsInvalidati
 
         try
         {
-            await process.WaitForExitAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            using var settlement = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await SystemProcessRunner.WaitForSettlementAsync(process, settlement.Token).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is InvalidOperationException or TimeoutException)
+        catch (Exception exception) when (exception is InvalidOperationException or OperationCanceledException or Win32Exception)
         {
             throw new BeadsJournalSettlementException("Beads journal child settlement is uncertain; watcher stopped without replacement.", exception);
         }

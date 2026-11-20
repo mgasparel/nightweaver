@@ -140,14 +140,14 @@ internal sealed class SystemProcessRunner : IProcessRunner
     // Process.HasExited/WaitForExitAsync can observe an exit code during Windows
     // process rundown, before the native handle signals and file locks settle.
     // Keep the original wait token; cancellation still kills and settles the child.
-    private static async Task WaitForSettlementAsync(Process process, CancellationToken cancellationToken)
+    internal static async Task WaitForSettlementAsync(Process process, CancellationToken cancellationToken)
     {
         await process.WaitForExitAsync(cancellationToken);
         while (!HasSettled(process))
             await Task.Delay(1, cancellationToken);
     }
 
-    private static bool HasSettled(Process process)
+    internal static bool HasSettled(Process process)
     {
         if (!OperatingSystem.IsWindows()) return process.HasExited;
         return WaitForSingleObject(process.SafeHandle, 0) switch
