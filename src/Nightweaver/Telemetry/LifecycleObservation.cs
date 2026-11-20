@@ -32,6 +32,7 @@ internal sealed class LifecycleObservation(TimeProvider clock,
         internal long Start;
         internal bool Complete;
         internal string? Stage;
+        internal bool HasValidStage;
         internal bool KnownVisit;
         internal int Repairs;
         internal int Attempts;
@@ -115,13 +116,16 @@ internal sealed class LifecycleObservation(TimeProvider clock,
                 var observation = BeadWorkflowObservation.Read(bead);
                 var stage = observation.Error is null && observation.State is { } state
                     ? state.Stage ?? (state.Planned ? null : bead.IssueType == "task" ? "stage:implement" : "stage:plan") : null;
-                if (stage != entry.Stage)
+                // Malformed observations lose coverage, not the last valid visit.
+                // Recovery to that same stage cannot prove a new role boundary.
+                if (observation.Error is null && stage != entry.Stage)
                 {
-                    entry.KnownVisit = knownPrevious && observation.Error is null && pause is null;
+                    entry.KnownVisit = knownPrevious && entry.HasValidStage && pause is null;
                     entry.Attempts = 0;
                     entry.LastInvocation = null;
                     entry.Stage = stage;
                 }
+                if (observation.Error is null) entry.HasValidStage = true;
                 if (observation.Error is not null) entry.KnownVisit = false;
                 if (observation.RepairCycles is { } repairs)
                 {
@@ -168,6 +172,7 @@ internal sealed class LifecycleObservation(TimeProvider clock,
                 if (entry.KnownVisit && entry.Stage == RoleStage(role) && entry.LastInvocation == invocation)
                     coverage = entry.Repairs == 0 && entry.Attempts == 1 ? ApprovalCoverage.FirstPass : ApprovalCoverage.LaterPass;
                 entry.Stage = state.Stage;
+                entry.HasValidStage = true;
                 entry.Repairs = state.RepairCycles;
                 entry.KnownVisit = !state.ProductDecisionRequired && !state.NeedsHuman;
                 entry.Attempts = 0;

@@ -24,6 +24,10 @@ the denominator is FirstPass + LaterPass. Always show Unknown alongside it.
 An initial or newly visible Bead, reset counter, malformed workflow, missing
 attempt, stale read, restart or lost cache history cannot establish first-pass
 history. Confirmed predecessor publication establishes the next visit boundary.
+Malformed observations retain the last valid stage and observed attempts while
+making the visit unknown. Recovery to the same stage preserves that unknown
+coverage; a valid stage change or confirmed predecessor publication is required
+to establish a new visit.
 Counts describe observed publications, not exactly-once business accounting.
 
 | Instrument | Dimensions | Interpretation |

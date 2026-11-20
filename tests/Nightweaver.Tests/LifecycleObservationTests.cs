@@ -133,6 +133,41 @@ public sealed class LifecycleObservationTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MalformedInitialObservationCannotEstablishVisitButValidBoundaryCan(bool observedBoundary)
+    {
+        var observation = new LifecycleObservation(new WorkflowTimingTests.Clock(), (_, _) => { }, _ => { }, (_, _) => { });
+        var review = Bead(labels: ["stage:review"]);
+        observation.Observe([Bead(labels: ["stage:review", "stage:qa"])]);
+        if (observedBoundary) observation.Observe([Bead()]);
+        observation.Observe([review]);
+        observation.Attempt(review.Id, "reviewer", "review-attempt");
+        Assert.Equal(observedBoundary ? ApprovalCoverage.FirstPass : ApprovalCoverage.Unknown,
+            observation.Published(review.Id, "reviewer", "review-attempt", BeadWorkflowState.Parse(review) with { Stage = "stage:qa" }));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MalformedRecoveryToSameStageKeepsVisitUnknown(bool previouslyAttempted)
+    {
+        var observation = new LifecycleObservation(new WorkflowTimingTests.Clock(), (_, _) => { }, _ => { }, (_, _) => { });
+        var review = Bead(labels: ["stage:review"]);
+        if (previouslyAttempted) observation.Observe([Bead()]);
+        observation.Observe([review]);
+        if (previouslyAttempted) observation.Attempt(review.Id, "reviewer", "before-malformed");
+        observation.Observe([Bead(labels: ["stage:review", "stage:qa"])]);
+        observation.Observe([review]);
+        observation.Attempt(review.Id, "reviewer", "after-recovery");
+        var qa = BeadWorkflowState.Parse(review) with { Stage = "stage:qa" };
+        Assert.Equal(ApprovalCoverage.Unknown, observation.Published(review.Id, "reviewer", "after-recovery", qa));
+        // Confirmed predecessor publication establishes a genuinely new visit.
+        observation.Attempt(review.Id, "qa", "qa-attempt");
+        Assert.Equal(ApprovalCoverage.FirstPass, observation.Published(review.Id, "qa", "qa-attempt", qa with { Stage = "stage:merge" }));
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1)]
     public async Task WireMetricsAreUnsampledAndMilestonesExcludePrivateContent(double sampling)
