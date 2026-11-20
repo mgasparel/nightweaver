@@ -376,9 +376,11 @@ public sealed class OperationalTelemetryTests
         internal ConcurrentQueue<Capture> Captures { get; } = new();
         internal int RedirectHits;
         private readonly CancellationTokenSource stop = new();
+        private readonly TaskCompletionSource releaseHeldResponse = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private bool disposed;
 
-        internal static async Task<Receiver> StartAsync(int status = 200, bool hold = false, Uri? forward = null)
+        internal static async Task<Receiver> StartAsync(int status = 200, bool hold = false, Uri? forward = null,
+            string? heldSignal = null, int heldStatus = 200)
         {
             if (forward is not null && (forward.Scheme != "http" || forward.Host != "127.0.0.1"
                 || !string.IsNullOrEmpty(forward.UserInfo) || !string.IsNullOrEmpty(forward.Query)))
@@ -407,9 +409,15 @@ public sealed class OperationalTelemetryTests
                     try { await Task.Delay(Timeout.InfiniteTimeSpan, receiver.stop.Token); }
                     catch (OperationCanceledException) { }
                 }
-                context.Response.StatusCode = status;
-                if (status == 301) context.Response.Headers.Location = new Uri(receiver.Endpoint, "/stolen").AbsoluteUri;
-                if (status != 200) await context.Response.WriteAsync(Canary);
+                else if (heldSignal == signal)
+                {
+                    try { await receiver.releaseHeldResponse.Task.WaitAsync(receiver.stop.Token); }
+                    catch (OperationCanceledException) { }
+                }
+                var responseStatus = heldSignal == signal ? heldStatus : status;
+                context.Response.StatusCode = responseStatus;
+                if (responseStatus == 301) context.Response.Headers.Location = new Uri(receiver.Endpoint, "/stolen").AbsoluteUri;
+                if (responseStatus != 200) await context.Response.WriteAsync(Canary);
             });
             app.MapPost("/stolen", () => { Interlocked.Increment(ref receiver!.RedirectHits); });
             await app.StartAsync();
@@ -425,6 +433,11 @@ public sealed class OperationalTelemetryTests
 
         internal async Task<Capture[]> WaitForSignalsAsync() =>
             [await WaitForSignalAsync("traces"), await WaitForSignalAsync("logs"), await WaitForSignalAsync("metrics")];
+
+        internal static Task WaitForExportFailureAsync(string signal, IEnumerable<string> diagnostics) =>
+            WaitUntilAsync(() => diagnostics.Any(value => value.Contains($"{signal}/export", StringComparison.Ordinal)));
+
+        internal void ReleaseHeldResponse() => releaseHeldResponse.TrySetResult();
 
         internal async Task WaitForWorkflowKindsAsync(string[] expected, IEnumerable<string> diagnostics)
         {

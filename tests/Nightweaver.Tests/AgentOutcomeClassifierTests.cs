@@ -92,14 +92,16 @@ public sealed class AgentOutcomeClassifierTests
     }
 
     [Theory]
-    [InlineData("primary", "success", false, false)]
-    [InlineData("unavailable", "unavailable", true, false)]
-    [InlineData("invalid", "invalid", true, false)]
-    [InlineData("unavailable", "unavailable", true, true)]
-    public async Task ClassifierDiagnosticsAreSeparateFromVerifiedLifecycleOutcomes(string mode, string primaryResult, bool fallback, bool concurrentDecorator)
+    [InlineData("primary", "success", false, false, false)]
+    [InlineData("unavailable", "unavailable", true, false, false)]
+    [InlineData("invalid", "invalid", true, false, false)]
+    [InlineData("unavailable", "unavailable", true, true, false)]
+    [InlineData("invalid", "invalid", true, false, true)]
+    public async Task ClassifierDiagnosticsAreSeparateFromVerifiedLifecycleOutcomes(string mode, string primaryResult, bool fallback,
+        bool concurrentDecorator, bool holdMetricsResponse)
     {
         using var fixture = new OutcomeFixture();
-        await using var receiver = await Receiver.StartAsync();
+        await using var receiver = await Receiver.StartAsync(heldSignal: holdMetricsResponse ? "metrics" : null, heldStatus: 503);
         ConcurrentQueue<string> diagnostics = new();
         await using var telemetry = new OperationalTelemetry(OperationalHost.Runtime, new(receiver.Endpoint, "", 1),
             diagnostics.Enqueue, metricIntervalMilliseconds: 100);
@@ -134,7 +136,6 @@ public sealed class AgentOutcomeClassifierTests
         // Assert records before bounded best-effort shutdown can cancel pending work.
         await receiver.WaitForWorkflowKindsAsync(fallback ? ["LifecyclePrimary", "LifecycleFallback"] : ["LifecyclePrimary"], diagnostics);
         await receiver.WaitForSignalsAsync();
-        await telemetry.StopAsync(false);
         var spans = receiver.Captures.Where(c => c.Signal == "traces").SelectMany(FirstPathTelemetryTests.DecodeRecords)
             .Select(span => Attributes(span, 9)).ToArray();
         Assert.Contains(spans, tags => tags.GetValueOrDefault("kind") == "LifecyclePrimary" && tags["outcome"] == primaryResult);
@@ -142,7 +143,20 @@ public sealed class AgentOutcomeClassifierTests
             $"Expected fallback={fallback}; kinds={string.Join(",", spans.Select(t => t.GetValueOrDefault("kind")))}; losses={string.Join(";", diagnostics)}");
         if (fallback) Assert.Contains(spans, tags => tags.GetValueOrDefault("kind") == "LifecycleFallback" && tags["outcome"] == "success");
         Assert.Empty(diagnostics);
-        Assert.DoesNotContain(spans, tags => tags["operation"] == "verified_merge");
+        // The active classifier evidence must be complete and loss-free. Best-effort
+        // shutdown can report independent export loss after that evidence is verified.
+        var shutdown = telemetry.StopAsync(false).AsTask();
+        if (holdMetricsResponse) receiver.ReleaseHeldResponse();
+        await shutdown;
+        if (holdMetricsResponse)
+        {
+            await Receiver.WaitForExportFailureAsync("metrics", diagnostics);
+            Assert.Equal("Operational telemetry loss: metrics/export (further losses counted in metrics).",
+                Assert.Single(diagnostics));
+        }
+        Assert.DoesNotContain(receiver.Captures.Where(c => c.Signal == "traces")
+            .SelectMany(FirstPathTelemetryTests.DecodeRecords).Select(span => Attributes(span, 9)),
+            tags => tags["operation"] == "verified_merge");
         foreach (var capture in receiver.Captures) Assert.DoesNotContain(canary, Encoding.UTF8.GetString(capture.Bytes));
         Assert.DoesNotContain(receiver.Captures.Where(c => c.Signal == "metrics").SelectMany(FirstPathTelemetryTests.DecodeRecords),
             m => m.Only(1).String is "nightweaver.published.outcomes" or "nightweaver.semantic.repairs");
