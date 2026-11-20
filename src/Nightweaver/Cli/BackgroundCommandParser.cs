@@ -9,7 +9,7 @@ internal static class BackgroundCommandParser
         help = false;
         if (args.Count < 2)
         {
-            throw new UsageException("'background' requires start, status, stop, or restart");
+            throw new UsageException("'background' requires start, status, stop, restart, or maintenance");
         }
 
         if (args[1] == "owner") return ParseOwner(args);
@@ -20,12 +20,17 @@ internal static class BackgroundCommandParser
             return new(BackgroundAction.Status, null);
         }
 
-        var action = args[1] switch
+        var maintenance = args[1] == "maintenance";
+        if (maintenance && args.Count < 3) throw new UsageException("maintenance requires enter, status, or leave");
+        var action = (maintenance ? "maintenance-" + args[2] : args[1]) switch
         {
             "start" => BackgroundAction.Start,
             "status" => BackgroundAction.Status,
             "stop" => BackgroundAction.Stop,
             "restart" => BackgroundAction.Restart,
+            "maintenance-enter" => BackgroundAction.MaintenanceEnter,
+            "maintenance-status" => BackgroundAction.MaintenanceStatus,
+            "maintenance-leave" => BackgroundAction.MaintenanceLeave,
             _ => throw new UsageException($"unknown background action '{args[1]}'")
         };
         string? project = null;
@@ -35,8 +40,10 @@ internal static class BackgroundCommandParser
         var hasConfig = false;
         var hasUrls = false;
         var force = false;
+        string? maintenanceToken = null;
+        long? revision = null;
 
-        for (var index = 2; index < args.Count; index++)
+        for (var index = maintenance ? 3 : 2; index < args.Count; index++)
         {
             var token = args[index];
             if (token is "--help" or "-h")
@@ -46,6 +53,22 @@ internal static class BackgroundCommandParser
                 break;
             }
 
+            if (token is "--token" or "--revision")
+            {
+                if (action != BackgroundAction.MaintenanceLeave) throw new UsageException("token/revision require maintenance leave");
+                var value = ReadValue(args, ref index, token);
+                if (token == "--token")
+                {
+                    if (maintenanceToken is not null || !Guid.TryParseExact(value, "N", out _)) throw new UsageException("invalid/repeated maintenance token");
+                    maintenanceToken = value;
+                }
+                else
+                {
+                    if (revision is not null || !long.TryParse(value, out var parsed) || parsed < 1) throw new UsageException("invalid/repeated maintenance revision");
+                    revision = parsed;
+                }
+                continue;
+            }
             if (token is "--project" or "--config" or "--urls")
             {
                 var value = ReadValue(args, ref index, token);
@@ -102,7 +125,9 @@ internal static class BackgroundCommandParser
             selector = new ProjectSelector.ByConfigPath(config!);
         }
 
-        return new BackgroundCommandOptions(action, selector, urls, force);
+        if (action == BackgroundAction.MaintenanceLeave && (maintenanceToken is null || revision is null))
+            throw new UsageException("maintenance leave requires --token and --revision from current maintenance status");
+        return new BackgroundCommandOptions(action, selector, urls, force, MaintenanceToken: maintenanceToken, Revision: revision);
     }
 
     private static BackgroundCommandOptions ParseOwner(IReadOnlyList<string> args)

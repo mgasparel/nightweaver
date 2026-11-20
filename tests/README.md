@@ -396,3 +396,11 @@ and one in-process OTLP wire/privacy check. Existing native
 `PoolConcurrencyIntegrationTests` retain the process/tool boundary; no native
 journey, additional tracker command or scheduling change is added. See
 [pool observation semantics](../docs/design/pool-observation-telemetry.md).
+
+Background lifecycle intent adds cheap store/transition/command-parser/signal fixtures
+for durable absent-owner stop, lost-response crash points, pending reservations,
+maintenance token/revision release, intervening stop/disable, command-lock contention,
+failed-write interlocks and direct-stop versus internal-failure reasons. The second
+signal is checked while persistence is deliberately blocked. These add no native
+runtime, Agent, scheduler or publish journey; existing control-pipe tests retain the
+peer deadline/disconnect boundary and existing background/native hosting coverage remains.

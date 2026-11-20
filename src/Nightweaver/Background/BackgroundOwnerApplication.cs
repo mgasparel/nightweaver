@@ -5,6 +5,7 @@ using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
 using Nightweaver.Telemetry;
+using Nightweaver.Supervision;
 
 namespace Nightweaver.Background;
 
@@ -70,6 +71,25 @@ internal static class BackgroundOwnerApplication
                 var projectConfig = ProjectConfigLoader.Load(options.ConfigPath, projectSlug, paths);
                 if (!PathEquals(projectConfig.ConfigFilePath, options.ConfigPath))
                     throw new InvalidDataException("background owner config path did not resolve to the requested Project file");
+                var lifecycle = await SupervisionLifecycle.OpenAsync(paths, projectConfig, cancellationToken).ConfigureAwait(false);
+                shutdownSignals.PersistIntentionalStop = () =>
+                {
+                    try
+                    {
+                        lifecycle?.ApplyAsync(SupervisionLifecycleAction.Stop, null, null, CancellationToken.None)
+                            .GetAwaiter().GetResult();
+                        state.Update(record => record with { State = "stopping", StopReason = "OperatorDrain",
+                            Message = "Intentional console drain requested" });
+                        PersistAsync(recordPath, state).GetAwaiter().GetResult();
+                    }
+                    catch (Exception)
+                    {
+                        state.Update(record => record with { State = "stopping", StopReason = "supervision-unavailable",
+                            Message = "Direct stop intent could not be persisted; supervision unavailable. Inspect retained state before recovery." });
+                        PersistAsync(recordPath, state).GetAwaiter().GetResult();
+                        throw;
+                    }
+                };
                 state.Update(record => record with { TargetRepository = projectConfig.TargetRepository.Path });
                 await PersistAsync(recordPath, state).ConfigureAwait(false);
                 ownerEnvironment.Out.WriteLine($"Background owner {options.RunId} starting Project '{projectSlug.Value}'.");
@@ -79,7 +99,7 @@ internal static class BackgroundOwnerApplication
                 var runtimeWasReady = false;
                 var controlServer = BackgroundControlProtocol.RunServerAsync(pipeName,
                     (request, requestToken) => HandleRequestAsync(request, options, paths, projectConfig, state,
-                        recordPath, () => webHost, requestToken),
+                        recordPath, () => webHost, lifecycle, requestToken),
                     serverLifetime.Token,
                     request => ApplyControlAction(request, options.RunId, shutdownSignals));
                 _ = WatchControlServerAsync(controlServer, state, recordPath, shutdownSignals, serverLifetime.Token);
@@ -128,10 +148,12 @@ internal static class BackgroundOwnerApplication
                 if (webHost is not null) await webHost.DisposeAsync().ConfigureAwait(false);
                 state.Update(record => record with
                 {
-                    State = runtimeCode == ExitCodes.Success ? "stopped" : runtimeWasReady ? "degraded" : "failed",
+                    State = shutdownSignals.Reason is RuntimeShutdownReason.WebFailure or RuntimeShutdownReason.RuntimeFailure
+                        ? "degraded" : runtimeCode == ExitCodes.Success ? "stopped" : runtimeWasReady ? "degraded" : "failed",
+                    StopReason = shutdownSignals.IntentPersistenceFailure is not null ? "supervision-unavailable" : (shutdownSignals.Reason == RuntimeShutdownReason.None ? RuntimeShutdownReason.RuntimeFailure : shutdownSignals.Reason).ToString(),
                     WebHealth = "stopped",
                     RuntimeHealth = runtimeCode == ExitCodes.Success ? "stopped" : "unknown",
-                    Message = runtimeCode == ExitCodes.Success ? "manual stop completed" : "runtime exited with an inspection failure"
+                    Message = shutdownSignals.IntentPersistenceFailure ?? $"owner exited: {shutdownSignals.Reason}; runtime code {runtimeCode}"
                 });
                 await PersistAsync(recordPath, state).ConfigureAwait(false);
                 ownerEnvironment.Out.WriteLine($"Background owner {options.RunId} exited with code {runtimeCode}.");
@@ -156,10 +178,10 @@ internal static class BackgroundOwnerApplication
         }
     }
 
-    private static async Task<BackgroundControlResponse> HandleRequestAsync(
+    internal static async Task<BackgroundControlResponse> HandleRequestAsync(
         BackgroundControlRequest request, BackgroundOwnerOptions options, HostPaths paths,
         ProjectConfig project, BackgroundOwnerState state, string recordPath,
-        Func<BackgroundWebHost?> webHostProvider, CancellationToken cancellationToken)
+        Func<BackgroundWebHost?> webHostProvider, SupervisionLifecycle? lifecycle, CancellationToken cancellationToken)
     {
         if (request.Operation == "status")
         {
@@ -169,9 +191,27 @@ internal static class BackgroundOwnerApplication
         if (request.Operation is not ("stop" or "force") || request.RunId != options.RunId)
             return new BackgroundControlResponse(false, state.Current, "control request identity or operation is invalid");
 
+        try
+        {
+            if (lifecycle is not null)
+            {
+                if (request.Maintenance)
+                {
+                    if (lifecycle.Read().State?.MaintenanceToken is null)
+                        throw new InvalidOperationException("Maintenance suppression is not confirmed.");
+                }
+                else if (lifecycle.Read().State is not { DesiredRunning: false })
+                    await lifecycle.ApplyAsync(SupervisionLifecycleAction.Stop, null, null, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return new(false, state.Current with { StopReason = "supervision-unavailable" }, exception.Message);
+        }
         var stoppingRecord = state.Current with
         {
             State = "stopping",
+            StopReason = request.Maintenance ? "Maintenance" : request.Operation == "force" ? "ForcedStop" : "OperatorDrain",
             Message = request.Operation == "force" ? "force stop requested" : "graceful drain requested"
         };
         await BackgroundOwnerRecord.WriteAsync(recordPath, stoppingRecord, cancellationToken).ConfigureAwait(false);
@@ -179,7 +219,7 @@ internal static class BackgroundOwnerApplication
         return new BackgroundControlResponse(true, stoppingRecord, null);
     }
 
-    private static void ApplyControlAction(BackgroundControlRequest request, string runId,
+    internal static void ApplyControlAction(BackgroundControlRequest request, string runId,
         RuntimeShutdownSignals shutdownSignals)
     {
         if (request.Operation is not ("stop" or "force") || request.RunId != runId) return;
@@ -189,7 +229,7 @@ internal static class BackgroundOwnerApplication
         }
         else
         {
-            shutdownSignals.RequestGracefulStop();
+            shutdownSignals.RequestGracefulStop(request.Maintenance ? RuntimeShutdownReason.Maintenance : RuntimeShutdownReason.OperatorDrain, intentAlreadyPersisted: true);
         }
     }
 
@@ -226,16 +266,17 @@ internal static class BackgroundOwnerApplication
         try
         {
             var exitCode = await webHost.WaitForExitAsync().ConfigureAwait(false);
-            if (cancellationToken.IsCancellationRequested) return;
+            if (cancellationToken.IsCancellationRequested || shutdownSignals.Reason != RuntimeShutdownReason.None) return;
             state.Update(record => record with
             {
                 State = "degraded",
                 WebHealth = "stopped",
+                StopReason = "WebFailure",
                 RuntimeHealth = "stale",
                 Message = $"Web Console exited unexpectedly with code {exitCode}; runtime is stopping and will require manual restart"
             });
             await BackgroundOwnerRecord.WriteAsync(recordPath, state.Current, CancellationToken.None).ConfigureAwait(false);
-            shutdownSignals.RequestGracefulStop();
+            shutdownSignals.RequestGracefulStop(RuntimeShutdownReason.WebFailure);
         }
         catch (Exception exception) when (exception is ObjectDisposedException or IOException) { }
     }
@@ -246,10 +287,10 @@ internal static class BackgroundOwnerApplication
         try
         {
             await serverTask.ConfigureAwait(false);
-            if (cancellationToken.IsCancellationRequested) return;
-            state.Update(record => record with { State = "degraded", Message = "local control server stopped unexpectedly" });
+            if (cancellationToken.IsCancellationRequested || shutdownSignals.Reason != RuntimeShutdownReason.None) return;
+            state.Update(record => record with { State = "degraded", StopReason = "RuntimeFailure", Message = "local control server stopped unexpectedly" });
             await BackgroundOwnerRecord.WriteAsync(recordPath, state.Current, CancellationToken.None).ConfigureAwait(false);
-            shutdownSignals.RequestGracefulStop();
+            shutdownSignals.RequestGracefulStop(RuntimeShutdownReason.RuntimeFailure);
         }
         catch (Exception exception) when (exception is OperationCanceledException or IOException) { }
     }

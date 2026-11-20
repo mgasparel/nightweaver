@@ -22,6 +22,9 @@ internal sealed record BackgroundOwnerRecord(
     string WebLogPath,
     string? Message)
 {
+    public string? StopReason { get; init; }
+    public Nightweaver.Supervision.SupervisionRead? Supervision { get; init; }
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,

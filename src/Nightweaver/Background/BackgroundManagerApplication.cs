@@ -4,6 +4,8 @@ using System.Text.Json;
 using Nightweaver.Cli;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
+using Nightweaver.Supervision;
+using Nightweaver.Inspection;
 
 namespace Nightweaver.Background;
 
@@ -14,11 +16,13 @@ internal static class BackgroundManagerApplication
     private static readonly JsonSerializerOptions OutputJson = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        WriteIndented = true
+        WriteIndented = true,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
     };
 
     internal static async Task<int> RunAsync(BackgroundCommandOptions options, AppEnvironment environment,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<HostPaths, ProjectConfig, CancellationToken, Task<SupervisionLifecycle?>>? openLifecycle = null)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -52,23 +56,75 @@ internal static class BackgroundManagerApplication
 
         var pipeName = BackgroundIdentity.PipeName(paths, project.Name);
         var recordPath = BackgroundOwnerRecord.PathFor(paths, project.Name);
-        switch (options.Action)
+        try
         {
-            case BackgroundAction.Status:
+            // Future recovery launchers must hold this same lock through final intent check and launch.
+            using var commandLock = options.Action is BackgroundAction.Status or BackgroundAction.MaintenanceStatus
+                ? null : BackgroundFileLock.AcquireStart(paths, project.Name);
+            var lifecycle = await (openLifecycle ?? SupervisionLifecycle.OpenAsync)(paths, project, cancellationToken).ConfigureAwait(false);
+            if (options.Action is BackgroundAction.Status or BackgroundAction.MaintenanceStatus)
+            {
+                var supervision = lifecycle?.Read() ?? new SupervisionRead(SupervisionAvailability.Manual, null,
+                    Path.Combine(paths.SupervisionRoot(project.Name), "state.json"), null);
+                if (options.Action == BackgroundAction.MaintenanceStatus)
+                {
+                    environment.Out.WriteLine(JsonSerializer.Serialize(supervision, OutputJson));
+                    return supervision?.Availability == SupervisionAvailability.Unavailable ? ExitCodes.InspectionFailure : ExitCodes.Success;
+                }
                 return WriteStatus(await QueryAsync(paths, project, configPath, pipeName, recordPath,
-                    cancellationToken).ConfigureAwait(false), environment);
-            case BackgroundAction.Stop:
-                return await StopAsync(paths, project, configPath, pipeName, recordPath, options.Force,
-                    environment, cancellationToken).ConfigureAwait(false);
-            case BackgroundAction.Start:
-                return await StartAsync(paths, project, configPath, options.Urls ?? "http://127.0.0.1:5000",
-                    pipeName, recordPath, environment, cancellationToken).ConfigureAwait(false);
-            case BackgroundAction.Restart:
-                return await RestartAsync(paths, project, configPath, options.Urls, pipeName, recordPath,
-                    environment, cancellationToken).ConfigureAwait(false);
-            default:
-                environment.Err.WriteLine("nightweaver: invalid background manager action.");
-                return ExitCodes.UsageOrConfiguration;
+                    cancellationToken).ConfigureAwait(false), environment, supervision);
+            }
+            if (options.Action == BackgroundAction.MaintenanceLeave)
+            {
+                if (lifecycle is null) throw new InvalidOperationException("No supervision installation; maintenance is unavailable.");
+                var released = await lifecycle.ApplyAsync(SupervisionLifecycleAction.LeaveMaintenance,
+                    options.MaintenanceToken, options.Revision, cancellationToken).ConfigureAwait(false);
+                environment.Out.WriteLine(JsonSerializer.Serialize(released, OutputJson));
+                return ExitCodes.Success;
+            }
+            if (options.Action == BackgroundAction.MaintenanceEnter)
+            {
+                if (lifecycle is null) throw new InvalidOperationException("No supervision installation; maintenance is unavailable.");
+                var entered = await lifecycle.ApplyAsync(SupervisionLifecycleAction.EnterMaintenance, null, null,
+                    cancellationToken).ConfigureAwait(false);
+                return await StopAsync(paths, project, configPath, pipeName, recordPath, false,
+                    environment, cancellationToken, maintenance: true, releaseCommand: commandLock!.Dispose, supervision: entered).ConfigureAwait(false);
+            }
+            SupervisionRead? intent = null;
+            if (lifecycle is not null)
+                intent = await lifecycle.ApplyAsync(options.Action is BackgroundAction.Stop or BackgroundAction.Restart
+                    ? SupervisionLifecycleAction.Stop : SupervisionLifecycleAction.Start,
+                    null, null, cancellationToken).ConfigureAwait(false);
+            switch (options.Action)
+            {
+                case BackgroundAction.Stop:
+                    return await StopAsync(paths, project, configPath, pipeName, recordPath, options.Force,
+                        environment, cancellationToken, releaseCommand: commandLock!.Dispose, supervision: intent).ConfigureAwait(false);
+                case BackgroundAction.Start:
+                    return await StartAsync(paths, project, configPath, options.Urls ?? "http://127.0.0.1:5000",
+                        pipeName, recordPath, environment, cancellationToken).ConfigureAwait(false);
+                case BackgroundAction.Restart:
+                {
+                    var stopped = await StopAsync(paths, project, configPath, pipeName, recordPath, false,
+                        environment, cancellationToken, releaseCommand: commandLock!.Dispose).ConfigureAwait(false);
+                    if (stopped != ExitCodes.Success || BackgroundFileLock.IsOwnerActive(paths, project.Name))
+                        return ExitCodes.InspectionFailure;
+                    using var restartLock = BackgroundFileLock.AcquireStart(paths, project.Name);
+                    if (lifecycle is not null && lifecycle.Read().State?.Generation != intent?.State?.Generation)
+                        throw new InvalidOperationException("Intent changed during restart drain; no owner launched.");
+                    if (lifecycle is not null)
+                        await lifecycle.ApplyAsync(SupervisionLifecycleAction.Start, null, null, cancellationToken).ConfigureAwait(false);
+                    return await RestartAsync(paths, project, configPath, options.Urls, pipeName, recordPath,
+                        environment, cancellationToken).ConfigureAwait(false);
+                }
+                default: return ExitCodes.UsageOrConfiguration;
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException
+            or InvalidOperationException or TargetRepositoryException or ToolExecutionException or ProjectConfigurationException)
+        {
+            environment.Err.WriteLine($"nightweaver: lifecycle command unavailable; durable intent was not confirmed: {exception.Message}");
+            return ExitCodes.InspectionFailure;
         }
     }
 
@@ -85,14 +141,6 @@ internal static class BackgroundManagerApplication
             return ExitCodes.InspectionFailure;
         }
 
-        InvocationRuntimeFiles.PinnedRuntimeFile startLock;
-        try { startLock = BackgroundFileLock.AcquireStart(paths, project.Name); }
-        catch (IOException)
-        {
-            environment.Err.WriteLine("nightweaver: another background start or restart is already being prepared.");
-            return ExitCodes.InspectionFailure;
-        }
-        using (startLock)
         {
             var existing = await QueryAsync(paths, project, configPath, pipeName, recordPath,
                 cancellationToken).ConfigureAwait(false);
@@ -170,7 +218,7 @@ internal static class BackgroundManagerApplication
 
     private static async Task<int> StopAsync(HostPaths paths, ProjectConfig project, string configPath,
         string pipeName, string recordPath, bool force, AppEnvironment environment,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool maintenance = false, Action? releaseCommand = null, SupervisionRead? supervision = null)
     {
         var existing = await QueryAsync(paths, project, configPath, pipeName, recordPath,
             cancellationToken).ConfigureAwait(false);
@@ -179,9 +227,9 @@ internal static class BackgroundManagerApplication
             if (existing.OwnerLockActive)
             {
                 environment.Err.WriteLine("nightweaver: an owner lock is active but its control pipe is unavailable; no process was changed.");
-                return WriteStatus(existing, environment);
+                return WriteStatus(existing, environment, supervision);
             }
-            return WriteStatus(existing, environment);
+            return WriteStatus(existing, environment, supervision);
         }
         var owner = existing.Record!;
         if (!SameConfig(owner, configPath))
@@ -193,7 +241,7 @@ internal static class BackgroundManagerApplication
         try
         {
             var stopResponse = await BackgroundControlProtocol.SendAsync(pipeName,
-                new BackgroundControlRequest(force ? "force" : "stop", owner.RunId, force),
+                new BackgroundControlRequest(force ? "force" : "stop", owner.RunId, force, maintenance),
                 TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
             if (!stopResponse.Accepted || stopResponse.Owner?.RunId != owner.RunId)
             {
@@ -210,6 +258,7 @@ internal static class BackgroundManagerApplication
             }
         }
 
+        releaseCommand?.Invoke();
         if (!await WaitForOwnerExitAsync(paths, project, OwnerStopTimeout, cancellationToken).ConfigureAwait(false))
         {
             var pending = await QueryAsync(paths, project, configPath, pipeName, recordPath,
@@ -217,12 +266,12 @@ internal static class BackgroundManagerApplication
             environment.Err.WriteLine(force
                 ? "nightweaver: force-stop was requested but the owner has not exited; inspect owner identity and logs."
                 : "nightweaver: runtime is still draining. Run background status, or use background stop --force after reviewing active work.");
-            return WriteStatus(pending, environment);
+            return WriteStatus(pending, environment, supervision);
         }
 
         var stopped = await QueryAsync(paths, project, configPath, pipeName, recordPath,
             cancellationToken).ConfigureAwait(false);
-        return WriteStatus(stopped, environment);
+        return WriteStatus(stopped, environment, supervision);
     }
 
     private static async Task<int> RestartAsync(HostPaths paths, ProjectConfig project, string configPath,
@@ -256,6 +305,16 @@ internal static class BackgroundManagerApplication
     private static async Task<OwnerQuery> QueryAsync(HostPaths paths, ProjectConfig project,
         string configPath, string pipeName, string recordPath, CancellationToken cancellationToken)
     {
+        // An absent owner lock cannot authorize a live response. Avoid waiting on a
+        // nonexistent pipe for manual status and durable absent-owner commands.
+        if (!BackgroundFileLock.IsOwnerActive(paths, project.Name))
+        {
+            var retained = BackgroundOwnerRecord.TryRead(recordPath);
+            if (retained is not null && retained.State is "running" or "starting" or "stopping")
+                retained = retained with { State = "stopped", WebHealth = "unknown", RuntimeHealth = "stale",
+                    Message = "owner is not running; retained status is diagnostic only" };
+            return new(false, retained, false, "no background owner is running");
+        }
         try
         {
             var response = await TryQueryPipeAsync(pipeName, "status", string.Empty, false,
@@ -326,14 +385,15 @@ internal static class BackgroundManagerApplication
         string.Equals(Path.GetFullPath(record.ConfigPath), Path.GetFullPath(configPath),
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
-    private static int WriteStatus(OwnerQuery query, AppEnvironment environment)
+    private static int WriteStatus(OwnerQuery query, AppEnvironment environment, SupervisionRead? supervision = null)
     {
         var record = query.Record ?? new BackgroundOwnerRecord(1,
             query.OwnerLockActive ? "unavailable" : "stopped", string.Empty, 0, DateTimeOffset.MinValue,
             string.Empty, string.Empty, string.Empty, null, null, string.Empty, "unknown",
             query.OwnerLockActive ? "unknown" : "stale", string.Empty, string.Empty,
             query.Failure ?? "no background owner has been recorded");
-        environment.Out.WriteLine(JsonSerializer.Serialize(record, OutputJson));
+        environment.Out.WriteLine(JsonSerializer.Serialize(record with { Supervision = supervision }, OutputJson));
+        if (supervision?.Availability == SupervisionAvailability.Unavailable) return ExitCodes.InspectionFailure;
         if (record.State == "running" || record.State == "stopped") return ExitCodes.Success;
         environment.Err.WriteLine("nightweaver: background runtime is " + record.State + ". " + (query.Failure ?? record.Message ?? string.Empty));
         return ExitCodes.InspectionFailure;

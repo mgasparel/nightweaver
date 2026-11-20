@@ -43,6 +43,8 @@ internal sealed class SupervisionStore
         {
             // Pin before enumeration: File.Exists would conflate access denial with opt-out.
             using var pins = InvocationRuntimeFiles.PinExistingRuntimeDirectory(directory);
+            if (Directory.EnumerateFileSystemEntries(directory, "stop-intent.uncertain*").Any())
+                throw new InvalidDataException("Stop intent persistence was uncertain; inspect the retained interlock before recovery.");
             if (Directory.EnumerateFileSystemEntries(directory, "state.json.*.tmp").Any())
                 throw new InvalidDataException("Interrupted atomic publication retained; inspect before recovery.");
             byte[] bytes;
@@ -63,6 +65,11 @@ internal sealed class SupervisionStore
             or InvalidDataException or ArgumentException or NotSupportedException or OverflowException)
         { return new(SupervisionAvailability.Unavailable, null, Path, exception.Message); }
     }
+
+    internal Task LatchUncertainStopAsync() => InvocationRuntimeFiles.WriteRuntimeFileAtomicallyAsync(
+        System.IO.Path.Combine(directory, "stop-intent.uncertain"),
+        "Stop intent could not be confirmed. Recovery is unavailable until explicit operator inspection."u8.ToArray(),
+        CancellationToken.None);
 
     internal async Task<SupervisionState> SaveAsync(long? expectedRevision, SupervisionState next, CancellationToken cancellationToken)
     {

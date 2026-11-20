@@ -1,9 +1,9 @@
 # Bounded local supervision v1
 
 This contract settles the policy and durable operational state for subsequent
-supervision work. The model/store alone installs no task, enables no supervision,
-launches no process and changes no manual background command. There is no CLI or
-Web integration in this slice. Missing storage means manual opt-out; an existing
+supervision work. The model/store installs no task and enables no supervision. Background lifecycle
+commands integrate intent and maintenance suppression; there is no automatic recovery
+launcher, scheduler installation or Web integration in this slice. Missing storage means manual opt-out; an existing
 unreadable, malformed, foreign or interrupted store means unavailable.
 
 ## Execution boundary
@@ -140,9 +140,9 @@ incident. Only one reservation can be unresolved, bounding serialization while
 preserving actionable evidence. Capture bundle retention is separate; the store
 never deletes bundles or interrupted runtime work.
 
-The future operator surface must expose availability/path/diagnostic, identity,
+The operator status surface exposes availability/path/diagnostic, identity,
 intent/generation/maintenance token, attempts/next due/exhaustion, pending identity,
-last/unresolved incident and history truncation. Commands are explicit enable,
+last/unresolved incident and history truncation. Future installation commands are explicit enable,
 disable, desired start/stop, begin/end exact-token maintenance and inspected
 reset. SetIntent increments generation and breaks failure qualification without
 refunding attempts or clearing a reservation; it is the shared storage primitive,
@@ -160,3 +160,45 @@ One isolated junction creation reuses the repository's existing mklink boundary
 pattern to prove the new store preserves outside sentinels; it adds no runtime,
 Agent, tracker, scheduler or fixture-publish journey. Complete measured suite
 evidence and cost attribution belong in the Bead implementation comment.
+
+## Background lifecycle integration
+
+The existing start.lock serializes start, restart, stop and maintenance mutations.
+A contending command fails explicitly before accepting intent; it does not claim a
+successful stop. Future recovery consumers must hold this same lock through fresh
+intent/generation and native-owner checks, reservation and launch, alongside the
+existing owner's physical-repository process-lifetime exclusion. They cannot use
+an old reservation to launch after a newer stop. Stop releases command serialization
+after its pipe request, before waiting for drain. Restart reacquires it and compares
+the persisted generation after drain; an intervening command prevents its launch.
+Only an explicit start/restart writes desired-running. It preserves enabled state,
+incident history and exhausted attempts; inspected policy Reset is separate and
+never happens automatically on start, health, logon or reboot.
+
+Maintenance enter persists a fresh operation token before requesting drain, preserving
+the current enabled/desired intent. It refuses an already active operation. Status
+exposes the current identity/revision/token and store availability/path/diagnostic.
+Leave requires the current token and revision, clears only maintenance and starts
+nothing. A stale release fails; even a newly inspected release preserves intervening
+stop/disable. No timer expires maintenance. Missing-store enter/leave is refused
+without creating a supervision installation. Upgrades can consume these same commands.
+
+Direct owner console first-stop persists stopped intent before cancellation and
+records OperatorDrain. Manager stop/force-stop persists before querying/controlling
+the owner, including absent owners and uncertain replies. A pipe stop also verifies
+or writes stopped intent before accepting, while maintenance drain verifies its
+interlock and retains the saved intent. Internal Web/control-runtime failure never
+writes manual stopped intent. OperatorDrain, ForcedStop, Maintenance, WebFailure
+and RuntimeFailure are distinct owner stop reasons; successful runtime drain after
+Web failure remains degraded rather than being reported as manual stop. Recovery
+must treat supervision-unavailable owner evidence as Unknown, never Failed authority.
+
+An uncertain stop write attempts a separate safe stop-intent.uncertain interlock.
+The store refuses all recovery and further writes while that file or its interrupted
+publication remains. It does not overwrite the old complete state or automatically
+remove evidence. Inspect the exact path and retained state before explicit repair;
+if even the interlock cannot be published, the command reports unavailable and direct
+owner shutdown retains supervision-unavailable evidence. No durable stop is acknowledged.
+The second console stop closes Jobs and exits immediately, bypassing all persistence,
+callbacks and compensation. Graceful drain retains existing per-role deadlines and
+no total force deadline; the manager's two-minute wait only returns pending status.

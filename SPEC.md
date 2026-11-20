@@ -502,8 +502,14 @@ The optional top-level `decisions_api_key` (legacy alias `openai_api_key`) accep
 
 The dormant [supervision v1 model and store](docs/design/supervision-v1.md) define
 bounded operational recovery intent, attempt reservations and incident retention.
-They have no runtime/scheduler integration and grant no Beads workflow authority;
-missing storage remains manual opt-out and invalid storage is unavailable.
+The background lifecycle integrates durable stop/start intent and explicit token/revision
+maintenance suppression; it installs no scheduler and grants no Beads workflow authority.
+Missing storage remains manual opt-out and invalid storage is unavailable. Intentional
+drain, force-stop, maintenance, Web failure and runtime failure have distinct local reasons.
+Operator stop commits suppression before owner control; command serialization covers the
+launch boundary, with the lock released before waiting for drain so force-stop remains usable.
+Intent persistence failure never acknowledges durable stop and retains an unavailable interlock.
+Graceful drain retains ordinary per-role bounds with no overall force deadline.
 
 The Web host offers a Project-bound, versioned read model beside the legacy console APIs. One host-owned collector shares tracker inventory and runtime/file observations across subscribers. Every resource carries host epoch, decimal revision, observation/attempt times and independent source health. Cached data is display evidence; guarded commands continue to reread authoritative tracker state and expected workflow identities. External tracker changes are reconciled periodically, including comments, relations and native readiness. Failed observations retain last good data with explicit stale health; initial unavailable is distinct from an empty result. Tracker/runtime revisions do not establish a cross-command transaction.
 
