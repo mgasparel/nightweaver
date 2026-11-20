@@ -25,6 +25,8 @@ internal sealed class WorkflowTiming : IDisposable
     private string? beadId;
     private string? invocationId;
 
+    internal WorkflowPhase ActivePhase { get { lock (gate) return phase; } }
+
     internal WorkflowTiming(TimeProvider clock, Action<WorkflowPhase, double> recordPhase, Action<double> recordOccupied)
     {
         this.clock = clock;

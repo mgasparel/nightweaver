@@ -347,3 +347,9 @@ limit is removed. Collection weights use the 1,230-case merged-main measurement,
 including previously unweighted native collections. A fast setup probe improved
 from 9.817s to 8.055s; that diagnostic and scheduling replay are not complete-suite
 or latest-main acceptance. The complete timed command above remains the gate.
+
+Pool waiting and capacity telemetry adds controlled-clock coordinator/helper cases
+and one in-process OTLP wire/privacy check. Existing native
+`PoolConcurrencyIntegrationTests` retain the process/tool boundary; no native
+journey, additional tracker command or scheduling change is added. See
+[pool observation semantics](../docs/design/pool-observation-telemetry.md).

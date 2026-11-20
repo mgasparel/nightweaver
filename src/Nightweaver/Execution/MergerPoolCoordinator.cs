@@ -84,6 +84,7 @@ internal sealed class MergerPoolCoordinator
     private readonly FactoryTelemetryPublisher? telemetry;
     private readonly MergerPoolSnapshotReader readSnapshot;
     private readonly MergerPoolSlotRunner runSlot;
+    private readonly PoolObservation? observation;
     private readonly object admissionSync = new();
     private Task admissionTail = Task.CompletedTask;
     private readonly object stateGate = new();
@@ -103,6 +104,7 @@ internal sealed class MergerPoolCoordinator
         FactoryTelemetryPublisher? telemetry = null,
         EnvironmentReservations? environments = null,
         ICompletedEnvironmentQueue? cleanupQueue = null,
+        PoolObservation? observation = null,
         CancellationToken slotLifetimeToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
@@ -116,6 +118,8 @@ internal sealed class MergerPoolCoordinator
         this.stopGate = stopGate;
         this.environments = environments;
         this.telemetry = telemetry;
+        this.observation = observation ?? OperationalTelemetry.Current?.Telemetry.ObservePool("merger", 1,
+            () => stopGate?.IsStopRequested == true);
         if (readSnapshot is null)
         {
             var reader = new BeadsReader(processRunner);
@@ -163,10 +167,20 @@ internal sealed class MergerPoolCoordinator
     {
         using var admission = await EnterAdmissionAsync(cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
-        var snapshot = await readSnapshot(repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
+        MergerPoolSnapshot snapshot;
+        try
+        {
+            snapshot = await readSnapshot(repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch
+        {
+            observation?.Unknown(WaitCensor.Failure);
+            throw;
+        }
         var diagnostics = new List<MergerPoolDiagnostic>();
         var eligible = SelectEligible(snapshot, diagnostics);
+        lock (stateGate) observation?.Observe(eligible.Select(bead => bead.Id));
         var admitted = new List<MergerPoolAdmission>();
 
         for (var index = 0; index < eligible.Count; index++)
@@ -176,6 +190,8 @@ internal sealed class MergerPoolCoordinator
             var reservation = TryReserve(bead.Id, out var reservationDiagnostic);
             if (reservation is null)
             {
+                if (reservationDiagnostic!.Code == MergerPoolDiagnosticCode.AlreadyReserved)
+                    observation?.ExcludeReserved(bead.Id);
                 diagnostics.Add(reservationDiagnostic!);
                 if (reservationDiagnostic!.Code is MergerPoolDiagnosticCode.CapacityReached or MergerPoolDiagnosticCode.Stopping)
                 {
@@ -290,6 +306,7 @@ internal sealed class MergerPoolCoordinator
             reservation.Timing?.Dispose();
             telemetry?.Release("merger", reservation.SlotId, reservation.BeadId);
             reservations.Remove(reservation.BeadId);
+            observation?.Release(reservation.BeadId);
             reservation.EnvironmentLease?.Dispose();
             // Publish the result in the same critical section that releases capacity. A drain
             // which observes no reservations can then safely place its accounting barrier next.
@@ -330,6 +347,7 @@ internal sealed class MergerPoolCoordinator
                 var slotId = telemetry?.SlotForReservation("merger", beadId) ?? "merger-1";
                 reservation = new ReservationState(beadId, slotId) { EnvironmentLease = environmentLease, Timing = WorkflowTiming.Reserve("merger", beadId) };
                 reservations.Add(beadId, reservation);
+                observation?.Reserve(beadId, reservation.Timing);
                 telemetry?.Reserve("merger", slotId, beadId);
                 return true;
             }
