@@ -4,12 +4,115 @@ using Nightweaver.Cli;
 using Nightweaver.Configuration;
 using Nightweaver.Supervision;
 using Nightweaver.Inspection;
+using Nightweaver.Execution;
 using System.Text.Json;
 
 namespace Nightweaver.Tests;
 
 public sealed class SupervisionLifecycleTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RestartActiveOwnerRetainsGenerationGuardAcrossDrain(bool interveningStop)
+    {
+        using var temp = new TempDirectory();
+        var identity = SupervisionPolicyTests.Identity(temp.Path);
+        var paths = new HostPaths(temp.Path);
+        var project = ProjectSlug.Parse("demo");
+        var token = TestContext.Current.CancellationToken;
+        Directory.CreateDirectory(Path.GetDirectoryName(identity.ConfigPath)!);
+        await File.WriteAllTextAsync(identity.ConfigPath, JsonSerializer.Serialize(new
+        {
+            name = "demo", target_repository = new { path = Path.Combine(temp.Path, "target") }
+        }), token);
+        var store = new SupervisionStore(paths, project, identity);
+        await store.SaveAsync(null, SupervisionPolicy.SetIntent(SupervisionState.Manual(identity), true, true, null), token);
+        var lifecycle = new SupervisionLifecycle(store);
+        var runId = Guid.NewGuid().ToString("N");
+        var owner = new BackgroundOwnerRecord(1, "running", runId, 123, SupervisionPolicyTests.Start,
+            temp.Path, identity.ConfigPath, "demo", null, null, "http://127.0.0.1:5000", "healthy", "live", "", "", null);
+        using var ownerLock = BackgroundFileLock.AcquireOwner(paths, project);
+        using var serverLifetime = new CancellationTokenSource();
+        var stops = 0;
+        var server = BackgroundControlProtocol.RunServerAsync(BackgroundIdentity.PipeName(paths, project),
+            async (request, requestToken) =>
+            {
+                if (request.Operation == "stop")
+                {
+                    Assert.Equal(runId, request.RunId);
+                    Assert.False(store.Read().State!.DesiredRunning);
+                    Assert.Throws<IOException>(() => BackgroundFileLock.AcquireStart(paths, project));
+                    stops++;
+                    // Direct owner stop can advance intent while the manager waits for drain.
+                    if (interveningStop)
+                        await lifecycle.ApplyAsync(SupervisionLifecycleAction.Stop, null, null, requestToken);
+                }
+                return new(true, owner, null);
+            }, serverLifetime.Token, afterResponse: _ => ownerLock.Dispose());
+        var error = new StringWriter();
+        try
+        {
+            var result = await BackgroundManagerApplication.RunAsync(
+                new(BackgroundAction.Restart, new ProjectSelector.ByConfigPath(identity.ConfigPath)),
+                new(temp.Path, temp.Path, new StringWriter(), error), token,
+                (_, _, _) => Task.FromResult<SupervisionLifecycle?>(lifecycle));
+            Assert.Equal(1, result);
+            Assert.Equal(1, stops);
+            Assert.False(BackgroundFileLock.IsOwnerActive(paths, project));
+            Assert.Equal(!interveningStop, store.Read().State!.DesiredRunning);
+            Assert.Contains(interveningStop ? "Intent changed during restart drain" : "deployment manifest is missing",
+                error.ToString(), StringComparison.Ordinal);
+            using var nextCommand = BackgroundFileLock.AcquireStart(paths, project);
+        }
+        finally
+        {
+            await serverLifetime.CancelAsync();
+            await server.WaitAsync(TimeSpan.FromSeconds(5), token);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RestartAbsentOwnerReleasesCommandLockAndReachesExplicitStart(bool supervised)
+    {
+        using var temp = new TempDirectory();
+        var identity = SupervisionPolicyTests.Identity(temp.Path);
+        var paths = new HostPaths(temp.Path);
+        var project = ProjectSlug.Parse("demo");
+        Directory.CreateDirectory(Path.GetDirectoryName(identity.ConfigPath)!);
+        await File.WriteAllTextAsync(identity.ConfigPath, JsonSerializer.Serialize(new
+        {
+            name = "demo", target_repository = new { path = Path.Combine(temp.Path, "target") }
+        }), TestContext.Current.CancellationToken);
+        var store = new SupervisionStore(paths, project, identity);
+        if (supervised)
+            await store.SaveAsync(null, SupervisionPolicy.SetIntent(SupervisionState.Manual(identity), true, false, null),
+                TestContext.Current.CancellationToken);
+        var before = store.Read().State;
+        var error = new StringWriter();
+        var environment = new AppEnvironment(temp.Path, temp.Path, new StringWriter(), error);
+
+        var result = await BackgroundManagerApplication.RunAsync(
+            new(BackgroundAction.Restart, new ProjectSelector.ByConfigPath(identity.ConfigPath)), environment,
+            TestContext.Current.CancellationToken, (_, _, _) => Task.FromResult<SupervisionLifecycle?>(new(store)));
+
+        // The missing manifest prevents native launch after the explicit start action.
+        Assert.Equal(1, result);
+        Assert.Contains("deployment manifest is missing", error.ToString(), StringComparison.Ordinal);
+        Assert.False(BackgroundFileLock.IsOwnerActive(paths, project));
+        using var nextCommand = BackgroundFileLock.AcquireStart(paths, project);
+        if (supervised)
+        {
+            var after = store.Read().State!;
+            Assert.True(after.DesiredRunning);
+            Assert.Equal(before!.Generation + 2, after.Generation);
+        }
+        else
+            Assert.False(Directory.Exists(paths.SupervisionRoot(project)));
+    }
+
     [Fact]
     public async Task OwnerAcceptsStopOnlyAfterPersistenceAndDuplicateRepliesNeverForceDrain()
     {
@@ -264,6 +367,12 @@ public sealed class SupervisionLifecycleTests
         Assert.True(entered.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
         try
         {
+            Assert.False(first.IsCompleted);
+            Assert.True(shutdown.StopGate.IsStopRequested);
+            Assert.False(shutdown.FirstStopToken.IsCancellationRequested);
+            Assert.False(shutdown.StopGate.TryReserve(() => throw new InvalidOperationException("reservation admitted"), out bool _));
+            using (ContinuousAgentLaunchContext.Enter(shutdown.StopGate))
+                Assert.False(ContinuousAgentLaunchContext.TryLaunch(() => throw new InvalidOperationException("launch admitted")));
             shutdown.RequestStop();
             Assert.Equal(1, exits);
             Assert.Equal(RuntimeShutdownReason.ForcedStop, shutdown.Reason);

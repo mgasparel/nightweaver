@@ -229,6 +229,7 @@ internal static class BackgroundManagerApplication
                 environment.Err.WriteLine("nightweaver: an owner lock is active but its control pipe is unavailable; no process was changed.");
                 return WriteStatus(existing, environment, supervision);
             }
+            releaseCommand?.Invoke();
             return WriteStatus(existing, environment, supervision);
         }
         var owner = existing.Record!;

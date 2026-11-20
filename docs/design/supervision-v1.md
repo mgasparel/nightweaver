@@ -183,8 +183,9 @@ nothing. A stale release fails; even a newly inspected release preserves interve
 stop/disable. No timer expires maintenance. Missing-store enter/leave is refused
 without creating a supervision installation. Upgrades can consume these same commands.
 
-Direct owner console first-stop persists stopped intent before cancellation and
-records OperatorDrain. Manager stop/force-stop persists before querying/controlling
+Direct owner console first-stop closes reservation and native-launch admission
+synchronously before potentially blocking intent persistence. It persists stopped
+intent before cancellation and records OperatorDrain. Manager stop/force-stop persists before querying/controlling
 the owner, including absent owners and uncertain replies. A pipe stop also verifies
 or writes stopped intent before accepting, while maintenance drain verifies its
 interlock and retains the saved intent. Internal Web/control-runtime failure never

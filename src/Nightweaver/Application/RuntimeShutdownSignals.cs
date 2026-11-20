@@ -57,13 +57,14 @@ internal sealed class RuntimeShutdownSignals : IDisposable
 
     private void BeginGracefulStop(RuntimeShutdownReason stopReason, bool intentAlreadyPersisted)
     {
+        // Close admission before potentially blocking intent IO; cancellation still follows persistence.
+        StopGate.RequestStop();
         Interlocked.CompareExchange(ref reason, (int)stopReason, 0);
         if (stopReason == RuntimeShutdownReason.OperatorDrain && !intentAlreadyPersisted)
         {
             try { PersistIntentionalStop?.Invoke(); }
             catch (Exception exception) { IntentPersistenceFailure = exception.Message; }
         }
-        StopGate.RequestStop();
         firstStop.Cancel();
         try { gracefulStopAccepted?.Invoke(); }
         catch (Exception) { }
