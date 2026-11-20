@@ -500,6 +500,11 @@ The optional top-level `decisions_api_key` (legacy alias `openai_api_key`) accep
 
 ### 7.3 Shared operational observations
 
+The dormant [supervision v1 model and store](docs/design/supervision-v1.md) define
+bounded operational recovery intent, attempt reservations and incident retention.
+They have no runtime/scheduler integration and grant no Beads workflow authority;
+missing storage remains manual opt-out and invalid storage is unavailable.
+
 The Web host offers a Project-bound, versioned read model beside the legacy console APIs. One host-owned collector shares tracker inventory and runtime/file observations across subscribers. Every resource carries host epoch, decimal revision, observation/attempt times and independent source health. Cached data is display evidence; guarded commands continue to reread authoritative tracker state and expected workflow identities. External tracker changes are reconciled periodically, including comments, relations and native readiness. Failed observations retain last good data with explicit stale health; initial unavailable is distinct from an empty result. Tracker/runtime revisions do not establish a cross-command transaction.
 
 The wire schema and finite budgets are specified in [operational observations v1.2](docs/design/operational-observations-v1.md), with implementation ownership, scheduling and lifecycle documented in [shared operational observations](docs/design/operational-observer.md). Standalone and background-launched Web instances use the same registration and shutdown path. SSE transport and browser synchronization are separate consumers of the shared cache.

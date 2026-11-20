@@ -1,0 +1,162 @@
+# Bounded local supervision v1
+
+This contract settles the policy and durable operational state for subsequent
+supervision work. The model/store alone installs no task, enables no supervision,
+launches no process and changes no manual background command. There is no CLI or
+Web integration in this slice. Missing storage means manual opt-out; an existing
+unreadable, malformed, foreign or interrupted store means unavailable.
+
+## Execution boundary
+
+The selected future adapter is a Windows Task Scheduler task for the selected
+current user: **InteractiveToken**, least privilege, logon trigger and recurring
+one-minute ticks. Reboot recovery begins only after that user next logs on.
+There is no password, service, S4U, boot-before-logon, session provisioning or
+credential-management fallback. No supervisor is installed by this change or its
+tests. Logout, sleep, task-service failure and absence of an interactive session
+are observation gaps, never proof of health or permission to launch elsewhere.
+See Microsoft's [logon types](https://learn.microsoft.com/en-us/windows/win32/api/taskschd/ne-taskschd-task_logon_type).
+
+The installation identity binds canonical local host root, selected configuration
+path, **physical Git common directory** and user SID. The future installer must
+resolve the physical repository using the existing repository validator and obtain
+the actual selected Windows SID. A copied store is not an installation. State
+paths are derived only from HostPaths and ProjectSlug, never serialized paths.
+Identity paths are rejected for traversal/noncanonical, network/device, stream,
+trailing-dot/space and control-character aliases. All accessed storage components
+use Windows no-reparse handles; parents stay pinned against replacement.
+
+The existing physical-Git-common-directory process-lifetime repository mutex
+remains authoritative. A supervision writer lock serializes only operational
+commands; it cannot replace repository exclusion. Only ordinary Orchestrator
+startup recovery may guardedly release exact current-Project claims. Supervision
+does not clear pauses, reset Delivery repairs, delete worktrees/branches/tmp,
+modify admission or replay Beads writes.
+
+## Policy and finite worksheet
+
+These are v1 design choices, not newly inferred Product thresholds:
+
+| Operation | Bound | Meaning |
+| --- | ---: | --- |
+| Tick cadence | 60 s | Round an eligible due time up to a tick; missed ticks do not accumulate launches |
+| Identity-bound probe | 10 s | Unknown, inaccessible and stale responses grant no recovery |
+| Incident capture | 45 s | Observation only; retain capture errors separately |
+| Native start | 75 s | Conservative allowance for existing 45 s manager startup and 30 s Web readiness |
+| Reconciliation | 20 s | Confirm native process settlement/owner identity; uncertainty retains reservation |
+| Persistence | 10 s | Reservation and evidence publication; failure grants no launch |
+| Allocated work | 160 s | Sum of the finite sub-budgets |
+| Tick deadline | 180 s | Includes 20 s margin for cancellation and settlement |
+| Scheduler action limit | 240 s | Exceeds the complete tick deadline; interrupted ticks stay reconcilable |
+
+The existing manager waits 45 seconds and Web startup has a 30-second readiness
+loop. They can overlap; the 75-second allowance conservatively contains both and
+does not change either existing deadline. Adapters must enforce sub-budgets with
+native settlement. Reaching a deadline cannot imply a child has exited. A task
+action limit terminating a tick leaves its persisted reservation unresolved.
+Never substitute this worksheet for runtime drain: deliberate graceful stop uses
+normal Agent role deadlines, waits all existing slots without a fixed cutoff and
+starts no successor role/retry. A tick observing drain does nothing; force stop
+remains the existing explicit second-stop path.
+
+Recovery requires two consecutive matching Failed observations separated by
+60–120 seconds in one observation epoch, with the same PID, process creation time,
+owner ID and runtime ID (or both absent). Healthy and Draining require an owner
+identity. Unknown, Gap, Healthy, Draining, changed owner, duplicate rapid probes,
+UTC/monotonic disagreement over five seconds, large gaps and a fresh epoch break
+qualification. New epochs represent a restarted tick/observer, reboot or session
+gap. Long forward jumps do not compress qualification into a burst. Backward UTC
+or backward same-epoch monotonic time latches clock-discontinuity attention;
+inspection and explicit reset are required. Due time and attempt budget survive
+all observation epochs and wall-clock changes.
+
+There are at most **three reservations per explicit reset**, with delays of
+30 seconds before attempt one, 2 minutes before attempt two and 10 minutes before
+attempt three. The first due time begins with the second matching failure;
+later due times begin at confirmed prior-attempt settlement. A successful start
+does not refund an attempt. Readiness, stable health, a tick restart, logon and
+reboot never reset the budget automatically. After the third settled attempt,
+exhaustion is durable even if the process is briefly healthy. Explicit reset
+requires no pending reservation, retains incident history, advances generation,
+and requires new failure qualification. This deliberately chooses explicit reset
+over an automatic stable-health reset window.
+
+## Persistence and consumer protocol
+
+`run/<project>/supervision/state.json` is version 1, at most 64 KiB and JSON depth
+12. It contains installation identity; enabled/desired-running intent; monotonic
+command generation; maintenance operation token; revision; attempts/exhaustion/
+next due UTC; one pending reservation (ID, generation, attempt number, UTC,
+observation epoch, prior owner/runtime); last observation; matching failure count;
+attention; last incident; unresolved incident; and bounded resolved history.
+IDs are 32-hex operational GUIDs, not arbitrary paths. Evidence IDs refer to local
+capture bundles owned by later capture work; the store never opens those paths.
+Incident reasons are a finite vocabulary, with no command lines, environment,
+configuration contents or free-form secrets. There is no Beads ledger here.
+
+Reads have no filesystem side effects. A missing directory/file yields Manual
+only after safe path inspection; access denial is not absence. Strict loading
+rejects unknown/missing/duplicate fields, invalid enums, unsupported versions,
+invalid identities/counters, oversized files and invalid state combinations.
+An unexpected `state.json.*.tmp` retains interrupted-publication evidence and
+makes the store unavailable even if the old committed file is valid. Operators
+inspect that exact path and original committed state; automatic code does not
+delete the temporary evidence or initialize over corrupt state.
+
+Every save holds an exclusive, pinned `writer.lock`, rereads the store, compares
+the expected revision and atomically publishes through a new sibling file with
+write-through flush. Parent pins prevent redirecting publication. A stale writer
+or uncertain/canceled save must reread; the supplied in-memory state is not proof
+of success. The shared runtime-file helper preserves the previous complete file
+on cancellation; any retained partial publication blocks future writes.
+
+Future consumers must serialize the entire command/reserve/launch boundary under
+repository exclusion in addition to revision-guarded storage. They must:
+
+1. Revalidate installation and native owner identity, read fresh intent and
+   commit the current observation. Observe is a pure proposal until saved.
+2. If eligible, reserve once and **successfully persist** the reservation before
+   any native launch. Recheck command generation, maintenance/stop intent and
+   native ownership immediately before launch under that same serialization.
+3. After interruption, reconcile the exact pending attempt and actual native
+   owner. Neither a new tick, new command nor missing response grants another
+   reservation. Only confirmed running-or-absent settlement clears pending state;
+   uncertainty keeps the reservation plus unresolved incident and attention.
+   Settlement of an old generation records facts but never restores old intent.
+4. Capture incidents before kill/restart/cleanup when capture-first policy
+   applies, within the capture budget; report capture failure independently.
+   Exhausted, suppressed, unavailable or uncertain state launches nothing.
+
+The pure transition functions do not acquire repository authority, probe owners,
+capture incidents or launch children. Available storage is not a launch permit.
+Later integration must enforce the protocol above at the actual native boundary.
+
+## Retention and operator actions
+
+Keep the latest 32 resolved/history incident entries and a cumulative discarded
+count. The current last incident and one unresolved incident are separately
+retained; history truncation cannot evict the pending attempt or unresolved
+incident. Only one reservation can be unresolved, bounding serialization while
+preserving actionable evidence. Capture bundle retention is separate; the store
+never deletes bundles or interrupted runtime work.
+
+The future operator surface must expose availability/path/diagnostic, identity,
+intent/generation/maintenance token, attempts/next due/exhaustion, pending identity,
+last/unresolved incident and history truncation. Commands are explicit enable,
+disable, desired start/stop, begin/end exact-token maintenance and inspected
+reset. SetIntent increments generation and breaks failure qualification without
+refunding attempts or clearing a reservation; it is the shared storage primitive,
+not a public command that authorizes clearing another operation's token. Upgrade
+and notification consumers use this contract; neither is a prerequisite here.
+
+## Verification and cost
+
+`SupervisionPolicyTests` use deterministic UTC/monotonic observations for
+qualification, suppression, gaps, clock rollback, bounded backoff/exhaustion,
+reset, interrupted reconciliation and retention. `SupervisionStoreTests` use
+small disposable files for strict schema loading, revision conflicts, reload,
+pending-state preservation, cancellation, sharing denial and unsafe paths.
+One isolated junction creation reuses the repository's existing mklink boundary
+pattern to prove the new store preserves outside sentinels; it adds no runtime,
+Agent, tracker, scheduler or fixture-publish journey. Complete measured suite
+evidence and cost attribution belong in the Bead implementation comment.

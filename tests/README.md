@@ -38,6 +38,13 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Supervision v1 adds deterministic state/clock/backoff fixtures and small local
+store fixtures for revision guards, crash reservations, corrupt/foreign state,
+sharing denial, bounded serialization and sentinel-preserving unsafe-path checks.
+One disposable junction creation proves the new store's actual no-reparse
+boundary using the existing mklink pattern. No runtime, Agent, scheduler or
+fixture-publish journey is added. See [the dormant contract](../docs/design/supervision-v1.md).
+
 Dashboard acceptance reuses the native first-path Git/bd/Agent correlation smoke.
 Two bounded paired-runtime/Web loopback component cases add parallel arrival
 pressure, actual encoded byte/record measurement and unavailable receiver checks;
