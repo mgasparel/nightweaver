@@ -8,6 +8,10 @@ export type AttentionItem = {
   sourceCommentId: string | null; contextNotice: string | null;
   message?: Message | null; otherPauseReports?: Message[];
 };
+/** Retain a focused row across live reorder without opening the whole inventory. */
+export function visibleAttention(items: AttentionItem[], limit: number, focused?: string) {
+  return items.filter((row, index) => index < limit || row.beadId === focused);
+}
 export type WorkspaceData = {
   sourceMetadata?: string | null;
   presentation?: { role: string; summary: string; trackedStage: string | null; planning: string | null;

@@ -112,6 +112,13 @@ h1:focus:not(:focus-visible) {
   border-color: var(--accent);
   background: #24273c;
 }
+.overview .button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1b1530;
+  font-size: 14px;
+}
+.overview .button.primary:hover { background: #c9bcff; }
 .text-link {
   display: inline-flex;
   align-items: center;
@@ -350,9 +357,9 @@ h1:focus:not(:focus-visible) {
 }
 .studio-overview {
   display: grid;
-  grid-template-columns: minmax(0, 1.8fr) minmax(300px, 1fr);
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr);
   gap: 24px;
-  align-items: stretch;
+  align-items: start;
 }
 .panel {
   min-width: 0;
@@ -415,34 +422,30 @@ h1:focus:not(:focus-visible) {
   font-size: 20px;
 }
 .attention-panel {
+  grid-column: 1 / -1;
   background: linear-gradient(135deg, #222032, #191c2d);
-  border-color: #494054;
+  border-color: transparent;
 }
-.attention-panel .unavailable > .eyebrow {
-  color: var(--amber);
-}
-.attention-panel .panel-body {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-}
-.attention-panel .unavailable {
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  flex: 1;
-}
-.attention-panel .unavailable p {
-  margin-bottom: 28px;
-}
-.attention-panel .unavailable .button {
-  margin-top: auto;
-}
-.attention-panel {
-  display: flex;
-  flex-direction: column;
-}
+.overview .page-heading { margin-bottom: 12px; }
+.overview .page-heading h1 { font-size: 28px; letter-spacing: -.6px; }
+.overview .page-heading > .eyebrow { display: none; }
+.overview-summary { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-bottom: 24px; color: var(--muted); font-size: 14px; }
+.summary-attention { color: var(--amber); text-decoration: underline; text-underline-offset: 4px; }
+.overview .panel { border-color: transparent; }
+.overview .panel-heading { border-bottom: 0; min-height: 0; padding-bottom: 0; flex-wrap: wrap; }
+.overview .panel-heading h2 { font-size: 20px; }
+.overview .panel-body { padding-top: 16px; }
+.overview .attention-inventory { margin-bottom: 0; }
+.overview .attention-row { border: 0; padding: 16px; background: #ffffff05; }
+.overview .attention-row h2 { font-size: 18px; line-height: 1.5; }
+.overview .attention-row .attention-question { font-size: 15px; color: var(--ink); margin: 8px 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.overview .attention-row .button { margin-bottom: 12px; }
+.overview .attention-row p, .overview .bead-row-meta { font-size: 13px; }
+.overview .bead-row-meta { flex-wrap: wrap; overflow-wrap: anywhere; }
+.overview .digest-overview { flex-direction: column; align-items: flex-start; }
+.overview .digest-overview h2 { font-size: 18px; }
+.overview .digest-preview-scope { font-size: 14px; margin: 8px 0; color: var(--muted); }
+.overview .bead-freshness { font-size: 12px; gap: 8px 12px; margin-bottom: 12px; }
 .merge-note {
   display: flex;
   align-items: center;
@@ -464,53 +467,6 @@ h1:focus:not(:focus-visible) {
 }
 .merge-note > .status {
   margin-left: auto;
-}
-.project-card {
-  display: block;
-  padding-bottom: 20px;
-}
-.project-card-heading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.project-card-heading h3 {
-  overflow-wrap: anywhere;
-  min-width: 0;
-}
-.project-card-heading > .status {
-  margin-left: auto;
-}
-.project-card > p {
-  font-size: 11px;
-  color: var(--muted);
-  margin: 12px 0;
-}
-.project-summary {
-  font-size: 10px;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.future-project {
-  border-top: 1px solid var(--line);
-  padding-top: 20px;
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  color: var(--muted);
-}
-.future-project h3 {
-  font-size: 12px;
-}
-.future-project p {
-  font-size: 11px;
-  margin-top: 5px;
-}
-.studio-overview > .panel:last-child .unavailable {
-  padding: 0 0 18px;
 }
 .workspace-tabs {
   display: flex;
@@ -624,12 +580,9 @@ dialog::backdrop {
     padding-inline: 24px;
   }
   .studio-overview {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
-  .studio-overview > .floor-panel,
-  .studio-overview > .attention-panel {
-    grid-column: 1/-1;
-  }
+
   .metric {
     padding: 16px;
   }
@@ -777,12 +730,7 @@ dialog::backdrop {
   .explorer-controls > .button {
     width: 100%;
   }
-  .project-card-heading > .status {
-    margin-left: 40px;
-  }
-  .project-card-heading h3 {
-    flex: 1;
-  }
+
   .crumb span {
     padding: 0 5px;
   }

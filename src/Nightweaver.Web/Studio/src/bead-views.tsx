@@ -5,7 +5,7 @@ import { DeliveryView } from "./delivery-views";
 import { operations, interactions } from "./operations-browser";
 import { useObservation } from "./use-observation";
 import { observationStatus, type Snapshot } from "./operations";
-import { beadPath, safeBeadId, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
+import { beadPath, safeBeadId, visibleAttention, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
 import { AttentionCommands } from "./attention-commands";
 import { PlanningAuthorization } from "./product-views";
 import { Relations } from "./workspace-relations";
@@ -157,6 +157,7 @@ export function AttentionView({ project, compact = false }: { project: string; c
   const items = snapshot.observation?.data;
   const [selected, setSelected] = useState<string>();
   const [limit, setLimit] = useState(8);
+  const [focused, setFocused] = useState<string>();
   const reviewHeading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { if (selected) reviewHeading.current?.focus(); }, [selected]);
   const item = items?.find(row => row.beadId === selected);
@@ -167,12 +168,16 @@ export function AttentionView({ project, compact = false }: { project: string; c
     <div className={compact ? "" : "attention-board"}><div>
     {!compact && <p className="eyebrow attention-list-title">Paused Beads · {items?.length ?? "Unavailable"}</p>}
     {!items ? <p className="bead-empty">Attention is unavailable. Refresh to try again.</p> : items.length === 0
-      ? <p className="bead-empty">No paused Beads. You’re all caught up here.</p>
+      ? <p className="bead-empty">No paused Beads in this observation. Runtime activity is reported separately.</p>
       : <div className={compact ? "attention-inventory" : "attention-layout"}>
-        <section className="attention-inventory" aria-label="Paused Beads">
-          {items.slice(0, compact ? 3 : limit).map(row => <article key={row.beadId} className={`attention-row ${selected === row.beadId ? "selected" : ""}`}>
+        <section className="attention-inventory" aria-label="Paused Beads" onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(undefined); }}>
+          {visibleAttention(items, compact ? 3 : limit, focused).map(row => <article key={row.beadId} onFocusCapture={() => setFocused(row.beadId)} className={`attention-row ${selected === row.beadId ? "selected" : ""}`}>
             <div className="bead-row-meta"><span>{row.beadId}</span><Status tone="warn">{row.kind === "product-decision-required" ? "Decision needed" : "Recovery needed"}</Status></div>
             <h2><Link to={beadPath(project, row.beadId)}>{row.title}</Link></h2>
+            {compact && <>
+              {row.question && <p className="attention-question">{row.question}</p>}
+              <Link className="button primary" to={beadPath(project, row.beadId)}>Review {row.beadId}</Link>
+            </>}
             <p>{row.stage ?? "Stage unavailable"} · P{row.priority} · Repairs {row.repairCycles ?? 0}/{row.maxRepairCycles}</p>
             {!compact && <button className="text-link" aria-pressed={selected === row.beadId} onClick={() => setSelected(row.beadId)}>Review {row.beadId}</button>}
           </article>)}
