@@ -8,7 +8,18 @@ internal sealed class RuntimeShutdownSignals : IDisposable
     private readonly CancellationTokenSource firstStop = new();
     private readonly Action<int> terminateProcess;
     private readonly Action? gracefulStopAccepted;
-    internal Action? PersistIntentionalStop { get; set; }
+    private readonly object intentGate = new();
+    private Action? persistIntentionalStop;
+    private bool intentionalStopPending;
+    private bool intentPersistenceStarted;
+    internal Action? PersistIntentionalStop
+    {
+        set
+        {
+            lock (intentGate) persistIntentionalStop = value;
+            PersistPendingIntentionalStop();
+        }
+    }
     internal string? IntentPersistenceFailure { get; private set; }
     private int reason;
     internal RuntimeShutdownReason Reason => (RuntimeShutdownReason)Volatile.Read(ref reason);
@@ -62,12 +73,26 @@ internal sealed class RuntimeShutdownSignals : IDisposable
         Interlocked.CompareExchange(ref reason, (int)stopReason, 0);
         if (stopReason == RuntimeShutdownReason.OperatorDrain && !intentAlreadyPersisted)
         {
-            try { PersistIntentionalStop?.Invoke(); }
-            catch (Exception exception) { IntentPersistenceFailure = exception.Message; }
+            lock (intentGate) intentionalStopPending = true;
+            PersistPendingIntentionalStop();
         }
         firstStop.Cancel();
         try { gracefulStopAccepted?.Invoke(); }
         catch (Exception) { }
+    }
+
+    private void PersistPendingIntentionalStop()
+    {
+        Action persist;
+        lock (intentGate)
+        {
+            if (!intentionalStopPending || intentPersistenceStarted || persistIntentionalStop is null
+                || Volatile.Read(ref forceStopStarted) != 0) return;
+            intentPersistenceStarted = true;
+            persist = persistIntentionalStop;
+        }
+        try { persist(); }
+        catch (Exception exception) { IntentPersistenceFailure = exception.Message; }
     }
 
     private static void TryStartDeferredRecoveryDiagnostic()

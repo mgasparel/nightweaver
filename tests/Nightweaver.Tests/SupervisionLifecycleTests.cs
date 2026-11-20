@@ -14,6 +14,43 @@ public sealed class SupervisionLifecycleTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task EarlyConsoleStopIsPersistedWhenOwnerLifecycleInitializationSettles(bool beforeInitialization)
+    {
+        using var temp = new TempDirectory();
+        var identity = SupervisionPolicyTests.Identity(temp.Path);
+        var store = new SupervisionStore(new HostPaths(temp.Path), ProjectSlug.Parse("demo"), identity);
+        var token = TestContext.Current.CancellationToken;
+        await store.SaveAsync(null, SupervisionPolicy.SetIntent(SupervisionState.Manual(identity), true, true, null), token);
+        using var shutdown = new RuntimeShutdownSignals();
+        var initialization = new TaskCompletionSource<SupervisionLifecycle?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (beforeInitialization) shutdown.RequestStop();
+        var persists = 0;
+        var opening = BackgroundOwnerApplication.InitializeLifecycleAsync(shutdown, initializationToken =>
+        {
+            Assert.False(initializationToken.CanBeCanceled);
+            return initialization.Task;
+        }, lifecycle =>
+        {
+            persists++;
+            lifecycle!.ApplyAsync(SupervisionLifecycleAction.Stop, null, null, CancellationToken.None).GetAwaiter().GetResult();
+        });
+        if (!beforeInitialization) shutdown.RequestStop();
+        Assert.False(opening.IsCompleted);
+        Assert.True(shutdown.StopGate.IsStopRequested);
+        Assert.True(shutdown.FirstStopToken.IsCancellationRequested);
+        initialization.SetResult(new(store));
+        await opening.WaitAsync(TimeSpan.FromSeconds(5), token);
+
+        var reloaded = new SupervisionStore(new HostPaths(temp.Path), ProjectSlug.Parse("demo"), identity).Read();
+        Assert.Equal(SupervisionAvailability.Available, reloaded.Availability);
+        Assert.False(reloaded.State!.DesiredRunning);
+        Assert.Equal(1, persists);
+        Assert.Null(shutdown.IntentPersistenceFailure);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task RestartActiveOwnerRetainsGenerationGuardAcrossDrain(bool interveningStop)
     {
         using var temp = new TempDirectory();

@@ -71,8 +71,8 @@ internal static class BackgroundOwnerApplication
                 var projectConfig = ProjectConfigLoader.Load(options.ConfigPath, projectSlug, paths);
                 if (!PathEquals(projectConfig.ConfigFilePath, options.ConfigPath))
                     throw new InvalidDataException("background owner config path did not resolve to the requested Project file");
-                var lifecycle = await SupervisionLifecycle.OpenAsync(paths, projectConfig, cancellationToken).ConfigureAwait(false);
-                shutdownSignals.PersistIntentionalStop = () =>
+                var lifecycle = await InitializeLifecycleAsync(shutdownSignals,
+                    token => SupervisionLifecycle.OpenAsync(paths, projectConfig, token), lifecycle =>
                 {
                     try
                     {
@@ -89,7 +89,7 @@ internal static class BackgroundOwnerApplication
                         PersistAsync(recordPath, state).GetAwaiter().GetResult();
                         throw;
                     }
-                };
+                }).ConfigureAwait(false);
                 state.Update(record => record with { TargetRepository = projectConfig.TargetRepository.Path });
                 await PersistAsync(recordPath, state).ConfigureAwait(false);
                 ownerEnvironment.Out.WriteLine($"Background owner {options.RunId} starting Project '{projectSlug.Value}'.");
@@ -170,12 +170,24 @@ internal static class BackgroundOwnerApplication
                     State = "failed",
                     WebHealth = "unavailable",
                     RuntimeHealth = "unavailable",
+                    StopReason = shutdownSignals.Reason == RuntimeShutdownReason.OperatorDrain
+                        ? "supervision-unavailable" : record.StopReason,
                     Message = exception.Message
                 });
                 await PersistAsync(recordPath, state).ConfigureAwait(false);
                 return ExitCodes.InspectionFailure;
             }
         }
+    }
+
+    internal static async Task<SupervisionLifecycle?> InitializeLifecycleAsync(RuntimeShutdownSignals shutdownSignals,
+        Func<CancellationToken, Task<SupervisionLifecycle?>> openLifecycle, Action<SupervisionLifecycle?> persistStop)
+    {
+        // Identity validation must settle even when a console stop arrived before registration.
+        // The callback setter reconciles that retained stop before startup can observe cancellation.
+        var lifecycle = await openLifecycle(CancellationToken.None).ConfigureAwait(false);
+        shutdownSignals.PersistIntentionalStop = () => persistStop(lifecycle);
+        return lifecycle;
     }
 
     internal static async Task<BackgroundControlResponse> HandleRequestAsync(

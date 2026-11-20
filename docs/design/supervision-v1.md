@@ -184,8 +184,14 @@ stop/disable. No timer expires maintenance. Missing-store enter/leave is refused
 without creating a supervision installation. Upgrades can consume these same commands.
 
 Direct owner console first-stop closes reservation and native-launch admission
-synchronously before potentially blocking intent persistence. It persists stopped
-intent before cancellation and records OperatorDrain. Manager stop/force-stop persists before querying/controlling
+synchronously before potentially blocking intent persistence. Once registered,
+it persists stopped intent before cancellation and records OperatorDrain. It also
+retains intent if the first signal precedes lifecycle callback registration: owner
+identity initialization settles independently of first-stop cancellation, and
+registration reconciles the retained intentional stop exactly once before startup
+continues. Initialization failure retains supervision-unavailable owner evidence.
+Deferred registration after force begins starts no persistence.
+Manager stop/force-stop persists before querying/controlling
 the owner, including absent owners and uncertain replies. A pipe stop also verifies
 or writes stopped intent before accepting, while maintenance drain verifies its
 interlock and retains the saved intent. Internal Web/control-runtime failure never

@@ -6,6 +6,61 @@ namespace Nightweaver.Tests;
 public sealed class RuntimeShutdownSignalsTests
 {
     [Fact]
+    public async Task SecondSignalDoesNotWaitForEarlyStopReconciliation()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var forceExit = new ManualResetEventSlim();
+        using var shutdown = new RuntimeShutdownSignals(_ => forceExit.Set());
+        shutdown.RequestStop();
+        var token = TestContext.Current.CancellationToken;
+        var registration = Task.Run(() => shutdown.PersistIntentionalStop = () =>
+        {
+            entered.Set();
+            release.Wait();
+        }, token);
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5), token));
+            Assert.False(registration.IsCompleted);
+            Assert.True(shutdown.StopGate.IsStopRequested);
+            shutdown.RequestStop();
+            Assert.True(forceExit.IsSet);
+        }
+        finally
+        {
+            release.Set();
+            await registration.WaitAsync(TimeSpan.FromSeconds(5), token);
+        }
+    }
+
+    [Fact]
+    public void EarlyStopIsReconciledExactlyOnceAndRetainsPersistenceFailure()
+    {
+        using var shutdown = new RuntimeShutdownSignals();
+        shutdown.RequestStop();
+        var writes = 0;
+        Action persist = () => { writes++; throw new IOException("unavailable stop store"); };
+        shutdown.PersistIntentionalStop = persist;
+        shutdown.PersistIntentionalStop = persist;
+
+        Assert.Equal(1, writes);
+        Assert.Equal("unavailable stop store", shutdown.IntentPersistenceFailure);
+        Assert.True(shutdown.StopGate.IsStopRequested);
+    }
+
+    [Fact]
+    public void RegistrationAfterForceDoesNotStartDeferredPersistence()
+    {
+        var exits = new List<int>();
+        using var shutdown = new RuntimeShutdownSignals(exits.Add);
+        shutdown.RequestStop();
+        shutdown.RequestStop();
+        shutdown.PersistIntentionalStop = () => Assert.Fail("Force must not start deferred intent IO.");
+        Assert.Equal([1], exits);
+    }
+
+    [Fact]
     public void SecondSignalSelectsForceOnceAndDeniesClassifierLaunches()
     {
         var exits = new List<int>();
