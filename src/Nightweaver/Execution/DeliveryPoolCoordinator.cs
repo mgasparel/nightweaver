@@ -196,9 +196,11 @@ internal sealed class DeliveryPoolCoordinator
         catch
         {
             observation?.Unknown(WaitCensor.Failure);
+            OperationalTelemetry.Current?.Telemetry.Lifecycle.Unknown(LifecycleLoss.Failure);
             throw;
         }
 
+        OperationalTelemetry.Current?.Telemetry.Lifecycle.Observe(snapshot.Inventory.ById.Values);
         var diagnostics = new List<DeliveryPoolDiagnostic>();
         var eligible = SelectEligible(snapshot, diagnostics);
         lock (stateGate) observation?.Observe(eligible.Select(bead => bead.Id));

@@ -28,7 +28,7 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     // Two hosts: 6 operation counters + 2 * (9 buckets + sum + count) +
     // 3 signals * 4 drop reasons + 3 export failure counters + one target_info each.
     // Includes one SDK overflow series per stream (histogram overflow costs 11 series).
-    internal const int ProjectedSeries = 2 * (4 * 11 + 22 + 22 + 7 * 4 + 37 + 7 + 22 + 8 * 11 + 4 + 4 * 11 + 55 + 12 + 6 + 2 * 11 + 12 + 3 + 1 + 1 + 11 + 1 + 1 + 43 + 8 * 11 + 1 + 5 + 13 + 4 * 11 + 19 + 19);
+    internal const int ProjectedSeries = 1350 + 2 * (19 + 4 * 11 + 9 + 4 + 4 + 3);
     private readonly ActivitySource source = new(ScopeName);
     private readonly Meter meter = new(ScopeName);
     private readonly CancellationTokenSource stop = new();
@@ -54,7 +54,12 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     private readonly Counter<long> operationalRetries;
     private readonly Counter<long> publishedOutcomes;
     private readonly Counter<long> semanticRepairs;
+    private readonly Counter<long> approvals;
+    private readonly Histogram<double> humanWait;
+    private readonly Counter<long> lifecycleLoss;
+    internal LifecycleObservation Lifecycle { get; }
     private readonly Dictionary<string, PoolObservation> pools = new(StringComparer.Ordinal);
+    private readonly ObservationBudget observationBudget = new();
     private readonly Histogram<double> eligibleWait;
     private readonly Counter<long> waitCensored;
     private readonly Counter<long> drops;
@@ -141,6 +146,19 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
         operationalRetries = meter.CreateCounter<long>("nightweaver.operational.retries");
         publishedOutcomes = meter.CreateCounter<long>("nightweaver.published.outcomes");
         semanticRepairs = meter.CreateCounter<long>("nightweaver.semantic.repairs");
+        approvals = meter.CreateCounter<long>("nightweaver.approvals");
+        humanWait = meter.CreateHistogram<double>("nightweaver.human_wait.duration", "s");
+        lifecycleLoss = meter.CreateCounter<long>("nightweaver.lifecycle.censored");
+        Lifecycle = new(clock ?? TimeProvider.System,
+            (pause, seconds) => humanWait.Record(seconds, new KeyValuePair<string, object?>("pause", pause.ToString())),
+            reason => lifecycleLoss.Add(1, new KeyValuePair<string, object?>("reason", reason.ToString())),
+            (id, outcome) => RecordMilestone(id, null, null, outcome, "observed_snapshot"), budget: observationBudget);
+        foreach (var name in new[] { "paused", "oldest", "fresh", "coverage", "age" })
+        {
+            var key = name;
+            meter.CreateObservableGauge("nightweaver.lifecycle." + name, () => Lifecycle.Read(key),
+                name is "oldest" or "age" ? "s" : null);
+        }
         eligibleWait = meter.CreateHistogram<double>("nightweaver.eligible_wait.duration", "s");
         waitCensored = meter.CreateCounter<long>("nightweaver.eligible_wait.censored");
         foreach (var name in new[] { "capacity", "occupied", "fresh", "coverage", "age", "backpressure", "queued", "oldest" })
@@ -169,6 +187,16 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
                     if (!ReferenceEquals(instrument.Meter, meter)) return MetricStreamConfiguration.Drop;
                     return instrument.Name switch
                     {
+                        "nightweaver.approvals" => new MetricStreamConfiguration
+                            { TagKeys = ["role", "coverage"], CardinalityLimit = 19 },
+                        "nightweaver.human_wait.duration" => new ExplicitBucketHistogramConfiguration
+                            { TagKeys = ["pause"], Boundaries = DurationBuckets, CardinalityLimit = 4 },
+                        "nightweaver.lifecycle.censored" => new MetricStreamConfiguration
+                            { TagKeys = ["reason"], CardinalityLimit = 9 },
+                        "nightweaver.lifecycle.paused" or "nightweaver.lifecycle.oldest" => new MetricStreamConfiguration
+                            { TagKeys = ["pause"], CardinalityLimit = 4 },
+                        "nightweaver.lifecycle.fresh" or "nightweaver.lifecycle.coverage" or "nightweaver.lifecycle.age" => new MetricStreamConfiguration
+                            { TagKeys = [], CardinalityLimit = 1 },
                         "nightweaver.eligible_wait.duration" => new ExplicitBucketHistogramConfiguration
                             { TagKeys = ["pool"], Boundaries = DurationBuckets, CardinalityLimit = 4 },
                         "nightweaver.eligible_wait.censored" => new MetricStreamConfiguration
@@ -295,7 +323,8 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
             if (pools.TryGetValue(pool, out var existing)) return existing;
             var observation = new PoolObservation(pool, capacity, TimeProvider.System,
                 seconds => eligibleWait.Record(seconds, new KeyValuePair<string, object?>("pool", pool)),
-                (reason, count) => waitCensored.Add(count, new("pool", pool), new("reason", reason.ToString())), stopping);
+                (reason, count) => waitCensored.Add(count, new("pool", pool), new("reason", reason.ToString())), stopping,
+                budget: observationBudget);
             pools.Add(pool, observation);
             return observation;
         }
@@ -354,6 +383,7 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
         if (Volatile.Read(ref closing) != 0) return;
         invocationAttempts.Add(1, new("role", role), new("status", status));
         invocationDuration.Record(seconds, new KeyValuePair<string, object?>("role", role));
+        Lifecycle.Attempt(beadId, role, invocationId);
         Submit(new("invocation", status, seconds, null, role, beadId, runtimeId, invocationId, EndUtc: DateTime.UtcNow));
     }
 
@@ -405,7 +435,22 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
         publishedOutcomes.Add(1, new("role", role), new("outcome", receipt.Outcome.ToString()));
         if (receipt.Outcome == AgentOutcomeChoice.ChangesRequired)
             semanticRepairs.Add(1, new KeyValuePair<string, object?>("role", role));
+        var coverage = Lifecycle.Published(result.BeadId, role, result.InvocationId, receipt.PublishedState);
+        // Graph materialization is a milestone, not a second Planner first-pass approval.
+        if (receipt.Outcome == AgentOutcomeChoice.Approved && !receipt.PublishedState.Planned)
+            approvals.Add(1, new("role", role), new("coverage", coverage.ToString()));
+        RecordMilestone(result.BeadId, role, result.InvocationId,
+            receipt.PublishedState.Planned ? "planning_published" : receipt.Outcome.ToString(), "confirmed_publication");
         return WorkflowResult.Success;
+    }
+
+    private void RecordMilestone(string beadId, string? role, string? invocationId, string outcome, string provenance)
+    {
+        var runtime = Current?.RuntimeId;
+        if (Volatile.Read(ref closing) != 0 || !IsOperationalId(beadId) || runtime is null
+            || invocationId is not null && !IsOperationalId(invocationId)) return;
+        Submit(new("lifecycle", outcome, 0, null, role, beadId, runtime, invocationId,
+            EndUtc: DateTime.UtcNow, Source: provenance));
     }
 
     internal void RecordWorkflow(WorkflowOperation operation, WorkflowResult outcome, double seconds, string runtimeId,
@@ -467,9 +512,11 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
         if (!logger.IsEnabled(LogLevel.Information)) return;
         logger.Log(LogLevel.Information, record.Operation == "observation"
                 ? new EventId(1003, "ObservationCompletion") : record.Operation == "verified_merge"
-                ? new EventId(1002, "VerifiedMerge") : new EventId(1001, "OperationalCompletion"), Tags(record), null,
+                ? new EventId(1002, "VerifiedMerge") : record.Operation == "lifecycle"
+                ? new EventId(1004, "LifecycleMilestone") : new EventId(1001, "OperationalCompletion"), Tags(record), null,
             (_, _) => record.Operation == "observation" ? "Observation collection completed."
-                : record.Operation == "verified_merge" ? "Verified merge closure confirmed." : "Operational operation completed.");
+                : record.Operation == "verified_merge" ? "Verified merge closure confirmed."
+                : record.Operation == "lifecycle" ? "Lifecycle milestone observed." : "Operational operation completed.");
     }
 
     private static List<KeyValuePair<string, object?>> Tags(Record record)
@@ -484,6 +531,8 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
         if (record.CheckedHead is not null) tags.Add(new("checked.head", record.CheckedHead));
         if (record.MergeCommit is not null) tags.Add(new("merge.commit", record.MergeCommit));
         if (record.Source is not null) tags.Add(new("source", record.Source));
+        if (record.Operation == "lifecycle" && record.EndUtc is { } utc)
+            tags.Add(new("observed.utc", utc.ToString("O", System.Globalization.CultureInfo.InvariantCulture)));
         return tags;
     }
 
@@ -539,6 +588,7 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     internal async ValueTask StopAsync(bool force)
     {
         if (Interlocked.Exchange(ref closing, 1) != 0) return;
+        Lifecycle.Unknown(LifecycleLoss.Shutdown);
         spans.Writer.TryComplete();
         events.Writer.TryComplete();
         if (force) stop.Cancel();
@@ -619,13 +669,18 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
                 if (!ReferenceEquals(activity.Source, ownedSource) || activity.Events.Any() || activity.Links.Any()
                     || activity.Baggage.Any() || activity.TraceStateString is not null
                     || activity.StatusDescription is not null
-                    || activity.DisplayName is not ("host.start" or "host.stop" or "invocation" or "verified_merge" or "workflow" or "observation")
+                    || activity.DisplayName is not ("host.start" or "host.stop" or "invocation" or "verified_merge" or "workflow" or "observation" or "lifecycle")
                     || activity.TagObjects.Count() > 9
                     || activity.TagObjects.Any(tag => tag.Key switch
                     {
-                        "operation" => tag.Value is not ("host.start" or "host.stop" or "invocation" or "verified_merge" or "workflow" or "observation"),
-                        "outcome" => tag.Value is not ("success" or "failure" or "cancelled" or "completed" or "failed" or "timed_out" or "launch_failed" or "unknown" or "unavailable" or "invalid" or "refused" or "uncertain"),
-                        "source" => tag.Value is not string family || !IsObservationSource(family),
+                        "operation" => tag.Value is not ("host.start" or "host.stop" or "invocation" or "verified_merge" or "workflow" or "observation" or "lifecycle"),
+                        "outcome" => tag.Value is not ("success" or "failure" or "cancelled" or "completed" or "failed" or "timed_out" or "launch_failed" or "unknown" or "unavailable" or "invalid" or "refused" or "uncertain"
+                            or "Approved" or "ReadyForReview" or "ChangesRequired" or "ProductDecisionRequired" or "planning_published"
+                            or "pause_enter_observed" or "pause_exit_observed" or "pause_changed_observed"),
+                        "source" => tag.Value is not string family || !(IsObservationSource(family) || family is "confirmed_publication" or "observed_snapshot"),
+                        "observed.utc" => tag.Value is not string utc || !DateTime.TryParseExact(utc, "O",
+                            System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedUtc)
+                            || parsedUtc.Kind != DateTimeKind.Utc,
                         "kind" => tag.Value is not string kind || !Enum.TryParse<WorkflowOperation>(kind, out var operation) || !Enum.IsDefined(operation),
                         "detail.id" => tag.Value is not string id || !IsOpaqueId(id),
                         "role" => tag.Value is not string role || !IsRole(role),

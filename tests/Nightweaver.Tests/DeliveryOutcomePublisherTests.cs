@@ -38,6 +38,9 @@ public sealed class DeliveryOutcomePublisherTests
         Assert.Contains(spans, tags => tags.GetValueOrDefault("kind") == "Publication" && tags["outcome"] == outcome);
         var metrics = receiver.Captures.Where(c => c.Signal == "metrics").SelectMany(FirstPathTelemetryTests.DecodeRecords).ToArray();
         Assert.Equal(confirmed, metrics.Any(m => m.Only(1).String == "nightweaver.published.outcomes"));
+        Assert.Equal(confirmed, metrics.Any(m => m.Only(1).String == "nightweaver.approvals"));
+        Assert.Equal(confirmed, spans.Any(tags => tags.GetValueOrDefault("operation") == "lifecycle"
+            && tags.GetValueOrDefault("source") == "confirmed_publication"));
         Assert.DoesNotContain(metrics, m => m.Only(1).String == "nightweaver.semantic.repairs");
         Assert.Equal(confirmed ? 1 : 0, fixture.Runner.PublishWriteCount);
     }

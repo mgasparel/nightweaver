@@ -135,7 +135,8 @@ public sealed class OperationalTelemetryTests
             }
             else
             {
-                Assert.All(records, metric => Assert.Contains(metric.Only(1).String, MetricNames));
+                Assert.All(records, metric => Assert.Contains(metric.Only(1).String,
+                    MetricNames.Concat(["nightweaver.lifecycle.fresh", "nightweaver.lifecycle.coverage"])));
                 Assert.DoesNotContain("detail.id", Encoding.UTF8.GetString(capture.Bytes));
                 Assert.DoesNotContain("0123456789abcdef0123456789abcdef", Encoding.UTF8.GetString(capture.Bytes));
                 var histogram = Assert.Single(records, metric => metric.Only(1).String == "nightweaver.operation.duration");
@@ -276,7 +277,7 @@ public sealed class OperationalTelemetryTests
         clock.Seconds = 1_000_000;
         for (var index = 0; index < 16; index++) Assert.True(admission.TryTake());
         Assert.False(admission.TryTake());
-        Assert.Equal(1350, OperationalTelemetry.ProjectedSeries);
+        Assert.Equal(1516, OperationalTelemetry.ProjectedSeries);
         Assert.True(OperationalTelemetry.ProjectedSeries <= 2000);
     }
 
