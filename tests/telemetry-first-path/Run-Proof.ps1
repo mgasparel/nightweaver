@@ -14,6 +14,8 @@ foreach ($key in $names) { $saved[$key] = [Environment]::GetEnvironmentVariable(
 $container = $null
 Push-Location $checkout
 try {
+    & node (Join-Path $checkout 'tests/telemetry-first-path/approval-ratio-proof.mjs') (Join-Path $output 'approval-ratio')
+    if ($LASTEXITCODE -ne 0) { throw 'Deterministic approval ratio proof failed.' }
     $dockerArgs = @('run','--detach','--name',$name,'--label','nightweaver.fixture=first-path',
         '--env','GF_AUTH_ANONYMOUS_ENABLED=true','--env','GF_AUTH_ANONYMOUS_ORG_ROLE=Admin',
         '--env','GF_ANALYTICS_REPORTING_ENABLED=false','--env','GF_ANALYTICS_CHECK_FOR_UPDATES=false')

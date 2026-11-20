@@ -38,6 +38,12 @@ panel query, freshness gating and Playwright links run outside the default suite
 through `tests/telemetry-first-path/Run-Proof.ps1`. See the
 [dashboard contract](../docs/design/grafana-bottlenecks.md).
 
+Run `node tests/telemetry-first-path/approval-ratio-proof.mjs <fresh-evidence-directory>`
+for eight deterministic PromQL cases against the generated approval panel using
+the pinned local image's promtool (Docker required). This checks later-pass-only
+zero, mixed/first-pass ratios, absent/zero denominators, Unknown exclusion and
+role isolation without another native journey or a running backend.
+
 Lifecycle observation adds deterministic monotonic-clock coverage of first-pass
 known/unknown visits, semantic repair versus retry attempts, pause labels, notes,
 abort, deletion/reopen, restart, stale reads, UTC jumps and the shared cache bound.

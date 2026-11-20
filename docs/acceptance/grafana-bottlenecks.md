@@ -48,6 +48,29 @@ fixed failure diagnostics with an unavailable receiver. The retained default
 privacy tests cover credential/config/log/exception and foreign-listener exclusion.
 No real credential was used or copied into evidence.
 
+## Approval-ratio regression proof
+
+The generated query derives a missing FirstPass numerator's zero from the
+observed known-approval denominator, matched by role, and divides only where
+that denominator is positive. LaterPass-only approvals therefore show 0%;
+absent or zero known approvals remain unknown, and Unknown never enters the ratio.
+
+`node tests/telemetry-first-path/approval-ratio-proof.mjs <fresh-evidence-directory>`
+evaluates the generated panel expression with the pinned fixture image's real
+Prometheus promtool, using eight deterministic cases: later-pass only, mixed
+known approvals (25%), first-pass only (100%), Unknown only, no approvals, zero
+known denominator, Unknown exclusion and role isolation. `Run-Proof.ps1` also
+runs this fixture. It starts no server and adds no native Agent journey.
+
+Retained before/after evidence is under invocation
+`H:/Nightweaver/prod/tmp/nightshift/ns-5gg-p8c572d3f60439d2b8870/20261120T0211237457541Z-implementer/`
+in `ratio-before` and `ratio-after` (`approval-ratio.yml`, `promtool.log` and
+`result.json`). The retained query at `76b85a6f1aa0423a48e4a10809819228fda4728d`
+fails three cases: missing later-pass-only zero, NaN for zero denominator and
+missing the later-pass role in the isolation case. The repaired query passes all
+eight cases. Existing import/render/correlation/privacy and unavailable-exporter
+evidence above is reused; this repair changes only the panel query and description.
+
 ## Cost and limitations
 
 The generated closed inventory covers all 38 instruments, including explicit

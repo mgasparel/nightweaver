@@ -826,7 +826,7 @@
       "id": 18,
       "type": "timeseries",
       "title": "Known-history first-pass approvals",
-      "description": "FirstPass / (FirstPass + LaterPass) approvals. Unknown excluded and shown alongside. Repeated attempts also make LaterPass.",
+      "description": "FirstPass / (FirstPass + LaterPass) approvals. Positive known approvals with LaterPass only yield 0%; absent or zero known approvals remain unknown. Unknown excluded and shown alongside. Repeated attempts also make LaterPass.",
       "gridPos": {
         "x": 0,
         "y": 47,
@@ -840,7 +840,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(role) (increase(nightweaver_approvals_total{coverage=\"FirstPass\"}[$__range])) / sum by(role) (increase(nightweaver_approvals_total{coverage=~\"FirstPass|LaterPass\"}[$__range]))",
+          "expr": "(sum by(role) (increase(nightweaver_approvals_total{coverage=\"FirstPass\"}[$__range])) or on(role) (0 * sum by(role) (increase(nightweaver_approvals_total{coverage=~\"FirstPass|LaterPass\"}[$__range])))) / on(role) (sum by(role) (increase(nightweaver_approvals_total{coverage=~\"FirstPass|LaterPass\"}[$__range])) > 0)",
           "range": true,
           "instant": false,
           "legendFormat": "{{role}}"
