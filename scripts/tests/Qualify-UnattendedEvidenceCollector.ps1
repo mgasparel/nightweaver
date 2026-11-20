@@ -49,11 +49,25 @@ $evidence = Join-Path $root 'evidence'
 foreach ($path in @($installation,$repository,$evidence,(Join-Path $installation 'projects'),(Join-Path $installation 'web'),(Join-Path $installation 'run/fixture/background'),(Join-Path $installation 'telemetry/fixture'))) { [IO.Directory]::CreateDirectory($path) | Out-Null }
 $utf8 = [Text.UTF8Encoding]::new($false)
 function Save($Path,$Value) { [IO.File]::WriteAllText($Path, ($Value | ConvertTo-Json -Depth 12 -Compress), $utf8) }
-# Synthetic Git repository only: no host lifecycle, Agents, real workload or tracker setup.
+# Disposable Git/tracker fixture only: no host lifecycle, Agents or real workload.
 git -C $repository init --quiet
 if ($LASTEXITCODE -ne 0) { throw 'Disposable git initialization failed' }
 git -C $repository -c user.name=Fixture -c user.email=fixture@example.invalid commit --allow-empty -m fixture --quiet
 if ($LASTEXITCODE -ne 0) { throw 'Disposable git identity preparation failed' }
+function FixtureBd([string[]]$Arguments) {
+    $deadline=[Threading.CancellationTokenSource]::new(20000)
+    try {
+        $read=[Nightweaver.Evidence.Capture.NativeRead]::Run((Get-Command bd -CommandType Application).Source,
+            $Arguments,$repository,[Nightweaver.Evidence.Capture.LocalSources]::ReadEnvironment(),1048576,$deadline.Token).GetAwaiter().GetResult()
+        if ($read.Outcome -ne 'complete') { throw 'Disposable tracker preparation/audit failed' }
+        return [Text.Encoding]::UTF8.GetString($read.Bytes)
+    } finally { $deadline.Dispose() }
+}
+$null=FixtureBd @('init','--prefix','fixture','--non-interactive','--skip-agents','--skip-hooks')
+$workload=@(1..3 | ForEach-Object {
+    (FixtureBd @('create','--title',"Synthetic collector fixture $_",'--type','task','--priority','2','--json') | ConvertFrom-Json).id
+})
+$logicalBefore=FixtureBd @('--readonly','--sandbox','list','--all','--limit','0','--json')
 $configuration = Join-Path $installation 'projects/fixture.json'
 Save $configuration @{credential='configuration-canary-never-copy';project='fixture'}
 Save (Join-Path $installation 'nightweaver-deployment.json') @{schema_version=1;build_version=('a'*40)}
@@ -80,7 +94,7 @@ $server = [CollectorQualificationServer]::new($repository)
 $options = [Nightweaver.Evidence.Capture.Options]::new()
 $options.Installation=$installation; $options.Configuration=$configuration; $options.Repository=$repository; $options.EvidenceRoot=$evidence
 $options.Project='fixture'; $options.Contract=$contract; $options.ContractRevision=('d'*40)
-$options.WorkloadIds=@('fixture-1','fixture-2','fixture-3'); $options.StartUtc=[datetimeoffset]::UtcNow; $options.CutoffUtc=$options.StartUtc.AddHours(8)
+$options.WorkloadIds=$workload; $options.StartUtc=[datetimeoffset]::UtcNow; $options.CutoffUtc=$options.StartUtc.AddHours(8)
 $options.StopAfterSeconds=$Seconds; $options.WebUrl="http://127.0.0.1:$($server.Port)/"
 $timer=[Diagnostics.Stopwatch]::StartNew(); $cpu=$process.TotalProcessorTime.TotalMilliseconds
 $ioBefore=[Nightweaver.Evidence.Capture.NativeRead]::CurrentIo()
@@ -89,7 +103,7 @@ try {
     $native=[Nightweaver.Evidence.Capture.NativeRead]::Run((Join-Path $PSHOME 'pwsh.exe'), @(
         '-NoProfile','-File',(Join-Path $PSScriptRoot '../Capture-UnattendedEvidence.ps1'),
         '-Installation',$installation,'-Configuration',$configuration,'-Repository',$repository,'-Project','fixture',
-        '-WorkloadIds','fixture-1,fixture-2,fixture-3','-Contract',$contract,'-ContractRevision',('d'*40),
+        '-WorkloadIds',($workload -join ','),'-Contract',$contract,'-ContractRevision',('d'*40),
         '-StartUtc',$options.StartUtc.ToString('o'),'-CutoffUtc',$options.CutoffUtc.ToString('o'),
         '-EvidenceRoot',$evidence,'-WebUrl',$options.WebUrl,'-StopAfterSeconds',([string]$Seconds)
     ),$repository,[Nightweaver.Evidence.Capture.LocalSources]::ReadEnvironment(),1048576,$captureDeadline.Token).GetAwaiter().GetResult()
@@ -98,6 +112,8 @@ try {
     if ($result['collectorProcessId'] -eq $PID) { throw 'Collector was not independent of synthetic owner' }
 } finally { $captureDeadline.Dispose(); $server.Dispose() }
 $timer.Stop(); $process.Refresh()
+$logicalAfter=FixtureBd @('--readonly','--sandbox','list','--all','--limit','0','--json')
+if ($logicalAfter -cne $logicalBefore) { throw 'Collector changed logical tracker data' }
 if ((Snapshot) -cne $before) { throw 'Collector changed disposable source content' }
 if (-not $result['validation'].integrityValid) { throw 'Qualification archive failed validation' }
 $archive=$result['archiveDirectory']
@@ -119,7 +135,9 @@ if ($projection.records -gt 32768 -or $projection.files -gt 16384 -or $projectio
 $resourceSamples=@($samples | Where-Object { $_.sourceKind -eq 'resource' -and $_.outcome -eq 'complete' })
 if ($resourceSamples.Count -lt 2 -or $timer.Elapsed.TotalSeconds -gt ($Seconds+10)) { throw 'Resource or finite-settlement qualification unavailable' }
 $report=[ordered]@{
-    schema='nightweaver-unattended-collector-qualification-v1';synthetic=$true;sourcePreserved=$true
+    schema='nightweaver-unattended-collector-qualification-v1';synthetic=$true;sourcePreserved=$true;logicalTrackerPreserved=$true
+    trackerBeforeSha256=[Nightweaver.Evidence.Capture.Data]::Hash([Text.Encoding]::UTF8.GetBytes($logicalBefore))
+    trackerAfterSha256=[Nightweaver.Evidence.Capture.Data]::Hash([Text.Encoding]::UTF8.GetBytes($logicalAfter))
     archiveDirectory=$archive;archiveSha256=(Get-FileHash (Join-Path $archive 'manifest.json')).Hash.ToLowerInvariant()
     samplesSha256=(Get-FileHash (Join-Path $archive 'samples.jsonl')).Hash.ToLowerInvariant()
     result=$result;outerSeconds=$timer.Elapsed.TotalSeconds;collectorCpuMs=$native.NativeCpuMs
@@ -129,7 +147,7 @@ $report=[ordered]@{
     qualifierCpuMs=$process.TotalProcessorTime.TotalMilliseconds-$cpu;qualifierIoBefore=$ioBefore;qualifierIoAfter=[Nightweaver.Evidence.Capture.NativeRead]::CurrentIo()
     httpGets=$server.Gets;archiveBytes=$archiveBytes;payloadBytes=$payloadBytes
     gaps=@($samples | Where-Object outcome -ne 'complete').Count;projection=$projection
-    visibility='No tracker is initialized; native readonly reads fail honestly. Synthetic factory heartbeat ages without a publisher. No production or Agent process is started.'
+    visibility='Three synthetic Beads are prepared before capture; logical tracker and source bytes are compared afterward. Synthetic factory heartbeat ages without a publisher; missing host logs remain gaps. No production or Agent process is started.'
 }
 $probes=[ordered]@{}
 foreach ($probe in @(

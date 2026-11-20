@@ -174,8 +174,9 @@ real-writer intervals pass the delivered validator; pinned-directory/junction/
 hard-link checks preserve source content. They run inside the local measured
 suite and Windows CI with positive counts and no skips.
 
-Qualification uses synthetic local installation/owner/HTTP/files plus disposable
-Git and native read boundaries, with no Agent or production lifecycle. It records
+Qualification launches the public collector CLI independently of its synthetic
+owner, using local installation/HTTP/files and a disposable Git/Beads fixture,
+with no Agent or production lifecycle. It records
 source hashes before/after, collector CPU/IO counters, read elapsed time, command
 counts, actual samples/gaps, finalization, archive hashes and a per-source-kind
 eight-hour footprint projection. Projection assumptions are explicit: changing
