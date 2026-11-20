@@ -328,6 +328,21 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         }
     }
 
+    /// <summary>Pins an existing runtime directory for a read-only, no-reparse enumeration.</summary>
+    internal static IDisposable PinExistingRuntimeDirectory(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Runtime directory pins require Windows sharing semantics.");
+        ValidatePathSegments(path);
+        var guard = new InvocationRuntimeFiles(string.Empty, string.Empty, null!);
+        try
+        {
+            guard.PinDirectoryChain(Path.GetFullPath(path), createMissing: false, exclusiveLeaf: false);
+            return guard;
+        }
+        catch { guard.Dispose(); throw; }
+    }
+
     /// <summary>Reads a bounded owned status file without following a file or directory reparse point.</summary>
     internal static byte[] ReadRuntimeFileBounded(string path, int maximumBytes)
     {
