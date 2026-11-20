@@ -15,6 +15,9 @@ Current question (or recovery diagnostic) previews use the first 140 Unicode
 characters with whitespace collapsed so multiline evidence cannot displace
 Review. A native keyboard-accessible disclosure after Review retains the complete
 context and source comment attribution; the Workspace link remains available.
+On mobile, freshness status and Refresh share a row, with source details and
+warnings below. Compact spacing keeps Review visible even while the longer
+recovering-updates header is displayed; warnings and type sizes remain intact.
 Project navigation remains in the sidebar, including its existing mobile controls.
 
 The summary's paused count comes from the shared `attention` observation and
@@ -32,7 +35,8 @@ not introduce highlight counts or a digest backend migration.
 Verification extends `studio-qa.mjs` through `overview-checks.mjs` on the existing
 isolated QA AppHost. Controlled resource reads cover one decision, a twelve-item
 inventory with long titles/IDs, a long multiline question with keyboard access to
-its complete context, empty, stale, and unavailable observations at
+its complete context (also while a held sibling factory read keeps the real
+coordinator recovering), empty, stale, and unavailable observations at
 1440x900, 375x900, and 720x900 (the effective width of a 1440px screen at 200%).
 The native shell journey retains reload/history, keyboard navigation, sidebar
 dialogs and focus, legacy routes and current-project scoping. Two cheap Studio

@@ -448,6 +448,18 @@ h1:focus:not(:focus-visible) {
 .overview .digest-overview h2 { font-size: 18px; }
 .overview .digest-preview-scope { font-size: 14px; margin: 8px 0; color: var(--muted); }
 .overview .bead-freshness { font-size: 12px; gap: 8px 12px; margin-bottom: 12px; }
+@media (max-width: 600px) {
+  .overview-summary { margin-bottom: 16px; }
+  .overview .attention-row { padding: 12px; }
+  .overview .bead-freshness {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+  .overview .bead-freshness > details,
+  .overview .bead-freshness > [role="alert"],
+  .overview .bead-freshness > p { grid-column: 1 / -1; }
+}
 .merge-note {
   display: flex;
   align-items: center;
