@@ -5,7 +5,7 @@ import { DeliveryView } from "./delivery-views";
 import { operations, interactions } from "./operations-browser";
 import { useObservation } from "./use-observation";
 import { observationStatus, type Snapshot } from "./operations";
-import { beadPath, safeBeadId, visibleAttention, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
+import { attentionPreview, beadPath, safeBeadId, visibleAttention, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
 import { AttentionCommands } from "./attention-commands";
 import { PlanningAuthorization } from "./product-views";
 import { Relations } from "./workspace-relations";
@@ -175,8 +175,14 @@ export function AttentionView({ project, compact = false }: { project: string; c
             <div className="bead-row-meta"><span>{row.beadId}</span><Status tone="warn">{row.kind === "product-decision-required" ? "Decision needed" : "Recovery needed"}</Status></div>
             <h2><Link to={beadPath(project, row.beadId)}>{row.title}</Link></h2>
             {compact && <>
-              {row.question && <p className="attention-question">{row.question}</p>}
+              {(row.question || row.diagnostic) && <p className="attention-question">{attentionPreview(row.question || row.diagnostic!)}</p>}
               <Link className="button primary" to={beadPath(project, row.beadId)}>Review {row.beadId}</Link>
+              {(row.question || row.diagnostic) && <details className="attention-context">
+                <summary>Read full context &amp; pause details</summary>
+                <p>{row.question || row.diagnostic}</p>
+                <p>{row.sourceCommentId ? `Source comment ${row.sourceCommentId}` : "Source comment unavailable"}</p>
+                {row.contextNotice && <p>{row.contextNotice}</p>}
+              </details>}
             </>}
             <p>{row.stage ?? "Stage unavailable"} · P{row.priority} · Repairs {row.repairCycles ?? 0}/{row.maxRepairCycles}</p>
             {!compact && <button className="text-link" aria-pressed={selected === row.beadId} onClick={() => setSelected(row.beadId)}>Review {row.beadId}</button>}

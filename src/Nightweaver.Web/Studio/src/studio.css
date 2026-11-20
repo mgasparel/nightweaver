@@ -438,7 +438,9 @@ h1:focus:not(:focus-visible) {
 .overview .attention-inventory { margin-bottom: 0; }
 .overview .attention-row { border: 0; padding: 16px; background: #ffffff05; }
 .overview .attention-row h2 { font-size: 18px; line-height: 1.5; }
-.overview .attention-row .attention-question { font-size: 15px; color: var(--ink); margin: 8px 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.overview .attention-row .attention-question { font-size: 15px; color: var(--ink); margin: 8px 0 12px; overflow-wrap: anywhere; }
+.overview .attention-context { margin-top: 12px; }
+.overview .attention-context p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .overview .attention-row .button { margin-bottom: 12px; }
 .overview .attention-row p, .overview .bead-row-meta { font-size: 13px; }
 .overview .bead-row-meta { flex-wrap: wrap; overflow-wrap: anywhere; }

@@ -12,6 +12,10 @@ export type AttentionItem = {
 export function visibleAttention(items: AttentionItem[], limit: number, focused?: string) {
   return items.filter((row, index) => index < limit || row.beadId === focused);
 }
+/** Compact context cannot let legacy multiline evidence displace the Review action. */
+export function attentionPreview(context: string) {
+  return Array.from(context).slice(0, 140).join("").replace(/\s+/g, " ").trim();
+}
 export type WorkspaceData = {
   sourceMetadata?: string | null;
   presentation?: { role: string; summary: string; trackedStage: string | null; planning: string | null;

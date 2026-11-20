@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { visibleAttention } from '../src/bead-model.ts';
+import { attentionPreview, visibleAttention } from '../src/bead-model.ts';
+
+test('current context preview bounds multiline evidence without splitting Unicode characters', () => {
+  assert.equal(attentionPreview('Which boundary?'), 'Which boundary?');
+  assert.equal(attentionPreview('a\n\n'.repeat(100)), ('a '.repeat(46) + 'a').trim());
+  assert.equal(attentionPreview('😀'.repeat(141)), '😀'.repeat(140));
+});
 
 test('attention preview stays bounded while a focused row moves beyond its boundary', () => {
   const items = Array.from({length: 12}, (_, i) => ({beadId: `paused-${i}`}));
