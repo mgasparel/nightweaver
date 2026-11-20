@@ -583,6 +583,8 @@ namespace Nightweaver.Evidence.Capture
         private readonly List<Task> pending = new List<Task>();
         private Dictionary<string, object> manifest, epoch;
         private long origin, end, shutdownDeadline, shutdownAnchor, lastRuntime = -1;
+        private long turnDeadline = long.MaxValue;
+        private Dictionary<string, object> publicationGap;
         private DateTimeOffset actualStart, lastUtc;
         private bool uncertain, clockUncertain, stopped, writerUnsettled;
         private string stopReason;
@@ -626,13 +628,25 @@ namespace Nightweaver.Evidence.Capture
                 if (!new[] { "interventionJournal", "operatorAttestation", "budgetWorksheet", "runAuthorization", "qualification", "checks" }.Contains(pair.Key)) throw new InvalidDataException("invalid-reference");
         }
         private long Elapsed => Math.Max(0, clock.Milliseconds - origin);
+        private async Task Turn(long deadline, Func<Task> action)
+        {
+            long previous = turnDeadline;
+            turnDeadline = Math.Min(previous, Math.Min(end, deadline));
+            try { await action().ConfigureAwait(false); }
+            finally { turnDeadline = previous; }
+        }
         private async Task<ReadResult> Read(Request request, long deadline)
         {
             long start = clock.Milliseconds;
             string startedUtc = Data.Utc(clock.UtcNow);
             ReadResult Stamp(ReadResult value) { value.CollectionStartUtc = startedUtc; value.CollectionStartElapsedMs = Math.Max(0, start - origin); return value; }
-            int budget = (int)Math.Min(request.Budget, Math.Max(0, Math.Min(end, deadline) - start));
-            if (budget <= 0 || stopped || cancellation.IsCancellationRequested) return Stamp(ReadResult.Failure("interrupted", "collection-cutoff"));
+            // Cancellation settlement belongs to the turn too. Do not start a
+            // request whose cancellation grace would extend this absolute bound.
+            long readDeadline = Math.Min(end, Math.Min(deadline, turnDeadline == long.MaxValue ? turnDeadline : turnDeadline - 300));
+            int budget = (int)Math.Min(request.Budget, Math.Max(0, readDeadline - start));
+            if (budget <= 0 || stopped || cancellation.IsCancellationRequested)
+                return Stamp(ReadResult.Failure("interrupted", budget <= 0 && turnDeadline < end ? "turn-deadline" : "collection-cutoff"));
+            request.Budget = budget;
             using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
             {
                 timeout.CancelAfter(budget);
@@ -653,7 +667,7 @@ namespace Nightweaver.Evidence.Capture
                     timeout.Cancel();
                     try
                     {
-                        int grace = ShutdownRemaining(300);
+                        int grace = (int)Math.Min(ShutdownRemaining(300), Math.Max(0, turnDeadline - clock.Milliseconds));
                         if (grace <= 0 && !task.IsCompleted) throw new TimeoutException();
                         ObserveSettlement(await task.WaitAsync(TimeSpan.FromMilliseconds(Math.Max(1, grace))).ConfigureAwait(false));
                     }
@@ -735,41 +749,49 @@ namespace Nightweaver.Evidence.Capture
                     if (clock.Milliseconds >= nextRuntime)
                     {
                         long due = nextRuntime; long turnStart = clock.Milliseconds;
-                        if (turnStart - due >= 15000) Emit("runtime", "schedule", ReadResult.Failure("missing", "skipped-runtime-turns"), Elapsed);
-                        await Runtime(turnStart + 5000, webRotation++).ConfigureAwait(false);
+                        await Turn(turnStart + 5000, async () =>
+                        {
+                            if (turnStart - due >= 15000) Emit("runtime", "schedule", ReadResult.Failure("missing", "skipped-runtime-turns"), Elapsed);
+                            await Runtime(turnDeadline, webRotation++).ConfigureAwait(false);
+                        }).ConfigureAwait(false);
                         // Strict no catch-up: an overrun schedules a future turn.
                         nextRuntime = Math.Max(turnStart + 15000, clock.Milliseconds + 1);
                     }
                     if (clock.Milliseconds >= nextTracker && clock.Milliseconds < end - 5000 && !stopped)
                     {
                         long start = clock.Milliseconds;
-                        for (int i = 0; i < 2 && clock.Milliseconds < start + 4000; i++)
+                        await Turn(Math.Min(start + 4000, end - 5000), async () =>
                         {
-                            string id = trackerIds[rotation++ % trackerIds.Length]; long before = Elapsed;
-                            var result = await Read(new Request("tracker", id), Math.Min(start + 4000, end - 5000)).ConfigureAwait(false);
-                            if (result.Outcome == "complete") trackerAccepted[id] = clock.Milliseconds;
-                            Emit("tracker", id, result, before);
-                        }
-                        var ages = trackerIds.Select(id => Data.Map("sourceId", id, "ageMs", trackerAccepted.ContainsKey(id) ? (object)Math.Max(0, clock.Milliseconds - trackerAccepted[id]) : null)).ToArray();
-                        var ageResult = ReadResult.Json(ages);
-                        if (trackerIds.Any(id => trackerAccepted.ContainsKey(id) ? clock.Milliseconds - trackerAccepted[id] > 180000 : Elapsed > 180000))
-                        { ageResult.Outcome = "invalid"; ageResult.Code = "tracker-age-over-180s"; }
-                        Emit("tracker", "source-ages", ageResult, Elapsed);
+                            for (int i = 0; i < 2 && clock.Milliseconds < start + 4000 && !stopped; i++)
+                            {
+                                string id = trackerIds[rotation++ % trackerIds.Length]; long before = Elapsed;
+                                var result = await Read(new Request("tracker", id), turnDeadline).ConfigureAwait(false);
+                                if (Emit("tracker", id, result, before) != null && result.Outcome == "complete") trackerAccepted[id] = clock.Milliseconds;
+                            }
+                            var ages = trackerIds.Select(id => Data.Map("sourceId", id, "ageMs", trackerAccepted.ContainsKey(id) ? (object)Math.Max(0, clock.Milliseconds - trackerAccepted[id]) : null)).ToArray();
+                            var ageResult = ReadResult.Json(ages);
+                            if (trackerIds.Any(id => trackerAccepted.ContainsKey(id) ? clock.Milliseconds - trackerAccepted[id] > 180000 : Elapsed > 180000))
+                            { ageResult.Outcome = "invalid"; ageResult.Code = "tracker-age-over-180s"; }
+                            Emit("tracker", "source-ages", ageResult, Elapsed);
+                        }).ConfigureAwait(false);
                         nextTracker = Math.Max(start + 60000, clock.Milliseconds + 1);
                     }
                     var logs = options.InvocationLogs.Keys.Select(id => (Id: id, Host: false)).ToList();
                     if (options.CaptureBackgroundLogs) logs.AddRange(new[] { ("background-host", true), ("background-web", true) });
                     long logDeadline = Math.Min(end - 5000, clock.Milliseconds + 2000);
-                    for (int i = 0; i < Math.Min(4, logs.Count); i++)
+                    await Turn(logDeadline, async () =>
                     {
-                        if (clock.Milliseconds >= logDeadline || stopped) break;
-                        var selection = logs[logRotation++ % logs.Count];
-                        await Invocation(selection.Id, selection.Host, logDeadline).ConfigureAwait(false);
-                    }
+                        for (int i = 0; i < Math.Min(4, logs.Count); i++)
+                        {
+                            if (clock.Milliseconds >= logDeadline || stopped) break;
+                            var selection = logs[logRotation++ % logs.Count];
+                            await Invocation(selection.Id, selection.Host, logDeadline).ConfigureAwait(false);
+                        }
+                    }).ConfigureAwait(false);
                     if (clock.Milliseconds >= nextResource && !stopped)
                     { await Resources("periodic").ConfigureAwait(false); nextResource = clock.Milliseconds + 900000; }
                     long next = Math.Min(end - 5000, Math.Min(nextRuntime, Math.Min(nextTracker, nextResource)));
-                    if (next > clock.Milliseconds) await clock.Delay((int)Math.Min(next - clock.Milliseconds, 15000), cancellation).ConfigureAwait(false);
+                    if (!stopped && next > clock.Milliseconds) await clock.Delay((int)Math.Min(next - clock.Milliseconds, 15000), cancellation).ConfigureAwait(false);
                 }
                 if (!stopped && !cancellation.IsCancellationRequested)
                 {
@@ -791,7 +813,7 @@ namespace Nightweaver.Evidence.Capture
             {
                 if (writerUnsettled) throw new IOException("writer-settlement-uncertain");
                 Emit("installation", "collector-stop", ReadResult.Json(Data.Map("reason", terminal, "reads", Reads, "readElapsedMs", ReadMilliseconds,
-                    "unsettledOperations", pending.Count, "settlementUncertain", uncertain, "shutdownBudgetMs", 10000)), Elapsed, true);
+                    "unsettledOperations", pending.Count, "settlementUncertain", uncertain, "shutdownBudgetMs", 10000, "publicationGap", publicationGap)), Elapsed, true);
                 manifest["state"] = !stopped && !cancellation.IsCancellationRequested && options.StopAfterSeconds == 0 && clock.UtcNow >= options.CutoffUtc ? "complete" : "interrupted";
                 manifest["actualWindow"] = Data.Map("startUtc", Data.Utc(actualStart), "endUtc", Data.Utc(clock.UtcNow), "elapsedMs", Elapsed);
                 manifest["sampleCount"] = writer.Count; manifest["clockUncertain"] = clockUncertain;
@@ -805,7 +827,7 @@ namespace Nightweaver.Evidence.Capture
         private void Storage(Action action)
         {
             if (writerUnsettled) throw new IOException("writer-settlement-uncertain");
-            int budget = ShutdownRemaining(1000);
+            int budget = (int)Math.Min(ShutdownRemaining(1000), Math.Max(0, turnDeadline - clock.Milliseconds));
             if (budget <= 0) throw new IOException("shutdown-deadline");
             var task = Task.Run(action);
             try { task.WaitAsync(TimeSpan.FromMilliseconds(budget)).GetAwaiter().GetResult(); }
@@ -886,6 +908,18 @@ namespace Nightweaver.Evidence.Capture
         }
         private Dictionary<string, object> Emit(string kind, string id, ReadResult result, long start, bool terminal = false)
         {
+            if (!terminal && publicationGap != null) return null;
+            // Admission reserves the entire maximum storage allowance. A slow but
+            // settled append cannot renew the turn; retain an explicit first gap in
+            // the reserved terminal payload and stop instead of silently dropping it.
+            if (!terminal && turnDeadline - clock.Milliseconds < 1000)
+            {
+                publicationGap = Data.Map("sourceKind", kind, "sourceId", id, "startedElapsedMs", start, "endedElapsedMs", Elapsed,
+                    "outcome", result.Outcome, "failureCode", result.Code, "payloadBytes", result.Bytes?.LongLength ?? 0,
+                    "generation", result.Generation, "offset", result.Offset);
+                stopped = true; stopReason = "turn-publication-deadline"; BeginShutdown();
+                return null;
+            }
             var now = clock.UtcNow;
             if (now < lastUtc || Math.Abs((now - actualStart).TotalMilliseconds - Elapsed) > 2000) clockUncertain = true;
             bool backwards = now < lastUtc || (result.CollectionStartUtc != null && now < DateTimeOffset.Parse(result.CollectionStartUtc));
@@ -1014,12 +1048,15 @@ namespace Nightweaver.Evidence.Capture
         private async Task Resources(string phase)
         {
             long deadline = Math.Min(end, clock.Milliseconds + 5000);
-            for (int i = 0; i < 2; i++)
+            await Turn(deadline, async () =>
             {
-                long before = Elapsed;
-                Emit("resource", phase + "-" + i, await Read(new Request("resource", "counters"), deadline).ConfigureAwait(false), before);
-                if (i == 0 && deadline - clock.Milliseconds >= 1000) await clock.Delay(1000, cancellation).ConfigureAwait(false);
-            }
+                for (int i = 0; i < 2 && !stopped; i++)
+                {
+                    long before = Elapsed;
+                    Emit("resource", phase + "-" + i, await Read(new Request("resource", "counters"), deadline).ConfigureAwait(false), before);
+                    if (i == 0 && !stopped && deadline - clock.Milliseconds >= 1000) await clock.Delay(1000, cancellation).ConfigureAwait(false);
+                }
+            }).ConfigureAwait(false);
         }
         private async Task Invocation(string id, bool host, long deadline)
         {

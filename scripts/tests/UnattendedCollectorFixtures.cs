@@ -75,6 +75,7 @@ namespace Nightweaver.Evidence.Tests
         public ManualResetEventSlim WriteGate, WriteFinished;
         public bool Closed;
         public Action OnWrite, OnDispose;
+        public Action<Dictionary<string, object>> OnAppend;
         public int Count => Records.Count;
         public void Start(Dictionary<string, object> manifest) { Manifest = manifest; }
         public void Append(Dictionary<string, object> record, byte[] payload, bool terminal)
@@ -83,6 +84,7 @@ namespace Nightweaver.Evidence.Tests
             if (!terminal && Count >= FailAt) throw new IOException("credential-canary-must-not-escape");
             if (!terminal && Count == 5 && WriteGate != null) WriteGate.Wait();
             Records.Add(record); Payloads.Add(payload);
+            OnAppend?.Invoke(record);
             if (WriteGate != null && Count == 6) WriteFinished.Set();
         }
         public void Close(Dictionary<string, object> manifest) { OnWrite?.Invoke(); Manifest = manifest; Closed = true; }
@@ -111,6 +113,8 @@ namespace Nightweaver.Evidence.Tests
         public static async Task<Dictionary<string, object>> RunAll(string root)
         {
             cases = 0;
+            foreach (string kind in new[] { "runtime", "tracker", "log", "resource" })
+                await TurnPublicationBudget(root, kind).ConfigureAwait(false);
             var full = await Run(root).ConfigureAwait(false);
             Check((string)full.Result["state"] == "complete" && full.Clock.Now == 28800000, "Full simulated window did not stop exactly at cutoff");
             Check((string)full.Result["unattendedVerdict"] == "not-evaluated", "Collector produced a verdict");
@@ -291,6 +295,18 @@ namespace Nightweaver.Evidence.Tests
             {
                 var o = Options(root); o.StopAfterSeconds = 35;
                 var c = new FixtureClock(); var s = new FixtureSources { Clock = c, Options = o };
+                s.Override = r => { if (r.Kind == "tracker") c.Now += Math.Min(1900, r.Budget); return null; };
+                var path = Path.Combine(root, "archives", "publication-gap");
+                using (var w = new ArchiveWriter(path, new Limits(), () => c.Now += 900))
+                {
+                    var result = await new Collector(o, c, s, w, CancellationToken.None).Run().ConfigureAwait(false);
+                    Check((string)result["reason"] == "turn-publication-deadline" && (string)result["state"] == "interrupted", "Real writer concealed publication exhaustion");
+                }
+                archives.Add(path);
+            }
+            {
+                var o = Options(root); o.StopAfterSeconds = 35;
+                var c = new FixtureClock(); var s = new FixtureSources { Clock = c, Options = o };
                 var path = Path.Combine(root, "archives", "write-interruption"); int writes = 0;
                 using (var w = new ArchiveWriter(path, new Limits(), () => { if (++writes == 6) throw new IOException("injected-append-interruption"); }))
                 {
@@ -301,6 +317,57 @@ namespace Nightweaver.Evidence.Tests
             }
             Check(!JsonSerializer.Serialize(full.Result).Contains("credential-canary"), "Untrusted error escaped summary");
             return Data.Map("passed", cases, "failed", 0, "skipped", 0, "archives", archives);
+        }
+        public static async Task TurnPublicationBudget(string root, string kind)
+        {
+            long firstRead = -1, lastPublication = -1;
+            int publications = 0;
+            bool firstTurnDone = false;
+            var run = await Run(root, 35, (source, writer) =>
+            {
+                if (kind == "log")
+                    foreach (var bead in source.Options.WorkloadIds)
+                    {
+                        string invocation = "20260101T0000000000000Z-implementer";
+                        source.Options.InvocationLogs[bead + "/" + invocation] = Path.Combine(source.Options.Installation, "logs", "fixture", bead, invocation + ".log");
+                    }
+                bool Target(Request r) => kind == "runtime" ? (r.Kind == "file" && r.Id == "owner") || r.Kind == "process" || r.Kind == "http" || (r.Kind == "file" && r.Id == "factory") :
+                    kind == "tracker" ? r.Kind == "tracker" : kind == "log" ? r.Kind == "invocation" : r.Kind == "resource";
+                source.Override = r =>
+                {
+                    if (kind == "log" && firstRead >= 0 && r.Kind != "invocation" && r.Kind != "hostLog") firstTurnDone = true;
+                    if (Target(r))
+                    {
+                        if (firstRead < 0) firstRead = source.Clock.Now;
+                        source.Clock.Now += Math.Min(r.Budget, kind == "log" ? 900 : r.Kind == "http" ? 250 : 1900);
+                    }
+                    return null;
+                };
+                writer.OnAppend = record =>
+                {
+                    string sourceKind = (string)record["sourceKind"], id = (string)record["sourceId"];
+                    bool target = kind == "runtime" ? sourceKind == "runtime" || sourceKind == "cleanup" :
+                        kind == "log" ? sourceKind == "invocation" : sourceKind == kind;
+                    int firstTurnRecords = kind == "runtime" ? 4 : kind == "resource" ? 2 : 3;
+                    if (!target || id == "collector-stop" || publications >= firstTurnRecords || firstTurnDone) return;
+                    source.Clock.Now += 900;
+                    lastPublication = source.Clock.Now;
+                    publications++;
+                };
+            }).ConfigureAwait(false);
+            int budget = kind == "runtime" || kind == "resource" ? 5000 : kind == "tracker" ? 4000 : 2000;
+            Check(firstRead >= 0 && publications > 0, "Slow publication fixture missed its source: " + kind);
+            Check(lastPublication - firstRead <= budget, kind + " publication-inclusive turn exceeded " + budget + "ms: " + (lastPublication - firstRead));
+            Check((string)run.Result["reason"] == "turn-publication-deadline" && (string)run.Result["state"] == "interrupted", "Turn exhaustion silently discarded evidence: " + kind);
+            using var terminalDocument = JsonDocument.Parse(run.Writer.Payloads.Last(p => p != null));
+            var terminal = terminalDocument.RootElement;
+            var gap = terminal.GetProperty("publicationGap");
+            long gapAt = gap.GetProperty("endedElapsedMs").GetInt64();
+            Check(gapAt - firstRead <= budget && gapAt >= lastPublication, "Turn bookkeeping exceeded budget: " + kind);
+            Check(run.Source.Trace.All(t => t.At < gapAt), "New source admitted after publication gap: " + kind);
+            Check(run.Clock.Now == gapAt, "Stopped turn waited for another sampling tick: " + kind);
+            if (kind == "runtime" || kind == "log")
+                Check(gap.GetProperty("failureCode").GetString() == "turn-deadline", "Expired-read gap concealed its cause: " + kind);
         }
     }
 }

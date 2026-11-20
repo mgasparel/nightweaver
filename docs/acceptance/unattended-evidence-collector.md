@@ -113,11 +113,24 @@ evidence for later correlation; a SHA in notes is not verified merge proof.
 
 Runtime turns are serial, every fifteen seconds, with at most two HTTP requests,
 two-second per-read bounds and a five-second turn budget including local identity
-reads. Tracker turns have at most two commands per sixty seconds, two seconds
-each/four combined. Inventory/readiness/three selected details rotate without
+reads, cancellation settlement, bookkeeping and record publication. Tracker turns
+have at most two commands per sixty seconds, two seconds each/four combined.
+Inventory/readiness/three selected details rotate without
 catch-up; a separate sample retains monotonic ages and failures beyond 180 seconds.
 More than 45 seconds between accepted owner identities is an explicit gap.
 Source policy can be stricter than those outer limits.
+
+Runtime, tracker, log and resource turns each carry one absolute deadline through
+reads and publication. Reads reserve 300 ms for cancellation settlement within
+that deadline; every append requires a full one-second storage allowance still
+available, and its wait is clipped to the same deadline. Failure records and
+source-age bookkeeping cannot obtain fresh allowances. If publication cannot fit,
+collection stops with `turn-publication-deadline`, closes as interrupted, and uses
+reserved terminal capacity to record `publicationGap`: the first unpublished
+source, outcome/failure, monotonic interval, byte count and log generation/offset.
+Its payload is unavailable; subsequent sources are not admitted. Earlier committed
+evidence survives. Terminal reporting and closure use the separate aggregate
+shutdown deadline below; they cannot renew or resume the expired sampling turn.
 
 Log turns rotate at most four chunks in two seconds; each chunk read has at most
 one second. Each chunk is at most 64 KiB, and each source retains at most 8 MiB
@@ -183,7 +196,10 @@ timeouts, stale identity/health, PID reuse, replacement/chunk caps, cancellation
 uncertain settlement, clock skew, storage/cap failures and read allowlists.
 Deadline fixtures cover late/grace uncertain results and slow settled endpoint
 writes followed by disposal and clipped/unavailable inspection at the same
-finalizer used by the PowerShell entry point. Short
+finalizer used by the PowerShell entry point. Slow settled reads and writes also
+exercise publication-inclusive runtime, tracker, log and resource budgets,
+expired-read gaps and stopped source admission. A real writer publication-gap
+archive passes the independent validator. Short
 real-writer intervals pass the delivered validator; pinned-directory/junction/
 hard-link checks preserve source content. They run inside the local measured
 suite and Windows CI with positive counts and no skips.
