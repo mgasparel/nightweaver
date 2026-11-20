@@ -94,6 +94,9 @@ The finite allowlist consists of:
   built-in Windows PowerShell 5.1 CIM cmdlets, in a collector-owned native Job;
   missing cmdlets, policy denials and failures remain gaps. It does not capture
   command lines or environment/configuration contents.
+  System uptime is the interval between the captured OS boot time and the same
+  UTC observation timestamp retained in the payload. Missing or future boot times
+  fail the read instead of fabricating zero uptime.
 - Optional `-References` keys `interventionJournal`, `operatorAttestation`,
   `budgetWorksheet`, `runAuthorization`, `qualification`, `checks`, each an
   explicit nonsecret local ordinary file. Absent references stay null. Present
@@ -209,8 +212,12 @@ owner, using local installation/HTTP/files and a disposable Git/Beads fixture,
 with no Agent or production lifecycle. It records
 source hashes before/after, collector CPU/IO counters, read elapsed time, command
 counts, actual samples/gaps, finalization, archive hashes and a per-source-kind
-eight-hour footprint projection. Projection assumptions are explicit: changing
-payload sizes and future invocations can exhaust caps. Missing host logs and a
+eight-hour footprint projection. The qualification also checks every successful
+resource payload's uptime against
+its boot and observation timestamps through the actual Windows PowerShell 5.1
+adapter, and retains those measurements in its report. Projection assumptions
+are explicit: changing payload sizes and future invocations can exhaust caps.
+Missing host logs and a
 nonrenewed synthetic heartbeat are intentional gaps. Required production readiness,
 real-run qualification, incident diagnosis, semantic evaluation and ns-ke8 remain
 separate work.

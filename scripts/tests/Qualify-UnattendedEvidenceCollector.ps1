@@ -134,6 +134,20 @@ $projection=[ordered]@{records=$projectedRecords;bytes=[Math]::Ceiling($projecte
 if ($projection.records -gt 32768 -or $projection.files -gt 16384 -or $projection.bytes -gt 268435456) { throw 'Measured projection exceeds archive bounds' }
 $resourceSamples=@($samples | Where-Object { $_.sourceKind -eq 'resource' -and $_.outcome -eq 'complete' })
 if ($resourceSamples.Count -lt 2 -or $timer.Elapsed.TotalSeconds -gt ($Seconds+10)) { throw 'Resource or finite-settlement qualification unavailable' }
+$resourceUptimes=@(foreach ($sample in $resourceSamples) {
+    # Read the actual payload produced by the collector's Windows PowerShell 5.1 adapter.
+    $resource=Get-Content -LiteralPath (Join-Path $archive $sample.payload.path) -Raw | ConvertFrom-Json
+    $observed=[datetimeoffset]$resource.observedUtc
+    $boot=[datetimeoffset]$resource.system.lastBootUtc
+    $expected=($observed-$boot).TotalSeconds
+    $uptime=$resource.systemUptimeSeconds
+    if ($null -eq $uptime -or $uptime -isnot [ValueType] -or
+        [double]::IsNaN([double]$uptime) -or [double]::IsInfinity([double]$uptime) -or
+        $expected -lt 0 -or [Math]::Abs([double]$uptime-$expected) -gt 0.01) {
+        throw 'Resource uptime disagrees with captured boot and observation times'
+    }
+    [ordered]@{sourceId=$sample.sourceId;observedUtc=$resource.observedUtc;lastBootUtc=$resource.system.lastBootUtc;uptimeSeconds=$uptime;expectedSeconds=$expected}
+})
 $report=[ordered]@{
     schema='nightweaver-unattended-collector-qualification-v1';synthetic=$true;sourcePreserved=$true;logicalTrackerPreserved=$true
     trackerBeforeSha256=[Nightweaver.Evidence.Capture.Data]::Hash([Text.Encoding]::UTF8.GetBytes($logicalBefore))
@@ -146,6 +160,7 @@ $report=[ordered]@{
     counterScope='Settled collector Job accounting includes its resource/validator descendants; external CIM service work is excluded.'
     qualifierCpuMs=$process.TotalProcessorTime.TotalMilliseconds-$cpu;qualifierIoBefore=$ioBefore;qualifierIoAfter=[Nightweaver.Evidence.Capture.NativeRead]::CurrentIo()
     httpGets=$server.Gets;archiveBytes=$archiveBytes;payloadBytes=$payloadBytes
+    resourceUptimes=$resourceUptimes
     gaps=@($samples | Where-Object outcome -ne 'complete').Count;projection=$projection
     visibility='Three synthetic Beads are prepared before capture; logical tracker and source bytes are compared afterward. Synthetic factory heartbeat ages without a publisher; missing host logs remain gaps. No production or Agent process is started.'
 }
