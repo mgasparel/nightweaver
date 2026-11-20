@@ -138,6 +138,8 @@ admissions; it cannot create an accumulating series of replacement subprocesses.
 Explicit uncertain-settlement results remain authoritative even when returned
 late or during cancellation grace; a completed adapter task does not prove that
 its native children settled.
+Final inspection is also withheld while source settlement is uncertain; it
+cannot launch another native child after admissions have stopped for that reason.
 Clock discontinuities preserve monotonic duration and set clock uncertainty.
 Collection ends at the original monotonic cutoff even if UTC changes.
 

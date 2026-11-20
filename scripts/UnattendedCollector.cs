@@ -637,7 +637,7 @@ namespace Nightweaver.Evidence.Capture
             {
                 timeout.CancelAfter(budget);
                 // Contain synchronous adapter entry as well as its asynchronous operation.
-                var task = Task.Run(() => sources.Read(request, timeout.Token)); Reads++;
+                var task = Task.Run(() => sources.Read(request, timeout.Token), timeout.Token); Reads++;
                 try
                 {
                     var value = await task.WaitAsync(TimeSpan.FromMilliseconds(budget), cancellation).ConfigureAwait(false);
@@ -856,11 +856,11 @@ namespace Nightweaver.Evidence.Capture
             // Native cancellation itself needs settlement time. Reserve that time
             // inside the same absolute deadline rather than after its expiration.
             int inspectionBudget = ShutdownRemaining(5000, 300);
-            if (!writerUnsettled && sourcesDisposed && inspectionBudget > 0)
+            if (!writerUnsettled && !uncertain && sourcesDisposed && inspectionBudget > 0)
             {
                 using (var timeout = new CancellationTokenSource(inspectionBudget))
                 {
-                    var task = Task.Run(() => inspect(timeout.Token));
+                    var task = Task.Run(() => inspect(timeout.Token), timeout.Token);
                     try
                     {
                         var value = await task.WaitAsync(TimeSpan.FromMilliseconds(inspectionBudget)).ConfigureAwait(false);

@@ -99,13 +99,14 @@ namespace Nightweaver.Evidence.Tests
                 Contract = Path.Combine(root, "contract.md"), ContractRevision = new string('f', 40), WorkloadIds = new[] { "selected-1", "selected-2", "selected-3" },
                 StartUtc = DateTimeOffset.Parse("2026-01-01T00:00:00Z"), CutoffUtc = DateTimeOffset.Parse("2026-01-01T08:00:00Z") };
         }
-        private static async Task<(MemoryWriter Writer, FixtureSources Source, FixtureClock Clock, Dictionary<string, object> Result)> Run(string root, int seconds = 0, Action<FixtureSources, MemoryWriter> setup = null)
+        private static async Task<(MemoryWriter Writer, FixtureSources Source, FixtureClock Clock, Dictionary<string, object> Result, Collector Collector)> Run(string root, int seconds = 0, Action<FixtureSources, MemoryWriter> setup = null)
         {
             var options = Options(root); options.StopAfterSeconds = seconds;
             var clock = new FixtureClock(); var source = new FixtureSources { Clock = clock, Options = options }; var writer = new MemoryWriter();
             setup?.Invoke(source, writer);
-            var result = await new Collector(options, clock, source, writer, source.Cancel?.Token ?? CancellationToken.None).Run().ConfigureAwait(false);
-            return (writer, source, clock, result);
+            var collector = new Collector(options, clock, source, writer, source.Cancel?.Token ?? CancellationToken.None);
+            var result = await collector.Run().ConfigureAwait(false);
+            return (writer, source, clock, result, collector);
         }
         public static async Task<Dictionary<string, object>> RunAll(string root)
         {
@@ -165,6 +166,14 @@ namespace Nightweaver.Evidence.Tests
                 var firstHttp = deadlineUncertain.Source.Trace.FindIndex(t => t.Kind == "http");
                 Check(firstHttp == deadlineUncertain.Source.Trace.Count - 1, "Source admitted after uncertain deadline settlement");
                 Check(deadlineUncertain.Writer.Payloads.Where(p => p != null).Any(p => Encoding.UTF8.GetString(p).Contains("\"settlementUncertain\":true")), "Terminal evidence concealed uncertain deadline settlement");
+                bool inspectionAdmitted = false;
+                var finished = await deadlineUncertain.Collector.Finish(deadlineUncertain.Result, token =>
+                {
+                    inspectionAdmitted = true;
+                    return Task.FromResult(ReadResult.Json(Data.Map("integrityValid", true)));
+                }).ConfigureAwait(false);
+                Check(!inspectionAdmitted, "Validator native admission continued after uncertain source settlement");
+                Check((bool)finished["settlementUncertain"], "Finalizer erased source settlement uncertainty");
             }
             // Reproduce the reviewer's slow-but-settled endpoint counterexample.
             // The same Finish method owns disposal/validation for the PS wrapper;
