@@ -120,6 +120,8 @@ jobs:
           $timer = [Diagnostics.Stopwatch]::StartNew()
           $archiveFixtures = & ./scripts/tests/UnattendedEvidenceArchive.Tests.ps1 | ConvertFrom-Json
           if ($archiveFixtures.passed -lt 66 -or $archiveFixtures.failed -ne 0 -or $archiveFixtures.skipped -ne 0) { throw 'Archive fixture verification failed' }
+          $collectorFixtures = & ./scripts/tests/UnattendedEvidenceCollector.Tests.ps1 | ConvertFrom-Json
+          if ($collectorFixtures.passed -lt 102 -or $collectorFixtures.failed -ne 0 -or $collectorFixtures.skipped -ne 0) { throw 'Collector fixture verification failed' }
           dotnet test --solution Nightweaver.slnx --minimum-expected-tests 995 --report-xunit-xml --report-xunit-xml-filename ci.xml --show-slowest-tests 20
           $testExit = $LASTEXITCODE
           $timer.Stop()

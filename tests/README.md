@@ -21,6 +21,14 @@ Fixture failure prevents acceptance even if xUnit passes. Windows CI runs the sa
 checks inside the timed correctness step. For direct format inspection and its
 integrity-versus-coverage semantics, see [the archive format](../docs/acceptance/unattended-evidence-archive.md).
 
+The same stopwatch includes [collector fixtures](../scripts/tests/UnattendedEvidenceCollector.Tests.ps1)
+and reports `collectorFixtures` counts and `collectorFixtureSeconds`. These use
+injected clocks/readers/storage for the eight-hour schedule and short disk
+publication intervals; they add no Agent or overnight lifecycle journey. A
+separate disposable [qualification](../docs/acceptance/unattended-evidence-collector.md)
+exercises real file/HTTP/process boundaries and reports overhead without
+operating production. Collector fixture failures prevent suite acceptance.
+
 See [test-cost evidence](../docs/agents/test-cost-evidence.md) for the versioned
 measurement/comparability contract, native-boundary justification, capture-first
 1.5x diagnostic trigger and ordinary repair routing. Reuse comparable retained
@@ -50,6 +58,13 @@ abort, deletion/reopen, restart, stale reads, UTC jumps and the shared cache bou
 Existing confirmed/reread/refused Delivery publisher fixtures and a Planning
 publication fixture check lifecycle wire records without another native journey.
 See [the lifecycle contract](../docs/design/lifecycle-observation-telemetry.md).
+
+The native Beads cancellation fixture pins the lock owner's PID and creation time,
+then requires the actual Windows process signal and exclusive lock access before
+disposal. `SystemProcessRunner` waits for that signal before reading the native
+exit code or completing cancellation: managed exit notification can precede
+Windows process rundown. This strengthens the existing journey without adding
+native cases, changing its deadlines or reducing six-worker scheduling.
 
 Web observation telemetry adds four cheap decoder/loopback/component cases for shared
 subscriber collection, scheduled no-op suppression, monotonic retained age,
