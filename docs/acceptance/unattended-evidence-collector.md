@@ -135,6 +135,9 @@ children start suspended, join a kill-on-close Job before running, and have
 bounded stdout/stderr drains. Only that Job is terminated on timeout/output cap.
 Source cancellation gets a 300-ms settlement allowance. An unsettled source stops
 admissions; it cannot create an accumulating series of replacement subprocesses.
+Explicit uncertain-settlement results remain authoritative even when returned
+late or during cancellation grace; a completed adapter task does not prove that
+its native children settled.
 Clock discontinuities preserve monotonic duration and set clock uncertainty.
 Collection ends at the original monotonic cutoff even if UTC changes.
 
@@ -153,8 +156,14 @@ Storage calls have one-second observer deadlines. An unsettled writer is never
 replaced, closed or inspected concurrently; the result reports
 `writerSettled=false` and integrity unavailable. Stop the collector before later
 independent snapshot inspection. The shutdown allowance is **ten seconds** beyond
-the collection cutoff, including source settlement, terminal publication/closure
-and a separately owned five-second validator Job. Exhaustion is an unavailable
+the collection cutoff, including endpoint bookkeeping, source settlement,
+terminal publication/closure, disposal and a separately owned validator Job.
+One absolute monotonic deadline covers both the collector and PowerShell wrapper;
+early stops tighten it to ten seconds after stopping. Every storage/disposal
+allowance is clipped to remaining time. Inspection receives at most five seconds,
+with its 300-ms cancellation settlement reserved inside the remaining allowance.
+`shutdownMs` includes endpoint work after cutoff; `finalizationMs` includes
+disposal and inspection from that same anchor. Exhaustion is an unavailable
 inspection, not permission to extend collection. OS-level process termination or
 uninterruptible storage can leave only the last committed prefix/staging evidence;
 these are gaps and never sustained acceptance.
@@ -169,7 +178,10 @@ pwsh -NoProfile -File scripts/tests/Qualify-UnattendedEvidenceCollector.ps1 `
 
 Deterministic fixtures simulate the full eight-hour schedule, interruption,
 timeouts, stale identity/health, PID reuse, replacement/chunk caps, cancellation,
-uncertain settlement, clock skew, storage/cap failures and read allowlists. Short
+uncertain settlement, clock skew, storage/cap failures and read allowlists.
+Deadline fixtures cover late/grace uncertain results and slow settled endpoint
+writes followed by disposal and clipped/unavailable inspection at the same
+finalizer used by the PowerShell entry point. Short
 real-writer intervals pass the delivered validator; pinned-directory/junction/
 hard-link checks preserve source content. They run inside the local measured
 suite and Windows CI with positive counts and no skips.

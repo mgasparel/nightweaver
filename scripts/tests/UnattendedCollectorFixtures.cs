@@ -23,11 +23,14 @@ namespace Nightweaver.Evidence.Tests
         public Options Options;
         public List<(string Kind, string Id, long At, int Budget, long Offset)> Trace = new List<(string, string, long, int, long)>();
         public Func<Request, ReadResult> Override;
+        public Func<Request, CancellationToken, Task<ReadResult>> AsyncOverride;
         public CancellationTokenSource Cancel;
         public int DelayMs;
+        public Action OnDispose;
         public Task<ReadResult> Read(Request request, CancellationToken token)
         {
             Trace.Add((request.Kind, request.Id, Clock.Now, request.Budget, request.Offset));
+            if (AsyncOverride != null && request.Kind == "http") return AsyncOverride(request, token);
             Clock.Now += DelayMs;
             if (Override != null) { var result = Override(request); if (result != null) return Task.FromResult(result); }
             if (Cancel != null && Clock.Now > 30000) Cancel.Cancel();
@@ -61,7 +64,7 @@ namespace Nightweaver.Evidence.Tests
             }
             return Task.FromResult(ReadResult.Json(payload));
         }
-        public void Dispose() { }
+        public void Dispose() { OnDispose?.Invoke(); }
     }
     public sealed class MemoryWriter : IWriter
     {
@@ -71,17 +74,19 @@ namespace Nightweaver.Evidence.Tests
         public int FailAt = int.MaxValue;
         public ManualResetEventSlim WriteGate, WriteFinished;
         public bool Closed;
+        public Action OnWrite, OnDispose;
         public int Count => Records.Count;
         public void Start(Dictionary<string, object> manifest) { Manifest = manifest; }
         public void Append(Dictionary<string, object> record, byte[] payload, bool terminal)
         {
+            OnWrite?.Invoke();
             if (!terminal && Count >= FailAt) throw new IOException("credential-canary-must-not-escape");
             if (!terminal && Count == 5 && WriteGate != null) WriteGate.Wait();
             Records.Add(record); Payloads.Add(payload);
             if (WriteGate != null && Count == 6) WriteFinished.Set();
         }
-        public void Close(Dictionary<string, object> manifest) { Manifest = manifest; Closed = true; }
-        public void Dispose() { }
+        public void Close(Dictionary<string, object> manifest) { OnWrite?.Invoke(); Manifest = manifest; Closed = true; }
+        public void Dispose() { OnDispose?.Invoke(); }
     }
     public static class CollectorFixtures
     {
@@ -141,6 +146,55 @@ namespace Nightweaver.Evidence.Tests
             }
             var uncertain = await Run(root, 35, (source, writer) => source.Override = r => r.Kind == "http" ? ReadResult.Failure("timeout", "settlement-uncertain") : null).ConfigureAwait(false);
             Check((bool)uncertain.Result["settlementUncertain"] && uncertain.Source.Trace.Count(t => t.Kind == "http") == 1, "Unsettled source replaced");
+            foreach (bool grace in new[] { false, true })
+            {
+                var deadlineUncertain = await Run(root, 35, (source, writer) => source.AsyncOverride = async (request, token) =>
+                {
+                    if (grace)
+                    {
+                        // Exercise the outer deadline catch, then complete during its
+                        // settlement grace with explicit contrary ownership evidence.
+                        try { await Task.Delay(Timeout.Infinite, token).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { }
+                        await Task.Delay(20).ConfigureAwait(false);
+                    }
+                    source.Clock.Now += 2100;
+                    return ReadResult.Failure("timeout", "settlement-uncertain");
+                }).ConfigureAwait(false);
+                Check((bool)deadlineUncertain.Result["settlementUncertain"], "Deadline discarded settlement uncertainty: grace=" + grace);
+                var firstHttp = deadlineUncertain.Source.Trace.FindIndex(t => t.Kind == "http");
+                Check(firstHttp == deadlineUncertain.Source.Trace.Count - 1, "Source admitted after uncertain deadline settlement");
+                Check(deadlineUncertain.Writer.Payloads.Where(p => p != null).Any(p => Encoding.UTF8.GetString(p).Contains("\"settlementUncertain\":true")), "Terminal evidence concealed uncertain deadline settlement");
+            }
+            // Reproduce the reviewer's slow-but-settled endpoint counterexample.
+            // The same Finish method owns disposal/validation for the PS wrapper;
+            // no separate wrapper stopwatch or renewed timeout participates.
+            foreach (bool exhaustedDeadline in new[] { false, true })
+            {
+                var o = Options(root); o.StopAfterSeconds = 35;
+                var c = new FixtureClock(); var s = new FixtureSources { Clock = c, Options = o };
+                var w = new MemoryWriter();
+                s.Override = r => { if (c.Now >= 30000 && c.Now < 35000) c.Now += 2000; return null; };
+                w.OnWrite = () => { if (c.Now >= 30000) c.Now += 900; };
+                s.OnDispose = () => c.Now += 900;
+                w.OnDispose = () => c.Now += 900;
+                var collector = new Collector(o, c, s, w, CancellationToken.None);
+                var result = await collector.Run().ConfigureAwait(false);
+                Check((long)result["shutdownMs"] == c.Now - 35000 && c.Now > 35000, "Endpoint overrun omitted from shutdown duration");
+                if (exhaustedDeadline) c.Now = 45000;
+                bool inspected = false;
+                result = await collector.Finish(result, token =>
+                {
+                    inspected = true;
+                    int remaining = collector.ShutdownRemaining(5000, 300);
+                    Check(remaining > 0 && remaining < 5000, "Validator received a renewed five-second allowance");
+                    c.Now += remaining;
+                    return Task.FromResult(ReadResult.Json(Data.Map("integrityValid", true, "unattendedVerdict", "not-evaluated")));
+                }).ConfigureAwait(false);
+                Check(c.Now <= 45000 && (long)result["finalizationMs"] == c.Now - 35000, "Aggregate finalization exceeded cutoff plus ten seconds");
+                Check(inspected != exhaustedDeadline, "Inspection admitted after shutdown deadline or omitted with available budget");
+                if (exhaustedDeadline) Check(!(bool)result["writerSettled"], "Unavailable disposal reported as settled");
+            }
             var cancelled = await Run(root, 120, (source, writer) => source.Cancel = new CancellationTokenSource()).ConfigureAwait(false);
             Check((string)cancelled.Result["state"] == "interrupted" && (string)cancelled.Result["reason"] == "caller-cancelled", "Cancellation not finite");
             var skew = await Run(root, 35, (source, writer) => source.Override = r => { if (r.Kind == "http") source.Clock.Skew -= 5000; return null; }).ConfigureAwait(false);

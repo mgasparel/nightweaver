@@ -19,35 +19,19 @@ function Invoke-UnattendedEvidenceCollection {
     $signal = [Nightweaver.Evidence.Capture.StopSignal]::new()
     $collector = $null
     $result = $null
-    $finalization = [Diagnostics.Stopwatch]::new()
     $collectorIdentity = Get-Process -Id $PID
     try {
         $collector = [Nightweaver.Evidence.Capture.Collector]::new($Options, $clock, $sources, $writer, $signal.Token)
         $result = $collector.Run().GetAwaiter().GetResult()
-        $finalization.Start()
         $result['archiveDirectory'] = $archive
         $result['externalCommands'] = $sources.Commands
         $result['collectorProcessId'] = $PID
         $result['collectorStartedUtc'] = $collectorIdentity.StartTime.ToUniversalTime().ToString('o')
     } finally {
-        $signal.Dispose(); $sources.Dispose()
-        if ($null -eq $collector -or $collector.WriterSettled) {
-            $disposed = $writer.DisposeWithinDeadline()
-            if (-not $disposed -and $result) { $result['writerSettled']=$false; $result['reason']='writer-disposal-uncertain' }
-        }
+        $signal.Dispose()
+        $result = $collector.Finish($result, (Join-Path $PSHOME 'pwsh.exe'),
+            (Join-Path $PSScriptRoot 'Test-UnattendedEvidenceArchive.ps1'), $archive).GetAwaiter().GetResult()
     }
-    $result['validation'] = @{integrityValid=$false; unattendedVerdict='not-evaluated'; errors=@(@{code='writer-settlement-uncertain'})}
-    if ($result['writerSettled']) {
-        $deadline = [Threading.CancellationTokenSource]::new(5000)
-        try {
-            $inspection = [Nightweaver.Evidence.Capture.NativeRead]::Run((Join-Path $PSHOME 'pwsh.exe'),
-                @('-NoProfile','-File',(Join-Path $PSScriptRoot 'Test-UnattendedEvidenceArchive.ps1'),'-ArchiveDirectory',$archive),
-                $Options.EvidenceRoot, [Nightweaver.Evidence.Capture.LocalSources]::ReadEnvironment(), 1048576, $deadline.Token).GetAwaiter().GetResult()
-            $result['validation'] = if ($inspection.Outcome -eq 'complete') { [Text.Encoding]::UTF8.GetString($inspection.Bytes) | ConvertFrom-Json } else { @{integrityValid=$false; unattendedVerdict='not-evaluated'; errors=@(@{code='validation-unavailable'})} }
-        } finally { $deadline.Dispose() }
-    }
-    $finalization.Stop()
-    $result['finalizationMs'] = $result['shutdownMs'] + $finalization.ElapsedMilliseconds
     return $result
 }
 Export-ModuleMember -Function Invoke-UnattendedEvidenceCollection

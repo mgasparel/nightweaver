@@ -582,7 +582,7 @@ namespace Nightweaver.Evidence.Capture
         private readonly CancellationToken cancellation;
         private readonly List<Task> pending = new List<Task>();
         private Dictionary<string, object> manifest, epoch;
-        private long origin, end, lastRuntime = -1;
+        private long origin, end, shutdownDeadline, shutdownAnchor, lastRuntime = -1;
         private DateTimeOffset actualStart, lastUtc;
         private bool uncertain, clockUncertain, stopped, writerUnsettled;
         private string stopReason;
@@ -591,6 +591,16 @@ namespace Nightweaver.Evidence.Capture
         public int Reads { get; private set; }
         public long ReadMilliseconds { get; private set; }
         public bool WriterSettled => !writerUnsettled;
+        public int ShutdownRemaining(int maximum, int reserve = 0) => (int)Math.Min(maximum, Math.Max(0, shutdownDeadline - clock.Milliseconds - reserve));
+        private void BeginShutdown()
+        {
+            shutdownAnchor = Math.Min(shutdownAnchor, clock.Milliseconds);
+            shutdownDeadline = Math.Min(shutdownDeadline, shutdownAnchor + 10000);
+        }
+        private void ObserveSettlement(ReadResult value)
+        {
+            if (value.Code == "settlement-uncertain") { uncertain = true; stopped = true; BeginShutdown(); }
+        }
         public Collector(Options options, IClock clock, ISources sources, IWriter writer, CancellationToken cancellation)
         { this.options = options; this.clock = clock; this.sources = sources; this.writer = writer; this.cancellation = cancellation; }
         public static void Validate(Options o)
@@ -631,16 +641,23 @@ namespace Nightweaver.Evidence.Capture
                 try
                 {
                     var value = await task.WaitAsync(TimeSpan.FromMilliseconds(budget), cancellation).ConfigureAwait(false);
+                    ObserveSettlement(value);
+                    if (uncertain) return Stamp(ReadResult.Failure("timeout", "settlement-uncertain"));
                     if (clock.Milliseconds > start + budget) return Stamp(ReadResult.Failure("timeout", "source-deadline"));
                     if (value.Bytes != null && value.Bytes.Length > request.Maximum) return Stamp(ReadResult.Failure("limit", "output-limit"));
-                    if (value.Code == "settlement-uncertain") { uncertain = true; stopped = true; }
                     return Stamp(value);
                 }
                 catch
                 {
+                    if (cancellation.IsCancellationRequested) BeginShutdown();
                     timeout.Cancel();
-                    try { await task.WaitAsync(TimeSpan.FromMilliseconds(300)).ConfigureAwait(false); }
-                    catch { if (!task.IsCompleted) { pending.Add(task); uncertain = true; stopped = true; } }
+                    try
+                    {
+                        int grace = ShutdownRemaining(300);
+                        if (grace <= 0 && !task.IsCompleted) throw new TimeoutException();
+                        ObserveSettlement(await task.WaitAsync(TimeSpan.FromMilliseconds(Math.Max(1, grace))).ConfigureAwait(false));
+                    }
+                    catch { if (!task.IsCompleted) { pending.Add(task); uncertain = true; stopped = true; BeginShutdown(); } }
                     return Stamp(ReadResult.Failure(cancellation.IsCancellationRequested ? "interrupted" : "timeout", uncertain ? "settlement-uncertain" : "source-timeout"));
                 }
                 finally { ReadMilliseconds += Math.Max(0, clock.Milliseconds - start); }
@@ -662,6 +679,7 @@ namespace Nightweaver.Evidence.Capture
             if (remaining <= 0 || remaining > 28920000) throw new InvalidDataException("invalid-collection-window");
             end = origin + remaining;
             if (options.StopAfterSeconds > 0) end = Math.Min(end, origin + options.StopAfterSeconds * 1000L);
+            shutdownAnchor = end; shutdownDeadline = end + 10000;
             var common = Encoding.UTF8.GetString((await Essential(new Request("git", "common")).ConfigureAwait(false)).Bytes).Trim();
             string evidencePhysical = Encoding.UTF8.GetString((await Essential(new Request("directory", "evidence")).ConfigureAwait(false)).Bytes);
             string repositoryPhysical = Encoding.UTF8.GetString((await Essential(new Request("directory", "repository")).ConfigureAwait(false)).Bytes);
@@ -766,7 +784,9 @@ namespace Nightweaver.Evidence.Capture
             catch (OperationCanceledException) { terminal = "caller-cancelled"; }
             catch (IOException) { terminal = "storage-or-archive-limit"; stopped = true; }
             catch { terminal = "collector-failure"; stopped = true; }
-            long shutdownStart = clock.Milliseconds;
+            // Endpoint bookkeeping may already have crossed cutoff. It consumes the
+            // same absolute allowance as closure, disposal and independent inspection.
+            BeginShutdown();
             try
             {
                 if (writerUnsettled) throw new IOException("writer-settlement-uncertain");
@@ -779,14 +799,16 @@ namespace Nightweaver.Evidence.Capture
             }
             catch { terminal = "closure-unavailable"; }
             return Data.Map("schema", "nightweaver-unattended-collector-result-v1", "state", manifest["state"], "records", writer.Count,
-                "reads", Reads, "readElapsedMs", ReadMilliseconds, "elapsedMs", Elapsed, "shutdownMs", Math.Max(0, clock.Milliseconds - shutdownStart),
+                "reads", Reads, "readElapsedMs", ReadMilliseconds, "elapsedMs", Elapsed, "shutdownMs", Math.Max(0, clock.Milliseconds - shutdownAnchor),
                 "settlementUncertain", uncertain, "writerSettled", !writerUnsettled, "reason", terminal, "unattendedVerdict", "not-evaluated");
         }
         private void Storage(Action action)
         {
             if (writerUnsettled) throw new IOException("writer-settlement-uncertain");
+            int budget = ShutdownRemaining(1000);
+            if (budget <= 0) throw new IOException("shutdown-deadline");
             var task = Task.Run(action);
-            try { task.WaitAsync(TimeSpan.FromMilliseconds(1000)).GetAwaiter().GetResult(); }
+            try { task.WaitAsync(TimeSpan.FromMilliseconds(budget)).GetAwaiter().GetResult(); }
             catch (TimeoutException) when (!task.IsCompleted)
             {
                 // Never race an outstanding append with rollback, closure, validation
@@ -794,6 +816,73 @@ namespace Nightweaver.Evidence.Capture
                 writerUnsettled = true; uncertain = true; stopped = true;
                 throw new IOException("writer-settlement-uncertain");
             }
+        }
+        public Task<Dictionary<string, object>> Finish(Dictionary<string, object> result, string executable, string script, string archive)
+            => Finish(result, token => NativeRead.Run(executable, new[] { "-NoProfile", "-File", script, "-ArchiveDirectory", archive },
+                options.EvidenceRoot, LocalSources.ReadEnvironment(), 1048576, token));
+        private static object InspectionValue(JsonElement value)
+        {
+            switch (value.ValueKind)
+            {
+                case JsonValueKind.Object: return value.EnumerateObject().ToDictionary(p => p.Name, p => InspectionValue(p.Value));
+                case JsonValueKind.Array: return value.EnumerateArray().Select(InspectionValue).ToArray();
+                case JsonValueKind.String: return value.GetString();
+                case JsonValueKind.True: return true;
+                case JsonValueKind.False: return false;
+                case JsonValueKind.Number: return value.TryGetInt64(out long integer) ? (object)integer : value.GetDouble();
+                default: return null;
+            }
+        }
+        public async Task<Dictionary<string, object>> Finish(Dictionary<string, object> result, Func<CancellationToken, Task<ReadResult>> inspect)
+        {
+            // Also used after preflight failure. Never start a fresh allowance in
+            // the wrapper, and never inspect concurrently with an unsettled writer.
+            BeginShutdown();
+            async Task<bool> DisposeOwned(IDisposable owned)
+            {
+                int budget = ShutdownRemaining(1000);
+                if (budget <= 0) return false;
+                try { await Task.Run(owned.Dispose).WaitAsync(TimeSpan.FromMilliseconds(budget)).ConfigureAwait(false); return true; }
+                catch { return false; }
+            }
+            bool sourcesDisposed = await DisposeOwned(sources).ConfigureAwait(false);
+            if (!sourcesDisposed) uncertain = true;
+            if (!writerUnsettled && !await DisposeOwned(writer).ConfigureAwait(false)) writerUnsettled = true;
+            if (result == null) return null;
+            result["writerSettled"] = !writerUnsettled;
+            result["settlementUncertain"] = uncertain;
+            result["validation"] = Data.Map("integrityValid", false, "unattendedVerdict", "not-evaluated",
+                "errors", new[] { Data.Map("code", writerUnsettled ? "writer-settlement-uncertain" : "validation-unavailable") });
+            // Native cancellation itself needs settlement time. Reserve that time
+            // inside the same absolute deadline rather than after its expiration.
+            int inspectionBudget = ShutdownRemaining(5000, 300);
+            if (!writerUnsettled && sourcesDisposed && inspectionBudget > 0)
+            {
+                using (var timeout = new CancellationTokenSource(inspectionBudget))
+                {
+                    var task = Task.Run(() => inspect(timeout.Token));
+                    try
+                    {
+                        var value = await task.WaitAsync(TimeSpan.FromMilliseconds(inspectionBudget)).ConfigureAwait(false);
+                        ObserveSettlement(value);
+                        if (value.Outcome == "complete" && ShutdownRemaining(1) > 0) result["validation"] = InspectionValue(Json(value));
+                    }
+                    catch
+                    {
+                        timeout.Cancel();
+                        int grace = ShutdownRemaining(300);
+                        try
+                        {
+                            if (grace <= 0 && !task.IsCompleted) throw new TimeoutException();
+                            ObserveSettlement(await task.WaitAsync(TimeSpan.FromMilliseconds(Math.Max(1, grace))).ConfigureAwait(false));
+                        }
+                        catch { if (!task.IsCompleted) uncertain = true; }
+                    }
+                }
+            }
+            result["settlementUncertain"] = uncertain;
+            result["finalizationMs"] = Math.Max(0, clock.Milliseconds - shutdownAnchor);
+            return result;
         }
         private Dictionary<string, object> Emit(string kind, string id, ReadResult result, long start, bool terminal = false)
         {
