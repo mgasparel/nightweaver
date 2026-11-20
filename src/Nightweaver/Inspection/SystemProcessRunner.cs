@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using Nightweaver.Execution;
 
@@ -100,13 +101,13 @@ internal sealed class SystemProcessRunner : IProcessRunner
 
         try
         {
-            await process.WaitForExitAsync(linkedCancellation.Token);
+            await WaitForSettlementAsync(process, linkedCancellation.Token);
         }
         catch (OperationCanceledException)
         {
             try
             {
-                if (!process.HasExited)
+                if (!HasSettled(process))
                 {
                     process.Kill(entireProcessTree: true);
                 }
@@ -116,7 +117,7 @@ internal sealed class SystemProcessRunner : IProcessRunner
                 // The child exited while cancellation was being handled.
             }
 
-            await process.WaitForExitAsync(CancellationToken.None);
+            await WaitForSettlementAsync(process, CancellationToken.None);
             var timedOut = timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested;
             var stderr = await stderrTask;
             _ = await stdoutTask;
@@ -133,6 +134,42 @@ internal sealed class SystemProcessRunner : IProcessRunner
         var standardOutput = await stdoutTask;
         var standardError = await stderrTask;
         if (exceeded) throw new ToolExecutionException("observer output exceeded read limit");
-        return new ProcessResult(process.ExitCode, standardOutput, standardError);
+        return new ProcessResult(ReadExitCode(process), standardOutput, standardError);
     }
+
+    // Process.HasExited/WaitForExitAsync can observe an exit code during Windows
+    // process rundown, before the native handle signals and file locks settle.
+    // Keep the original wait token; cancellation still kills and settles the child.
+    private static async Task WaitForSettlementAsync(Process process, CancellationToken cancellationToken)
+    {
+        await process.WaitForExitAsync(cancellationToken);
+        while (!HasSettled(process))
+            await Task.Delay(1, cancellationToken);
+    }
+
+    private static bool HasSettled(Process process)
+    {
+        if (!OperatingSystem.IsWindows()) return process.HasExited;
+        return WaitForSingleObject(process.SafeHandle, 0) switch
+        {
+            0 => true,
+            258 => false,
+            _ => throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not observe native process settlement.")
+        };
+    }
+
+    private static int ReadExitCode(Process process)
+    {
+        if (!OperatingSystem.IsWindows()) return process.ExitCode;
+        if (!GetExitCodeProcess(process.SafeHandle, out var exitCode))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not read settled native process exit code.");
+        return unchecked((int)exitCode);
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(Microsoft.Win32.SafeHandles.SafeProcessHandle process, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(Microsoft.Win32.SafeHandles.SafeProcessHandle process, out uint exitCode);
 }

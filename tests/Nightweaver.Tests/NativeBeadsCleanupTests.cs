@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Nightweaver.Inspection;
 
@@ -26,6 +28,7 @@ public sealed class NativeBeadsCleanupTests : AgentStageIntegrationTestSupport
         var request = new ProcessRequest("bd", ["--sandbox", "import", input, "--json"],
             target.Path, target.CreateRuntimeEnvironment(), TimeSpan.FromSeconds(30));
         var writer = new SystemProcessRunner().RunAsync(request, lifetime.Token);
+        Process? observedWriter = null;
         try
         {
             while (true)
@@ -40,22 +43,45 @@ public sealed class NativeBeadsCleanupTests : AgentStageIntegrationTestSupport
                 if (owners.Any(owner =>
                     owner.GetProperty("ProcessObservation").GetProperty("ExecutablePath").GetString()
                         ?.EndsWith("bd.exe", StringComparison.OrdinalIgnoreCase) == true))
+                {
+                    var owner = owners.First(owner => owner.GetProperty("ProcessObservation")
+                        .GetProperty("ExecutablePath").GetString()
+                        ?.EndsWith("bd.exe", StringComparison.OrdinalIgnoreCase) == true);
+                    observedWriter = Process.GetProcessById(owner.GetProperty("Pid").GetInt32());
+                    _ = observedWriter.SafeHandle;
+                    Assert.Equal(owner.GetProperty("StartFileTime").GetInt64(), observedWriter.StartTime.ToFileTimeUtc());
                     break;
+                }
                 await Task.Delay(20, lockDeadline.Token);
             }
         }
         finally
         {
-            await lifetime.CancelAsync();
             try
             {
-                var result = await writer;
-                Assert.True(result.ExitCode == 0, result.StandardError);
+                await lifetime.CancelAsync();
+                try
+                {
+                    var result = await writer;
+                    Assert.True(result.ExitCode == 0,
+                        $"exit={result.ExitCode}; stderr={result.StandardError}; stdout={result.StandardOutput}");
+                }
+                catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+
+                if (observedWriter is not null)
+                {
+                    // Pin the exact Restart Manager owner generation, not a later PID reuse.
+                    Assert.Equal(0u, WaitForSingleObject(observedWriter.SafeHandle, 0));
+                    using var unlocked = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                }
             }
-            catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+            finally { observedWriter?.Dispose(); }
         }
 
         target.Dispose();
         Assert.False(Directory.Exists(target.RootPath));
     }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(Microsoft.Win32.SafeHandles.SafeProcessHandle process, uint milliseconds);
 }

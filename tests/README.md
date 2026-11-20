@@ -59,6 +59,13 @@ Existing confirmed/reread/refused Delivery publisher fixtures and a Planning
 publication fixture check lifecycle wire records without another native journey.
 See [the lifecycle contract](../docs/design/lifecycle-observation-telemetry.md).
 
+The native Beads cancellation fixture pins the lock owner's PID and creation time,
+then requires the actual Windows process signal and exclusive lock access before
+disposal. `SystemProcessRunner` waits for that signal before reading the native
+exit code or completing cancellation: managed exit notification can precede
+Windows process rundown. This strengthens the existing journey without adding
+native cases, changing its deadlines or reducing six-worker scheduling.
+
 Web observation telemetry adds four cheap decoder/loopback/component cases for shared
 subscriber collection, scheduled no-op suppression, monotonic retained age,
 timeout/unavailable/idle/stopped states and exported canary exclusion. Existing
