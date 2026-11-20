@@ -14,6 +14,84 @@ namespace Nightweaver.Tests;
 public sealed class AgentOutcomeClassifierTests
 {
     [Theory]
+    [InlineData("OpenAi")]
+    [InlineData("OpenRouter")]
+    public async Task PlannerValidUnclearStillStopsWithoutFallback(string providerName)
+    {
+        using var fixture = new OutcomeFixture();
+        using var client = new HttpClient(new DelegateHttpMessageHandler(_ => Task.FromResult(
+            providerName == "OpenRouter" ? new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"answers\":{\"planner_outcome\":{\"type\":\"choice\",\"choice\":\"incomplete_or_unclear\"}}}")
+            } : JsonResponse("incomplete_or_unclear", "planner_outcome"))));
+        var classifier = new AgentOutcomeClassifier(client, apiKeyOverride: "fixture-key",
+            executeFallback: (_, _, _, _, _) => throw new InvalidOperationException("Valid unclear must stop."));
+        var invocation = fixture.InvocationFor(AgentRole.Planner, "stage:plan") with
+        {
+            PlanningContext = "Candidate plan and Product evidence"
+        };
+        var result = await classifier.ClassifyAsync(fixture.Paths,
+            fixture.Project with { DecisionsApiProvider = Enum.Parse<DecisionsApiProvider>(providerName) },
+            fixture.Context with { BeadType = "feature", StageLabel = null }, fixture.Worktree, invocation, [],
+            TestContext.Current.CancellationToken);
+        Assert.Equal(AgentOutcomeChoice.IncompleteOrUnclear, result.Outcome);
+    }
+
+    [Theory]
+    [InlineData("OpenAi", false)]
+    [InlineData("OpenRouter", false)]
+    [InlineData("OpenAi", true)]
+    [InlineData("OpenRouter", true)]
+    public async Task PlannerReadinessDescribesAPlanHandoffWithoutImplementationOrPullRequestPrerequisites(
+        string providerName, bool useFallback)
+    {
+        using var fixture = new OutcomeFixture();
+        var invocation = fixture.InvocationFor(AgentRole.Planner, "stage:plan") with
+        {
+            PlanningContext = "Complete grounded Product and executable candidate plan"
+        };
+        using var client = new HttpClient(new DelegateHttpMessageHandler(async request =>
+        {
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            var questions = body.RootElement.GetProperty("questions");
+            var readiness = providerName == "OpenRouter"
+                ? questions.GetProperty("planner_outcome").GetProperty("criteria").GetProperty("ready_for_review").GetString()!
+                : questions[0].GetProperty("choices").EnumerateArray()
+                    .Single(choice => choice.GetProperty("value").GetString() == "ready_for_review")
+                    .GetProperty("description").GetString()!;
+            Assert.Contains("plan", readiness, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Challenger", readiness, StringComparison.Ordinal);
+            Assert.DoesNotContain("pull request", readiness, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Implementation and checks are complete", readiness, StringComparison.OrdinalIgnoreCase);
+            if (useFallback) return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+            return providerName == "OpenRouter" ? new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"answers\":{\"planner_outcome\":{\"type\":\"choice\",\"choice\":\"ready_for_review\"}}}")
+            } : JsonResponse("ready_for_review", "planner_outcome");
+        }));
+        var fallbackCalls = 0;
+        var classifier = new AgentOutcomeClassifier(client, apiKeyOverride: "fixture-key",
+            executeFallback: (_, _, fallback, _, _) =>
+            {
+                fallbackCalls++;
+                Assert.Contains("ready for independent Challenger review", fallback.StandardInput, StringComparison.Ordinal);
+                Assert.DoesNotContain("Implementation and checks are complete", fallback.StandardInput, StringComparison.Ordinal);
+                var bytes = JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    schema = "nightweaver-planner-outcome-v1", question = "planner_outcome", choice = "ready_for_review"
+                });
+                return Task.FromResult(new AgentStandardOutputCaptureResult(
+                    new(AgentExecutionStatus.Exited, 0, fallback.InvocationId, fallback.LogFilePath), bytes, false));
+            });
+        var result = await classifier.ClassifyAsync(fixture.Paths,
+            fixture.Project with { DecisionsApiProvider = Enum.Parse<DecisionsApiProvider>(providerName) },
+            fixture.Context with { BeadType = "feature", StageLabel = null }, fixture.Worktree, invocation, [],
+            TestContext.Current.CancellationToken);
+        Assert.Equal(AgentOutcomeChoice.ReadyForReview, result.Outcome);
+        Assert.Equal(useFallback ? 1 : 0, fallbackCalls);
+    }
+
+    [Theory]
     [InlineData("primary", "success", false, false)]
     [InlineData("unavailable", "unavailable", true, false)]
     [InlineData("invalid", "invalid", true, false)]
