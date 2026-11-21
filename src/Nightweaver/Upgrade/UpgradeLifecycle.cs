@@ -171,6 +171,12 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         using var admission = UpgradeInterlock.AcquireAdmission(paths);
         using var configurations = PinConfigurations(progress.Scope);
         if (!reconciling) await ConfirmAsync(progress, token).ConfigureAwait(false);
+        else if (progress.Maintenance.Any(m => !m.StartRequested))
+        {
+            var stoppedInventory = await InspectAsync(progress, token).ConfigureAwait(false);
+            foreach (var project in progress.Scope.Projects.Where(p => !progress.Maintenance.Single(m => m.Project == p.Name).StartRequested))
+                RequireStoppedSettlement(progress, project, stoppedInventory);
+        }
         var package = PreparedRelease.Inspect(paths.Root, true);
         await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
         if (package.Digest != progress.NewPackageDigest
@@ -273,9 +279,7 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
             if (expected is not null && (current!.State != "running" || current.Failure is not null
                 || current.StopReason is not null || current.WebHealth != "healthy" || current.RuntimeHealth != "live"))
                 throw new InvalidOperationException("Final replacement health is unconfirmed; retain the upgrade interlock.");
-            if (expected is null && current is not null && (!progress.Owners.Contains(OwnerEvidence(current))
-                || operations.Observe(current) is not { State: OwnerProcessState.Exited, DescendantsSettled: true }))
-                throw new InvalidOperationException("Stopped installation settlement is unconfirmed.");
+            if (expected is null) RequireStoppedSettlement(progress, project, inventory);
         }
         if (PreparedRelease.Inspect(paths.Root, true).Digest != package.Digest)
             throw new InvalidDataException("Installed payload changed during acceptance.");
@@ -306,25 +310,25 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         using var configurations = PinConfigurations(progress.Scope);
         var released = UpgradeInterlock.IsReleased(paths, Reservation(progress));
         if (!released) await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
+        var inventory = await InspectAsync(progress, token).ConfigureAwait(false);
+        foreach (var project in progress.Scope.Projects.Where(p => !progress.AcceptedPairs.Any(pair => pair.Owner.Project == p.Name)))
+            RequireStoppedSettlement(progress, project, inventory);
         var package = PreparedRelease.Inspect(paths.Root, true);
         if (package.Digest != progress.NewPackageDigest
             || PreparedRelease.Inspect(journal.RetainedPackageRoot, false).Digest != progress.OldPackageDigest)
             throw new InvalidDataException("Accepted payload or backup changed.");
-        var inventory = await InspectAsync(progress, token).ConfigureAwait(false);
+        // Stop must acquire its command and admission locks while control probes wait.
+        admission.Dispose();
+        commands.Dispose();
+        var observations = new Dictionary<string, DeploymentObservation>(StringComparer.Ordinal);
         foreach (var project in progress.Scope.Projects)
         {
             var pair = progress.AcceptedPairs.SingleOrDefault(p => p.Owner.Project == project.Name);
             var owner = inventory.Owners.SingleOrDefault(o => o.Project == project.Name);
-            if (pair is null)
-            {
-                if (operations.OwnerActive(project.Name) != false || owner is not null
-                    && (!progress.Owners.Contains(OwnerEvidence(owner))
-                        || operations.Observe(owner) is not { State: OwnerProcessState.Exited, DescendantsSettled: true }))
-                    throw new InvalidOperationException("Stopped acceptance settlement is unresolved.");
-            }
-            else
+            if (pair is not null)
             {
                 var observation = await observe(project, token).WaitAsync(SupervisionPolicy.ProbeBudget, token).ConfigureAwait(false);
+                observations.Add(project.Name, observation);
                 var current = UpgradeAcceptance.Confirm(progress, project, package.BuildVersion, pair.Owner.RunId, observation, time.GetUtcNow());
                 if (current.Owner != pair.Owner || current.Cli != pair.Cli || current.Web != pair.Web
                     || owner is null || OwnerEvidence(owner) != pair.Owner || operations.OwnerActive(project.Name) != true
@@ -334,15 +338,17 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         }
         // Health can change while a probe is in flight. Check native state again
         // before completing a lost release publication.
+        using var finalCommands = AcquireCommands(progress.Scope);
+        using var finalAdmission = UpgradeInterlock.AcquireAdmission(paths);
+        Read(revision);
+        if (!released) await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
         inventory = await InspectAsync(progress, token).ConfigureAwait(false);
         foreach (var project in progress.Scope.Projects)
         {
             var expected = progress.AcceptedPairs.SingleOrDefault(p => p.Owner.Project == project.Name);
             var current = inventory.Owners.SingleOrDefault(o => o.Project == project.Name);
-            if (expected is null ? operations.OwnerActive(project.Name) != false
-                || current is not null && (!progress.Owners.Contains(OwnerEvidence(current))
-                    || operations.Observe(current) is not { State: OwnerProcessState.Exited, DescendantsSettled: true })
-                : current is null || OwnerEvidence(current) != expected.Owner || operations.OwnerActive(project.Name) != true
+            if (expected is null) { RequireStoppedSettlement(progress, project, inventory); continue; }
+            if (current is null || OwnerEvidence(current) != expected.Owner || operations.OwnerActive(project.Name) != true
                     || operations.Observe(current).State != OwnerProcessState.Alive || current.State != "running"
                     || current.Failure is not null || current.StopReason is not null
                     || current.WebHealth != "healthy" || current.RuntimeHealth != "live")
@@ -350,12 +356,37 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         }
         if (PreparedRelease.Inspect(paths.Root, true).Digest != progress.NewPackageDigest)
             throw new InvalidDataException("Accepted payload changed during observation.");
+        if (!released) await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
+        // Recheck all three probe times after inventory, hashing and intent reads.
+        foreach (var project in progress.Scope.Projects.Where(p => observations.ContainsKey(p.Name)))
+        {
+            var pair = progress.AcceptedPairs.Single(p => p.Owner.Project == project.Name);
+            UpgradeAcceptance.Confirm(progress, project, package.BuildVersion, pair.Owner.RunId,
+                observations[project.Name], time.GetUtcNow());
+        }
         if (!released)
         {
-            await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
             await UpgradeInterlock.ReleaseAsync(paths, Reservation(progress), token).ConfigureAwait(false);
         }
         return progress;
+    }
+
+    private void RequireStoppedSettlement(UpgradeProgress progress, AffectedUpgradeProject project,
+        UpgradeLifecycleInventory inventory)
+    {
+        if (operations.OwnerActive(project.Name) != false)
+            throw new InvalidOperationException("Stopped acceptance settlement is unresolved.");
+        var current = inventory.Owners.SingleOrDefault(o => o.Project == project.Name);
+        var originals = progress.Owners.Where(o => o.Project == project.Name).ToArray();
+        if (current is not null && !originals.Contains(OwnerEvidence(current)))
+            throw new InvalidOperationException("Stopped acceptance has a foreign owner.");
+        foreach (var original in originals)
+        {
+            var owner = inventory.Owners.SingleOrDefault(o => OwnerEvidence(o) == original)
+                ?? throw new InvalidOperationException("Original owner evidence is inaccessible or missing.");
+            if (operations.Observe(owner) is not { State: OwnerProcessState.Exited, DescendantsSettled: true })
+                throw new InvalidOperationException("Original owner and descendant settlement is pending or unavailable.");
+        }
     }
 
     private async Task RequireActivationIntentAsync(UpgradeProgress progress, CancellationToken token)

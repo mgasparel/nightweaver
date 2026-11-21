@@ -528,6 +528,16 @@ The journal retains actual PID/creation/run/runtime/Job identities and each
 pair's first and final observation times. Stopped acceptance verifies payload
 and settlement without launching or inventing supervision state.
 
+Accepted resume also releases command and admission locks during health probes.
+It reacquires both locks before release, then checks the journal revision,
+current intent, native identity and installed hashes. It checks observation,
+control and runtime timestamps again after those reads. A proof that expires
+during another Project's probe cannot release suppression.
+For each stopped Project with an original journaled owner, both verification
+resume and accepted resume require a fresh exact owner record and confirmed
+process and Job settlement. A missing owner record and an absent owner lock
+cannot prove settlement. Missing or uncertain evidence retains suppression.
+
 Manager stop and force stop record `stopped-<Project>.json` in each active root
 interlock under the Project command lock and shared admission lock, before querying
 the owner. The record binds the exact reservation. A repeated stop is idempotent.

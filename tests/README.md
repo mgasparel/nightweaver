@@ -13,6 +13,12 @@ two-Project maintenance release interrupted after the first release. Each case
 checks unchanged intent, a later stop, and then foreign maintenance. Two resume
 calls per intent must retain the exact journal, interlock and store bytes, root
 suppression, and zero launches. These cases add no native journey or publish.
+Four resume safety cases cover Stop during a blocked accepted probe, expiry of
+observation/control/runtime evidence across two Projects, and missing or uncertain
+original process/Job evidence at Verifying and Accepted. The expiry case shares
+one package setup across three timestamp checks. Each stopped case shares setup
+across four native evidence states and repeated resume calls. Injected probes,
+native observations and controlled time add no native journey or fixture publish.
 
 Upgrade activation adds a pure live-identity matrix and disposable component
 checks for composed replacement, stopped intent, launch failure, cancellation,
