@@ -503,10 +503,16 @@ The optional top-level `decisions_api_key` (legacy alias `openai_api_key`) accep
 
 ### 7.3 Shared operational observations
 
-The dormant [supervision v1 model and store](docs/design/supervision-v1.md) define
+The [supervision v1 model and store](docs/design/supervision-v1.md) define
 bounded operational recovery intent, attempt reservations and incident retention.
 The background lifecycle integrates durable stop/start intent and explicit token/revision
 maintenance suppression; it installs no scheduler and grants no Beads workflow authority.
+An explicitly invoked `background tick` serializes with manual lifecycle commands,
+qualifies repeated identity-bound failures, reserves before launch and reconciles
+the exact reserved owner across crashes. Unknown launch acknowledgement retains
+the pending reservation; old-owner absence never proves a detached replacement
+has settled. Recovery uses existing background startup and repository exclusion,
+preserves deliberate drain, and never refunds retries on transient or stable health.
 Missing storage remains manual opt-out and invalid storage is unavailable. Intentional
 drain, force-stop, maintenance, Web failure and runtime failure have distinct local reasons.
 Operator stop commits suppression before owner control; command serialization covers the

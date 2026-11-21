@@ -38,6 +38,15 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Finite supervision ticks add deterministic coordinator cases and disposable
+store/command-entry fixtures. They cover mutation-boundary suppression, crash
+reservations, exact-run readiness, uncertainty, failed startups, persistent finite
+retry exhaustion, manual/tick contention, and failure-only graceful control. No
+native journey, scheduler registration, Agent launch or fixture publishing is added.
+Existing physical-repository exclusion and detached-owner containment journeys
+remain the native boundaries; the later isolated recovery proof covers their combined
+journey. See [supervision v1](../docs/design/supervision-v1.md).
+
 Classifier telemetry fixtures use a controlled HTTP transport beneath the real
 OTLP serializers and safe export handler. The five successful active-phase cases
 still require loss-free diagnostics; a separate active metrics rejection requires

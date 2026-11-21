@@ -137,7 +137,7 @@ Use the Unix apphost name `nightweaver` in place of `nightweaver.exe` on Unix sy
 
 ## Manual background deployment (Windows v1)
 
-The supported v1 deployment starts one detached runtime and its matching Web Console manually. Closing the starting terminal or browser does not stop the runtime. A crash requires an operator to run `background start` or `background restart`; Nightweaver installs no login task or Windows service and does not restart a crashed owner automatically.
+The supported v1 deployment starts one detached runtime and its matching Web Console manually. Closing the starting terminal or browser does not stop the runtime. Manual deployments recover through `background start` or `background restart`. An already opted-in supervision installation can invoke `background tick --project demo` for one finite recovery action. It serializes with manual lifecycle commands, retains retry reservations and verifies the matching runtime and Web before acknowledging recovery. Nightweaver installs no login task or Windows service in this slice. Missing supervision storage remains manual opt-out; invoking a tick never enables it. See [the supervision contract](docs/design/supervision-v1.md).
 
 The [supervision v1 contract](docs/design/supervision-v1.md) defines dormant policy
 and operational storage for future opt-in recovery. No supervisor is installed or enabled. With no store, manual commands retain their existing behavior.

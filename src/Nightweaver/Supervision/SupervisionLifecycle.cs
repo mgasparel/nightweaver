@@ -9,6 +9,7 @@ namespace Nightweaver.Supervision;
 /// <summary>Operator intent only. Never initializes supervision or grants process/repository authority.</summary>
 internal sealed class SupervisionLifecycle(SupervisionStore store)
 {
+    internal SupervisionStore Store => store;
     internal static async Task<SupervisionLifecycle?> OpenAsync(HostPaths paths, ProjectConfig project,
         CancellationToken cancellationToken)
     {

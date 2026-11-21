@@ -22,6 +22,8 @@ internal static class HelpText
     internal const string BackgroundUsage =
         "Usage: nightweaver background start|status|stop|restart (--project <project-slug> | --config <path-to-project-json>) [--urls <loopback-url>] [--force]\n\n" +
         "       nightweaver background maintenance enter|status|leave (--project <slug> | --config <path>) [--token <id> --revision <number>]\n\n" +
+        "       nightweaver background tick (--project <slug> | --config <path>)\n\n" +
+        "Tick performs one finite recovery action for an already opted-in installation; it installs no scheduler.\n" +
         "Maintenance enter persists suppression before drain; leave requires the current token/revision and never launches.\n" +
         "Start launches one hidden runtime and its paired Web Console. Status reports owner, Web and runtime health.\n" +
         "Stop drains by default; use --force to close active Agent jobs. Restart preserves host data and uses manual recovery.\n" +
