@@ -28,6 +28,7 @@ internal static class BackgroundCommandParser
             "status" => BackgroundAction.Status,
             "stop" => BackgroundAction.Stop,
             "restart" => BackgroundAction.Restart,
+            "tick" => BackgroundAction.Tick,
             "maintenance-enter" => BackgroundAction.MaintenanceEnter,
             "maintenance-status" => BackgroundAction.MaintenanceStatus,
             "maintenance-leave" => BackgroundAction.MaintenanceLeave,

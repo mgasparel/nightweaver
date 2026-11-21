@@ -3,8 +3,8 @@
 This contract settles the policy and durable operational state for subsequent
 supervision work. The model/store installs no task and enables no supervision. Background lifecycle
 commands integrate intent and maintenance suppression. Identity-bound observations and
-capture-first incident preparation are available, but there is no automatic recovery
-launcher, scheduler installation or Web UI integration in this slice. Missing storage means manual opt-out; an existing
+capture-first incident preparation and an explicitly invoked finite recovery tick
+are available. There is no scheduler installation or Web UI integration in this slice. Missing storage means manual opt-out; an existing
 unreadable, malformed, foreign or interrupted store means unavailable.
 
 ## Execution boundary
@@ -151,6 +151,47 @@ not a public command that authorizes clearing another operation's token. Upgrade
 and notification consumers use this contract; neither is a prerequisite here.
 
 ## Verification and cost
+
+`background tick --project <slug>` (or `--config <absolute-path>`) runs once under
+the same start.lock as manual lifecycle mutations. It never initializes or enables
+supervision. Boot time from a bounded CIM child plus the current token authentication ID qualifies
+the observation epoch across finite invocations; missing boot identity fails visibly.
+The authentication ID comes from [TOKEN_STATISTICS](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_statistics)
+through GetTokenInformation; it identifies the logon session across token handles.
+Neither managed group enumeration nor a reusable terminal session number establishes
+that identity. A cheap in-process native-token check verifies availability and stability.
+Stop, maintenance, gaps and deliberate drain grant no launch. Existing explicit-reset
+policy remains: stable health and short-lived readiness never replenish retries.
+
+After qualification and due time, the tick retains incident/capture evidence before
+requesting an identity-bound failure drain or reserving a launch. Previously required
+pending/failed resource captures remain blocking; owner failure alone does not claim
+a resource regression. The internal current-user `recover` control operation accepts
+only a recorded owner failure under current unsuppressed intent. It drains without
+writing manual stopped intent or imposing a drain timeout. Later finite ticks monitor
+native settlement. No recovery path kills a process or opens a containment Job.
+
+A launch reservation's ID is the new owner's run ID. Reservation publication,
+fresh intent/generation and original owner/descendant settlement are checked before
+the existing background startup launches. The new owner still acquires the physical
+repository process-lifetime mutex before ordinary startup reconciliation or Agent
+admission. Contention is never bypassed. The tick does not acquire that mutex and
+hold it while waiting for its child, which would block the child's startup.
+
+After any launch return or crash, the next tick reconciles pending state without
+replaying launch. Only the exact reserved healthy owner (matching fresh runtime and
+Web) acknowledges recovery. Confirmed native absence of the reserved run consumes the failed attempt;
+starting, foreign, missing or uncertain ownership retains the reservation and
+actionable attention. Settlement after an intervening stop records facts without
+restoring intent. Output includes outcome, persisted attempts/due time, reservation,
+exhaustion and incident state. Original owner logs and capture journals remain local.
+
+`SupervisionTickTests` exercise the finite command with injected process operations
+and real disposable store/command locks, concurrent tick/manual stop rejection,
+capture/confirm/reserve/launch boundaries, pending crash reconciliation, transient
+readiness, exhaustion, and failure-only owner control. These add no native process,
+scheduler, Agent or fixture-publish journey. The final combined native recovery proof
+belongs to the separately authorized isolated-recovery-proof task.
 
 `SupervisionPolicyTests` use deterministic UTC/monotonic observations for
 qualification, suppression, gaps, clock rollback, bounded backoff/exhaustion,

@@ -41,7 +41,7 @@ internal static class BackgroundControlProtocol
                     var response = request is null
                         ? new BackgroundControlResponse(false, null, "invalid control request")
                         : await handle(request, clientLifetime.Token).ConfigureAwait(false);
-                    if (request is { Operation: "stop" or "force" } && response.Accepted)
+                    if (request is { Operation: "stop" or "force" or "recover" } && response.Accepted)
                         acceptedAction = request;
                     await WriteAsync(pipe, response, clientLifetime.Token).ConfigureAwait(false);
                     await pipe.FlushAsync(clientLifetime.Token).ConfigureAwait(false);

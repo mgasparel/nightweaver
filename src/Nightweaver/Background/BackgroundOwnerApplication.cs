@@ -228,8 +228,26 @@ internal static class BackgroundOwnerApplication
             var record = await ObserveAsync(paths, project, state.Current, webHostProvider(), cancellationToken).ConfigureAwait(false);
             return new BackgroundControlResponse(true, record, null);
         }
-        if (request.Operation is not ("stop" or "force") || request.RunId != options.RunId)
+        if (request.Operation is not ("stop" or "force" or "recover") || request.RunId != options.RunId)
             return new BackgroundControlResponse(false, state.Current, "control request identity or operation is invalid");
+
+        if (request.Operation == "recover")
+        {
+            // Failure recovery preserves operator intent and never turns an intentional
+            // drain into a force deadline. Only an already recorded failure can drain.
+            if (lifecycle?.Read().State is not { Suppressed: false }
+                || state.Current.Failure is null || DeploymentObserver.IsDeliberate(state.Current.StopReason)
+                || request.Force || request.Maintenance)
+                return new(false, state.Current, "failure recovery is suppressed or unconfirmed");
+            var accepted = false;
+            await state.PublishAsync(recordPath, record =>
+            {
+                accepted = record.Failure is not null && !DeploymentObserver.IsDeliberate(record.StopReason)
+                    && lifecycle.Read().State is { Suppressed: false };
+                return accepted ? record with { State = "stopping" } : record;
+            }, cancellationToken).ConfigureAwait(false);
+            return new(accepted, state.Current, accepted ? null : "Owner intent changed before failure drain.");
+        }
 
         try
         {
@@ -260,7 +278,12 @@ internal static class BackgroundOwnerApplication
     internal static void ApplyControlAction(BackgroundControlRequest request, string runId,
         RuntimeShutdownSignals shutdownSignals)
     {
-        if (request.Operation is not ("stop" or "force") || request.RunId != runId) return;
+        if (request.Operation is not ("stop" or "force" or "recover") || request.RunId != runId) return;
+        if (request.Operation == "recover")
+        {
+            shutdownSignals.RequestGracefulStop(RuntimeShutdownReason.RuntimeFailure);
+            return;
+        }
         if (request.Operation == "force")
         {
             shutdownSignals.RequestForceStop();

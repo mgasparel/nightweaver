@@ -22,8 +22,12 @@ internal static class BackgroundManagerApplication
 
     internal static async Task<int> RunAsync(BackgroundCommandOptions options, AppEnvironment environment,
         CancellationToken cancellationToken,
-        Func<HostPaths, ProjectConfig, CancellationToken, Task<SupervisionLifecycle?>>? openLifecycle = null)
+        Func<HostPaths, ProjectConfig, CancellationToken, Task<SupervisionLifecycle?>>? openLifecycle = null,
+        Func<SupervisionLifecycle, CancellationToken, Task<SupervisionTick>>? createTick = null)
     {
+        using var tickDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (options.Action == BackgroundAction.Tick) tickDeadline.CancelAfter(SupervisionPolicy.TickDeadline);
+        cancellationToken = tickDeadline.Token;
         if (!OperatingSystem.IsWindows())
         {
             environment.Err.WriteLine("nightweaver: background deployment management currently requires Windows.");
@@ -62,6 +66,68 @@ internal static class BackgroundManagerApplication
             using var commandLock = options.Action is BackgroundAction.Status or BackgroundAction.MaintenanceStatus
                 ? null : BackgroundFileLock.AcquireStart(paths, project.Name);
             var lifecycle = await (openLifecycle ?? SupervisionLifecycle.OpenAsync)(paths, project, cancellationToken).ConfigureAwait(false);
+            if (options.Action == BackgroundAction.Tick)
+            {
+                if (lifecycle is null)
+                {
+                    environment.Out.WriteLine("{\"outcome\":\"manual\"}");
+                    return ExitCodes.Success;
+                }
+                var read = lifecycle.Read();
+                if (read.Availability == SupervisionAvailability.Manual)
+                {
+                    environment.Out.WriteLine("{\"outcome\":\"manual\"}");
+                    return ExitCodes.Success;
+                }
+                if (read.State is not { } installed)
+                    throw new InvalidDataException($"Supervision unavailable at '{read.Path}': {read.Diagnostic}");
+                if (installed.Suppressed && installed.PendingAttempt is null)
+                {
+                    environment.Out.WriteLine(JsonSerializer.Serialize(new SupervisionTickResult("suppressed", installed), OutputJson));
+                    return ExitCodes.Success;
+                }
+                async Task<SupervisionTick> CreateProductionTickAsync(SupervisionLifecycle currentLifecycle, CancellationToken tickToken)
+                {
+                    var epoch = await ReadTickEpochAsync(tickToken).ConfigureAwait(false);
+                    var observer = DeploymentObserver.Create(paths, project, installed.Identity.GitCommonDirectory,
+                        currentLifecycle.Read, epoch);
+                    var identity = new DeploymentIdentity(paths.Root, configPath, project.Name.Value,
+                        project.TargetRepository.Path, installed.Identity.GitCommonDirectory);
+                    var evidence = new DeploymentEvidenceStore(paths, project.Name, identity);
+                    var recorder = new DeploymentIncidentRecorder(paths, project.Name, evidence,
+                        new ResourceIncidentCapture(paths, project, new SystemProcessRunner()).CaptureAsync);
+                    return new SupervisionTick(new(currentLifecycle.Read,
+                        (revision, next, token) => currentLifecycle.Store.SaveAsync(revision, next, token),
+                        async token =>
+                        {
+                            var observation = await observer.ObserveAsync(token).ConfigureAwait(false);
+                            await evidence.RetainAsync(observation, null, token).ConfigureAwait(false);
+                            return observation;
+                        },
+                        // The journal retains required failed/pending resource captures from
+                        // prior observations. Owner failure alone is not resource-leak evidence.
+                        (observation, attempts, token) => recorder.PrepareAsync(observation, attempts,
+                            ResourceIncidentSignal.None, token),
+                        async (observation, token) =>
+                        {
+                            var response = await BackgroundControlProtocol.SendAsync(pipeName,
+                                new("recover", observation.Owner!.RunId), SupervisionPolicy.ProbeBudget, token).ConfigureAwait(false);
+                            return response.Accepted && response.Owner is { } owner
+                                && DeploymentObserver.SameOwner(observation.Owner, owner);
+                        },
+                        async (attempt, permit, token) =>
+                        {
+                            await StartAsync(paths, project, configPath,
+                                BackgroundOwnerRecord.TryRead(recordPath)?.WebUrl ?? "http://127.0.0.1:5000",
+                                pipeName, recordPath, environment, token, attempt, permit).ConfigureAwait(false);
+                        }));
+                }
+                var tick = await (createTick ?? CreateProductionTickAsync)(lifecycle, cancellationToken).ConfigureAwait(false);
+                var result = await tick.RunAsync(cancellationToken).ConfigureAwait(false);
+                environment.Out.WriteLine(JsonSerializer.Serialize(result, OutputJson));
+                return result.Outcome is "needs-attention" or "capture-blocked" or "settlement-unknown" or "drain-unconfirmed"
+                    ? ExitCodes.InspectionFailure : ExitCodes.Success;
+            }
             if (options.Action is BackgroundAction.Status or BackgroundAction.MaintenanceStatus)
             {
                 var supervision = lifecycle?.Read() ?? new SupervisionRead(SupervisionAvailability.Manual, null,
@@ -124,7 +190,8 @@ internal static class BackgroundManagerApplication
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException
-            or InvalidOperationException or TargetRepositoryException or ToolExecutionException or ProjectConfigurationException)
+            or InvalidOperationException or TargetRepositoryException or ToolExecutionException or ProjectConfigurationException
+            or TimeoutException)
         {
             environment.Err.WriteLine($"nightweaver: lifecycle command unavailable; durable intent was not confirmed: {exception.Message}");
             return ExitCodes.InspectionFailure;
@@ -133,7 +200,8 @@ internal static class BackgroundManagerApplication
 
     private static async Task<int> StartAsync(HostPaths paths, ProjectConfig project, string configPath,
         string urls, string pipeName, string recordPath, AppEnvironment environment,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string? reservedRunId = null,
+        Func<CancellationToken, Task<bool>>? permitLaunch = null)
     {
         BackgroundDeploymentManifest manifest;
         try { manifest = BackgroundDeploymentManifest.Load(paths.Root); }
@@ -162,11 +230,13 @@ internal static class BackgroundManagerApplication
                 return WriteStatus(existing with { Failure = "owner lock is active but control is unavailable" }, environment);
             }
 
-            var runId = Guid.NewGuid().ToString("N");
+            var runId = reservedRunId ?? Guid.NewGuid().ToString("N");
             try
             {
                 var executable = manifest.ResolveCliExecutable(paths.Root);
                 var ownerArguments = BuildOwnerStartArguments(paths.Root, configPath, project.Name.Value, runId, urls);
+                if (permitLaunch is not null && !await permitLaunch(cancellationToken).ConfigureAwait(false))
+                    throw new InvalidOperationException("Recovery launch authority changed; reservation retained.");
                 using var process = WindowsProcessLauncher.LaunchDetached(executable, ownerArguments, paths.Root);
                 var deadline = Stopwatch.StartNew();
                 while (deadline.Elapsed < OwnerStartTimeout)
@@ -217,6 +287,28 @@ internal static class BackgroundManagerApplication
                 return ExitCodes.InspectionFailure;
             }
         }
+    }
+
+    private static async Task<string> ReadTickEpochAsync(CancellationToken token)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        // A boot/session-qualified epoch is shared by finite CLI invocations. Failure
+        // to obtain it is visible, never replaced with a guessed/process-local epoch.
+        var result = await new SystemProcessRunner().RunAsync(new("pwsh",
+            ["-NoProfile", "-NonInteractive", "-Command",
+                "(Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime.ToUniversalTime().Ticks"],
+            Environment.CurrentDirectory, new Dictionary<string, string?>(), SupervisionPolicy.ProbeBudget)
+            { MaximumOutputBytes = 1024 }, token).ConfigureAwait(false);
+        if (result.ExitCode != 0 || !long.TryParse(result.StandardOutput.Trim(), out var boot) || boot <= 0)
+            throw new InvalidDataException("Boot identity unavailable; supervision tick suppressed.");
+        return TickEpoch(boot, SupervisionLogon.ReadIdentity());
+    }
+
+    internal static string TickEpoch(long boot, string logon)
+    {
+        var bytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+            boot.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" + logon));
+        return Convert.ToHexString(bytes.AsSpan(0, 16)).ToLowerInvariant();
     }
 
     private static async Task<int> StopAsync(HostPaths paths, ProjectConfig project, string configPath,
