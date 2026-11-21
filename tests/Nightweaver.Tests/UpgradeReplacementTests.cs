@@ -7,6 +7,20 @@ namespace Nightweaver.Tests;
 
 public sealed class UpgradeReplacementTests
 {
+    [Theory]
+    [InlineData(null, null, false, "Unknown")]
+    [InlineData(1L, "old", false, "Old")]
+    [InlineData(2L, "new", false, "New")]
+    [InlineData(1L, "other", false, "Unknown")]
+    [InlineData(3L, "new", false, "Unknown")]
+    [InlineData(null, null, true, "Removed")]
+    [InlineData(1L, "old", true, "Old")]
+    public void ReconcilesExactBytes(long? length, string? hash, bool removed, string expected)
+    {
+        Assert.Equal(Enum.Parse<UpgradeFileResult>(expected), UpgradeReplacement.ReconcileFile(new("file", 1, "old"),
+            removed ? null : new("file", 2, "new"), length, hash));
+    }
+
     [Fact]
     public async Task ReplacesOnlyInventoryAndRetainsCompleteOldPayload()
     {
@@ -29,6 +43,48 @@ public sealed class UpgradeReplacementTests
     }
 
     public static TheoryData<string> Boundaries => new(Enum.GetNames<UpgradeReplacementBoundary>());
+
+    [Theory]
+    [InlineData("retired.txt")]
+    [InlineData(PreparedRelease.InventoryName)]
+    public async Task ResumeAcknowledgesLostFileConfirmationWithoutWritingAgain(string path)
+    {
+        using var fixture = new Fixture();
+        await fixture.Prepare();
+        await Assert.ThrowsAsync<IOException>(() => fixture.Replacement((point, name) =>
+        {
+            if (name == path && point is UpgradeReplacementBoundary.AfterRemove or UpgradeReplacementBoundary.AfterWrite)
+                throw new IOException("lost confirmation");
+        }).ReplaceAsync(3, fixture.Candidate, fixture.Token));
+        var pending = fixture.Journal.Read().Progress!;
+        var resumed = await fixture.Replacement((point, name) =>
+        {
+            Assert.False(name == path && point is UpgradeReplacementBoundary.BeforeWrite or UpgradeReplacementBoundary.BeforeRemove);
+        }).ResumeAsync(pending.Revision, fixture.Candidate, fixture.Token);
+        Assert.Equal(UpgradePhase.Installed, resumed.Phase);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ResumePreservesUnexpectedPartialBytes(bool backup)
+    {
+        using var fixture = new Fixture();
+        await fixture.Prepare();
+        string? changed = null;
+        await Assert.ThrowsAsync<IOException>(() => fixture.Replacement((point, name) =>
+        {
+            if (point != (backup ? UpgradeReplacementBoundary.AfterBackup : UpgradeReplacementBoundary.AfterWrite)) return;
+            changed = name;
+            throw new IOException("interrupted write");
+        }).ReplaceAsync(3, fixture.Candidate, fixture.Token));
+        var path = Path.Combine(backup ? fixture.Journal.RetainedPackageRoot : fixture.Root, changed!);
+        File.WriteAllText(path, "partial bytes");
+        var pending = fixture.Journal.Read().Progress!;
+        await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Replacement().ResumeAsync(pending.Revision, fixture.Candidate, fixture.Token));
+        Assert.Equal("partial bytes", File.ReadAllText(path));
+        Assert.Equal(pending.Revision, fixture.Journal.Read().Progress!.Revision);
+    }
 
     [Theory]
     [MemberData(nameof(Boundaries))]
@@ -62,6 +118,13 @@ public sealed class UpgradeReplacementTests
             Assert.Contains(progress.Files, f => stop == UpgradeReplacementBoundary.AfterConfirm
                 ? f.Result == UpgradeFileResult.New : f.Result == UpgradeFileResult.Pending);
         }
+        var resumed = await fixture.Replacement().ResumeAsync(progress.Revision, fixture.Candidate, fixture.Token);
+        Assert.Equal(UpgradePhase.Installed, resumed.Phase);
+        Assert.Null(resumed.PendingOperation);
+        Assert.Equal(fixture.NextDigest, PreparedRelease.Inspect(fixture.Root, true).Digest);
+        Assert.Equal(fixture.Old.Digest, PreparedRelease.Inspect(fixture.Journal.RetainedPackageRoot, false).Digest);
+        AssertSnapshots(state, fixture.Sentinels());
+        Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(new(fixture.Root)));
     }
 
     [Theory]

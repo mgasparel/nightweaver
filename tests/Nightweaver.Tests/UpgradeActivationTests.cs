@@ -11,6 +11,56 @@ namespace Nightweaver.Tests;
 public sealed class UpgradeActivationTests
 {
     [Theory]
+    [InlineData(false, "lost-launch-reply")]
+    [InlineData(true, "lost-launch-reply")]
+    [InlineData(false, "lost-acceptance-reply")]
+    [InlineData(true, "lost-acceptance-reply")]
+    public async Task ResumeAcknowledgesLostLaunchReplyWithoutAnotherLaunch(bool supervised, string fault)
+    {
+        using var f = new Fixture(true, fault, supervised);
+        await f.Prepare();
+        var pending = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        Assert.Equal(fault == "lost-launch-reply" ? UpgradeActivationOutcome.Pending : UpgradeActivationOutcome.Failed, pending.Outcome);
+        Assert.Equal(1, f.Starts);
+        var resumed = await f.Coordinator().ResumeAsync(pending.Progress!.Revision, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.LiveAccepted, resumed.Outcome);
+        Assert.Equal(1, f.Starts);
+        var repeated = await f.Coordinator().ResumeAsync(resumed.Progress!.Revision, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.LiveAccepted, repeated.Outcome);
+        Assert.Equal(resumed.Progress.Revision, repeated.Progress!.Revision);
+        Assert.Equal(1, f.Starts);
+    }
+
+    [Theory]
+    [InlineData(false, "Installed")]
+    [InlineData(true, "Installed")]
+    [InlineData(false, "Draining")]
+    [InlineData(false, "Settled")]
+    public async Task ResumeContinuesInstalledPayloadAndIsIdempotent(bool running, string phase)
+    {
+        using var f = new Fixture(running);
+        await f.Prepare();
+        var installed = await f.Install(Enum.Parse<UpgradePhase>(phase));
+        var result = await f.Coordinator().ResumeAsync(installed.Revision, f.Candidate, f.Token);
+        Assert.Equal(running ? UpgradeActivationOutcome.LiveAccepted : UpgradeActivationOutcome.PayloadVerifiedStopped, result.Outcome);
+        var again = await f.Coordinator().ResumeAsync(result.Progress!.Revision, f.Candidate, f.Token);
+        Assert.Equal(result.Outcome, again.Outcome);
+        Assert.Equal(running ? 1 : 0, f.Starts);
+        Assert.Equal(result.Progress.Revision, again.Progress!.Revision);
+    }
+
+    [Fact]
+    public async Task ResumeRequiresTheExactObservedRevision()
+    {
+        using var f = new Fixture(true);
+        await f.Prepare();
+        var result = await f.Coordinator().ResumeAsync(2, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.Refused, result.Outcome);
+        Assert.Equal(0, f.Starts);
+        Assert.Equal(1, f.Journal.Read().Progress!.Revision);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ConsoleStopWaitsForSharedLocksButForceDoesNotWait(bool admission)
@@ -87,6 +137,11 @@ public sealed class UpgradeActivationTests
         Assert.Equal(f.OldDigest, PreparedRelease.Inspect(f.Paths.Root, true).Digest);
         Assert.Contains(UpgradeLifecycle.OwnerEvidence(f.Owner), f.Journal.Read().Progress!.Owners);
         Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+        var pending = f.Journal.Read().Progress!;
+        var resumed = await f.Coordinator().ResumeAsync(pending.Revision, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.Pending, resumed.Outcome);
+        Assert.Equal(0, f.Starts);
+        Assert.Equal(pending.Revision, resumed.Progress!.Revision);
     }
 
     [Theory]
@@ -97,7 +152,7 @@ public sealed class UpgradeActivationTests
         using var f = new Fixture(true, fault, supervised: false);
         await f.Prepare();
         if (fault == "console-before-capture") await f.ConsoleStop();
-        var result = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        var result = await f.Coordinator().ResumeAsync(1, f.Candidate, f.Token);
         Assert.Equal(0, f.Starts);
         if (fault == "console-before-capture")
         {
@@ -249,6 +304,15 @@ public sealed class UpgradeActivationTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => f.Coordinator().ApplyAsync(result.Progress.Revision, f.Candidate, f.Token));
         Assert.Equal(1, f.Starts);
         Assert.Equal(f.OldDigest, PreparedRelease.Inspect(f.Journal.RetainedPackageRoot, false).Digest);
+        var resumed = await f.Coordinator().ResumeAsync(result.Progress.Revision, f.Candidate, f.Token);
+        Assert.Equal(1, f.Starts);
+        if (fault is "second-owner" or "too-close") Assert.Equal(UpgradeActivationOutcome.LiveAccepted, resumed.Outcome);
+        else
+        {
+            Assert.Equal(UpgradeActivationOutcome.Pending, resumed.Outcome);
+            Assert.Equal(result.Progress.Revision, resumed.Progress!.Revision);
+            Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+        }
     }
 
     [Fact]
@@ -355,6 +419,7 @@ public sealed class UpgradeActivationTests
         private bool active;
         private bool unavailable;
         private int observations;
+        private bool acceptanceInterrupted;
         internal int Observations => observations;
         internal bool Active => active;
         private readonly Clock clock = new();
@@ -385,7 +450,15 @@ public sealed class UpgradeActivationTests
                 name = "demo", target_repository = new { path = repo }
             }));
             scope = new(Paths.Root, "S-1-5-21-1001", [new("demo", config, Hash(File.ReadAllBytes(config)), repo, repo, "physical")]);
-            Journal = new(scope, new('a', 32));
+            Journal = new(scope, new('a', 32), boundary =>
+            {
+                if (fault == "lost-acceptance-reply" && !acceptanceInterrupted && boundary == UpgradePublicationBoundary.Renamed
+                    && new UpgradeJournal(scope, new('a', 32)).Read().Progress?.Phase == UpgradePhase.Accepted)
+                {
+                    acceptanceInterrupted = true;
+                    throw new IOException("acceptance reply lost");
+                }
+            });
             store = new(Paths, ProjectSlug.Parse("demo"), new(Paths.Root, config, repo, scope.UserSid));
             Owner = new(1, running ? "running" : "stopped", new('b', 32), 1234, DateTimeOffset.UtcNow.AddMinutes(-1), Paths.Root,
                 config, "demo", repo, new('c', 32), "http://127.0.0.1:5000", "healthy", "live", "", "", null)
@@ -465,10 +538,12 @@ public sealed class UpgradeActivationTests
         internal UpgradeCoordinator Coordinator() => new(Journal, lifecycle, new(Journal, lifecycle),
             _ => Task.FromResult(new UpgradePreflightReport("test", Paths.Root, Candidate, OldDigest, nextDigest, scope.Projects,
                 fault != "preflight", true, [])), Start, Observe);
-        internal async Task<UpgradeProgress> Install()
+        internal async Task<UpgradeProgress> Install(UpgradePhase phase = UpgradePhase.Installed)
         {
             var progress = await lifecycle.BeginDrainAsync(1, Token);
+            if (phase == UpgradePhase.Draining) return progress;
             progress = await lifecycle.ConfirmSettlementAsync(progress.Revision, Token);
+            if (phase == UpgradePhase.Settled) return progress;
             return await new UpgradeReplacement(Journal, lifecycle).ReplaceAsync(progress.Revision, Candidate, Token);
         }
         internal Task<UpgradeProgress> Activate(long revision) => lifecycle.ActivateAsync(revision, Start, Observe, Token);
@@ -499,6 +574,7 @@ public sealed class UpgradeActivationTests
             var web = cli with { ProcessId = 5679 };
             Owner = Owner with { RunId = runId, RuntimeId = new('e', 32), ProcessId = cli.ProcessId,
                 ProcessStartedAtUtc = created, CliRelease = cli, WebRelease = web, ObservedAtUtc = created };
+            if (fault == "lost-launch-reply") throw new IOException("launch reply lost");
             if (fault is "stop" or "disable" or "maintenance")
             {
                 var state = store.Read().State!;

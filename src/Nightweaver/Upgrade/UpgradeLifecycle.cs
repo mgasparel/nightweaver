@@ -153,52 +153,62 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         await UpgradeInterlock.ReleaseAsync(paths, Reservation(progress), token).ConfigureAwait(false);
     }
 
-    // One-shot activation. A pending launch is reconciled by the later recovery adapter,
-    // never replayed here. Command locks exclude ticks and operator stop through launch.
+    // Resume observes the exact reserved runs and never replays a launch.
+    // Command locks exclude ticks and operator stop through a fresh launch.
     internal async Task<UpgradeProgress> ActivateAsync(long expectedRevision,
         Func<AffectedUpgradeProject, string, CancellationToken, Task> start,
         Func<AffectedUpgradeProject, CancellationToken, Task<DeploymentObservation>> observe,
-        CancellationToken token)
+        CancellationToken token, bool resume = false)
     {
         using var manager = UpgradeInterlock.AcquireManager(paths);
         var progress = Read(expectedRevision);
-        if (progress.Phase != UpgradePhase.Installed || progress.PendingOperation is not null)
+        var reconciling = resume && progress.Phase == UpgradePhase.Verifying;
+        if (reconciling && progress.PendingOperation is null)
+            throw new InvalidOperationException("Verification operation intent is missing.");
+        if (!reconciling && (progress.Phase != UpgradePhase.Installed || progress.PendingOperation is not null))
             throw new InvalidOperationException("Activation requires a confirmed installed package.");
         using var commands = AcquireCommands(progress.Scope);
         using var admission = UpgradeInterlock.AcquireAdmission(paths);
         using var configurations = PinConfigurations(progress.Scope);
-        await ConfirmAsync(progress, token).ConfigureAwait(false);
+        if (!reconciling) await ConfirmAsync(progress, token).ConfigureAwait(false);
         var package = PreparedRelease.Inspect(paths.Root, true);
         await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
         if (package.Digest != progress.NewPackageDigest
             || PreparedRelease.Inspect(journal.RetainedPackageRoot, false).Digest != progress.OldPackageDigest)
             throw new InvalidDataException("Activation payload or backup changed.");
-        var launches = progress.Maintenance.Where(m => m.StartRequested)
+        var grant = reconciling ? UpgradeInterlock.ReadActivation(paths, Reservation(progress)) : null;
+        var launches = grant?.Launches ?? progress.Maintenance.Where(m => m.StartRequested)
             .Select(m => new UpgradeLaunch(m.Project, Guid.NewGuid().ToString("N"))).ToArray();
-        var intent = Guid.NewGuid().ToString("N");
-        progress = (await journal.SaveAsync(progress.Revision, progress with
-        { Phase = UpgradePhase.Verifying, PendingOperation = intent }, token).ConfigureAwait(false)).Progress!;
-        await UpgradeInterlock.ActivateAsync(paths, Reservation(progress),
-            new(1, progress.OperationId, progress.NewPackageDigest, launches), token).ConfigureAwait(false);
-        var maintenance = new List<UpgradeMaintenance>();
-        foreach (var item in progress.Maintenance)
+        if (grant is not null && (grant.PackageDigest != progress.NewPackageDigest
+            || !launches.Select(l => l.Project).Order().SequenceEqual(progress.Maintenance.Where(m => m.StartRequested).Select(m => m.Project).Order())))
+            throw new InvalidDataException("Activation reservation does not match the operation.");
+        var intent = reconciling ? progress.PendingOperation! : Guid.NewGuid().ToString("N");
+        if (!reconciling)
         {
-            if (item.Token is null) { maintenance.Add(item); continue; }
-            var lifecycle = await operations.OpenLifecycle(item.Project, token).ConfigureAwait(false)
-                ?? throw new InvalidOperationException("Supervision installation changed.");
-            var state = lifecycle.Read().State;
-            if (state?.Generation != item.Generation || state.Revision != item.Revision || state.PendingAttempt is not null)
-                throw new InvalidOperationException("Intent changed before activation.");
-            var released = await lifecycle.ApplyAsync(SupervisionLifecycleAction.LeaveMaintenance,
-                item.Token, item.Revision, token).ConfigureAwait(false);
-            maintenance.Add(item with { Token = null, Generation = released.State!.Generation, Revision = released.State.Revision });
+            progress = (await journal.SaveAsync(progress.Revision, progress with
+            { Phase = UpgradePhase.Verifying, PendingOperation = intent }, token).ConfigureAwait(false)).Progress!;
+            await UpgradeInterlock.ActivateAsync(paths, Reservation(progress),
+                new(1, progress.OperationId, progress.NewPackageDigest, launches), token).ConfigureAwait(false);
+            var maintenance = new List<UpgradeMaintenance>();
+            foreach (var item in progress.Maintenance)
+            {
+                if (item.Token is null) { maintenance.Add(item); continue; }
+                var lifecycle = await operations.OpenLifecycle(item.Project, token).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("Supervision installation changed.");
+                var state = lifecycle.Read().State;
+                if (state?.Generation != item.Generation || state.Revision != item.Revision || state.PendingAttempt is not null)
+                    throw new InvalidOperationException("Intent changed before activation.");
+                var released = await lifecycle.ApplyAsync(SupervisionLifecycleAction.LeaveMaintenance,
+                    item.Token, item.Revision, token).ConfigureAwait(false);
+                maintenance.Add(item with { Token = null, Generation = released.State!.Generation, Revision = released.State.Revision });
+            }
+            progress = (await journal.SaveAsync(progress.Revision, progress with { Maintenance = maintenance.ToArray() }, token)
+                .ConfigureAwait(false)).Progress!;
         }
-        progress = (await journal.SaveAsync(progress.Revision, progress with { Maintenance = maintenance.ToArray() }, token)
-            .ConfigureAwait(false)).Progress!;
         // The root interlock still excludes every ordinary launch. Only these exact
         // owner runs may acquire payload leases. Do not hold admission while children start.
         admission.Dispose();
-        foreach (var launch in launches)
+        foreach (var launch in reconciling ? [] : launches)
         {
             await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
             await start(progress.Scope.Projects.Single(p => p.Name == launch.Project), launch.RunId, token).ConfigureAwait(false);
@@ -281,6 +291,70 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
                 launches.Length == 0 ? "payload-verified-stopped" : "live-pair-accepted", DateTimeOffset.UtcNow)] };
         progress = (await journal.SaveAsync(progress.Revision, accepted, token).ConfigureAwait(false)).Progress!;
         await UpgradeInterlock.ReleaseAsync(paths, Reservation(progress), token).ConfigureAwait(false);
+        return progress;
+    }
+
+    internal async Task<UpgradeProgress> ConfirmAcceptedAsync(long revision,
+        Func<AffectedUpgradeProject, CancellationToken, Task<DeploymentObservation>> observe, CancellationToken token)
+    {
+        using var manager = UpgradeInterlock.AcquireManager(paths);
+        var progress = Read(revision);
+        if (progress.Phase != UpgradePhase.Accepted || progress.PendingOperation is not null || progress.AcceptedPairs is null)
+            throw new InvalidOperationException("Accepted operation evidence is required.");
+        using var commands = AcquireCommands(progress.Scope);
+        using var admission = UpgradeInterlock.AcquireAdmission(paths);
+        using var configurations = PinConfigurations(progress.Scope);
+        var released = UpgradeInterlock.IsReleased(paths, Reservation(progress));
+        if (!released) await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
+        var package = PreparedRelease.Inspect(paths.Root, true);
+        if (package.Digest != progress.NewPackageDigest
+            || PreparedRelease.Inspect(journal.RetainedPackageRoot, false).Digest != progress.OldPackageDigest)
+            throw new InvalidDataException("Accepted payload or backup changed.");
+        var inventory = await InspectAsync(progress, token).ConfigureAwait(false);
+        foreach (var project in progress.Scope.Projects)
+        {
+            var pair = progress.AcceptedPairs.SingleOrDefault(p => p.Owner.Project == project.Name);
+            var owner = inventory.Owners.SingleOrDefault(o => o.Project == project.Name);
+            if (pair is null)
+            {
+                if (operations.OwnerActive(project.Name) != false || owner is not null
+                    && (!progress.Owners.Contains(OwnerEvidence(owner))
+                        || operations.Observe(owner) is not { State: OwnerProcessState.Exited, DescendantsSettled: true }))
+                    throw new InvalidOperationException("Stopped acceptance settlement is unresolved.");
+            }
+            else
+            {
+                var observation = await observe(project, token).WaitAsync(SupervisionPolicy.ProbeBudget, token).ConfigureAwait(false);
+                var current = UpgradeAcceptance.Confirm(progress, project, package.BuildVersion, pair.Owner.RunId, observation, time.GetUtcNow());
+                if (current.Owner != pair.Owner || current.Cli != pair.Cli || current.Web != pair.Web
+                    || owner is null || OwnerEvidence(owner) != pair.Owner || operations.OwnerActive(project.Name) != true
+                    || operations.Observe(owner).State != OwnerProcessState.Alive)
+                    throw new InvalidOperationException("Accepted replacement identity is unresolved.");
+            }
+        }
+        // Health can change while a probe is in flight. Check native state again
+        // before completing a lost release publication.
+        inventory = await InspectAsync(progress, token).ConfigureAwait(false);
+        foreach (var project in progress.Scope.Projects)
+        {
+            var expected = progress.AcceptedPairs.SingleOrDefault(p => p.Owner.Project == project.Name);
+            var current = inventory.Owners.SingleOrDefault(o => o.Project == project.Name);
+            if (expected is null ? operations.OwnerActive(project.Name) != false
+                || current is not null && (!progress.Owners.Contains(OwnerEvidence(current))
+                    || operations.Observe(current) is not { State: OwnerProcessState.Exited, DescendantsSettled: true })
+                : current is null || OwnerEvidence(current) != expected.Owner || operations.OwnerActive(project.Name) != true
+                    || operations.Observe(current).State != OwnerProcessState.Alive || current.State != "running"
+                    || current.Failure is not null || current.StopReason is not null
+                    || current.WebHealth != "healthy" || current.RuntimeHealth != "live")
+                throw new InvalidOperationException("Final accepted native identity or health is unresolved.");
+        }
+        if (PreparedRelease.Inspect(paths.Root, true).Digest != progress.NewPackageDigest)
+            throw new InvalidDataException("Accepted payload changed during observation.");
+        if (!released)
+        {
+            await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
+            await UpgradeInterlock.ReleaseAsync(paths, Reservation(progress), token).ConfigureAwait(false);
+        }
         return progress;
     }
 

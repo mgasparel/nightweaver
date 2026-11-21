@@ -16,6 +16,46 @@ internal sealed class UpgradeCoordinator(UpgradeJournal journal, UpgradeLifecycl
     Func<AffectedUpgradeProject, string, CancellationToken, Task> start,
     Func<AffectedUpgradeProject, CancellationToken, Task<DeploymentObservation>> observe)
 {
+    internal async Task<UpgradeActivationResult> ResumeAsync(long expectedRevision, string candidateRoot, CancellationToken token)
+    {
+        var read = journal.Read();
+        if (read.Availability != UpgradeJournalAvailability.Available || read.Progress is not { } progress
+            || progress.Revision != expectedRevision)
+            return new(read.Progress?.OperationId ?? "", UpgradeActivationOutcome.Refused, read.Progress, "Operation revision is unavailable or changed.");
+        try
+        {
+            using (var manager = Execution.InvocationRuntimeFiles.OpenExistingPackageFileForRead(typeof(UpgradeCoordinator).Assembly.Location))
+                if (Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(manager.Stream)) != progress.ManagerDigest)
+                    throw new InvalidDataException("Recovery manager changed.");
+            if (progress.Phase == UpgradePhase.Prepared)
+                return await ApplyAsync(expectedRevision, candidateRoot, token).ConfigureAwait(false);
+            if (progress.Phase == UpgradePhase.Draining)
+                progress = await lifecycle.ConfirmSettlementAsync(progress.Revision, token).ConfigureAwait(false);
+            if (progress.Phase == UpgradePhase.Settled)
+                progress = await replacement.ReplaceAsync(progress.Revision, candidateRoot, token).ConfigureAwait(false);
+            else if (progress.Phase == UpgradePhase.Replacing)
+                progress = await replacement.ResumeAsync(progress.Revision, candidateRoot, token).ConfigureAwait(false);
+            if (progress.Phase is UpgradePhase.Installed or UpgradePhase.Verifying)
+                progress = await lifecycle.ActivateAsync(progress.Revision, start, observe, token, resume: true).ConfigureAwait(false);
+            else if (progress.Phase == UpgradePhase.Accepted)
+                progress = await lifecycle.ConfirmAcceptedAsync(progress.Revision, observe, token).ConfigureAwait(false);
+            if (progress.Phase != UpgradePhase.Accepted)
+                return new(progress.OperationId, UpgradeActivationOutcome.Refused, progress,
+                    progress.Phase == UpgradePhase.Inspected ? "Prepared operation evidence is required." : "Use rollback reconciliation for this phase.");
+            return new(progress.OperationId, progress.AcceptedPairs?.Length > 0 ? UpgradeActivationOutcome.LiveAccepted
+                : UpgradeActivationOutcome.PayloadVerifiedStopped, progress, "accepted");
+        }
+        catch (OperationCanceledException)
+        {
+            return new(progress.OperationId, UpgradeActivationOutcome.Pending, journal.Read().Progress, "Resume was interrupted. Inspect the retained operation.");
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or InvalidOperationException
+            or UnauthorizedAccessException or System.ComponentModel.Win32Exception or System.Text.Json.JsonException or TimeoutException)
+        {
+            return new(progress.OperationId, UpgradeActivationOutcome.Pending, journal.Read().Progress, exception.Message);
+        }
+    }
+
     internal static UpgradeCoordinator Create(HostPaths paths, UpgradeJournal journal, bool sourceBoundarySupported,
         Func<CancellationToken, Task<UpgradePreflightReport>> preflight, AppEnvironment environment, IProcessRunner runner)
     {
@@ -80,7 +120,7 @@ internal sealed class UpgradeCoordinator(UpgradeJournal journal, UpgradeLifecycl
                     or OperationCanceledException) { }
             }
             return new(operation, pending ? UpgradeActivationOutcome.Pending : UpgradeActivationOutcome.Failed,
-                progress, "inspect-retained-operation");
+                progress, exception.Message);
         }
     }
 }

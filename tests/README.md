@@ -1,5 +1,13 @@
 # Test suite
 
+Upgrade resume extends the existing replacement interruption and activation fault
+cases with reconciliation checks. It reuses each disposable package setup.
+Small additional cases cover exact byte decisions, partial backup/live bytes,
+lost retirement/inventory confirmations, lost launch replies, phase continuation,
+stale revisions and repeated completion. Controlled time retains the activation
+health interval. These checks add no native owner, Agent, Scheduler, browser or
+fixture publish journey. The normal application paths do not invoke resume.
+
 Upgrade activation adds a pure live-identity matrix and disposable component
 checks for composed replacement, stopped intent, launch failure, cancellation,
 stop/disable/maintenance changes, unavailable stores, changed payload, changed
