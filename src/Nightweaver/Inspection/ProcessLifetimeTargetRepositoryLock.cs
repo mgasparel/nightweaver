@@ -10,6 +10,7 @@ namespace Nightweaver.Inspection;
 /// <summary>Owns one OS mutex for the lifetime of the process that runs live dispatch.</summary>
 internal static class ProcessLifetimeTargetRepositoryLock
 {
+    internal static string ResolveIdentity(string commonDirectory) => TargetRepositoryIdentity.Resolve(commonDirectory);
     private static readonly ConcurrentDictionary<string, Thread> OwnedHere = new(StringComparer.Ordinal);
 
     internal static void Acquire(ValidatedTargetRepository repository)

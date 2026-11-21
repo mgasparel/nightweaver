@@ -56,6 +56,16 @@ try {
     Check ($LASTEXITCODE -eq 0 -and $manifest.build_version -ceq $revision) 'Manifest revision mismatch'
     Check ($manifest.schema_version -eq 1 -and $manifest.cli_executable -ceq 'nightweaver.exe' -and $manifest.web_executable -ceq 'web/Nightweaver.Web.exe') 'Manifest contract changed'
     Check (@($manifest.PSObject.Properties).Count -eq 4) 'Manifest schema changed'
+    $inventory = Get-Content -LiteralPath (Join-Path $destination 'nightweaver-release.json') -Raw | ConvertFrom-Json
+    Check ($inventory.schema_version -eq 1 -and $inventory.build_version -ceq $revision) 'Inventory identity mismatch'
+    Check (($inventory.capabilities -join ',') -ceq 'paired-inventory-v1') 'Publisher claimed undelivered upgrade capabilities'
+    $payload = @(Get-ChildItem -LiteralPath $destination -File -Recurse -Force | Where-Object Name -ne 'nightweaver-release.json')
+    Check ($inventory.files.Count -eq $payload.Count) 'Inventory omitted payload'
+    foreach ($file in $inventory.files) {
+        $full = Join-Path $destination $file.path
+        Check ((Get-Item -LiteralPath $full).Length -eq $file.length) 'Inventory length mismatch'
+        Check ((Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash -ceq $file.sha256) 'Inventory hash mismatch'
+    }
     foreach ($case in @(
         @('entry', 'Studio entry is missing'), @('js', 'Studio bundle is missing'),
         @('css', 'Studio bundle is missing'), @('cli', 'CLI apphost is missing'),

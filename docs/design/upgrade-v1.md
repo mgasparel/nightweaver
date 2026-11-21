@@ -210,6 +210,60 @@ evidence remain through acceptance; v1 defines no automatic post-accept deletion
 
 ## Verification and delivery seams
 
+### Read-only release preflight
+
+The paired publisher now writes `nightweaver-release.json` alongside the unchanged
+deployment manifest v1. Inventory schema 1 has exactly `schema_version`,
+`build_version`, `capabilities` and `files`; each file has exactly `path`, `length`
+and `sha256`. Paths use `/` and retain exact spelling; collisions compare without
+case. The SHA256 of the inventory's exact UTF-8 bytes is the package digest.
+The inventory includes the deployment manifest and every other payload file,
+excluding itself. CLI and Web publish with the same pinned informational build
+identity; inspection checks all three shipping CLI/Web assembly identities and
+the identical CLI library included in both outputs. This is local integrity and
+pair evidence, not signed provenance or permission to mutate an installation.
+
+```text
+nightweaver upgrade preflight --installation H:\Nightweaver\installed --candidate H:\Releases\prepared
+```
+
+Repeat `--config <absolute-path>` for known external configurations. All root
+`projects/*.json` are included automatically; duplicate Project identities and
+unsafe/overlapping roots refuse. Read-only Git queries resolve each physical
+common-directory identity using the same identity function as owner exclusion.
+The bounded JSON report includes canonical installation/candidate/config/repository
+paths, config hashes, old/new inventory digests when verified, affected Projects,
+compatibility, rollback eligibility and fixed refusal codes. It emits no config
+contents, tool output, owner commands or credentials. Exit 1 means refused,
+exit 2 means invalid command syntax; `upgrade --help` displays usage.
+
+Current releases advertise only `paired-inventory-v1`. Preflight deliberately
+reports `compatible: false` and `rollback_eligible: false`: the root interlock,
+external recovery manager, complete root-wide owner census and cross-version
+durable-state readers have not shipped. Arbitrary capability strings cannot
+override this implementation boundary. It reports `capability-unsupported`,
+`state-unsupported`, `identity-unknown` and `rollback-incompatible` after otherwise
+successful inventory. Missing/malformed packages/configurations and missing
+runtimes add bounded earlier refusals. Legacy manifests without the inventory
+remain inspection-only with an unavailable package digest. No historical SHA is
+treated as capability proof. This command does not produce Prepared authority.
+
+Inspection holds no-follow directory/file handles, rejects hard-linked payloads,
+reparse points, device/stream/short-path aliases, traversal, duplicate/unknown JSON
+members, unknown schemas and builds, missing/changed/mixed files, state paths,
+oversize inputs and unlisted candidate files. Installed operator state and unknown
+extras remain untouched. No staging is created while compatibility is refused;
+future Prepared persistence must retain immutable verified bytes and revalidate
+them under the mutation locks specified above. No journal, runtime or supervision
+store is initialized and no owner is stopped or launched by preflight.
+
+`PreparedReleaseTests` use small disposable trees plus copies of the already-built
+assemblies. They cover valid integrity, tamper/deletion/mixed builds, strict schema,
+state overlap, Studio escape, bounded command refusals and unchanged sentinels.
+One junction/hard-link fixture proves the no-follow/link-count boundary with one
+short `mklink /J` helper; it adds no owner, Agent, publish, supervision or browser
+journey. Publisher fixtures reuse their injected paired publish boundary.
+
 `UpgradePolicyTests` cover all allowed edges, every other phase/step pair,
 missing identity/compatibility/interlock/journal evidence, pending native drain,
 payload mismatch, forward-state rollback refusal, fresh health and changed or

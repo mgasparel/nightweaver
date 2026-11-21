@@ -38,6 +38,14 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Prepared release fixtures validate complete paired inventories, assembly identities,
+strict schema/path/hash refusals, Project/root/repository inventory and read-only
+preflight command output. They retain sentinels and reject unavailable compatibility
+without lifecycle writes. One short junction helper proves link refusal; no owner,
+Agent, repeated publish or browser journey is added. Run publisher component checks
+with `pwsh -NoProfile -File scripts/tests/Publish-Nightweaver.Tests.ps1`; these reuse
+injected publishes. See [upgrade preflight](../docs/design/upgrade-v1.md#read-only-release-preflight).
+
 Upgrade contract fixtures exhaust the pure phase/step table and refuse missing
 identity, compatibility, interlock, native settlement, payload or fresh acceptance
 evidence. Stopped/disabled/maintenance intent and rollback-readable forward state
