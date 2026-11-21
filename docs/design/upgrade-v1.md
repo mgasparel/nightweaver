@@ -115,6 +115,20 @@ desired-running intent and uses the existing Maintenance graceful-stop path.
 An uncertain reply retains the operation, interlock and journal. Stop remains
 available and can change durable intent during drain.
 
+The drain step reads the exact retained owner again before each request. It
+skips the control pipe only when the owner lock is absent, the original native
+process has exited and its Job descendants have settled. It retains that owner
+identity in the operation. All other cases still require the drain request and
+the separate settlement check before payload replacement.
+
+A direct console stop takes the Project command lock and records the same
+operation-bound stop evidence as a manager stop. It waits for sharing contention
+before it cancels graceful runtime work. A second console signal keeps the
+immediate force-exit path. Manual mode creates no supervision store. Intent
+capture also excludes a manual owner already in an intentional drain. A console
+stop after capture cancels activation and retains the operation, backup and
+startup suppression, even if the upgrade pipe later accepts a drain request.
+
 Settlement is an explicit observation, not expiration of the manager's stop
 wait. Confirmation requires the original PID/creation/run/runtime identity,
 native process exit and an empty named containment Job. PID reuse, missing
@@ -443,3 +457,57 @@ permits `Installed`, which grants no acceptance or startup authority. The
 component does not retry, release suppression, restore owner records or remove
 retained evidence. It reserves enough journal revisions before it changes files;
 budget exhaustion refuses. Recovery and rollback remain later work.
+
+## Internal activation and live release evidence
+
+`UpgradeCoordinator` composes a fresh compatible preflight report, prepared
+journal, drain, native settlement, replacement and activation. Its production
+factory uses the existing inventory, ordinary background startup and shared
+deployment observer. The external manager supplies independently proven
+compatibility; untrusted inventory capabilities cannot enable it. Public
+preflight still refuses mutation until recovery and rollback are delivered.
+An unsettled drain returns pending. The coordinator never repeats a launch or
+an uncertain mutation. Cancellation retains the operation for explicit recovery.
+
+Activation persists `activation.json` under the current root interlock before
+launch. It binds the operation, new package digest and exact Project/run pairs.
+The manager compares configuration, journal, maintenance generation/token/revision,
+old native settlement and both payloads under the existing command/admission
+locks. It leaves only its own maintenance and keeps desired intent unchanged.
+Ordinary starts and ticks remain suppressed. Only the reserved owner process
+and its contained Web child can obtain payload leases. Missing, malformed,
+foreign or interrupted activation evidence refuses startup, even beside a
+historical release record. A failed launch retains the grant, pending intent,
+backup and root interlock; the one-shot coordinator cannot replay it.
+
+Command locks cover the final launch boundary and are released for health
+observation. Stop remains usable. Final publication reacquires all affected
+command locks and admission, then rechecks intent, inventory, native identity
+and installed hashes. The final owner inventory must still report running state,
+healthy Web and live runtime, with no failure or stop reason. A recorded failure
+rejects acceptance even while the exact native owner remains alive and holds its
+lock. It retains the pending operation, backup and root interlock.
+Running acceptance requires the same CLI/Web pair in two
+fresh Healthy observations at least ten seconds apart within sixty seconds.
+The journal retains actual PID/creation/run/runtime/Job identities and each
+pair's first and final observation times. Stopped acceptance verifies payload
+and settlement without launching or inventing supervision state.
+
+Manager stop and force stop record `stopped-<Project>.json` in each active root
+interlock under the Project command lock and shared admission lock, before querying
+the owner. The record binds the exact reservation. A repeated stop is idempotent.
+This records a later manual stop even after the old owner has settled, without
+creating supervision state. Activation checks affected Project stop records before
+grant publication, each launch and final acceptance. A stop for another Project
+does not cancel activation. Malformed, foreign or interrupted records retain
+suppression. No automatic path clears these records or restores saved start intent.
+
+CLI and Web capture startup release evidence once from a validated installed
+inventory. Loaded assembly location, informational build and module identity
+must agree with the package. Web `/health` returns that captured identity with
+`Cache-Control: no-store`. The owner compares its HTTP response with the exact
+launched Web PID and creation time. Its fresh control response carries both
+release identities alongside the existing runtime health. Legacy/dev installs
+without release inventories report no attestation and cannot establish upgrade
+acceptance. A later disk manifest cannot change a captured live identity.
+Representative native cross-version confirmation remains in `upgrade-proof`.

@@ -92,6 +92,8 @@ public sealed class Program
         // Resolve before listening, after all host configuration providers have been applied.
         var startupProject = app.Services.GetRequiredService<ProjectConfig>();
         app.Services.GetRequiredService<WebStartupAdmission>().Acquire(app.Services.GetRequiredService<HostPaths>(), startupProject.Name);
+        var liveRelease = LiveReleaseIdentity.Capture(app.Services.GetRequiredService<HostPaths>().Root,
+            startupProject.ConfigFilePath, startupProject.Name.Value, typeof(Program).Assembly, "web/Nightweaver.Web.dll");
         // Environment-only opt-in, with a dedicated log pipeline; application/request logs stay local.
         using var telemetryLifetime = new WebTelemetryLifetime(app.Lifetime, startupTimestamp);
         app.Services.GetRequiredService<OperationalObservationService>().Telemetry = telemetryLifetime.Telemetry;
@@ -111,7 +113,12 @@ public sealed class Program
         // excluding static-asset suffixes even at the exact Workspace depth.
         app.MapFallbackToFile("/projects/{projectId}/beads/{beadId:regex(^(?!.*[.](js|mjs|css|map|json|html|htm|svg|png|jpg|jpeg|gif|webp|avif|ico|woff|woff2|ttf|otf|wasm|txt|xml)$)[A-Za-z0-9][A-Za-z0-9_.-]*$)}", "studio/index.html");
         app.MapFallbackToFile("/projects/{*path:nonfile}", "studio/index.html");
-        app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+        app.MapGet("/health", (HttpContext context) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return liveRelease is null ? (IResult)Results.Ok(new { status = "ok" })
+                : Results.Ok(new { status = "ok", release = liveRelease });
+        });
         app.MapOperationalObservations();
         app.MapFactoryTelemetry();
         app.MapCleanup();

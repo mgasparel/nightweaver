@@ -1,5 +1,37 @@
 # Test suite
 
+Upgrade activation adds a pure live-identity matrix and disposable component
+checks for composed replacement, stopped intent, launch failure, cancellation,
+stop/disable/maintenance changes, unavailable stores, changed payload, changed
+second observation and the verification time window. Controlled time supplies
+the ten-second observation interval. The identity matrix uses no package copies
+or native setup; file/lock cases retain the real journal and replacement boundary.
+These cases add no native owner, Agent, Scheduler or fixture-publish journey.
+The representative native release-attestation proof belongs to `upgrade-proof`.
+Manual stop repair adds component checks through the actual manager stop and
+force-stop path after drain and settlement, and during the health interval.
+They check zero launches after the later stop, repeated stop, retained suppression
+and manual opt-out. Small file checks cover unrelated Projects and malformed,
+foreign or interrupted stop records. These add no native journey or publish.
+Stopped-owner repair adds two component cases with retained owner evidence and
+an unavailable control pipe. Four cases retain suppression for unsettled,
+reused or unavailable native evidence and an unknown owner lock. Two console
+stop cases cover intent capture and the later upgrade pipe request. Two small
+file-lock cases check command/admission contention and immediate second-signal
+force exit. They use injected native operations and the existing package setup.
+They add no native owner, Agent, Scheduler, browser or fixture publication.
+Final acceptance adds seven component cases. Two Healthy probes precede a final
+inventory with Web/runtime failure or an independently invalid state, failure,
+stop reason, Web health or runtime health. The exact native owner stays alive
+and holds its lock. These cases require retained pending evidence, backup and
+startup suppression, with no acceptance or repeated launch. They reuse the same
+package setup and add no native journey or fixture publication. Production adds
+five field checks to the final inventory already read during activation.
+Existing Web journeys also exercise the compatible health endpoint; legacy/dev
+hosts omit release evidence and keep their exact health JSON. Normal owner startup validates a release
+inventory only when one exists, and each owner health probe checks the launched
+Web process identity. Complete-suite measurements include that production cost.
+
 Upgrade drain uses disposable store/command-lock fixtures and injected native
 operations. Cases cover manual opt-out, exact maintenance ownership, root-wide
 startup suppression, lost drain replies, PID reuse, unsettled descendants,

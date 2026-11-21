@@ -4,11 +4,13 @@ using System.Text.Json;
 using Nightweaver.Execution;
 using Nightweaver.Telemetry;
 using Nightweaver.Supervision;
+using Nightweaver.Upgrade;
 
 namespace Nightweaver.Background;
 
 internal sealed class BackgroundWebHost : IAsyncDisposable
 {
+    private static readonly JsonSerializerOptions HealthJson = new(JsonSerializerDefaults.Web);
     private readonly WindowsProcessLauncher.WindowsAgentProcess process;
     private readonly Task<uint> exitTask;
     private readonly Task stdoutPump;
@@ -17,6 +19,18 @@ internal sealed class BackgroundWebHost : IAsyncDisposable
     private readonly SemaphoreSlim logGate;
     private readonly string url;
     private bool disposed;
+    internal LiveRelease? Release { get; private set; }
+    private async Task<bool> CheckReleaseAsync(HttpResponseMessage response, CancellationToken token)
+    {
+        await using var body = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+        using var json = await ReadBoundedAsync(body, token).ConfigureAwait(false);
+        Release = json.RootElement.TryGetProperty("release", out var release) && release.ValueKind != JsonValueKind.Null
+            ? release.Deserialize<LiveRelease>(HealthJson) : null;
+        if (Release is null) return true; // Legacy health remains distinct from release acceptance.
+        if (process.ProcessId is not { } pid) return false;
+        using var child = System.Diagnostics.Process.GetProcessById(pid);
+        return LiveReleaseIdentity.MatchesProcess(Release, pid, child.StartTime.ToUniversalTime()) && !exitTask.IsCompleted;
+    }
 
     private BackgroundWebHost(WindowsProcessLauncher.WindowsAgentProcess process, string url,
         InvocationRuntimeFiles.PinnedRuntimeFile log, SemaphoreSlim logGate, Task stdoutPump, Task stderrPump)
@@ -87,6 +101,8 @@ internal sealed class BackgroundWebHost : IAsyncDisposable
                 using var health = await client.GetAsync(new Uri(baseUri, "health"), cancellationToken).ConfigureAwait(false);
                 if (health.StatusCode != HttpStatusCode.OK)
                     throw new IOException($"Web Console health endpoint returned {(int)health.StatusCode}");
+                if (!await CheckReleaseAsync(health, cancellationToken).ConfigureAwait(false))
+                    throw new IOException("Web Console release process does not match the launched child.");
                 using var stateResponse = await client.GetAsync(new Uri(baseUri, "api/factory/state"), cancellationToken).ConfigureAwait(false);
                 if (stateResponse.StatusCode != HttpStatusCode.OK)
                     throw new IOException($"Web Console runtime-state endpoint returned {(int)stateResponse.StatusCode}");
@@ -127,6 +143,7 @@ internal sealed class BackgroundWebHost : IAsyncDisposable
             var baseUri = new Uri(url.EndsWith('/') ? url : url + "/", UriKind.Absolute);
             using var health = await client.GetAsync(new Uri(baseUri, "health"), HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             if (health.StatusCode != HttpStatusCode.OK) return false;
+            if (!await CheckReleaseAsync(health, cancellationToken).ConfigureAwait(false)) return false;
             using var state = await client.GetAsync(new Uri(baseUri, "api/factory/state"), HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             if (state.StatusCode != HttpStatusCode.OK) return false;
             await using var body = await state.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);

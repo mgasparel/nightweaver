@@ -226,7 +226,7 @@ public sealed class UpgradeReplacementTests
     }
 
     private static string Digest(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
-    private static void Package(string root, bool next)
+    internal static void Package(string root, bool next)
     {
         var build = System.Diagnostics.FileVersionInfo.GetVersionInfo(typeof(PreparedRelease).Assembly.Location).ProductVersion!.Split('+').Last();
         Put(root, "nightweaver.exe", next ? "new cli" : "old cli");

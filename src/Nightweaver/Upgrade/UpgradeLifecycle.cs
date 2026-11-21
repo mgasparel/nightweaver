@@ -19,8 +19,10 @@ internal sealed record UpgradeLifecycleOperations(
     Func<string, bool?> OwnerActive);
 
 /// <summary>Internal boundary for the replacement adapter. No public mutation command or automatic restart.</summary>
-internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, UpgradeLifecycleOperations operations)
+internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, UpgradeLifecycleOperations operations,
+    TimeProvider? clock = null, Func<TimeSpan, CancellationToken, Task>? wait = null)
 {
+    private readonly TimeProvider time = clock ?? TimeProvider.System;
     internal static async Task<bool> RequestDrainAsync(HostPaths paths, BackgroundOwnerRecord owner, string operationId,
         string? maintenanceToken, CancellationToken token)
     {
@@ -66,7 +68,13 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
                 throw new InvalidDataException("Supervision became unavailable; retain the upgrade boundary.");
             if (read?.State is not null)
                 read = await lifecycle!.ApplyAsync(SupervisionLifecycleAction.EnterMaintenance, null, null, token).ConfigureAwait(false);
-            maintenance.Add(new(project.Name, read?.State?.MaintenanceToken, read?.State?.Generation ?? 0, read?.State?.Revision ?? 0));
+            maintenance.Add(new(project.Name, read?.State?.MaintenanceToken, read?.State?.Generation ?? 0, read?.State?.Revision ?? 0)
+            {
+                StartRequested = read?.State is { Enabled: true, DesiredRunning: true }
+                    || read?.State is null && operations.OwnerActive(project.Name) == true
+                        && inventory.Owners.SingleOrDefault(o => o.Project == project.Name) is { } owner
+                        && owner.State != "stopping" && !DeploymentObserver.IsDeliberate(owner.StopReason)
+            });
         }
         var owners = inventory.Owners.Select(OwnerEvidence).ToArray();
         var saved = await journal.SaveAsync(expectedRevision, progress with { Phase = UpgradePhase.Draining,
@@ -78,6 +86,13 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         configurations.Dispose();
         foreach (var owner in inventory.Owners)
         {
+            var fresh = await InspectAsync(progress, token).ConfigureAwait(false);
+            var current = fresh.Owners.SingleOrDefault(o => OwnerEvidence(o) == OwnerEvidence(owner))
+                ?? throw new InvalidOperationException("Original owner evidence changed before drain.");
+            var active = operations.OwnerActive(owner.Project);
+            var observation = operations.Observe(current);
+            if (active == false && observation is { State: OwnerProcessState.Exited, DescendantsSettled: true })
+                continue;
             var item = progress.Maintenance.Single(m => m.Project == owner.Project);
             if (!await operations.Drain(owner, progress.OperationId, item.Token, token).ConfigureAwait(false))
                 throw new InvalidOperationException("Upgrade drain is unconfirmed; retain the boundary and inspect the original owner.");
@@ -136,6 +151,155 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
             await lifecycle.ApplyAsync(SupervisionLifecycleAction.LeaveMaintenance, item.Token, item.Revision, token).ConfigureAwait(false);
         }
         await UpgradeInterlock.ReleaseAsync(paths, Reservation(progress), token).ConfigureAwait(false);
+    }
+
+    // One-shot activation. A pending launch is reconciled by the later recovery adapter,
+    // never replayed here. Command locks exclude ticks and operator stop through launch.
+    internal async Task<UpgradeProgress> ActivateAsync(long expectedRevision,
+        Func<AffectedUpgradeProject, string, CancellationToken, Task> start,
+        Func<AffectedUpgradeProject, CancellationToken, Task<DeploymentObservation>> observe,
+        CancellationToken token)
+    {
+        using var manager = UpgradeInterlock.AcquireManager(paths);
+        var progress = Read(expectedRevision);
+        if (progress.Phase != UpgradePhase.Installed || progress.PendingOperation is not null)
+            throw new InvalidOperationException("Activation requires a confirmed installed package.");
+        using var commands = AcquireCommands(progress.Scope);
+        using var admission = UpgradeInterlock.AcquireAdmission(paths);
+        using var configurations = PinConfigurations(progress.Scope);
+        await ConfirmAsync(progress, token).ConfigureAwait(false);
+        var package = PreparedRelease.Inspect(paths.Root, true);
+        await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
+        if (package.Digest != progress.NewPackageDigest
+            || PreparedRelease.Inspect(journal.RetainedPackageRoot, false).Digest != progress.OldPackageDigest)
+            throw new InvalidDataException("Activation payload or backup changed.");
+        var launches = progress.Maintenance.Where(m => m.StartRequested)
+            .Select(m => new UpgradeLaunch(m.Project, Guid.NewGuid().ToString("N"))).ToArray();
+        var intent = Guid.NewGuid().ToString("N");
+        progress = (await journal.SaveAsync(progress.Revision, progress with
+        { Phase = UpgradePhase.Verifying, PendingOperation = intent }, token).ConfigureAwait(false)).Progress!;
+        await UpgradeInterlock.ActivateAsync(paths, Reservation(progress),
+            new(1, progress.OperationId, progress.NewPackageDigest, launches), token).ConfigureAwait(false);
+        var maintenance = new List<UpgradeMaintenance>();
+        foreach (var item in progress.Maintenance)
+        {
+            if (item.Token is null) { maintenance.Add(item); continue; }
+            var lifecycle = await operations.OpenLifecycle(item.Project, token).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("Supervision installation changed.");
+            var state = lifecycle.Read().State;
+            if (state?.Generation != item.Generation || state.Revision != item.Revision || state.PendingAttempt is not null)
+                throw new InvalidOperationException("Intent changed before activation.");
+            var released = await lifecycle.ApplyAsync(SupervisionLifecycleAction.LeaveMaintenance,
+                item.Token, item.Revision, token).ConfigureAwait(false);
+            maintenance.Add(item with { Token = null, Generation = released.State!.Generation, Revision = released.State.Revision });
+        }
+        progress = (await journal.SaveAsync(progress.Revision, progress with { Maintenance = maintenance.ToArray() }, token)
+            .ConfigureAwait(false)).Progress!;
+        // The root interlock still excludes every ordinary launch. Only these exact
+        // owner runs may acquire payload leases. Do not hold admission while children start.
+        admission.Dispose();
+        foreach (var launch in launches)
+        {
+            await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
+            await start(progress.Scope.Projects.Single(p => p.Name == launch.Project), launch.RunId, token).ConfigureAwait(false);
+        }
+        // Stop must remain usable during the health window. Final publication takes
+        // fresh command/admission locks and compares the same intent revisions again.
+        commands.Dispose();
+        await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
+        var inventory = await InspectAsync(progress, token).ConfigureAwait(false);
+        if (inventory.Owners.Any(o => operations.OwnerActive(o.Project) != false && !launches.Contains(new(o.Project, o.RunId))))
+            throw new InvalidOperationException("Unexpected replacement owner.");
+        var pairs = new List<UpgradeAcceptedPair>();
+        var firstTimes = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var confirmedTimes = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var verificationStarted = time.GetTimestamp();
+        for (var round = 0; round < 2; round++)
+        {
+            var previous = pairs.ToArray();
+            pairs.Clear();
+            if (round == 1 && launches.Length > 0)
+                await (wait?.Invoke(TimeSpan.FromSeconds(10), token)
+                    ?? Task.Delay(TimeSpan.FromSeconds(10), time, token)).ConfigureAwait(false);
+            foreach (var launch in launches)
+            {
+                var project = progress.Scope.Projects.Single(p => p.Name == launch.Project);
+                var remaining = TimeSpan.FromSeconds(60) - time.GetElapsedTime(verificationStarted);
+                if (remaining <= TimeSpan.Zero) throw new TimeoutException("Replacement verification window expired.");
+                var observation = await observe(project, token).WaitAsync(remaining, time, token).ConfigureAwait(false);
+                var pair = UpgradeAcceptance.Confirm(progress, project, package.BuildVersion, launch.RunId, observation, time.GetUtcNow());
+                if (round == 0) firstTimes.Add(project.Name, observation.Utc);
+                else
+                {
+                    if (observation.Utc - firstTimes[project.Name] < TimeSpan.FromSeconds(10))
+                        throw new InvalidOperationException("Replacement observations are too close together.");
+                    confirmedTimes.Add(project.Name, observation.Utc);
+                }
+                var owner = observation.Owner!;
+                var current = inventory.Owners.SingleOrDefault(o => o.Project == project.Name);
+                if (current is null || !DeploymentObserver.SameOwner(owner, current) || operations.OwnerActive(project.Name) != true
+                    || operations.Observe(owner).State != OwnerProcessState.Alive)
+                    throw new InvalidOperationException("Replacement owner changed during acceptance.");
+                pairs.Add(pair);
+            }
+            if (round == 1 && !previous.SequenceEqual(pairs))
+                throw new InvalidOperationException("Replacement pair changed between acceptance observations.");
+            if (time.GetElapsedTime(verificationStarted) > TimeSpan.FromSeconds(60))
+                throw new TimeoutException("Replacement verification window expired.");
+            await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
+        }
+        using var finalCommands = AcquireCommands(progress.Scope);
+        using var finalAdmission = UpgradeInterlock.AcquireAdmission(paths);
+        await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
+        inventory = await InspectAsync(progress, token).ConfigureAwait(false);
+        foreach (var project in progress.Scope.Projects)
+        {
+            var expected = pairs.SingleOrDefault(p => p.Owner.Project == project.Name);
+            var current = inventory.Owners.SingleOrDefault(o => o.Project == project.Name);
+            if (expected is null ? operations.OwnerActive(project.Name) != false
+                : current is null || OwnerEvidence(current) != expected.Owner || operations.OwnerActive(project.Name) != true
+                    || operations.Observe(current).State != OwnerProcessState.Alive)
+                throw new InvalidOperationException("Final replacement native identity is unconfirmed.");
+            if (expected is not null && (current!.State != "running" || current.Failure is not null
+                || current.StopReason is not null || current.WebHealth != "healthy" || current.RuntimeHealth != "live"))
+                throw new InvalidOperationException("Final replacement health is unconfirmed; retain the upgrade interlock.");
+            if (expected is null && current is not null && (!progress.Owners.Contains(OwnerEvidence(current))
+                || operations.Observe(current) is not { State: OwnerProcessState.Exited, DescendantsSettled: true }))
+                throw new InvalidOperationException("Stopped installation settlement is unconfirmed.");
+        }
+        if (PreparedRelease.Inspect(paths.Root, true).Digest != package.Digest)
+            throw new InvalidDataException("Installed payload changed during acceptance.");
+        if (launches.Length > 0 && (time.GetElapsedTime(verificationStarted) < TimeSpan.FromSeconds(10)
+            || time.GetElapsedTime(verificationStarted) > TimeSpan.FromSeconds(60)
+            || confirmedTimes.Values.Any(utc => !DeploymentObserver.Fresh(utc, time.GetUtcNow()))))
+            throw new InvalidOperationException("Replacement acceptance observations expired before publication.");
+        await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
+        var accepted = progress with { Phase = UpgradePhase.Accepted, PendingOperation = null, LastConfirmedOperation = intent,
+            AcceptedPairs = pairs.Select(p => p with { FirstObservedUtc = firstTimes[p.Owner.Project], ConfirmedUtc = confirmedTimes[p.Owner.Project] }).ToArray(),
+            Evidence = [.. progress.Evidence, new(Guid.NewGuid().ToString("N"),
+                launches.Length == 0 ? UpgradeEvidenceKind.StoppedAcceptance : UpgradeEvidenceKind.RunningAcceptance,
+                launches.Length == 0 ? "payload-verified-stopped" : "live-pair-accepted", DateTimeOffset.UtcNow)] };
+        progress = (await journal.SaveAsync(progress.Revision, accepted, token).ConfigureAwait(false)).Progress!;
+        await UpgradeInterlock.ReleaseAsync(paths, Reservation(progress), token).ConfigureAwait(false);
+        return progress;
+    }
+
+    private async Task RequireActivationIntentAsync(UpgradeProgress progress, CancellationToken token)
+    {
+        Read(progress.Revision);
+        UpgradeInterlock.RequireCurrent(paths, Reservation(progress));
+        foreach (var item in progress.Maintenance)
+        {
+            var lifecycle = await operations.OpenLifecycle(item.Project, token).ConfigureAwait(false);
+            UpgradeInterlock.RequireActivationAllowed(paths, Reservation(progress), ProjectSlug.Parse(item.Project));
+            var read = lifecycle?.Read();
+            RequireNoPendingAttempt(read);
+            if (read?.Availability == SupervisionAvailability.Unavailable
+                || read?.State is { } state && (state.Generation != item.Generation || state.Revision != item.Revision
+                    || state.MaintenanceToken != item.Token || item.StartRequested && (!state.Enabled || !state.DesiredRunning))
+                || read?.State is null && item.Revision != 0)
+                throw new InvalidOperationException("Activation intent changed; retain the upgrade interlock.");
+        }
     }
 
     private async Task ConfirmAsync(UpgradeProgress progress, CancellationToken token)
@@ -200,7 +364,7 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         return read.Progress;
     }
 
-    private static UpgradeOwner OwnerEvidence(BackgroundOwnerRecord owner) => new(owner.Project, owner.ProcessId,
+    internal static UpgradeOwner OwnerEvidence(BackgroundOwnerRecord owner) => new(owner.Project, owner.ProcessId,
         owner.ProcessStartedAtUtc, owner.RunId, owner.RunId, owner.RuntimeId!, BackgroundContainment.Name(owner));
     private static UpgradeReservation Reservation(UpgradeProgress progress) => new(1, progress.Scope.Root, progress.OperationId,
         Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(progress.Scope, PreparedRelease.JsonOptions))));
