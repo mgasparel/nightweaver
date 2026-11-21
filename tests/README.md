@@ -542,3 +542,14 @@ failed-write interlocks and direct-stop versus internal-failure reasons. The sec
 signal is checked while persistence is deliberately blocked. These add no native
 runtime, Agent, scheduler or publish journey; existing control-pipe tests retain the
 peer deadline/disconnect boundary and existing background/native hosting coverage remains.
+
+Package replacement fixtures use disposable paired packages and injected
+interruption callbacks before/after backup, write, retirement and confirmation.
+They check complete rollback bytes, pending mixed payload, retained suppression,
+operator sentinels, sharing denial, source changes and pinned path replacement.
+Two cases reuse the shared Git template and create one disposable worktree each
+to compare actual `git worktree list --porcelain` before and after success or
+interruption. Injected Git output cannot prove preservation of a real registration.
+This adds no owner, Agent, fixture publish or browser journey. Other detailed
+cases stay in file/component fixtures. Unchanged payload files avoid redundant
+writes and journal revisions; normal runtime paths do not call this component.

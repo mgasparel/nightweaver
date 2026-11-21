@@ -612,15 +612,33 @@ internal sealed class InvocationRuntimeFiles : IDisposable
     internal static PinnedLogReadStream OpenExistingPackageFileForRead(string path) =>
         OpenPinnedReadOnlyFile(Path.GetFullPath(path), FileShareRead, "package file", rejectHardLinks: true);
 
+    // Upgrade handles deny write/delete sharing and reject aliases before mutation.
+    internal static PinnedLogReadStream OpenPackageFileForMutation(string path, bool create) =>
+        OpenPinnedReadOnlyFile(Path.GetFullPath(path), FileShareNone, "package mutation", true,
+            GenericRead | GenericWrite | DeleteAccess, create ? CreateNew : OpenExisting, FileAccess.ReadWrite, create);
+
+    internal static void RetirePackageFile(FileStream stream)
+    {
+        var information = Marshal.AllocHGlobal(1);
+        try
+        {
+            Marshal.WriteByte(information, 1);
+            if (!SetFileInformationByHandle(stream.SafeFileHandle, 4, information, 1))
+                throw NativeError("Could not retire package file", Marshal.GetLastWin32Error());
+        }
+        finally { Marshal.FreeHGlobal(information); }
+    }
+
     private static PinnedLogReadStream OpenPinnedReadOnlyFile(string expected, uint shareMode, string description,
-        bool rejectHardLinks = false)
+        bool rejectHardLinks = false, uint access = GenericRead, uint disposition = OpenExisting,
+        FileAccess streamAccess = FileAccess.Read, bool createParents = false)
     {
         ValidatePathSegments(expected);
         var guard = new InvocationRuntimeFiles(string.Empty, expected, null!);
         try
         {
-            guard.PinDirectoryChain(Path.GetDirectoryName(expected)!, createMissing: false, exclusiveLeaf: false);
-            var handle = CreateFileW(ToExtendedLengthPath(expected), GenericRead, shareMode, IntPtr.Zero, OpenExisting,
+            guard.PinDirectoryChain(Path.GetDirectoryName(expected)!, createMissing: createParents, exclusiveLeaf: false);
+            var handle = CreateFileW(ToExtendedLengthPath(expected), access, shareMode, IntPtr.Zero, disposition,
                 FileFlagOverlapped | FileFlagOpenReparsePoint, IntPtr.Zero);
             if (handle.IsInvalid)
             {
@@ -639,7 +657,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
                     throw new InvalidDataException($"{description} path '{expected}' is a directory.");
                 if (rejectHardLinks && info.NumberOfLinks != 1)
                     throw new InvalidDataException("Package files must have exactly one physical link.");
-                var stream = new FileStream(handle, FileAccess.Read, 4096, isAsync: true);
+                var stream = new FileStream(handle, streamAccess, 4096, isAsync: true);
                 return new PinnedLogReadStream(stream, guard);
             }
             catch

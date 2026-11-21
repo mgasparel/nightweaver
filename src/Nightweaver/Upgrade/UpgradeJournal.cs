@@ -207,7 +207,7 @@ internal sealed class UpgradeJournal
         var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in progress.Files)
         {
-            if (file is null || !PreparedRelease.SafePayloadPath(file.Path) || !files.Add(file.Path)
+            if (file is null || !(PreparedRelease.SafePayloadPath(file.Path) || file.Path == PreparedRelease.InventoryName) || !files.Add(file.Path)
                 || file.ExpectedHash is not null && !Hash(file.ExpectedHash)
                 || file.ObservedHash is not null && !Hash(file.ObservedHash) || !Enum.IsDefined(file.Result))
                 throw new InvalidDataException("Invalid per-file evidence.");

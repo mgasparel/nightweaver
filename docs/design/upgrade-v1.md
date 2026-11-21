@@ -410,3 +410,36 @@ proof/runbook. Their adapters must establish these facts under real exclusion;
 passing this worksheet alone cannot prove their behavior. Reuse existing
 [supervision](supervision-v1.md), [unattended acceptance](../acceptance/unattended-self-build.md)
 and [archive](../acceptance/unattended-evidence-archive.md) contracts.
+
+## Internal package replacement
+
+`UpgradeReplacement` is an internal one-shot component. Only the later composed
+manager can expose mutation after recovery and rollback exist. It requires a
+fresh settled journal revision, the bound old/new inventories, and an external
+manager whose actual assembly hash matches the journal. It starts no process,
+releases no maintenance, and never changes a canonical root or Git registration.
+
+The component retains the complete old package, including retired files and the
+exact inventory, at `RetainedPackageRoot`. It flushes and verifies every backup
+before the first live write. Candidate and backup read handles reject reparse
+points and hard links and deny writes and deletion for the operation lifetime.
+Existing backup content refuses a fresh attempt. Interrupted backup files remain
+for recovery inspection; the component never initializes over them.
+
+Only the validated inventory union and `nightweaver-release.json` can change.
+Unknown extras remain in place. New-name collisions and file/directory changes
+refuse. Unchanged file hashes avoid redundant writes. Each changed file has a
+persisted pending intent before the lifecycle boundary repeats configuration,
+maintenance, inventory and native settlement checks. Existing files open with
+exclusive read/write/delete access and no-follow/single-link validation. Writes
+use that same handle; retirement marks that same handle for deletion. Fresh
+files use create-new under pinned parents. The inventory changes last.
+
+Live writes are deliberately not a multi-file transaction. Interrupted writes,
+deletions or uncertain confirmations retain `Replacing` and pending evidence;
+readers must treat pending files as unknown until reconciliation. A confirmed
+per-file result is historical evidence. Only a final complete payload check
+permits `Installed`, which grants no acceptance or startup authority. The
+component does not retry, release suppression, restore owner records or remove
+retained evidence. It reserves enough journal revisions before it changes files;
+budget exhaustion refuses. Recovery and rollback remain later work.
