@@ -73,8 +73,32 @@ internal sealed class DeploymentEvidenceStore(HostPaths paths, ProjectSlug proje
         if (value.ContinuingIncident is { } active && (value.LastObservation.Health == DeploymentHealth.Healthy
             || value.RecoveredIncident?.Id == active.Id))
             throw new InvalidDataException("Deployment incident lifecycle is inconsistent.");
-        if (value.ContinuingIncident is null && value.History.Length > 0 && value.RecoveredIncident is null)
-            throw new InvalidDataException("Deployment incident has no continuing or recovered record.");
+        // History is ordered by retention, not observation timestamps. A previous
+        // recovery cannot account for a newer incident whose current pointer vanished.
+        var current = value.ContinuingIncident ?? value.RecoveredIncident;
+        var currentIndex = Array.FindIndex(value.History, item => item.Id == current?.Id);
+        var recoveredIndex = Array.FindIndex(value.History, item => item.Id == value.RecoveredIncident?.Id);
+        if (value.ContinuingIncident is not null && recoveredIndex >= 0 && recoveredIndex >= currentIndex)
+            throw new InvalidDataException("Deployment recovery is not older than the continuing incident.");
+        foreach (var incident in value.History.Skip(recoveredIndex + 1))
+            if (incident.Capture.State is IncidentCaptureState.Failed or IncidentCaptureState.Pending
+                && incident.Id != value.ContinuingIncident?.Id && incident.Id != value.RecoveredIncident?.Id)
+                throw new InvalidDataException("Unrecovered required capture has no continuing incident.");
+        if (current is null)
+        {
+            if (value.History.Length > 0)
+                throw new InvalidDataException("Deployment incident has no continuing or recovered record.");
+        }
+        else if (current.Capture.State is IncidentCaptureState.Failed or IncidentCaptureState.Pending)
+        {
+            // A blocked incident remains current while later owner failures are
+            // retained as NotRequired history. It may even outlive history eviction.
+            if ((currentIndex < 0 && value.Discarded == 0) || value.History.Skip(currentIndex + 1)
+                .Any(item => item.Capture.State != IncidentCaptureState.NotRequired))
+                throw new InvalidDataException("Deployment capture interlock disagrees with retained history.");
+        }
+        else if (currentIndex < 0 || currentIndex != value.History.Length - 1)
+            throw new InvalidDataException("Deployment incident does not account for the latest retained history.");
     }
 
     private bool ValidIncident(DeploymentIncident? incident) => incident is not null

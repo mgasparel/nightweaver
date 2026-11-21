@@ -265,7 +265,12 @@ files and an exclusive writer lock preserve foreign/corrupt/unavailable evidence
 reads require every serialized field, including explicit nullable incident/capture
 members, and reject duplicate/unknown fields, invalid enums, malformed identities
 and inconsistent incident/history/capture state before any replacement or collector
-call. Rejected journals remain byte-for-byte intact for inspection.
+call. Rejected journals remain byte-for-byte intact for inspection. Retention order
+binds the current/recovered pointers to history: an older recovery cannot account
+for a newer unresolved required capture, even if the current pointer is explicitly
+null or points at another failure. A blocked incident may outlive history eviction
+while later owner failures are retained without replacing its capture interlock;
+confirmed recovery followed by uncertainty remains valid in that case.
 Persistence failure retains `supervision-unavailable` on the owner and grants no
 automatic recovery permission. Uncertainty never clears a continuing incident;
 only a later confirmed Healthy observation records recovery separately.

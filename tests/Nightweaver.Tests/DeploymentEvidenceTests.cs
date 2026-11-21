@@ -12,6 +12,99 @@ namespace Nightweaver.Tests;
 public sealed class DeploymentEvidenceTests
 {
     [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public async Task OlderRecoveryCannotHideNewerRequiredCapture(bool pending, bool recoveredCaptureFailed, bool replaceWithLaterFailure)
+    {
+        using var directory = new TempDirectory();
+        var paths = new HostPaths(directory.Path);
+        var project = ProjectSlug.Parse("demo");
+        var identity = DeploymentObservationTests.Identity(directory.Path);
+        var observation = Observation(identity);
+        var store = new DeploymentEvidenceStore(paths, project, identity);
+        var recovered = DeploymentEvidenceStore.NewIncident(paths, project, observation, 1,
+            recoveredCaptureFailed ? ResourceIncidentSignal.NativeTimeouts : ResourceIncidentSignal.None,
+            recoveredCaptureFailed ? new(IncidentCaptureState.Failed, null, "capture-unavailable")
+                : new(IncidentCaptureState.NotRequired, null, null));
+        await store.RetainAsync(observation, recovered, TestContext.Current.CancellationToken);
+        await store.RetainAsync(observation with { Health = DeploymentHealth.Healthy }, null, TestContext.Current.CancellationToken);
+        var blocked = DeploymentEvidenceStore.NewIncident(paths, project, observation, 2,
+            ResourceIncidentSignal.NativeTimeouts,
+            new(pending ? IncidentCaptureState.Pending : IncidentCaptureState.Failed, null, "capture-unavailable"));
+        await store.RetainAsync(observation, blocked, TestContext.Current.CancellationToken);
+        if (replaceWithLaterFailure)
+            await store.RetainAsync(observation, DeploymentEvidenceStore.NewIncident(paths, project, observation, 2,
+                ResourceIncidentSignal.None, new(IncidentCaptureState.NotRequired, null, null)), TestContext.Current.CancellationToken);
+        Assert.Equal(recovered.Id, store.Read()!.RecoveredIncident!.Id);
+        Assert.Equal(blocked.Id, store.Read()!.ContinuingIncident!.Id);
+        var journal = JsonNode.Parse(await File.ReadAllTextAsync(store.Path, TestContext.Current.CancellationToken))!;
+        journal["continuingIncident"] = replaceWithLaterFailure ? journal["history"]!.AsArray().Last()!.DeepClone() : null;
+        var original = Encoding.UTF8.GetBytes(journal.ToJsonString());
+        await File.WriteAllBytesAsync(store.Path, original, TestContext.Current.CancellationToken);
+
+        var readError = Record.Exception(() => store.Read());
+        var calls = 0;
+        var recorder = new DeploymentIncidentRecorder(paths, project, store, (_, _) =>
+        {
+            calls++;
+            return Task.FromResult(new IncidentCapture(IncidentCaptureState.Captured, directory.Path, null));
+        });
+        Assert.IsType<InvalidDataException>(readError);
+        foreach (var signal in new[] { ResourceIncidentSignal.None, ResourceIncidentSignal.NativeTimeouts })
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => recorder.PrepareAsync(observation, 2,
+                signal, TestContext.Current.CancellationToken));
+            Assert.Equal(0, calls);
+            Assert.Equal(original, await File.ReadAllBytesAsync(store.Path, TestContext.Current.CancellationToken));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecoveryPreservesBlockedIncidentAfterHistoryEviction(bool pending)
+    {
+        using var directory = new TempDirectory();
+        var paths = new HostPaths(directory.Path);
+        var project = ProjectSlug.Parse("demo");
+        var identity = DeploymentObservationTests.Identity(directory.Path);
+        var observation = Observation(identity);
+        var store = new DeploymentEvidenceStore(paths, project, identity);
+        var blocked = DeploymentEvidenceStore.NewIncident(paths, project, observation, 1,
+            ResourceIncidentSignal.NativeTimeouts,
+            new(pending ? IncidentCaptureState.Pending : IncidentCaptureState.Failed, null, "capture-unavailable"));
+        await store.RetainAsync(observation, blocked, TestContext.Current.CancellationToken);
+        for (var index = 0; index < SupervisionPolicy.MaximumHistory + 1; index++)
+        {
+            var later = DeploymentEvidenceStore.NewIncident(paths, project, observation, 1,
+                ResourceIncidentSignal.None, new(IncidentCaptureState.NotRequired, null, null));
+            await store.RetainAsync(observation, later, TestContext.Current.CancellationToken);
+        }
+        var retained = store.Read()!;
+        Assert.Equal(SupervisionPolicy.MaximumHistory, retained.History.Length);
+        Assert.Equal(2, retained.Discarded);
+        Assert.DoesNotContain(retained.History, item => item.Id == blocked.Id);
+        Assert.Equal(blocked.Id, retained.ContinuingIncident!.Id);
+        await store.RetainAsync(observation with { Health = DeploymentHealth.Healthy }, null, TestContext.Current.CancellationToken);
+        await store.RetainAsync(observation with { Health = DeploymentHealth.Unknown }, null, TestContext.Current.CancellationToken);
+        Assert.Null(store.Read()!.ContinuingIncident);
+        Assert.Equal(blocked.Id, store.Read()!.RecoveredIncident!.Id);
+        var recorder = new DeploymentIncidentRecorder(paths, project, store, (_, _) =>
+            Task.FromResult(new IncidentCapture(IncidentCaptureState.Failed, null, "capture-unavailable")));
+        var result = await recorder.PrepareAsync(observation, 2, ResourceIncidentSignal.NativeTimeouts, TestContext.Current.CancellationToken);
+        Assert.False(result.ReadyForReconciliation);
+        Assert.NotEqual(blocked.Id, result.Incident.Id);
+        Assert.Equal(blocked.Id, store.Read()!.RecoveredIncident!.Id);
+        Assert.Equal(result.Incident.Id, store.Read()!.ContinuingIncident!.Id);
+    }
+
+    [Theory]
     [InlineData(false, "missing-incident")]
     [InlineData(true, "missing-incident")]
     [InlineData(false, "missing-state")]

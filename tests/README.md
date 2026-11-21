@@ -52,7 +52,11 @@ Report its measured cost against retained baseline XML with the full candidate r
 Disposable capture-journal mutations cover missing/null required members, invalid
 enums and observation identity, duplicate/unknown fields and inconsistent incident
 history/capture state. Reads and preparation must reject them, invoke no collector
-and preserve the original bytes. These deterministic cases add no native journey.
+and preserve the original bytes. Recovery-A/capture-B mutations cover explicit
+null and misdirected current pointers for Failed/Pending B, with both ordinary and
+failed-capture A. Positive cases retain recovery followed by uncertainty and a
+subsequent incident after the blocked record outlives bounded history eviction.
+These deterministic cases add no native journey.
 
 `OwnerFailurePublicationTests` inject sharing denial and publication cancellation
 for stop/force/maintenance, concurrent owner failure, and discovery/timer/completion
