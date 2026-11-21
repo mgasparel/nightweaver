@@ -98,6 +98,7 @@ internal sealed class OperationalObservationSource(
     private bool readyFirst;
     private TargetRepositoryValidator? repositoryValidator;
     private double nativeMilliseconds;
+    private bool? targetedStreamsQualified;
     internal long CommandCount { get; private set; }
     internal double NativeMilliseconds => nativeMilliseconds;
 
@@ -512,6 +513,17 @@ internal sealed class OperationalObservationSource(
         {
             ReadStarted?.Invoke(detailId, "bootstrap-combined");
             var combined = await reader.ReadWorkspaceDetailAsync(repository, id, token);
+            if (targetedStreamsQualified is null && HasBudget)
+            {
+                // One bounded discovery per collector, never per sweep. Only the
+                // pinned producer's successfully requested iterators certify that
+                // omitempty means empty. Counts and inventory play no part.
+                try { targetedStreamsQualified = await reader.QualifyTargetedEmptyStreamsAsync(repository, token); }
+                catch (Exception exception) when (IsSourceFailure(exception)) { targetedStreamsQualified = false; }
+            }
+            if (targetedStreamsQualified == true)
+                combined = (combined.Bead, combined.Comments ?? [], combined.Incoming ?? []);
+            else combined = (combined.Bead, null, null);
             Accept(detailId, combined.Bead);
             if (combined.Comments is not null)
             {

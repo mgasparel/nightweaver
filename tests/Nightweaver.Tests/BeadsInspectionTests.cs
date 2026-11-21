@@ -110,6 +110,23 @@ public sealed class BeadsInspectionTests
         }
     }
 
+    [Theory]
+    [InlineData("{\"version\":\"1.3.1\",\"build\":\"c1c4b642a\",\"commit\":\"c1c4b642ac1c08d8c828007a1c2f96e47e43ef7c\",\"schema_version\":1}", true)]
+    [InlineData("{\"version\":\"1.3.1\",\"build\":\"c1c4b642a\"}", false)]
+    [InlineData("{\"version\":\"1.3.1\",\"build\":\"c1c4b642a\",\"commit\":\"foreign\",\"schema_version\":1}", false)]
+    [InlineData("{\"version\":\"9.0.0\",\"build\":\"c1c4b642a\",\"commit\":\"c1c4b642ac1c08d8c828007a1c2f96e47e43ef7c\",\"schema_version\":1}", false)]
+    [InlineData("[]", false)]
+    [InlineData("{\"version\":\"1.3.1\",\"version\":\"1.3.1\"}", false)]
+    public async Task EmptyTargetedStreamsRequireTheExactVerifiedProducer(string json, bool expected)
+    {
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            Assert.Equal(["--readonly", "--sandbox", "version", "--json"], request.Arguments);
+            return Task.FromResult(new ProcessResult(0, json, ""));
+        });
+        Assert.Equal(expected, await new BeadsReader(runner).QualifyTargetedEmptyStreamsAsync(new("target", "main"), TestContext.Current.CancellationToken));
+    }
+
     private static string Row(string id, string status = "in_progress", string? actor = "nightweaver:demo") => JsonSerializer.Serialize(new
     {
         id, status, issue_type = "custom", priority = 2, created_at = "2026-10-23T00:00:00Z", assignee = actor,

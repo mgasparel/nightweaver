@@ -10,10 +10,15 @@ incoming relations, including durable and ephemeral owners. Both native incoming
 and show resolve only owners in the selected database; this establishes no
 cross-database inventory completeness.
 
-Only explicit streams are reused. Omitted streams, including empty collections
-omitted by this producer, retain native comments/incoming fallback. Aggregate
-counts cannot establish emptiness or completeness. Unsupported flags, malformed
-streams, read failures and payload limits retain ordinary bounded reads and honest
+One bounded `version --json` discovery per collector qualifies the exact version,
+build and full commit above. Only this producer's requested streams are reused;
+successful iterator completion makes its omitted collections empty. This is a
+targeted-read contract, not an inventory completeness claim. Unknown versions or
+failed discovery retain native comments/incoming fallback, even when arrays are
+present. The discovery shares the same native/sweep budgets and is not retried
+per sweep. Aggregate counts cannot establish emptiness or completeness.
+Unsupported flags, malformed streams, read failures and payload limits retain
+ordinary bounded reads and honest
 health. Outgoing relations always use native `dep list --direction down` because
 show's outgoing hydration is best effort. No inventory-derived edge shortcut is
 used. Each coalesced source captures its own generation before the native read;

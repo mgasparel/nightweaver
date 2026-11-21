@@ -544,7 +544,7 @@ public sealed class OperationalObservationSourceTests
         await service.CollectOnceAsync(false, token);
         await service.CollectOnceAsync(false, token);
         Assert.Equal(first.Revision, service.Read("workspace:task-1").Revision);
-        Assert.Equal(6, runner.Commands.Count); // One bootstrap with authoritative confirmation; idle turns perform no tracker-body reads.
+        Assert.Equal(7, runner.Commands.Count); // One bootstrap plus one unsupported capability discovery; idle turns perform no tracker-body reads.
     }
 
     [Fact]
@@ -858,12 +858,15 @@ public sealed class OperationalObservationSourceTests
             "A failed core refresh must not discard the captured inventory needed to retry pending detail work.");
     }
 
-    [Fact]
-    public async Task ColdWorkspaceCompletesBeforeFiniteContentionInterval()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ColdWorkspaceCompletesBeforeFiniteContentionInterval(bool hasComment)
     {
         using var target = new ObservationTargetFixture();
         var clock = new CostClock();
         var native = new Runner { TargetPath = target.Path, Rows = 2, OutgoingDependency = true };
+        if (!hasComment) native.HistoryOverrides["task-1"] = [];
         var started = clock.GetUtcNow();
         var trace = new List<string>();
         var runner = new RecordingProcessRunner(async (request, token) =>
@@ -875,11 +878,13 @@ public sealed class OperationalObservationSourceTests
             // Every bd command uses the same clock and rule before and after repair.
             clock.Advance(TimeSpan.FromSeconds(offset >= 8 && offset < 45 ? 2 : 1.6));
             if (offset >= 8 && offset < 45) throw new ToolExecutionException("Injected native command timed out after 2s");
+            if (request.Arguments[2] == "version")
+                return new ProcessResult(0, "{\"version\":\"1.3.1\",\"build\":\"c1c4b642a\",\"commit\":\"c1c4b642ac1c08d8c828007a1c2f96e47e43ef7c\",\"schema_version\":1}", "");
             var result = await native.RunAsync(request, token);
             if (request.Arguments[2] != "show") return result;
             var rows = System.Text.Json.Nodes.JsonNode.Parse(result.StandardOutput)!.AsArray();
-            rows[0]!["comments"] = System.Text.Json.Nodes.JsonNode.Parse("[{\"id\":\"comment-1\",\"issue_id\":\"task-1\",\"author\":\"human\",\"text\":\"Initial comment\",\"created_at\":\"2026-01-01T00:00:00Z\"}]");
-            // Omitted incoming array deliberately exercises native up fallback.
+            if (hasComment) rows[0]!["comments"] = System.Text.Json.Nodes.JsonNode.Parse("[{\"id\":\"comment-1\",\"issue_id\":\"task-1\",\"author\":\"human\",\"text\":\"Initial comment\",\"created_at\":\"2026-01-01T00:00:00Z\"}]");
+            // Omitted incoming array is empty only after pinned producer discovery.
             return result with { StandardOutput = rows.ToJsonString() };
         });
         using var factory = Factory(target.Path, runner, clock);
@@ -897,7 +902,7 @@ public sealed class OperationalObservationSourceTests
         Assert.NotNull(completed);
         var workspace = Assert.IsType<BeadWorkspaceResponse>(completed.Data);
         Assert.Contains(workspace.Relations, relation => relation.Id == "task-2" && relation.Type == "blocks" && relation.Direction == "outgoing");
-        Assert.Single(workspace.Comments);
+        Assert.Equal(hasComment ? 1 : 0, workspace.Comments.Count);
         Assert.Contains(runner.Requests, request => request.Arguments.Contains("down"));
     }
 
@@ -908,6 +913,8 @@ public sealed class OperationalObservationSourceTests
     [InlineData("limited")]
     [InlineData("dep-failure")]
     [InlineData("invalidation")]
+    [InlineData("unknown-producer")]
+    [InlineData("version-failure")]
     public async Task ColdCombinedReadPreservesNativeFallbackGenerationsAndWarmReadBudget(string mode)
     {
         using var target = new ObservationTargetFixture();
@@ -917,6 +924,12 @@ public sealed class OperationalObservationSourceTests
         var runner = new RecordingProcessRunner(async (request, token) =>
         {
             var result = await native.RunAsync(request, token);
+            if (request.Arguments.Contains("version"))
+            {
+                if (mode == "unknown-producer") return new ProcessResult(0, "{}", "");
+                if (mode == "version-failure") throw new ToolExecutionException("Version discovery timed out after 2s");
+                return new ProcessResult(0, "{\"version\":\"1.3.1\",\"build\":\"c1c4b642a\",\"commit\":\"c1c4b642ac1c08d8c828007a1c2f96e47e43ef7c\",\"schema_version\":1}", "");
+            }
             if (!request.Arguments.Contains("--include-dependents")) return result;
             if (mode == "unsupported") return new ProcessResult(1, "", "unsupported flags");
             if (mode == "limited") return result with { StandardOutput = new string('x', 2 * 1024 * 1024 + 1) };
@@ -1245,7 +1258,6 @@ public sealed class OperationalObservationSourceTests
         var wisp = wispRow.RootElement.GetProperty("id").GetString()!;
         target.Run("bd", ["dep", "add", incoming, bead, "--type", "related"]);
         target.Run("bd", ["dep", "add", wisp, bead, "--type", "blocks"]);
-        target.Run("bd", ["comments", "add", bead, "Cold combined read marker"]);
         var measured = new ConcurrentQueue<string>();
         var timeline = Stopwatch.StartNew();
         var commandSequence = 0;

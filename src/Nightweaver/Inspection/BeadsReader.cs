@@ -102,6 +102,27 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         }
     }
 
+    internal async Task<bool> QualifyTargetedEmptyStreamsAsync(ValidatedTargetRepository repository, CancellationToken token)
+    {
+        var json = await RunQueryAsync(repository, BeadsCommand.CreateVersion(repository.Path), "bd version", token);
+        if (Encoding.UTF8.GetByteCount(json) > 4096) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in root.EnumerateObject()) if (!names.Add(property.Name)) return false;
+            return root.TryGetProperty("version", out var version) && version.ValueKind == JsonValueKind.String && version.GetString() == "1.3.1"
+                && root.TryGetProperty("build", out var build) && build.ValueKind == JsonValueKind.String && build.GetString() == "c1c4b642a"
+                && root.TryGetProperty("commit", out var commit) && commit.ValueKind == JsonValueKind.String
+                && commit.GetString() == "c1c4b642ac1c08d8c828007a1c2f96e47e43ef7c"
+                && root.TryGetProperty("schema_version", out var schema) && schema.ValueKind == JsonValueKind.Number
+                && schema.TryGetInt32(out var schemaVersion) && schemaVersion == 1;
+        }
+        catch (JsonException) { return false; }
+    }
+
     // Workspace-only coalescing. Never interpret show.Dependencies or its best-effort
     // aggregate counts as relation evidence. Missing streams retain native fallback.
     internal async Task<(BeadSnapshot Bead, IReadOnlyList<BeadsCommentSnapshot>? Comments,
