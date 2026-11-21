@@ -60,7 +60,8 @@ configured Projects, external configurations in the bound scope, runtime
 directories and retained background owners. It checks configuration hashes,
 physical Git identities and the current SID. Unknown consumers, unreadable
 evidence and changed membership refuse the operation. A foreground runtime or
-explicit dispatch holds a Project payload lease. This version refuses an active
+explicit dispatch holds a Project payload lease until native process exit,
+including after the runtime method returns. This version refuses an active
 foreground consumer because it has no background drain endpoint.
 
 The caller must independently prove that the source implements the upgrade

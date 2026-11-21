@@ -42,7 +42,7 @@ internal static class ContinuousApplication
             .ValidateAsync(project.TargetRepository, project.ConfigFilePath, cancellationToken).ConfigureAwait(false);
 
         // The process-owned lock precedes startup recovery and every live Delivery admission.
-        using var payloadLifetime = UpgradeInterlock.AcquireRuntime(hostPaths, project.Name, repository);
+        UpgradeInterlock.AcquireRuntime(hostPaths, project.Name, repository);
         EnsureInitialRoots(hostPaths, project.Name);
 
         var beadsReader = new BeadsReader(processRunner);

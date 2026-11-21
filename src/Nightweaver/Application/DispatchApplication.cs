@@ -52,7 +52,7 @@ internal static class DispatchApplication
 
         // The process-owned OS mutex precedes tracker recovery and every dispatch mutation.
         // Its dedicated owner thread remains alive until this native process exits.
-        using var payloadLifetime = UpgradeInterlock.AcquireRuntime(hostPaths, project.Name, repository);
+        UpgradeInterlock.AcquireRuntime(hostPaths, project.Name, repository);
         SharedRuntimeRootValidator.EnsureUsable(hostPaths.WorktreesRoot(project.Name));
         SharedRuntimeRootValidator.EnsureUsable(hostPaths.TmpRoot(project.Name));
         SharedRuntimeRootValidator.EnsureUsable(hostPaths.LogsRoot(project.Name));

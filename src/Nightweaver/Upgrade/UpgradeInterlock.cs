@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
@@ -12,6 +13,9 @@ internal sealed record UpgradeReservation(int Version, string Root, string Opera
 /// <summary>Durable root-wide suppression. A partial publication never permits startup.</summary>
 internal static class UpgradeInterlock
 {
+    // Like repository exclusion, a payload lease belongs to the native process.
+    // Returning from a runtime method is not proof that its process has exited.
+    private static readonly ConcurrentBag<IDisposable> ProcessPayloadLeases = [];
     internal static string Root(HostPaths paths) => Path.Combine(paths.Root, "run", "upgrade", "interlocks");
     internal static IDisposable AcquireManager(HostPaths paths) => InvocationRuntimeFiles.OpenExclusiveRuntimeFile(
         Path.Combine(paths.Root, "run", "upgrade", "manager.lock"), true);
@@ -20,12 +24,12 @@ internal static class UpgradeInterlock
     internal static IDisposable AcquirePayload(HostPaths paths, ProjectSlug project) => InvocationRuntimeFiles.OpenExclusiveRuntimeFile(
         Path.Combine(paths.Root, "run", project.Value, "payload.lock"), true);
 
-    internal static IDisposable AcquireRuntime(HostPaths paths, ProjectSlug project, ValidatedTargetRepository repository)
+    internal static void AcquireRuntime(HostPaths paths, ProjectSlug project, ValidatedTargetRepository repository)
     {
         using var admission = AcquireAdmission(paths);
         RequireStartupAllowed(paths);
         ProcessLifetimeTargetRepositoryLock.Acquire(repository);
-        return AcquirePayload(paths, project);
+        ProcessPayloadLeases.Add(AcquirePayload(paths, project));
     }
 
     internal static void RequireStartupAllowed(HostPaths paths)
