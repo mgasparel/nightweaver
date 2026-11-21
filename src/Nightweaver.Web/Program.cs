@@ -116,7 +116,8 @@ public sealed class Program
         app.MapGet("/health", (HttpContext context) =>
         {
             context.Response.Headers.CacheControl = "no-store";
-            return Results.Ok(new { status = "ok", release = liveRelease });
+            return liveRelease is null ? (IResult)Results.Ok(new { status = "ok" })
+                : Results.Ok(new { status = "ok", release = liveRelease });
         });
         app.MapOperationalObservations();
         app.MapFactoryTelemetry();

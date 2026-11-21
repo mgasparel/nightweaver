@@ -32,6 +32,7 @@ public sealed class WebHostIntegrationTests
         using var response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
         Assert.Equal("{\"status\":\"ok\"}", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         var config = factory.Services.GetRequiredService<ProjectConfig>();
