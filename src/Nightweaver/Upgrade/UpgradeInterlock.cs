@@ -5,6 +5,7 @@ using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
 using Nightweaver.Supervision;
+using Nightweaver.Background;
 
 namespace Nightweaver.Upgrade;
 
@@ -34,13 +35,26 @@ internal static class UpgradeInterlock
 
     internal static string WebPayloadPath(HostPaths paths, ProjectSlug project) =>
         Path.Combine(paths.Root, "run", project.Value, "web-payload.lock");
+    internal static string OwnedWebPayloadPath(HostPaths paths, ProjectSlug project) =>
+        Path.Combine(paths.Root, "run", project.Value, "owned-web-payload.lock");
 
-    internal static IDisposable AcquireWeb(HostPaths paths, ProjectSlug project)
+    internal static IDisposable AcquireWeb(HostPaths paths, ProjectSlug project,
+        Func<BackgroundOwnerRecord, bool>? contained = null)
     {
         using var admission = AcquireAdmission(paths);
         RequireStartupAllowed(paths);
+        var owner = BackgroundOwnerRecord.TryRead(BackgroundOwnerRecord.PathFor(paths, project));
+        if (owner is { ContainmentVersion: 1, RuntimeId: not null }
+            && owner.Root == paths.Root && owner.Project == project.Value
+            && BackgroundFileLock.ObserveOwner(paths, project) == true
+            && (contained ?? IsContainedWeb)(owner))
+            return InvocationRuntimeFiles.OpenSharedRuntimeFile(OwnedWebPayloadPath(paths, project));
         return InvocationRuntimeFiles.OpenSharedRuntimeFile(WebPayloadPath(paths, project));
     }
+
+    private static bool IsContainedWeb(BackgroundOwnerRecord owner) =>
+        BackgroundContainment.Read(owner).State == OwnerProcessState.Alive
+        && WindowsProcessLauncher.IsCurrentProcessInOwnerJob(BackgroundContainment.Name(owner));
 
     internal static void AcquireWebForProcessLifetime(HostPaths paths, ProjectSlug project) =>
         ProcessPayloadLeases.Add(AcquireWeb(paths, project));

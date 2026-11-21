@@ -202,6 +202,20 @@ internal static class WindowsProcessLauncher
         return info.ActiveProcesses == 0;
     }
 
+    // Self-admission only. Close the query handle synchronously before startup can
+    // wait or listen. Never retain it in the Web lifetime or an external observer.
+    internal static bool IsCurrentProcessInOwnerJob(string name)
+    {
+        using var job = OpenJobObjectW(0x0004, false, name);
+        if (job.IsInvalid) return false;
+        return IsProcessInJob(GetCurrentProcess(), job, out var member) && member;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsProcessInJob(IntPtr process, SafeKernelHandle job,
+        [MarshalAs(UnmanagedType.Bool)] out bool member);
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeKernelHandle OpenJobObjectW(uint access,
         [MarshalAs(UnmanagedType.Bool)] bool inherit, string name);

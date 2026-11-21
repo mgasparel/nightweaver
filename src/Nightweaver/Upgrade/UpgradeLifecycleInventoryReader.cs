@@ -74,6 +74,18 @@ internal static class UpgradeLifecycleInventoryReader
             var active = BackgroundFileLock.ObserveOwner(paths, slug);
             if (active is null || active == true && owner is null)
                 throw new InvalidDataException("Upgrade owner inventory is unavailable.");
+            // A contained Web child can outlive the original owner during native
+            // rundown. Its lease must still bind to retained owner/Job evidence.
+            try
+            {
+                using var web = InvocationRuntimeFiles.OpenExclusiveRuntimeFile(UpgradeInterlock.OwnedWebPayloadPath(paths, slug), false);
+            }
+            catch (IOException exception) when (Missing(exception)) { }
+            catch (IOException exception) when ((exception.HResult & 0xffff) is 32 or 33
+                || exception.InnerException is Win32Exception { NativeErrorCode: 32 or 33 })
+            {
+                if (owner is null) throw new InvalidDataException("Contained Web owner evidence is unavailable.", exception);
+            }
             // Foreground owners use this lease too. They have no background drain
             // endpoint, so this version refuses them instead of ignoring them.
             try

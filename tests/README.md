@@ -10,7 +10,12 @@ explicit-dispatch native journeys now acquire two short startup file locks and
 read the root interlock; complete-suite timing includes this production cost.
 Standalone Web admission adds shared process-lifetime payload leases. Disposable
 file checks cover concurrent Web consumers, background/Web overlap, reservation
-and mutation suppression, and release. Existing standalone Web native journeys
+and mutation suppression, and release. Injected native membership distinguishes
+the contained Web child from an additional standalone Web consumer. The real
+inventory and drain boundary require the original Job's descendant settlement.
+Valid pending supervision reservations refuse drain, settlement and mutation
+with either a settled previous owner or no previous owner record. These repair
+cases add no native journey or fixture publication. Existing standalone Web native journeys
 now assert that the process holds its lease. One short child of the existing
 ExecutionCrashHost fixture proves that a competing process cannot create a fresh
 host root before repository exclusion. In-process mutex checks cannot prove that

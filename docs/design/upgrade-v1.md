@@ -68,8 +68,21 @@ Standalone Web hosts check admission before listening and hold a shared
 `run/<project>/web-payload.lock` lease until native process exit. Multiple Web
 hosts can share this lease. The inventory refuses an active standalone Web host,
 including when a background owner is also present, because standalone hosts have
-no drain endpoint. The embedded Web host remains contained by its background
-owner. A Web host cannot start across a reserved or active mutation boundary.
+no drain endpoint. Web admission uses a separate `owned-web-payload.lock` only
+when the fresh root/Project owner record and held owner lock match, the original
+owner is natively alive, and the current Web process belongs to that exact named
+owner Job. An owner record alone never exempts a standalone Web consumer. The
+self-admission probe opens a query-only Job handle for one synchronous membership
+call and closes it before startup continues. It retains no Job handle across
+listening, awaits or process lifetime. External settlement observers still never
+open a Job while its owner lives. The original owner's native process and named
+Job descendant settlement remain required, including for the contained Web child.
+A Web host cannot start across a reserved or active mutation boundary.
+
+Fresh drain, settlement, mutation and release checks refuse any unresolved
+supervision `PendingAttempt`, even when the previous owner is settled or absent.
+They preserve its reservation, attempt count and incident history. Maintenance
+ownership alone cannot prove that a detached reserved launch has settled.
 
 The caller must independently prove that the source implements the upgrade
 boundary. An inventory capability string does not supply this proof. Legacy

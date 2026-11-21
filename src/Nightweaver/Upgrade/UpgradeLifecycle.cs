@@ -51,6 +51,7 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         {
             var lifecycle = await operations.OpenLifecycle(project.Name, token).ConfigureAwait(false);
             var read = lifecycle?.Read();
+            RequireNoPendingAttempt(read);
             if (read?.Availability == SupervisionAvailability.Unavailable || read?.State?.MaintenanceToken is not null)
                 throw new InvalidOperationException("Supervision is unavailable or maintenance is already active.");
         }
@@ -60,6 +61,7 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         {
             var lifecycle = await operations.OpenLifecycle(project.Name, token).ConfigureAwait(false);
             var read = lifecycle?.Read();
+            RequireNoPendingAttempt(read);
             if (read?.Availability == SupervisionAvailability.Unavailable)
                 throw new InvalidDataException("Supervision became unavailable; retain the upgrade boundary.");
             if (read?.State is not null)
@@ -148,6 +150,7 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
                 throw new InvalidOperationException("Owner settlement is pending or unavailable.");
             var lifecycle = await operations.OpenLifecycle(project.Name, token).ConfigureAwait(false);
             var read = lifecycle?.Read();
+            RequireNoPendingAttempt(read);
             var saved = progress.Maintenance.Single(m => m.Project == project.Name);
             if (read?.Availability == SupervisionAvailability.Unavailable
                 || read?.State is { } state && (saved.Token is null || state.MaintenanceToken != saved.Token
@@ -164,6 +167,12 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
             if (operations.Observe(owner) is not { State: OwnerProcessState.Exited, DescendantsSettled: true })
                 throw new InvalidOperationException("Original owner and descendant settlement is pending or unavailable.");
         }
+    }
+
+    private static void RequireNoPendingAttempt(SupervisionRead? read)
+    {
+        if (read?.State?.PendingAttempt is not null)
+            throw new InvalidOperationException("A supervision launch is unresolved; retain the reservation and reconcile the exact reserved owner.");
     }
 
     private async Task<UpgradeLifecycleInventory> InspectAsync(UpgradeProgress progress, CancellationToken token)

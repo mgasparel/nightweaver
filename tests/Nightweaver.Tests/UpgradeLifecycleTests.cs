@@ -27,6 +27,8 @@ public sealed class UpgradeLifecycleTests
     [Theory]
     [InlineData("manual")]
     [InlineData("background")]
+    [InlineData("background-contained-web")]
+    [InlineData("orphan-contained-web")]
     [InlineData("standalone-web")]
     [InlineData("background-and-web")]
     [InlineData("foreground")]
@@ -44,25 +46,176 @@ public sealed class UpgradeLifecycleTests
         var project = fixture.Scope.Projects[0] with { Repository = Path.Combine(fixture.Temp.Path, "repo"),
             PhysicalRepositoryIdentity = ProcessLifetimeTargetRepositoryLock.ResolveIdentity(fixture.Scope.Projects[0].GitCommonDirectory) };
         var expected = fixture.Scope with { UserSid = user.User!.Value, Projects = [project] };
-        using var payload = scenario is "foreground" or "background" or "background-and-web" ? UpgradeInterlock.AcquirePayload(fixture.Paths, fixture.Slug) : null;
-        using var owner = scenario is "background" or "background-and-web" ? BackgroundFileLock.AcquireOwner(fixture.Paths, fixture.Slug) : null;
-        using var web = scenario is "standalone-web" or "background-and-web" ? UpgradeInterlock.AcquireWeb(fixture.Paths, fixture.Slug) : null;
+        using var payload = scenario is "foreground" or "background" or "background-and-web" or "background-contained-web" ? UpgradeInterlock.AcquirePayload(fixture.Paths, fixture.Slug) : null;
+        using var owner = scenario is "background" or "background-and-web" or "background-contained-web" or "orphan-contained-web" ? BackgroundFileLock.AcquireOwner(fixture.Paths, fixture.Slug) : null;
         if (owner is not null) await BackgroundOwnerRecord.WriteAsync(BackgroundOwnerRecord.PathFor(fixture.Paths, fixture.Slug), fixture.Owner, fixture.Token);
+        using var web = scenario is "standalone-web" or "background-and-web" or "background-contained-web" or "orphan-contained-web"
+            ? UpgradeInterlock.AcquireWeb(fixture.Paths, fixture.Slug, _ => scenario is "background-contained-web" or "orphan-contained-web") : null;
+        if (scenario == "orphan-contained-web")
+        {
+            owner!.Dispose();
+            File.Delete(BackgroundOwnerRecord.PathFor(fixture.Paths, fixture.Slug));
+        }
         if (scenario == "unknown-runtime") fixture.Temp.WriteFile("run/foreign/retained", "preserve");
         if (scenario == "unknown-config") fixture.Temp.WriteFile("projects/foreign.json", "{}");
         if (scenario == "malformed-owner") fixture.Temp.WriteFile("run/demo/background/owner.json", "{");
         var runner = new InventoryRunner(project.GitCommonDirectory);
         async Task<UpgradeLifecycleInventory> Read() => await UpgradeLifecycleInventoryReader.ReadAsync(fixture.Paths,
             expected, scenario != "unsupported", runner, fixture.Token);
-        if (scenario is "manual" or "background")
+        if (scenario is "manual" or "background" or "background-contained-web")
         {
             var inventory = await Read();
             Assert.Equal(expected.Projects, inventory.Scope.Projects);
-            Assert.Equal(scenario == "background" ? 1 : 0, inventory.Owners.Length);
+            Assert.Equal(scenario == "manual" ? 0 : 1, inventory.Owners.Length);
         }
         else await Assert.ThrowsAnyAsync<Exception>(() => Read());
         Assert.False(Directory.Exists(fixture.Paths.SupervisionRoot(fixture.Slug)));
         if (scenario == "unknown-runtime") Assert.Equal("preserve", File.ReadAllText(Path.Combine(fixture.Temp.Path, "run", "foreign", "retained")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ContainedWebCanDrainButStandaloneWebStillBlocks(bool standalone)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        using var fixture = new Fixture();
+        await fixture.Prepare();
+        fixture.Temp.WriteFile("repo/.beads/metadata.json", "{}");
+        using var user = System.Security.Principal.WindowsIdentity.GetCurrent();
+        var project = fixture.Scope.Projects[0] with { Repository = Path.Combine(fixture.Temp.Path, "repo"),
+            PhysicalRepositoryIdentity = ProcessLifetimeTargetRepositoryLock.ResolveIdentity(fixture.Scope.Projects[0].GitCommonDirectory) };
+        var expected = fixture.Scope with { UserSid = user.User!.Value, Projects = [project] };
+        var journal = new UpgradeJournal(expected, new('f', 32));
+        var initial = fixture.Journal.Read().Progress! with { Revision = 0, Scope = expected, OperationId = new('f', 32) };
+        await journal.SaveAsync(null, initial, fixture.Token);
+        var ownerLock = BackgroundFileLock.AcquireOwner(fixture.Paths, fixture.Slug);
+        using var ownerLifetime = ownerLock;
+        await BackgroundOwnerRecord.WriteAsync(BackgroundOwnerRecord.PathFor(fixture.Paths, fixture.Slug), fixture.Owner, fixture.Token);
+        using var containedWeb = UpgradeInterlock.AcquireWeb(fixture.Paths, fixture.Slug, owner =>
+        {
+            Assert.Equal(fixture.Owner, owner);
+            return true; // Inject only native membership; use actual admission and inventory locks.
+        });
+        using var additionalWeb = standalone ? UpgradeInterlock.AcquireWeb(fixture.Paths, fixture.Slug, _ => false) : null;
+        var drains = 0;
+        var coordinator = new UpgradeLifecycle(fixture.Paths, journal, new(
+            token => UpgradeLifecycleInventoryReader.ReadAsync(fixture.Paths, expected, true,
+                new InventoryRunner(project.GitCommonDirectory), token),
+            (_, _) => Task.FromResult<SupervisionLifecycle?>(null),
+            (_, _, _, _) => { drains++; ownerLock.Dispose(); return Task.FromResult(true); },
+            _ => fixture.Native, name => BackgroundFileLock.ObserveOwner(fixture.Paths, ProjectSlug.Parse(name))));
+        var mutations = 0;
+        if (standalone)
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => coordinator.BeginDrainAsync(1, fixture.Token));
+            Assert.Equal(0, drains);
+            Assert.Equal(UpgradePhase.Prepared, journal.Read().Progress!.Phase);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.WithMutationAsync(1,
+                _ => { mutations++; return Task.CompletedTask; }, fixture.Token));
+        }
+        else
+        {
+            await coordinator.BeginDrainAsync(1, fixture.Token);
+            Assert.Equal(1, drains);
+            fixture.Native = new(OwnerProcessState.Exited, false); // The contained Web has not settled.
+            await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.ConfirmSettlementAsync(2, fixture.Token));
+            fixture.Native = new(OwnerProcessState.Exited, true);
+            await coordinator.ConfirmSettlementAsync(2, fixture.Token);
+            fixture.Native = new(OwnerProcessState.Exited, false);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.WithMutationAsync(3,
+                _ => { mutations++; return Task.CompletedTask; }, fixture.Token));
+            fixture.Native = new(OwnerProcessState.Exited, true);
+            await coordinator.WithMutationAsync(3, _ => { mutations++; return Task.CompletedTask; }, fixture.Token);
+        }
+        Assert.Equal(standalone ? 0 : 1, mutations);
+        Assert.False(Directory.Exists(fixture.Paths.SupervisionRoot(fixture.Slug)));
+    }
+
+    [Theory]
+    [InlineData("no-lock")]
+    [InlineData("foreign-root")]
+    [InlineData("foreign-project")]
+    [InlineData("unnamed-job")]
+    [InlineData("no-runtime")]
+    [InlineData("not-contained")]
+    public async Task UnverifiedWebAdmissionAlwaysRetainsStandaloneLease(string scenario)
+    {
+        using var fixture = new Fixture();
+        await fixture.Prepare();
+        using var held = scenario != "no-lock" ? BackgroundFileLock.AcquireOwner(fixture.Paths, fixture.Slug) : null;
+        var owner = scenario switch
+        {
+            "foreign-root" => fixture.Owner with { Root = fixture.Temp.CreateDirectory("other-root") },
+            "foreign-project" => fixture.Owner with { Project = "other" },
+            "unnamed-job" => fixture.Owner with { ContainmentVersion = 0 },
+            "no-runtime" => fixture.Owner with { RuntimeId = null },
+            _ => fixture.Owner
+        };
+        await BackgroundOwnerRecord.WriteAsync(BackgroundOwnerRecord.PathFor(fixture.Paths, fixture.Slug), owner, fixture.Token);
+        var probes = 0;
+        using var web = UpgradeInterlock.AcquireWeb(fixture.Paths, fixture.Slug, _ => { probes++; return false; });
+        Assert.Equal(scenario == "not-contained" ? 1 : 0, probes);
+        Assert.Throws<IOException>(() => Nightweaver.Execution.InvocationRuntimeFiles.OpenExclusiveRuntimeFile(
+            UpgradeInterlock.WebPayloadPath(fixture.Paths, fixture.Slug), false));
+    }
+
+    [Theory]
+    [InlineData("drain", false)]
+    [InlineData("drain", true)]
+    [InlineData("settlement", false)]
+    [InlineData("settlement", true)]
+    [InlineData("mutation", false)]
+    [InlineData("mutation", true)]
+    public async Task UnresolvedLaunchRefusesDrainSettlementAndMutation(string boundary, bool previousOwner)
+    {
+        using var fixture = new Fixture(true);
+        await fixture.Prepare();
+        if (!previousOwner) fixture.Inventory = fixture.Inventory with { Owners = [] };
+        fixture.Native = new(OwnerProcessState.Exited, true);
+        if (boundary != "drain") await fixture.Coordinator.BeginDrainAsync(1, fixture.Token);
+        if (boundary == "mutation") await fixture.Coordinator.ConfirmSettlementAsync(2, fixture.Token);
+        var old = fixture.Store.Read().State!;
+        var previous = previousOwner ? new SupervisionOwner(fixture.Owner.ProcessId, fixture.Owner.ProcessStartedAtUtc,
+            fixture.Owner.RunId, fixture.Owner.RuntimeId) : null;
+        var incident = new SupervisionIncident(new('1', 32), SupervisionPolicyTests.Start, "settlement-unknown", null);
+        await fixture.Store.SaveAsync(old.Revision, old with { Attempts = 1,
+            PendingAttempt = new(new('2', 32), old.Generation, 1, SupervisionPolicyTests.Start, new('3', 32), previous),
+            LastIncident = incident, UnresolvedIncident = incident, History = [incident], Attention = "unresolved-attempt" }, fixture.Token);
+        var before = fixture.Store.Read().State!;
+        if (boundary != "drain")
+        {
+            // Model a retained boundary from a source that preserved PendingAttempt
+            // on maintenance entry. All saved maintenance authority still matches.
+            var progress = fixture.Journal.Read().Progress!;
+            await fixture.Journal.SaveAsync(progress.Revision, progress with {
+                Maintenance = [new("demo", before.MaintenanceToken, before.Generation, before.Revision)] }, fixture.Token);
+        }
+        var revision = fixture.Journal.Read().Progress!.Revision;
+        var mutations = 0;
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            if (boundary == "drain") await fixture.Coordinator.BeginDrainAsync(revision, fixture.Token);
+            else if (boundary == "settlement") await fixture.Coordinator.ConfirmSettlementAsync(revision, fixture.Token);
+            else await fixture.Coordinator.WithMutationAsync(revision, _ => { mutations++; return Task.CompletedTask; }, fixture.Token);
+        });
+        Assert.Contains("supervision launch is unresolved", exception.Message, StringComparison.Ordinal);
+        var after = fixture.Store.Read().State!;
+        Assert.Equal(before.PendingAttempt, after.PendingAttempt);
+        Assert.Equal(before.Attempts, after.Attempts);
+        Assert.Equal(before.History, after.History);
+        Assert.Equal(before.Revision, after.Revision);
+        Assert.Equal(before.Generation, after.Generation);
+        Assert.Equal(before.MaintenanceToken, after.MaintenanceToken);
+        Assert.Equal(before.UnresolvedIncident, after.UnresolvedIncident);
+        Assert.Equal(revision, fixture.Journal.Read().Progress!.Revision);
+        Assert.Equal(0, mutations);
+        if (boundary == "drain")
+        {
+            Assert.Equal(0, fixture.Drains);
+            UpgradeInterlock.RequireStartupAllowed(fixture.Paths);
+        }
+        else Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(fixture.Paths));
     }
 
     private sealed class InventoryRunner(string common) : IProcessRunner
