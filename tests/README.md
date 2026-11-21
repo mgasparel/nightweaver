@@ -38,6 +38,13 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Upgrade contract fixtures exhaust the pure phase/step table and refuse missing
+identity, compatibility, interlock, native settlement, payload or fresh acceptance
+evidence. Stopped/disabled/maintenance intent and rollback-readable forward state
+are checked without processes, files, fixture publishing or browser journeys.
+See [recoverable upgrade v1](../docs/design/upgrade-v1.md); this worksheet does not
+prove future mutation adapters.
+
 Finite supervision ticks add deterministic coordinator cases and disposable
 store/command-entry fixtures. They cover mutation-boundary suppression, crash
 reservations, exact-run readiness, uncertainty, failed startups, persistent finite
