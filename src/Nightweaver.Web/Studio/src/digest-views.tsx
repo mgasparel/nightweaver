@@ -68,6 +68,7 @@ export function CatchUpView({ project, compact = false }: { project: string; com
     <section id="catch-up" className="studio-digest" data-generated-at={data?.generatedAt}>
       <div className="digest-overview">
         <div><p className="eyebrow">Your catch-up digest</p><h2>{data?.isCaughtUp ? "You’re caught up." : data ? `${data.metrics.completedTotal} completed · ${data.metrics.openOrUpdatedTotal} open or updated` : "Awaiting your digest"}</h2>
+          {compact && <p className="digest-preview-scope">{data ? `${labels[data.window]} · Snapshot ${stamp(data.generatedAt)}` : "Reporting window unavailable"}. Expand for outcomes in this window.</p>}
           <p id="digest-checkpoint-badge">{data?.lastCaughtUpAt ? `Caught up through ${stamp(data.lastCaughtUpAt)}` : "No catch-up bookmark set"}</p></div>
         <div className="digest-summary-actions">          <button id="digest-refresh" className="button" onClick={refresh}>{snapshot.refreshing ? "Refreshing…" : "Refresh digest"}</button>
           <button id="digest-mark-caught-up" className="button primary" disabled={!data || command.pending || data.isCaughtUp} onClick={() => { if (data) { intent.current = window; void checkpoints.save(project, data); } }}>{command.pending ? "Saving…" : data?.isCaughtUp ? "Caught Up" : "Mark Caught Up"}</button>

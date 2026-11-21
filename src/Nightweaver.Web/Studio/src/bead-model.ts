@@ -8,6 +8,20 @@ export type AttentionItem = {
   sourceCommentId: string | null; contextNotice: string | null;
   message?: Message | null; otherPauseReports?: Message[];
 };
+/** Retain surviving focused/open rows across live reorder without opening the inventory. */
+export function visibleAttention(items: AttentionItem[], limit: number, focused?: string, disclosed: ReadonlySet<string> = new Set()) {
+  return items.filter((row, index) => index < limit || row.beadId === focused || disclosed.has(row.beadId));
+}
+/** An authoritative removal retires disclosure state; unavailable data does not. */
+export function survivingAttentionDisclosures(items: AttentionItem[] | null | undefined, disclosed: Set<string>) {
+  if (!items) return disclosed;
+  const surviving = new Set(items.map(row => row.beadId));
+  return [...disclosed].every(id => surviving.has(id)) ? disclosed : new Set([...disclosed].filter(id => surviving.has(id)));
+}
+/** Compact context cannot let legacy multiline evidence displace the Review action. */
+export function attentionPreview(context: string) {
+  return Array.from(context).slice(0, 140).join("").replace(/\s+/g, " ").trim();
+}
 export type WorkspaceData = {
   sourceMetadata?: string | null;
   presentation?: { role: string; summary: string; trackedStage: string | null; planning: string | null;

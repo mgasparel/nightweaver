@@ -1,3 +1,4 @@
+import { overviewChecks } from './overview-checks.mjs';
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
@@ -19,10 +20,10 @@ try {
   const base = `/projects/${encodeURIComponent(projectId)}`;
   await page.goto(url);
   await page.waitForURL(`**${base}/overview`);
-  await page.getByRole('heading', { name: `${projectId}, at a glance.` }).waitFor();
+  await page.getByRole('heading', { name: `${projectId} overview` }).waitFor();
   await page.reload();
-  await page.getByRole('heading', { name: `${projectId}, at a glance.` }).waitFor();
-  assert.match(await page.locator('.project-summary').innerText(), /Runtime · (live|idle|stale|stopped|unavailable)/);
+  await page.getByRole('heading', { name: `${projectId} overview` }).waitFor();
+  assert.match(await page.locator('.overview-summary').innerText(), /Runtime · (live|idle|stale|stopped|unavailable)/);
 
   const nav = page.getByRole('navigation', { name: 'Project navigation' });
   for (const [route, label] of [['delivery', 'Delivery floor'], ['attention', 'Attention'], ['catch-up', 'Catch up'], ['beads', 'Beads']]) {
@@ -87,9 +88,10 @@ try {
   for (const width of [1440, 375, 720]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(`${url}${base}/overview`);
-    await page.getByRole('heading', { name: `${projectId}, at a glance.` }).waitFor();
-    await page.waitForFunction(() => [...document.querySelectorAll('.metrics .metric strong')].length === 4
-      && [...document.querySelectorAll('.metrics .metric strong')].every(node => /^\d+$/.test(node.textContent)), null, { timeout: 90000 });
+    await page.getByRole('heading', { name: `${projectId} overview` }).waitFor();
+    await page.waitForFunction(() => /\d+ paused Beads/.test(document.querySelector('.overview-summary')?.textContent ?? ''), null, { timeout: 90000 });
+    assert.equal(await page.locator('.overview .project-card, .overview .future-project').count(), 0);
+    assert.deepEqual(await page.locator('.studio-overview > .panel > .panel-heading h2').allTextContents(), ['Your attention', 'Delivery activity', 'Catch up']);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `overflow at ${width}`);
     await page.screenshot({ path: `${output}/overview-${width}.png`, fullPage: true });
     for (const label of ['All projects', 'Add project']) {
@@ -115,16 +117,10 @@ try {
     await page.locator('.attention-row').first().waitFor({ timeout: 90000 });
     await page.screenshot({ path: `${output}/attention-${width}.png`, fullPage: true });
   }
+  await overviewChecks(page, url, base, projectId, output);
   assert.deepEqual(mutations, [], 'Preview must never issue mutations');
   assert.deepEqual(errors, [], 'No browser errors');
 
-  // Compare the captured reference without modifying the source prototype.
-  const reference = await browser.newPage();
-  for (const width of [1440, 375, 720]) {
-    await reference.setViewportSize({ width, height: 900 });
-    await reference.goto(new URL('../../docs/design/nightweaver-multiproject-prototype.html', import.meta.url).href + '?variant=A');
-    await reference.screenshot({ path: `${output}/prototype-${width}.png`, fullPage: true });
-  }
   console.log(JSON.stringify({ projectId, widths: [1440, 375, 720], errors, mutations, output, checks: 'direct reload, history, keyboard, query state, legacy IDs, unknown project/route, dialogs and focus' }));
 } finally {
   await browser.close();

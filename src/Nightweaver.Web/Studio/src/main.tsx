@@ -19,9 +19,8 @@ import { useObservation } from "./use-observation";
 import { operations } from "./operations-browser";
 import { AttentionView, BeadWorkspace } from "./bead-views";
 import { Explorer } from "./explorer";
-import { explorerQuery, type ExplorerData } from "./explorer-model";
-import { DeliveryView, DeliveryMetric, RuntimeSummary } from "./delivery-views";
-import { CatchUpView, DigestMetric } from "./digest-views";
+import { DeliveryView, RuntimeSummary } from "./delivery-views";
+import { CatchUpView } from "./digest-views";
 import { CleanupView, ProductIntake } from "./product-views";
 
 const sections = [
@@ -195,7 +194,6 @@ function AppShell({ context }: { context: StudioContext }) {
               element={
                 <ProjectRoutes
                   context={context}
-                  onAdd={(trigger) => showPlaceholder("Add project", trigger)}
                 />
               }
             />
@@ -264,28 +262,15 @@ function AttentionMetric({ projectId }: { projectId: string }) {
   const snapshot = useObservation(projectId, "attention");
   const data = snapshot.observation?.data;
   const health = observationStatus(snapshot);
-  return <div className="metric">
-    <span className="eyebrow">Attention</span>
-    <strong aria-label={Array.isArray(data) ? `${data.length} paused Beads` : "Unavailable"}>{Array.isArray(data) ? data.length : "—"}</strong>
-    <small>Paused Beads · {health}</small>
-  </div>;
-}
-
-function ReadyMetric({ projectId }: { projectId: string }) {
-  const snapshot = useObservation<ExplorerData>(projectId, explorerQuery(new URLSearchParams()).key);
-  const data = snapshot.observation?.data;
-  return <div className="metric"><span className="eyebrow">Ready</span>
-    <strong>{data?.total ?? "—"}</strong>
-    <small>{data ? `Native readiness · ${observationStatus(snapshot)}` : "Readiness unavailable"}</small>
-  </div>;
+  return <Link className="summary-attention" to={`${projectPath(projectId)}/attention`}>
+    {Array.isArray(data) ? `${data.length} paused Beads` : "Attention unavailable"} · {health}
+  </Link>;
 }
 
 function ProjectRoutes({
   context,
-  onAdd,
 }: {
   context: StudioContext;
-  onAdd: (trigger: HTMLElement) => void;
 }) {
   const { projectId } = useParams();
   const base = projectPath(context.projectId);
@@ -309,7 +294,7 @@ function ProjectRoutes({
       <Route index element={<Navigate to="overview" replace />} />
       <Route
         path="overview"
-        element={<Overview context={context} onAdd={onAdd} />}
+        element={<Overview context={context} />}
       />
       {sections.slice(1).map(([id]) => (
         <Route
@@ -344,90 +329,29 @@ function PageHeading({
 
 function Overview({
   context,
-  onAdd,
 }: {
   context: StudioContext;
-  onAdd: (trigger: HTMLElement) => void;
 }) {
   const base = projectPath(context.projectId);
   return (
-    <>
-      <div className="heading-row">
-        <PageHeading
-          title={`${context.projectId}, at a glance.`}
-          description="Your agents have the details. You have the bigger picture."
-        />
-        <Link className="button" to={`${base}/catch-up`}>
-          <Icon name="catch-up" />
-          Catch me up
-        </Link>
-      </div>
-      <div className="metrics" aria-label="Observation availability">
-        <DeliveryMetric project={context.projectId} />
+    <div className="overview">
+      <PageHeading title={`${context.projectId} overview`} description="Observed execution and work awaiting your attention." />
+      <div className="overview-summary" aria-label="Observation availability">
         <AttentionMetric projectId={context.projectId} />
-        <DigestMetric project={context.projectId} />
-        <ReadyMetric projectId={context.projectId} />
+        <RuntimeSummary project={context.projectId} />
       </div>
       <div className="studio-overview">
-        <Panel
-          title="Delivery floor"
-          accessory={
-            <Link className="text-link" to={`${base}/delivery`}>
-              View floor <Icon name="arrow" />
-            </Link>
-          }
-          className="floor-panel"
-        >
-          <DeliveryView project={context.projectId} compact />
-        </Panel>
-        <Panel
-          title="Your attention"
-          accessory={<Icon name="attention" />}
-          className="attention-panel"
-        >
+        <Panel title="Your attention" accessory={<Link className="text-link" to={`${base}/attention`}>All attention <Icon name="arrow" /></Link>} className="attention-panel">
           <AttentionView project={context.projectId} compact />
         </Panel>
-        <Panel
-          title="Your projects"
-          accessory={
-            <button
-              className="text-link"
-              onClick={(event) => onAdd(event.currentTarget)}
-            >
-              ＋ Add project
-            </button>
-          }
-        >
-          <Link className="project-card" to={`${base}/overview`}>
-            <div className="project-card-heading">
-              <span className="project-icon">
-                {context.projectId[0].toUpperCase()}
-              </span>
-              <h3>{context.projectId}</h3>
-              <Status tone="accent">Current project</Status>
-            </div>
-            <p>The project configured for this local host.</p>
-            <div className="project-summary">
-              <RuntimeSummary project={context.projectId} />
-              <Icon name="arrow" />
-            </div>
-          </Link>
-          <div className="future-project">
-            <Icon name="plus" />
-            <div>
-              <h3>Room for your next project.</h3>
-              <p>Multi-project support is coming later.</p>
-            </div>
-          </div>
+        <Panel title="Delivery activity" accessory={<Link className="text-link" to={`${base}/delivery`}>View floor <Icon name="arrow" /></Link>} className="floor-panel">
+          <DeliveryView project={context.projectId} compact />
         </Panel>
-        <Panel
-          title="Catch up"
-          accessory={<span className="eyebrow">Meaningful changes</span>}
-        >
+        <Panel title="Catch up" className="catch-up-panel">
           <CatchUpView project={context.projectId} compact />
         </Panel>
       </div>
-    </>
+    </div>
   );
 }
 
