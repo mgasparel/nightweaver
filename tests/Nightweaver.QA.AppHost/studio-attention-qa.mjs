@@ -29,7 +29,7 @@ const attentionObservations = [];
 const mark = text => { checks.push(text); console.log(text); };
 let page;
 try {
-  page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.setDefaultTimeout(30000);
   const waitForCommand = predicate => {
     const pending = page.waitForResponse(predicate);
@@ -56,7 +56,19 @@ try {
     window.streams = [];
     window.EventSource = class extends Native { constructor(...args) { super(...args); if (String(args[0]).includes('/operations/v1/')) window.streams.push(this); } };
   });
-  const capture = async name => { for (const width of [1440, 375, 720]) { await page.setViewportSize({ width, height: 1000 }); assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await page.screenshot({ path: path.join(output, `${name}-${width}.png`), fullPage: true }); } await page.setViewportSize({ width: 1440, height: 1000 }); };
+  const capture = async name => {
+    for (const width of [1440, 375, 720]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(async () => { scrollTo(0, 0); await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); });
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await page.screenshot({ path: path.join(output, `${name}-${width}.png`), fullPage: true });
+      if (name.startsWith('decision-')) {
+        await page.getByRole('button', { name: 'Send & Resume', exact: true }).scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(output, `${name}-response-${width}.png`) });
+      }
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+  };
   const workspace = id => `/projects/qa/beads/${encodeURIComponent(id)}`;
   // The v1 observer deliberately holds two Workspace interests through a 30s
   // disconnect grace; a third selection can wait for grace, backoff and collection.
@@ -70,11 +82,32 @@ try {
   await page.getByRole('button', { name: `Review ${decision.beadId}`, exact: true }).click();
   const input = page.getByRole('textbox', { name: `Guidance for ${decision.beadId}` });
   await input.fill('Keep this exact Bead draft while live observations change.');
+  // The same decision editor is first in the dedicated Workspace, ahead of generic content.
+  await page.getByRole('link', { name: 'Open Full Bead Workspace and evidence', exact: true }).click();
+  await page.locator('.bead-facts').waitFor();
+  assert.equal(await input.inputValue(), 'Keep this exact Bead draft while live observations change.');
+  const guidance = page.locator('.workspace-guidance');
+  assert(await guidance.evaluate(node => !!(node.compareDocumentPosition(document.querySelector('.bead-facts')) & Node.DOCUMENT_POSITION_FOLLOWING)));
+  for (const width of [1440, 375, 720]) {
+    await page.setViewportSize({ width, height: 900 });
+    const editor = await input.boundingBox();
+    const send = await page.getByRole('button', { name: 'Send & Resume', exact: true }).boundingBox();
+    assert(send.y >= editor.y + editor.height && send.y - editor.y - editor.height < 180, `action adjacent to input at ${width}`);
+    assert.equal(await page.locator('.decision-evidence').getAttribute('open'), null);
+  }
+  await capture('decision-first');
+  await page.getByRole('link', { name: 'History', exact: true }).click();
+  assert.equal(await input.inputValue(), 'Keep this exact Bead draft while live observations change.');
+  await page.goBack();
+  await page.goBack();
+  await page.getByRole('button', { name: `Review ${decision.beadId}`, exact: true }).click();
+  assert.equal(await input.inputValue(), 'Keep this exact Bead draft while live observations change.');
+  mark('question and retained draft precede Summary; adjacent response controls at 1440/375/720; tabs and route changes preserve draft');
   await input.focus();
   await capture('attention-busy');
   await input.focus();
   bd(['comments', 'add', decision.beadId, 'External live comment while a human types.']);
-  const created = JSON.parse(bd(['create', '--title', 'External Studio escalation', '--type', 'task', '--labels', 'needs-human', '--json']));
+  const created = JSON.parse(bd(['create', '--id', 'qa-studio-decision-' + 'identity-'.repeat(10), '--title', 'External Studio escalation', '--type', 'task', '--labels', 'needs-human', '--json']));
   await page.locator(`a[href="${workspace(created.id)}"]`).waitFor();
   assert.equal(await input.inputValue(), 'Keep this exact Bead draft while live observations change.');
   assert(await input.evaluate(node => document.activeElement === node));
@@ -130,6 +163,15 @@ try {
   await page.locator('.panel-body > h2').filter({ hasText: retry.title }).waitFor();
   assert.equal(await page.getByText('Action confirmed.', { exact: false }).count(), 0);
   mark('real Save Note and Resume; duplicate prevention and late receipt cannot target new selection');
+  // Return through the retained forward entry without reloading the tab's store.
+  await page.goForward();
+  await input.waitFor();
+  assert.equal(await input.inputValue(), 'Keep this exact Bead draft while live observations change.');
+  await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
+  assert.equal(await input.inputValue(), '');
+  await page.goBack();
+  await page.getByRole('button', { name: `Review ${retry.beadId}`, exact: true }).click();
+  mark('successful sends retain the exact Bead draft until explicit discard');
   // Real host 409 from an intentionally stale expected snapshot.
   await page.route(`**/api/beads/${retry.beadId}/retry`, route => {
     const body = route.request().postDataJSON(); body.expected.repairCycles += 10;
@@ -169,6 +211,13 @@ try {
   mark('direct reload and Back/Forward preserve Workspace tab; external comment readable');
   // Deterministic long read projection; real shell, coordinator and React components.
   const detail = await (await page.request.get(base + `/api/beads/${created.id}`)).json();
+  detail.bead.title = 'A long human decision title with attributable context and preserved editable guidance '.repeat(3);
+  detail.attention = { ...detail.attention, kind: 'product-decision-required', canDecide: true, canRetry: false, canAbort: false,
+    question: 'Which boundary should we verify?', sourceCommentId: '1',
+    message: { state: 'supported', title: 'Planning question', summary: 'Which boundary should we verify?', role: 'planner', stage: 'stage:plan', sourceId: '1', original: 'Attributable fixture evidence',
+      sections: [{ label: 'Question', text: 'Which boundary should we verify?', details: true, commentId: null },
+        { label: 'Recommended answer', text: 'Verify the existing guarded command boundary.', details: true, commentId: null },
+        { label: 'Tradeoffs', text: 'This keeps native setup shared while testing the rendered decision.', details: true, commentId: null }] } };
   detail.comments = Array.from({ length: 80 }, (_, index) => ({ id: String(index), author: `Author ${index}`, createdAt: new Date(1700000000000 + index * 1000).toISOString(), body: `**Evidence ${index}**\n\n<script>window.unsafe=true</script>\n\n![bad](https://example.invalid/pixel) [bad](javascript:alert(1)) [safe](https://example.com)`, kind: 'ordinary' }));
   detail.history = { activeCommentId: '1', selectionSource: 'structured' };
   detail.relations = Array.from({ length: 40 }, (_, index) => ({ id: `qa-related-${index}`, title: `Related Bead ${index}`,
@@ -191,6 +240,20 @@ try {
     await route.fulfill({ response: actual, json: value });
   });
   await go(created.id);
+  const projectedInput = page.getByRole('textbox', { name: `Guidance for ${created.id}` });
+  await projectedInput.fill('A retained draft must not be replaced by updated advice.');
+  const evidence = page.locator('.decision-evidence');
+  await evidence.locator(':scope > summary').click();
+  await projectedInput.focus();
+  detail.attention.message.sections[1].text = 'Updated attributable recommendation without replacing the draft.';
+  await page.getByText(detail.attention.message.sections[1].text, { exact: true }).first().waitFor();
+  assert.equal(await projectedInput.inputValue(), 'A retained draft must not be replaced by updated advice.');
+  assert(await projectedInput.evaluate(node => document.activeElement === node));
+  assert(await evidence.evaluate(node => node.open));
+  assert.equal(await page.locator('.decision-context button').count(), 0, 'Recommendations are not invented structured choices');
+  await capture('decision-long-identity');
+  await evidence.locator(':scope > summary').click();
+  mark('attributable recommendation/tradeoffs precede editable guidance; long title/identity reflow and live evidence preserve draft, focus and disclosure');
   const relations = page.locator('details').filter({ has: page.locator('summary').filter({ hasText: /^Relations ·/ }) });
   await relations.locator('summary').click();
   assert.equal(await relations.getByRole('link').count(), 15);
@@ -220,13 +283,13 @@ try {
   mark('bounded history, pinned active evidence, safe Markdown, focused disclosures survive refresh and fall back on removal');
   for (const state of ['busy', 'stale', 'unavailable', 'empty']) {
     mode = state;
-    if (state === 'empty') { await page.goto(base + '/projects/qa/attention'); await page.getByText('No paused Beads.', { exact: false }).waitFor(); }
+    if (state === 'empty') { await page.goto(base + '/projects/qa/attention'); await page.getByText('No paused Beads in this observation. Runtime activity is reported separately.', { exact: true }).waitFor(); }
     else {
       if (state === 'stale') await page.getByText('Retained tracker fixture', { exact: true }).waitFor();
       if (state === 'unavailable') await page.getByRole('heading', { name: 'Bead unavailable', exact: true }).waitFor();
     }
     for (const width of [1440, 375, 720]) {
-      await page.setViewportSize({ width, height: 1000 });
+      await page.setViewportSize({ width, height: 900 });
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${state} no overflow at ${width}`);
       await page.screenshot({ path: path.join(output, `${state}-${width}.png`), fullPage: true });
     }
