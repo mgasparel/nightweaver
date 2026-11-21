@@ -150,7 +150,7 @@ try {
         if (($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Unsafe publish payload link.' }
         [ordered]@{ path = $_.FullName.Substring($stageFull.Length + 1).Replace('\', '/'); length = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
     })
-    if ($files.Count -gt 4096 -or ($files | Measure-Object length -Sum).Sum -gt 2GB) { throw 'Published payload exceeds inventory bounds.' }
+    if ($files.Count -gt 4096 -or ($files | ForEach-Object { [long]$_['length'] } | Measure-Object -Sum).Sum -gt 2GB) { throw 'Published payload exceeds inventory bounds.' }
     $inventory = [ordered]@{ schema_version = 1; build_version = $buildVersion; capabilities = @('paired-inventory-v1'); files = $files }
     $inventoryJson = ($inventory | ConvertTo-Json -Depth 6) + [Environment]::NewLine
     if ([Text.Encoding]::UTF8.GetByteCount($inventoryJson) -gt 1MB) { throw 'Published inventory exceeds metadata bounds.' }
