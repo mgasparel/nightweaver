@@ -117,6 +117,7 @@ internal sealed class OperationalObservationSource(
         internal IReadOnlyList<BeadDependency> Outgoing { get; set; } = [];
         internal IReadOnlyList<BeadsCommentSnapshot> Comments { get; set; } = [];
         internal bool CommentsPrefetched { get; set; }
+        internal ObservationSourceState? CommentPrefetchFailure { get; set; }
         internal string IncomingState { get; set; } = "complete";
         internal string OutgoingState { get; set; } = "complete";
         internal BeadWorkspaceEnvironment? Environment { get; set; }
@@ -407,20 +408,21 @@ internal sealed class OperationalObservationSource(
                 var combined = await TryReadColdWorkspaceAsync(repository, reader, id, token);
                 commentsThisSweep++;
                 var combinedComments = combined && commentsReadThisSweep.Contains(id);
+                var readComments = !combinedComments && HasBudget;
                 var comments = combinedComments ? histories[id].Comments
-                    : HasBudget ? await ReadAsync("comments:" + id, () => reader.ReadDetailCommentsAsync(repository, id, token), token) : null;
+                    : readComments ? await ReadAsync("comments:" + id, () => reader.ReadDetailCommentsAsync(repository, id, token), token) : null;
+                // An actual failed prefetch must remain visible at the comments
+                // substep without retrying that command in the same sweep.
+                if (readComments && comments is null) cycle.CommentPrefetchFailure = states["comments:" + id];
                 // If the optional combined read spent the turn's budget, keep
                 // the cycle for continuation without inventing a comment result.
-                if (comments is not null || states.ContainsKey("comments:" + id))
+                if (comments is not null)
                 {
                     cycle.Sources["comments:" + id] = states["comments:" + id];
                     try
                     {
-                        if (comments is not null)
-                        {
-                            if (!combinedComments) StoreHistory(id, comments);
-                            cycle.Comments = comments;
-                        }
+                        if (!combinedComments) StoreHistory(id, comments);
+                        cycle.Comments = comments;
                         cycle.CommentsPrefetched = true;
                     }
                     catch (ToolExecutionException exception)
@@ -597,7 +599,12 @@ internal sealed class OperationalObservationSource(
                         break;
                     case 3:
                         sourceId = "comments:" + id;
-                        if (cycle.CommentsPrefetched)
+                        if (cycle.CommentPrefetchFailure is { } failure)
+                        {
+                            capturedState = failure;
+                            cycle.CommentPrefetchFailure = null;
+                        }
+                        else if (cycle.CommentsPrefetched)
                         {
                             capturedState = cycle.Sources[sourceId];
                             cycle.CommentsPrefetched = false;

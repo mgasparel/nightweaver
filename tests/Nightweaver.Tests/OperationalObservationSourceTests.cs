@@ -972,6 +972,65 @@ public sealed class OperationalObservationSourceTests
         Assert.DoesNotContain(runner.Requests.Skip(before), request => request.Arguments.Contains("--include-dependents"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExpiredAttentionHistoryRequiresCommentValueBeforeWorkspacePublication(bool discoveryFails)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { TargetPath = target.Path };
+        var selectingWorkspace = false;
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            if (request.FileName == "bd" && selectingWorkspace)
+            {
+                var command = request.Arguments[2];
+                // Initial list + combined show + producer discovery exhaust the
+                // native turn. These costs are injected, not hosted timings.
+                clock.Advance(TimeSpan.FromSeconds(command == "version" ? 2 : command == "show" ? 1.2 : .9));
+                if (command == "version")
+                {
+                    if (discoveryFails) throw new ToolExecutionException("Version discovery timed out after 2s");
+                    return new ProcessResult(0, "{}", "");
+                }
+            }
+            return await native.RunAsync(request, token);
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var token = TestContext.Current.CancellationToken;
+        var attention = (await source.ReadScheduledAsync(Keys("attention"), (_, _) => { }, token))["attention"];
+        Assert.Null(attention.Error);
+        Assert.False(attention.Pending);
+        Assert.Single(Assert.IsType<AttentionDeskItem[]>(attention.Data));
+        Assert.Single(native.CommentIds);
+
+        clock.Advance(TimeSpan.FromSeconds(61)); // Expire the audit without changing the source generation.
+        native.Comment = "Human guidance after the Attention observation";
+        selectingWorkspace = true;
+        var keys = Keys("workspace:task-1"); // Retire Attention while retaining this selected history.
+        var first = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Single(native.CommentIds); // No comment read fits after discovery.
+        Assert.False(first.TryGetValue(keys[0].Value, out var initial) && initial.Data is not null && !initial.Pending && initial.Error is null);
+        var started = clock.GetUtcNow();
+        ObservationSample? completed = null;
+        while (clock.GetUtcNow() - started < TimeSpan.FromSeconds(45))
+        {
+            var samples = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+            if (samples.TryGetValue(keys[0].Value, out var sample) && sample.Data is not null && !sample.Pending && sample.Error is null)
+            {
+                Assert.Equal(2, native.CommentIds.Count);
+                Assert.Equal(native.Comment, Assert.Single(Assert.IsType<BeadWorkspaceResponse>(sample.Data).Comments).Body);
+                completed = sample;
+                break;
+            }
+            clock.Advance(TimeSpan.FromSeconds(1));
+        }
+        Assert.NotNull(completed);
+        Assert.Single(runner.Requests, request => request.Arguments.Contains("version"));
+    }
+
     [Fact]
     public async Task FailedCombinedReadCannotRepeatOrDiscardProgressAfterSpendingTheTurnBudget()
     {

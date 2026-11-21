@@ -12,6 +12,11 @@ responses cannot establish. Native outgoing reads and combined external
 comment/dependency journal-causality assertions remain. Omission, malformed or
 unsupported producer/flag responses, discovery failure, limits, permanent outgoing failure and warm budgets are
 covered cheaply. Deadlines and committed six-thread scheduling are unchanged.
+Two deterministic cases also retain a nonempty Attention history across an
+expired audit and Workspace selection. Failed or unsupported producer discovery
+exhausts the injected turn budget. Both cases require a later native comment
+read and the actual history before successful Workspace publication. They add
+no native journey or fixture publish.
 
 The cold native observer smoke retains at most 512 payload-free timeline records
 with monotonic offsets, source/reason, command class, requested deadline and

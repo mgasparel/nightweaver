@@ -15,7 +15,11 @@ build and full commit above. Only this producer's requested streams are reused;
 successful iterator completion makes its omitted collections empty. This is a
 targeted-read contract, not an inventory completeness claim. Unknown versions or
 failed discovery retain native comments/incoming fallback, even when arrays are
-present. The discovery shares the same native/sweep budgets and is not retried
+present. A retained comment source state alone cannot complete a Workspace
+history prefetch. If discovery exhausts the turn before a comment value is read,
+the cycle retains its comment substep for a later bounded native read. This also
+applies when an expired Attention history remains selected as a Workspace.
+The discovery shares the same native/sweep budgets and is not retried
 per sweep. Aggregate counts cannot establish emptiness or completeness.
 Unsupported flags, malformed streams, read failures and payload limits retain
 ordinary bounded reads and honest
