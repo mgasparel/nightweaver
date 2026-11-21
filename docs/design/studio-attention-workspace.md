@@ -15,8 +15,11 @@ validated Question/Recommended answer/Tradeoffs sections when present, then
 editable guidance with adjacent Send & Resume and Save Note controls.
 Original evidence and additional context are a stable disclosure below the editor;
 source-comment links still open the native History route. Freshness and material
-context warnings remain visible. Resume permits ordinary scheduling for this Bead
-and does not directly launch an Agent or override a paused Project.
+context warnings remain visible. Supported Environment retention and Historical
+cleanup warning sections stay above the actions for both pause kinds, outside the
+evidence disclosure. Discarding a decision draft returns keyboard focus to its
+guidance textarea. Resume permits ordinary scheduling for this Bead and does not
+directly launch an Agent or override a paused Project.
 
 The current observation contract has no structured alternatives. Guidance remains
 freeform; arbitrary prose is never converted into choice buttons, consequences or

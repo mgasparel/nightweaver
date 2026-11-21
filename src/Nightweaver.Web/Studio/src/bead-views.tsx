@@ -5,7 +5,7 @@ import { DeliveryView } from "./delivery-views";
 import { operations, interactions } from "./operations-browser";
 import { useObservation } from "./use-observation";
 import { observationStatus, type Snapshot } from "./operations";
-import { decisionSections, attentionPreview, beadPath, safeBeadId, survivingAttentionDisclosures, visibleAttention, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
+import { attentionWarningSections, decisionSections, attentionPreview, beadPath, safeBeadId, survivingAttentionDisclosures, visibleAttention, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
 import { AttentionCommands } from "./attention-commands";
 import { PlanningAuthorization } from "./product-views";
 import { Relations } from "./workspace-relations";
@@ -88,6 +88,8 @@ function DecisionContext({ item }: { item: AttentionItem }) {
       {item.message.summary !== item.question && item.message.summary !== item.diagnostic && <Markdown text={item.message.summary} />}</>}
     {decisionSections(item).map((section, index) => <section key={`${section.label}:${index}`}>
       <h3>{section.label}</h3><EvidenceSection section={section} /></section>)}
+    {attentionWarningSections(item).map((section, index) => <section className="bead-notice" key={`${section.label}:${index}`}>
+      <h3>{section.label}</h3><EvidenceSection section={section} /></section>)}
     {item.contextNotice && <p className="bead-notice">{item.contextNotice}</p>}
     {history && item.sourceCommentId && <Link className="text-link" to={`${history.path}?${new URLSearchParams({ tab: "history", comment: item.sourceCommentId })}`}>Source comment {item.sourceCommentId}</Link>}
   </section>;
@@ -147,7 +149,7 @@ function Guidance({ project, id, item, current }: { project: string; id: string;
     {(!current || !item) && <p className="bead-notice" role="status">The previous action is unavailable: this Bead resolved, was removed, or its current pause cannot be verified. Your draft stays with {id}.</p>}
     {item?.unavailableReason && <p className="bead-notice">{item.unavailableReason}</p>}
     {(item?.kind === "product-decision-required" || draft || !item) && <label>Guidance for {id}
-      <textarea value={draft} rows={4} onChange={event => {
+      <textarea data-focus-fallback value={draft} rows={4} onChange={event => {
         try { interactions.set(project, id, event.target.value); setDraft(event.target.value); setError(""); }
         catch (reason) { setError(String(reason)); }
       }} /></label>}

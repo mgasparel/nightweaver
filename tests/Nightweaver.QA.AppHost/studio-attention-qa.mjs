@@ -77,15 +77,47 @@ try {
   const decision = create('Studio product decision', 'feature', 'product-decision-required,stage:plan');
   const retry = create('Studio needs human', 'task', 'needs-human,stage:implement');
   const abort = create('Studio needs human abort', 'task', 'needs-human,stage:implement');
+  const retentionWarning = 'Retained worktree contains human changes. Preserve this environment before recovery.';
+  const cleanupWarning = 'Historical cleanup preflight was blocked. Inspect retained evidence before retry or abort.';
+  bd(['comments', 'add', retry.beadId, JSON.stringify({ schema: 'nightweaver-needs-human-v1',
+    bead_id: retry.beadId, bead_type: 'task', cause: 'environment-blocked', failed_role: 'implementer',
+    stage: 'stage:implement', reason: 'Review the retained environment before recovery.',
+    environment_retention: retentionWarning, cleanup_preflight: cleanupWarning })]);
+  const discardWithKeyboard = async editor => {
+    const discard = page.getByRole('button', { name: 'Discard draft', exact: true });
+    await discard.focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await editor.inputValue(), '');
+    assert(await editor.evaluate(node => document.activeElement === node), 'discard returns focus to the same editor');
+  };
+  const checkRecoveryWarnings = async name => {
+    const context = page.locator('.decision-context');
+    for (const width of [1440, 375, 720]) {
+      await page.setViewportSize({ width, height: 900 });
+      assert.equal(await page.locator('.decision-evidence').getAttribute('open'), null);
+      for (const text of [retentionWarning, cleanupWarning]) {
+        const warning = context.getByText(text, { exact: true });
+        assert(await warning.isVisible(), `material warning visible at ${width}`);
+        assert(await warning.evaluate(node => !!(node.compareDocumentPosition(document.querySelector('.guidance')) & Node.DOCUMENT_POSITION_FOLLOWING)));
+      }
+      assert.equal(await page.getByRole('button', { name: 'Send & Resume', exact: true }).count(), 0);
+    }
+    await capture(name);
+  };
   bd(['comments', 'add', decision.beadId, 'Which implementation direction should we take?']);
   await page.goto(base + '/projects/qa/attention');
   await page.getByRole('button', { name: `Review ${decision.beadId}`, exact: true }).click();
   const input = page.getByRole('textbox', { name: `Guidance for ${decision.beadId}` });
+  await input.fill('Discard this Attention decision draft.');
+  await discardWithKeyboard(input);
   await input.fill('Keep this exact Bead draft while live observations change.');
   // The same decision editor is first in the dedicated Workspace, ahead of generic content.
   await page.getByRole('link', { name: 'Open Full Bead Workspace and evidence', exact: true }).click();
   await page.locator('.bead-facts').waitFor();
   assert.equal(await input.inputValue(), 'Keep this exact Bead draft while live observations change.');
+  await discardWithKeyboard(input);
+  await input.fill('Keep this exact Bead draft while live observations change.');
+  mark('keyboard discard clears product-decision drafts and restores textarea focus in Attention and Workspace');
   const guidance = page.locator('.workspace-guidance');
   assert(await guidance.evaluate(node => !!(node.compareDocumentPosition(document.querySelector('.bead-facts')) & Node.DOCUMENT_POSITION_FOLLOWING)));
   for (const width of [1440, 375, 720]) {
@@ -161,14 +193,14 @@ try {
   await page.getByRole('button', { name: `Review ${retry.beadId}`, exact: true }).click();
   release(); await routeSettled; await page.unroute(`**/api/beads/${decision.beadId}/decide`);
   await page.locator('.panel-body > h2').filter({ hasText: retry.title }).waitFor();
+  await checkRecoveryWarnings('recovery-warnings-attention');
   assert.equal(await page.getByText('Action confirmed.', { exact: false }).count(), 0);
   mark('real Save Note and Resume; duplicate prevention and late receipt cannot target new selection');
   // Return through the retained forward entry without reloading the tab's store.
   await page.goForward();
   await input.waitFor();
   assert.equal(await input.inputValue(), 'Keep this exact Bead draft while live observations change.');
-  await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
-  assert.equal(await input.inputValue(), '');
+  await discardWithKeyboard(input);
   await page.goBack();
   await page.getByRole('button', { name: `Review ${retry.beadId}`, exact: true }).click();
   mark('successful sends retain the exact Bead draft until explicit discard');
@@ -183,6 +215,8 @@ try {
   await page.getByText('Bead changed. Review current state', { exact: false }).waitFor();
   await page.unroute(`**/api/beads/${retry.beadId}/retry`);
   await go(retry.beadId);
+  await checkRecoveryWarnings('recovery-warnings-workspace');
+  mark('supported native recovery retention and cleanup warnings stay visible above actions in both views at 1440/375/720');
   response = waitForCommand(r => r.url().endsWith(`/${retry.beadId}/retry`) && r.request().method() === 'POST');
   await page.getByRole('button', { name: 'Reset Budget & Retry', exact: true }).click();
   assert.equal((await response).status(), 200);
