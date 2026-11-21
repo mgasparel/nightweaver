@@ -592,6 +592,13 @@ acceptance evidence](docs/acceptance/studio-cutover.md).
 
 ---
 
+The [recoverable upgrade v1 contract](docs/design/upgrade-v1.md) defines same-root,
+package-only replacement, preservation/authority rules, compatibility refusal,
+evidence-gated phases and interruption/rollback boundaries. Its pure decision
+worksheet performs no upgrade IO or lifecycle action; public mutation and native
+proof belong to subsequent implementation slices. Production operations require
+separate explicit authorization.
+
 ## 8. Out of Scope
 
 - **Multi-Project Management UI**: A project-agnostic UI for creating/editing **Project** configurations, viewing/interacting with each **Project**'s `bd` tracker, and starting/monitoring/stopping per-**Project** **Orchestrator** processes is deferred to a separate effort.

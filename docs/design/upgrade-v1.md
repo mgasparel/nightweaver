@@ -1,0 +1,223 @@
+# Recoverable paired upgrades v1
+
+This is the contract for the ns-qa2 implementation graph, not an upgrade command.
+`UpgradePolicy` is a pure decision worksheet; it neither establishes facts nor
+persists progress, releases maintenance, launches processes or authorizes IO.
+Public mutation remains withheld until resume and rollback are implemented.
+Production release selection and each production operation require explicit
+operator authorization. This contract installs no supervisor and starts no
+collector, unattended run or automatic self-update.
+
+## Installation and ownership
+
+V1 replaces only inventoried package files **in place at the same canonical
+local root**. A manager copied to a separately inventoried, immutable recovery
+location outside the replaceable payload runs the operation. It must survive
+replacement of both CLI and Web. It uses the paired publisher's prepared output;
+the publisher's fresh-destination rule is unchanged. Directory swapping, copying
+operator state to a new root, rewriting Git registrations and manual directory
+choreography are not supported upgrade paths.
+
+One durable 32-hex operation ID binds root, current user SID, physical repository
+common directories, affected Project/configuration identities, old/new release
+inventories, manager capability, and the original native owners. Inventory hashes
+are SHA256 over exact relative names, lengths and bytes. Old and new inventories
+are immutable and retained outside live payload; paths are derived from trusted
+roots, not followed from journal strings. Reparse/device/network/alternate-stream
+aliases, hard-linked payloads, path collisions and ambiguous ownership refuse.
+Pinned no-reparse handles and the existing safe runtime publication primitives
+must be used by later persistence/replacement code. Progress is evidence, never
+filesystem authority.
+
+The affected set is root-wide: enumerate every configured Project, external
+configuration used by any owner, runtime directory, manual foreground/background
+owner and supervision installation sharing CLI/Web bytes. Bind config hashes,
+Project slugs, physical Git identities and original PID/creation/run/runtime/Job
+identities. Unknown owners, inaccessible inventory, missing configs, changed
+membership and incompatible external configuration refuse before drain. A second
+Project may not continue using the shared payload. Refuse unsupported alternate
+payload consumers rather than silently ignoring them. Recheck inventory at every
+mutation boundary; external edits invalidate preflight.
+
+The future root upgrade lock serializes upgrade managers. All affected existing
+`start.lock` locks are acquired in canonical order for interlock publication and
+native mutation boundaries. A durable root upgrade interlock must be honored by
+manual start/restart, foreground startup and finite supervision ticks, including
+when supervision storage is absent. Stop remains usable. Do not hold command
+locks while waiting for Agents to drain; reacquire and compare identity/generation
+before proceeding. The original owners retain physical-repository process-lifetime
+exclusion until exit; replacement owners acquire that existing exclusion normally.
+The manager never holds repository exclusion while waiting for a child to acquire
+it. The interlock is not a replacement for repository or native owner exclusion.
+
+## Preservation and authority inventory
+
+| Resource | Required rule through success, interruption and rollback |
+| --- | --- |
+| Root, Project/config paths, physical Git common directories and SID | Keep identities fixed; aliases, relocation or changed bindings refuse. External configurations are read and fingerprinted, never rewritten. |
+| `projects/` and configuration/secrets outside the root | Preserve exact bytes, ACLs and location; no schema migration or config-content evidence dump. |
+| `worktrees/<project>/`, Git common-directory registrations and branches | Preserve exact canonical paths, current HEAD/index, staged/unstaged/untracked/ignored content, registrations and locks. No sweep, prune, reset, rebase or branch deletion. |
+| `tmp/<project>/`, `logs/<project>/`, `telemetry/<project>/` | Preserve all content including retained invocation files, catch-up state and interrupted writes. Old telemetry is historical, never proof of a new runtime. |
+| `run/<project>/cleanup/` | Preserve root/repository-bound obligations, revisions, retries, failures and progress. Only ordinary cleanup revalidates current authority; upgrade/rollback never rebinds records or turns old-root records into deletion permission. |
+| `run/<project>/supervision/` and capture bundles | Preserve enabled/desired intent, generation, exact maintenance token/revision, pending reservation, exhaustion, due time, incidents and history. Missing is manual; malformed, interrupted, inaccessible or uncertain-stop state is unavailable, never opt-out. No reset or expiry. |
+| `run/<project>/background/` owner/identity/control records, factory runtime files | Retain old identity evidence in place or in an allowlisted historical snapshot before ordinary startup publication. Never restore old owner files as current identity, delete evidence to manufacture absence or infer authority from a PID alone. New owner/runtime files come only from ordinary startup. |
+| Native owner locks, named Jobs, command/writer locks | Do not copy, delete or recreate them to claim settlement. Confirm original process signal and original Job descendant accounting; PID reuse, lock release or missing pipe alone is insufficient. |
+| Root upgrade journal, interlock, recovery manager and inventories | Retain operation/revision, attempts, interrupted sibling files and per-file progress through failures. Unknown or partial publication blocks mutation until reconciled; no automatic initialization over evidence. |
+| CLI/Web executables, dependencies, prompts, Studio assets, deployment manifest | Replace only exact allowlisted old/new package union; unknown extras are preserved and collisions refuse. Retain complete old bytes before the first write. Manifest publication alone is not a multi-file transaction. |
+| Other files/directories, existing Scheduler tasks and Beads | Preserve unchanged. No task registration, workflow transition, claim release, pause change, repair reset or notifications. Ordinary owner startup recovery retains its existing guarded authority. |
+
+## Compatibility before drain
+
+The legacy deployment manifest v1 provides only schema/build/CLI/Web paths. It
+does not prove integrity, state compatibility, upgrade capability or a live pair.
+Preflight derives a complete inventory from the prepared paired release and
+requires explicit capability evidence for **both** source and target; a Git SHA
+or a version ordering is insufficient. The later release validator owns parsing
+and reports the following specific safe refusal before any drain:
+
+| Check | Supported v1 input / refusal detail |
+| --- | --- |
+| Package pair | Manifest v1, exact same build for CLI/Web, complete prompts, dependencies, Studio entry and local JS/CSS; reject `pair-mismatch`, `inventory-invalid` or `payload-collision`. Do not restore retired legacy HTML validation. |
+| Host | Windows/current user, architecture and required .NET runtimes for both packages and external manager proven available; otherwise `runtime-unsupported`. No runtime download/install fallback. |
+| Manager/source lifecycle | Source and target advertise root interlock support in foreground/background/tick launch paths, exact-token/revision maintenance when supervised, identity-bound observation, native owner/descendant settlement and shared command serialization; manager advertises this contract version and journal recovery. Otherwise `capability-unsupported`. Delivered supervision alone does not establish the future root interlock. |
+| Configuration | Every affected config is readable by old and new readers at the same identity, with required settings understood. Unknown schema/unsupported external config refuses `configuration-unsupported`; no rewriting to make it pass. |
+| Durable state | Old and new explicitly support current cleanup, supervision, runtime/telemetry/catch-up and upgrade journal versions. Strict readers must reject unknown/malformed/interrupted records; `state-unavailable` or `state-unsupported` refuses. |
+| Rollback | Old binaries can read every state format the candidate may write during verification and ordinary resumed work. V1 forbids irreversible state migration; no state snapshot restore. Missing proof refuses `rollback-incompatible`. |
+| Ownership/exclusion | Complete affected inventory, original identities, no unresolved recovery launch, root/command lock support and no foreign active owner. Otherwise `identity-unknown`, `reservation-pending` or `exclusion-unavailable`. |
+
+Legacy releases lacking any required capability support read-only inspection
+only, even if stopped. An operator may use a separately authorized future
+bootstrap procedure, but undocumented file copying is never successful upgrade.
+The contract therefore does not claim that today's deployed package can already
+be upgraded by a future manager.
+
+## Commands, phases and evidence
+
+`inspect` is read-only and returns package/identity/phase/failure evidence without
+creating state. `preflight` validates and proposes Prepared; any persisted result
+is revision guarded and still requires fresh revalidation before mutation.
+`apply` creates one operation, durably suppresses root-wide launches and performs
+the ordered boundaries below. `status` is read-only and distinguishes pending,
+refused, failed, verified and accepted. `resume <operation>` reconciles actual
+bytes, native identities, journal/interlock and intent before proposing the next
+boundary; it never replays an uncertain mutation. `rollback <operation>` restores
+package bytes only. `accept <operation>` commits explicit acceptance of freshly
+verified evidence; it is separate from launch or maintenance leave.
+
+| From -> to / worksheet step | Evidence required in addition to fresh identity, compatible inputs, reconciled journal and held boundary locks |
+| --- | --- |
+| Inspected -> Prepared / Preflight | Immutable inventories, old-state readability and target/manager capability proof; no drain. |
+| Prepared -> Draining / BeginDrain | Root interlock durably confirmed; every supervised Project's exact token/revision maintenance confirmed without changing desired/enabled intent; manual Projects use root interlock only. Persist original owner identities and drain request intent before requesting existing graceful maintenance control. |
+| Draining -> Settled / ConfirmSettlement | All original owners and their original Jobs natively settled, no replacement/unknown owner, all pending supervision reservations reconciled. A two-minute manager wait reports pending only. |
+| Settled -> Replacing / BeginReplacement | Still suppressed and settled; complete old package verified and durably retained, new inventory fixed, per-file write intent persisted before any package mutation. |
+| Replacing -> Installed / CommitPayload | Each live file matches new inventory, removed old-only files have recorded disposition, unknown files preserved; exact full pair verified and commit marker durable. |
+| Installed -> Verifying / BeginVerification | Old bytes retained, new bytes exact, current intent/generation inspected. Stopped, disabled or maintenance intent selects stopped verification. Running verification requires separate explicit start authorization plus fresh desired/enabled intent, exact maintenance leave and root-interlock handoff under command locks. |
+| Verifying -> Verifying / Verify | Fresh running or stopped acceptance below; verification expiry or a new intent change invalidates the proof. No implicit launch/retry. |
+| Verifying -> Accepted / Accept | Revalidate the same fresh proof and exact installed pair; atomically persist acceptance before releasing this operation's remaining root interlock. Release starts nothing. |
+| Replacing/Installed/Verifying -> RollingBack / BeginRollback | Reestablish root/maintenance suppression, gracefully drain any candidate owner and confirm its original native Job settlement too. Exact old bytes available, current forward state readable by old package. |
+| RollingBack -> RolledBack / CommitRollback | Original and candidate owners and their native descendants still confirmed settled/absent under suppression; restored old live inventory exact, current operator state preserved, journal commit durable. RolledBack means bytes restored, **not** running/healthy; separate explicit start and the same fresh acceptance checks prove usability. |
+
+`UpgradeFacts.AllOriginalOwnersAndJobsSettled` covers the pre-replacement owners;
+`UpgradeFacts.AllCandidateOwnersAndJobsSettled` independently covers every
+candidate owner and its original native Job descendants. Both BeginRollback and
+CommitRollback require this fact as well as original-owner settlement. True means
+confirmed native settlement of every candidate, or reconciled launch/reservation
+evidence proving none was launched; live, draining, unknown or lost-reply state
+must supply false and returns `NativeSettlementPending` without advancing.
+A permitted live verification owner does not require candidate settlement during
+BeginVerification/Verify/Accept and instead must match fresh running acceptance.
+Neither settlement fact means merely absence of a PID.
+`SuppressionConfirmed` means either full durable root/maintenance suppression or,
+during running verification only, the exact controlled handoff below; it must
+never be supplied merely because a maintenance command returned exit zero.
+`EvidenceReconciled` excludes unresolved writes, launch replies and pending native
+reservations. Boolean facts are trusted adapter inputs, not serialized permits.
+
+Running verification cannot use ordinary `start` while maintenance is active.
+Under the affected command locks, compare latest generations and operation tokens,
+leave only this operation's maintenance using the fresh revision, and temporarily
+permit only the recorded verification start through the root interlock. Persist
+its reserved run identity before launch; source ticks and other manual starts
+remain excluded. New owner acquires repository exclusion normally. A stop/disable
+during handoff wins and prevents launch; a lost reply retains the reservation for
+reconciliation, never another start. Future adapters must implement this without
+bypassing existing maintenance checks. Manager crash leaves only that recorded
+owner permitted; status/resume reconciles it before any action.
+
+## Fresh acceptance and stopped intent
+
+Running acceptance requires two matching Healthy observations at least ten
+seconds apart within a 60-second verification window. Each uses the delivered
+observer's <=10-second freshness, <=1-second future skew, native PID/creation,
+run/owner/runtime, held owner lock, current-user control, Project/config/root and
+physical Git common directory, actual Web health and factory runtime identity.
+Additionally prove exact **live** CLI and Web release identities match the new
+inventory, with installed file hashes rechecked. `/health`, a manifest, an old
+factory file or transient readiness alone is insufficient. Release identity
+attestation is a future adapter requirement, not something existing health proves.
+
+Stopped acceptance requires the same exact installed pair and compatibility,
+fresh root-wide original native settlement/absence, current stopped/disabled or
+maintenance intent and retained matching suppression evidence. It is explicitly
+reported as **accepted stopped**, never healthy/running. Manual missing-store
+installations retain separately journaled operator intent; adapters must not
+fabricate enabled supervision. `Enabled` in the worksheet means current launch
+permission (true for manual operation), not a request to initialize a store.
+Later stop/disable and foreign maintenance always win over saved initial intent.
+Accept, resume, rollback and maintenance leave never write desired-running or
+refund supervision attempts/Delivery repair budgets. No token expires by time.
+
+V1 routine bounds are design choices: 10 seconds for a probe (reuse delivered
+observer), 60 seconds for fresh acceptance, 10 seconds per journal publication,
+and at most 4,096 package files / 2 GiB total per release / 1 MiB journal metadata
+with bounded per-file entries. Preflight rejects oversize input before drain and
+checks free space for both retained packages plus staging with 10% margin.
+These contain local inspection/publication work; they never extend existing
+startup deadlines or impose a total graceful-drain force deadline. Cancellation
+and timeout mean pending/unknown until native and durable settlement is proven.
+
+## Interruption and failure disposition
+
+Before every irreversible mutation persist its intent and exact inputs; after it,
+confirm actual state before recording completion. Publication is atomic, flushed,
+revision guarded and strict-schema loaded. Unknown fields/versions, partial sibling
+files, changed operation IDs and missing evidence are explicit attention, not
+permission to initialize. Failures report fixed code, phase, operation/revision,
+affected allowlisted path, expected/observed hash or identity, native settlement,
+and permitted next actions; no unrestricted command line/environment/config dump.
+
+| Power loss, process death, canceled command or failed acknowledgement at boundary | Resume / rollback disposition |
+| --- | --- |
+| Inspection/preflight before operation commit | No mutation authorized. Inspect/revalidate; discard no existing foreign evidence. |
+| Operation/interlock or per-Project maintenance publication | Reread exact operation and all tokens/revisions; partial suppression cannot drain or replace. Resume completes only this operation's provable suppression. Unknown/foreign token retains evidence for inspection. |
+| Drain request/reply or owner exit | Reobserve original PID/creation/run/Job. Live/draining/uncertain means wait; no replacement or rollback. No implicit force stop; an explicit separate force operation still requires capture-first evidence and subsequent native settlement. |
+| Old package retention or first replacement intent | Verify retained bytes before any live write. Missing/corrupt backup blocks mutation. If no write occurred, a guarded cancellation may release only owned interlocks, starting nothing. |
+| Any individual payload write/delete or pair commit | Classify each file as old/new/recorded intermediate under locks. Known partial replacement resumes from verified per-file intent, or rolls back from verified old bytes. Unknown bytes, extra collision or lost journal leaves both paths blocked for inspection. Never launch a mixed pair. |
+| Start reservation, launch, readiness or response | Reconcile exact reserved owner and native descendants; no replay launch. Failed acceptance retains old package/interlocks. Rollback first suppresses/drains candidate and proves settlement. Unknown native state blocks both replacement and rollback. |
+| Verification or acceptance publication | Reread journal and fresh observations. Verified-but-unaccepted retains backup; expired health requires new probes, not new launch. Unknown accept publication is not success. A confirmed accepted operation is terminal: no automatic rollback, purge or reapply. A later upgrade is a new operation. |
+| Rollback write or commit | Reconcile exact old/new per-file progress, then resume restoration only with old-readable current state and no active owner. Never restore config/worktrees/tracker/cleanup/supervision snapshots. Unsupported newer state blocks rollback and retains inspection evidence. |
+| Maintenance/root-interlock release | Reread exact token/revision/current intent. Already released is reconciled as fact; foreign/newer operation refuses. Release never starts, enables or resets anything. Preserve later stop/disable. |
+
+Map fixed worksheet refusals to these diagnostics: `InvalidTransition` (inspect
+phase), `IdentityUnknown` (reinventory), `CompatibilityUnsupported` (specific
+preflight reason above), `InterlockUnavailable` (no mutation), `EvidenceUncertain`
+(inspect retained journal), `NativeSettlementPending` (wait/observe),
+`PayloadMismatch` (inspect exact file), `IntentChanged` (fresh operator decision),
+`AcceptanceUnproven` (probe without relaunch) and `RollbackIncompatible` (retain
+newer state and both packages). Refusal leaves phase and all evidence unchanged.
+There is no automatic file repair or repeated launch loop. Old bytes and recovery
+evidence remain through acceptance; v1 defines no automatic post-accept deletion.
+
+## Verification and delivery seams
+
+`UpgradePolicyTests` cover all allowed edges, every other phase/step pair,
+missing identity/compatibility/interlock/journal evidence, pending native drain,
+payload mismatch, forward-state rollback refusal, fresh health and changed or
+stopped/disabled/maintenance intent. They use no files, clocks or child processes.
+No native coverage, fixture publish, browser journey or runtime work is added.
+Later tasks own strict release validation, journal/interlock persistence, drain,
+replacement, activation, resume, rollback and representative isolated native
+proof/runbook. Their adapters must establish these facts under real exclusion;
+passing this worksheet alone cannot prove their behavior. Reuse existing
+[supervision](supervision-v1.md), [unattended acceptance](../acceptance/unattended-self-build.md)
+and [archive](../acceptance/unattended-evidence-archive.md) contracts.
