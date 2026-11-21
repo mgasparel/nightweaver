@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { Status } from './primitives';
 import { useObservation } from './use-observation';
 import { operations } from './operations-browser';
-import { InvocationController, emptyLog, isCurrent, runtimeState, type Factory, type Selection, type Slot } from './delivery-model';
+import { InvocationController, emptyLog, isCurrent, runtimeState, deliveryProgress, type Factory, type Selection, type Slot } from './delivery-model';
 
 const display = (value: unknown) => value == null || value === '' ? 'Unavailable' : String(value);
 const time = (value?: string) => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : 'Unavailable';
@@ -47,14 +47,28 @@ export function DeliveryView({ project, compact = false, bead }: { project: stri
         <div className="delivery-pool-heading"><h3>{name === 'Merger' ? 'Singleton Merger' : name}</h3><span>{pool ? `${pool.slots.filter(s => s.status !== 'idle').length} of ${pool.capacity} occupied · ${pool.capacity === 0 ? 'Pool disabled' : pool.slots.filter(s => s.status === 'idle').length + ' idle'}` : 'Observations unavailable'}</span></div>
         <div className="delivery-bays">{pool?.slots.filter(slot => bead ? slot.invocation?.bead_id === bead : !compact || slot.status !== 'idle').slice(0, compact ? 3 : undefined).map(slot => <article className="delivery-bay" data-slot-id={slot.slot_id} data-status={slot.status} data-outcome={slot.invocation?.status} key={snapshot.runtime_id + ':' + slot.slot_id}>
           <div className="delivery-pool-heading"><span className="eyebrow">{slot.slot_id}</span><Status>{state === 'live' || state === 'idle' ? '' : 'Last observed · '}{slot.status}</Status></div>
-          {slot.status !== 'idle' ? <><h3>{slot.bead_id ? <Link to={`/projects/${encodeURIComponent(project)}/beads/${encodeURIComponent(slot.bead_id)}`}>{slot.bead_id}</Link> : 'Bead unavailable'}</h3><p>{slot.role ?? 'Role unavailable'} · {slot.stage ?? 'Stage unavailable'}</p><p>Invocation: {slot.invocation?.status ?? 'Unavailable'}</p>{!compact && <p className="delivery-timing">Started {time(slot.invocation?.started_at)}<br />Deadline {time(slot.invocation?.deadline_at)}</p>}{!compact && <p>Repairs {display(slot.repair_cycles)} / {display(slot.max_repair_cycles)}{slot.diff?.status === 'available' ? ` · +${display(slot.diff.added)} / −${display(slot.diff.deleted)}` : ''}</p>}</> : <p>{state === 'idle' || state === 'live' ? 'Available for admission' : 'Last observed idle'}{slot.invocation ? ' · Retained invocation: ' + slot.invocation.status : ''}</p>}
-          {!compact && (slot.status !== "idle" || slot.invocation) && <details><summary>Diagnostics</summary><Fields values={[["Invocation", slot.invocation?.invocation_id], ["Invocation outcome", slot.invocation?.status], ["CLI", slot.invocation?.cli], ["Configured model", slot.invocation?.configured_model], ["Observed model", slot.invocation?.actual_model], ["Effort", slot.invocation?.effort], ["PID", slot.invocation?.process_id], ["Exit code", slot.invocation?.exit_code], ["Branch", slot.branch], ["Worktree", slot.worktree_path], ["Diff status", slot.diff?.status], ["Binary files", slot.diff?.binary], ["Untracked files", slot.diff?.untracked]]} /></details>}
+          {slot.status !== 'idle' ? <BayWork slot={slot} project={project} state={state} delivery={name === 'Delivery'} /> : <p>{state === 'idle' || state === 'live' ? 'Available for admission' : 'Last observed idle'}{slot.invocation ? ' · Retained invocation: ' + slot.invocation.status : ''}</p>}
+          {!compact && (slot.status !== "idle" || slot.invocation) && <details><summary>Diagnostics</summary><Fields values={[["Stage", slot.stage], ["Started", time(slot.invocation?.started_at)], ["Deadline", time(slot.invocation?.deadline_at)], ["Repairs", `${display(slot.repair_cycles)} / ${display(slot.max_repair_cycles)}`], ["Diff additions / deletions", slot.diff?.status === 'available' ? `${display(slot.diff.added)} / ${display(slot.diff.deleted)}` : undefined], ["Invocation", slot.invocation?.invocation_id], ["Invocation outcome", slot.invocation?.status], ["CLI", slot.invocation?.cli], ["Configured model", slot.invocation?.configured_model], ["Observed model", slot.invocation?.actual_model], ["Effort", slot.invocation?.effort], ["PID", slot.invocation?.process_id], ["Exit code", slot.invocation?.exit_code], ["Branch", slot.branch], ["Worktree", slot.worktree_path], ["Diff status", slot.diff?.status], ["Binary files", slot.diff?.binary], ["Untracked files", slot.diff?.untracked]]} /></details>}
           {slot.invocation && <button className="button" data-open-telemetry-slot={slot.slot_id} data-runtime-id={snapshot.runtime_id} data-invocation-id={slot.invocation.invocation_id} onClick={() => open(slot)}>{slot.status === 'running' && slot.invocation.status === 'running' && state === 'live' ? 'Open live invocation' : 'Open retained invocation'}</button>}
         </article>)}</div>{compact && <p className="delivery-summary-note">{bead ? (pool?.slots.some(slot => slot.invocation?.bead_id === bead) ? "Exact observed invocation identity" : "No matching invocation is retained in this pool.") : "Up to three occupied bays shown. Open the floor for all bays and retained output."}</p>}</section>)}
     </>}
     {selection && <InvocationDialog selection={selection} current={isCurrent(data, selection)} close={() => { select(undefined); requestAnimationFrame(() => { const trigger = Array.from(host.current?.querySelectorAll<HTMLElement>('[data-open-telemetry-slot]') ?? []).find(node => node.dataset.runtimeId === selection.runtime && node.dataset.openTelemetrySlot === selection.slot.slot_id && node.dataset.invocationId === selection.slot.invocation?.invocation_id); (trigger ?? heading.current)?.focus({ preventScroll: true }); }); }} />}
   </div>;
 }
+function BayWork({ slot, project, state, delivery }: { slot: Slot; project: string; state: string; delivery: boolean }) {
+  const progress = deliveryProgress(slot, state);
+  return <>
+    <h3 className="delivery-task-title">Title unavailable</h3>
+    <div className="delivery-task-identity"><span>{project}</span><span aria-hidden="true"> / </span>{slot.bead_id ? <Link to={`/projects/${encodeURIComponent(project)}/beads/${encodeURIComponent(slot.bead_id)}`}>{slot.bead_id}</Link> : <span>Bead unavailable</span>}</div>
+    <p className="delivery-activity"><span className="delivery-type">Type unavailable</span> {slot.role ?? 'Role unavailable'} · {slot.invocation?.started_at ? `Started ${time(slot.invocation.started_at)}` : 'Start time unavailable'}</p>
+    <p className="delivery-outcome">Invocation: {slot.invocation?.status ?? 'Unavailable'}</p>
+    {delivery && <div className="delivery-progress" data-neutral={progress.neutral}>
+      <div className="delivery-segments" aria-hidden="true">{[0, 1, 2, 3].map(index => <span key={index} data-position={index === progress.index ? 'current' : index < progress.index ? 'preceding' : 'remaining'} />)}</div>
+      <div className="delivery-progress-caption"><span>{progress.caption}</span>{progress.position && <span className="delivery-stage-position">{progress.position}</span>}</div>
+    </div>}
+  </>;
+}
+
 function InvocationDialog({ selection, current, close }: { selection: Selection; current: boolean; close(): void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const output = useRef<HTMLPreElement>(null);
