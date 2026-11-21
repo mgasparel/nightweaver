@@ -91,7 +91,8 @@ try {
     await page.getByRole('heading', { name: `${projectId} overview` }).waitFor();
     await page.waitForFunction(() => /\d+ paused Beads/.test(document.querySelector('.overview-summary')?.textContent ?? ''), null, { timeout: 90000 });
     assert.equal(await page.locator('.overview .project-card, .overview .future-project').count(), 0);
-    assert.deepEqual(await page.locator('.studio-overview > .panel > .panel-heading h2').allTextContents(), ['Your attention', 'Delivery activity', 'Catch up']);
+    assert.deepEqual(await page.locator('.studio-overview > .panel').evaluateAll(nodes => nodes.map(node => node.classList.contains('attention-panel') ? 'Attention' : node.classList.contains('floor-panel') ? 'Delivery' : 'Catch up')), ['Attention', 'Delivery', 'Catch up']);
+    await page.getByRole('heading', {name: 'Completed outcomes'}).waitFor();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `overflow at ${width}`);
     await page.screenshot({ path: `${output}/overview-${width}.png`, fullPage: true });
     for (const label of ['All projects', 'Add project']) {

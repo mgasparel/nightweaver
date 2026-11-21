@@ -43,11 +43,13 @@ export async function studioDeliveryQA(mode) {
     await page.waitForFunction(() => document.querySelector('#factory-status')?.dataset.state === 'live');
     const deliveryPool = page.getByRole('region', { name: 'Delivery pool', exact: true });
     const occupied = data.snapshot.delivery.slots.filter(row => row.status !== 'idle').length;
-    assert.match(await deliveryPool.locator('.delivery-pool-heading').first().innerText(), new RegExp(`${occupied} of ${data.snapshot.delivery.capacity} occupied`));
-    assert.equal(await page.locator('.delivery-bay').count(), 3);
+    assert.match(await page.locator('#factory-status').innerText(), new RegExp(`${occupied} occupied Delivery bays`));
+    assert.equal(await page.locator('.delivery-bay').count(), Math.min(occupied, 3));
     assert.equal(await page.locator('[data-slot-id="delivery-1"] .delivery-progress-caption').innerText(), 'Implement → Review\nStage 1 of 4');
-    assert.equal(await page.getByRole('region', { name: 'Merger pool', exact: true }).locator('.delivery-progress').count(), 0);
-    assert.equal(await page.getByRole('region', { name: 'Planning pool', exact: true }).locator('.delivery-progress').count(), 0);
+    assert.equal(await page.getByRole('region', { name: 'Merger pool', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('region', { name: 'Planning pool', exact: true }).count(), 0);
+    assert.match(await page.locator('.delivery-preview-footer').innerText(), /Planning.*occupied/);
+    assert.match(await page.locator('.delivery-preview-footer').innerText(), /Singleton Merger.*occupied/);
     for (const width of [1440, 375, 720]) {
       await page.setViewportSize({ width, height: 900 });
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));

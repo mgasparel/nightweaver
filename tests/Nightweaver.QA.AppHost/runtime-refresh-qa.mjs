@@ -49,6 +49,11 @@ try {
     });
     try {
       await page.goto(base + routePath);
+      if (name === 'overview') {
+        assert.equal(await page.locator('#factory-status button').count(), 0);
+        await page.locator('.floor-panel').getByRole('link', {name: 'View floor'}).click();
+        await page.waitForURL('**/projects/qa/delivery');
+      }
       const refresh = page.locator('#factory-status button');
       await refresh.waitFor();
       await page.waitForFunction(() => document.querySelector('#factory-status')?.dataset.state === 'live');

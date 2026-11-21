@@ -20,7 +20,7 @@ import { operations } from "./operations-browser";
 import { AttentionView, BeadWorkspace } from "./bead-views";
 import { Explorer } from "./explorer";
 import { DeliveryView, RuntimeSummary } from "./delivery-views";
-import { CatchUpView } from "./digest-views";
+import { CatchUpPreview, CatchUpView } from "./digest-views";
 import { CleanupView, ProductIntake } from "./product-views";
 
 const sections = [
@@ -341,15 +341,15 @@ function Overview({
         <RuntimeSummary project={context.projectId} />
       </div>
       <div className="studio-overview">
-        <Panel title="Your attention" accessory={<Link className="text-link" to={`${base}/attention`}>All attention <Icon name="arrow" /></Link>} className="attention-panel">
+        <section aria-label="Your attention" className="panel attention-panel"><div className="panel-body">
           <AttentionView project={context.projectId} compact />
-        </Panel>
-        <Panel title="Delivery activity" accessory={<Link className="text-link" to={`${base}/delivery`}>View floor <Icon name="arrow" /></Link>} className="floor-panel">
+        </div></section>
+        <Panel title="On the delivery floor" accessory={<Link className="text-link" to={`${base}/delivery`}>View floor <Icon name="arrow" /></Link>} className="floor-panel">
           <DeliveryView project={context.projectId} compact />
         </Panel>
-        <Panel title="Catch up" className="catch-up-panel">
-          <CatchUpView project={context.projectId} compact />
-        </Panel>
+        <section aria-label="Catch up" className="panel catch-up-panel">
+          <CatchUpPreview project={context.projectId} />
+        </section>
       </div>
     </div>
   );

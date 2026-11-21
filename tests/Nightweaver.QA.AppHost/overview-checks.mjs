@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { overviewVisualChecks } from './overview-visual-checks.mjs';
 
 // Extend the existing Studio journey; only reads are substituted. No new native setup.
 export async function overviewChecks(page, url, base, projectId, output) {
+  await overviewVisualChecks(page, url, base, projectId, output);
   const native = await (await page.request.get(`${url}/api/operations/v1/projects/${projectId}/resources?key=attention`)).json();
   assert.ok(native.data.length, 'Native fixture supplies an attention item');
   const decision = { ...native.data[0], beadId: 'qa-overview-decision', title: 'Choose the next delivery boundary', kind: 'product-decision-required', question: 'Which boundary should the next delivery verify?' };

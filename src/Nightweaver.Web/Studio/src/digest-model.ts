@@ -11,6 +11,13 @@ export const windows = ["auto", "since_caught_up", "24h", "7d", "30d", "all"] as
 export type DigestWindow = typeof windows[number];
 export const digestWindow = (value: string | null): DigestWindow => windows.includes(value as DigestWindow) ? value as DigestWindow : "auto";
 
+/** Preview actual closed outcomes across lineage and standalone lists, once per Bead. */
+export function completedOutcomes(data: Digest) {
+  const items = [...data.standaloneCompleted, ...data.threads.flatMap(thread => [thread.root, ...thread.items])];
+  return [...new Map(items.filter(item => item.status === "closed").map(item => [item.id, item])).values()]
+    .sort((a, b) => Date.parse(b.activityAt) - Date.parse(a.activityAt));
+}
+
 /** Preserve the whole inventory when an open/focused thread crosses the preview boundary. */
 export function visibleThreads(data: Digest, all: boolean, expanded: ReadonlySet<string>, focused?: string) {
   return all || data.threads.slice(5).some(thread => expanded.has(thread.root.id) || thread.root.id === focused)

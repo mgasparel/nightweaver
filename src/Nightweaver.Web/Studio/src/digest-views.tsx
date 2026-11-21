@@ -1,8 +1,8 @@
 import { observationStatus } from "./operations";
-import { Component, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import { beadPath, safeEvidenceUrl } from "./bead-model";
-import { DigestCheckpoints, digestWindow, visibleThreads, windows, type Digest, type DigestItem } from "./digest-model";
+import { completedOutcomes, DigestCheckpoints, digestWindow, visibleThreads, windows, type Digest, type DigestItem } from "./digest-model";
 import { operations } from "./operations-browser";
 import { Status } from "./primitives";
 import { useObservation } from "./use-observation";
@@ -32,6 +32,36 @@ export function DigestMetric({ project }: { project: string }) {
   const data = snapshot.observation?.data;
   return <div className="metric"><span className="eyebrow">Completed</span><strong>{data?.metrics.completedTotal ?? "—"}</strong>
     <small>{data ? `${labels[data.window]} · ${observationStatus(snapshot)}` : "Digest unavailable"}</small></div>;
+}
+
+export function CatchUpPreview({ project }: { project: string }) {
+  const snapshot = useObservation<Digest>(project, "digest:auto");
+  const data = snapshot.observation?.data;
+  const [focused, setFocused] = useState<string>();
+  const preview = useRef<HTMLDivElement>(null);
+  const active = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (active.current && !active.current.isConnected && document.activeElement === document.body) preview.current?.querySelector<HTMLElement>('h2')?.focus({preventScroll: true});
+  });
+  const outcomes = data ? completedOutcomes(data) : [];
+  return <div className="digest-preview" ref={preview} onFocusCapture={event => { active.current = event.target as HTMLElement; }}>
+    <div className="panel-heading"><h2 tabIndex={-1}>Completed outcomes</h2><span>{data ? labels[data.window] : "Period unavailable"}</span></div>
+    <div className="panel-body">
+      {(snapshot.stale || snapshot.observation?.health !== "fresh" || snapshot.dataState === "delayed" || snapshot.observation?.synchronization?.error || snapshot.observation?.synchronization?.journal === "catching-up") && <p role="status">{data ? "Showing last confirmed outcomes" : "Digest unavailable"} · {observationStatus(snapshot)}</p>}
+      {(snapshot.error || snapshot.observation?.error) && <p role="alert">{snapshot.error || snapshot.observation?.error?.message}</p>}
+      {data && <p>{data.metrics.completedTotal} completed Beads in this window.</p>}
+      {data && !outcomes.length && <p>No completed outcomes in this observation.</p>}
+      <ul className="digest-outcomes" onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(undefined); }}>
+        {outcomes.filter((item, index) => index < 3 || item.id === focused).map(item => <li key={item.id} onFocusCapture={() => setFocused(item.id)}>
+          <span className="outcome-check" aria-hidden="true">✓</span><div><h3><Link to={beadPath(project, item.id)}>{item.title || item.id}</Link></h3>
+            <p>{project} · {stamp(item.activityAt)} · {item.mergeEvidence?.state === "verified" ? "Merged" : "Closed"}</p>
+            {item.mergeEvidence?.cleanupWarning && <p className="bead-notice">Cleanup needs attention: {item.mergeEvidence.cleanupWarning}</p>}
+          </div>
+        </li>)}
+      </ul>
+      <Link className="text-link" to={`/projects/${encodeURIComponent(project)}/catch-up`}>Read the outcomes →</Link>
+    </div>
+  </div>;
 }
 
 export function CatchUpView({ project, compact = false }: { project: string; compact?: boolean }) {

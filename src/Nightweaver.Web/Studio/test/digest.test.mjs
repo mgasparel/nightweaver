@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DigestCheckpoints, digestWindow, visibleThreads } from '../src/digest-model.ts';
+import { completedOutcomes, DigestCheckpoints, digestWindow, visibleThreads } from '../src/digest-model.ts';
+
+test('Overview outcomes include closed lineage roots and children once, newest first, without open work', () => {
+  const item = (id, status, day) => ({id, status, activityAt: `2026-11-${day}T01:00:00Z`});
+  const child = item('child', 'closed', 19);
+  const data = {standaloneCompleted: [child, item('standalone', 'closed', 18)], threads: [
+    {root: item('open-root', 'open', 20), items: [child, item('open-child', 'in_progress', 20)]},
+    {root: item('closed-root', 'closed', 20), items: []}
+  ]};
+  assert.deepEqual(completedOutcomes(data).map(row => row.id), ['closed-root', 'child', 'standalone']);
+  assert.deepEqual(completedOutcomes({standaloneCompleted: [], threads: []}), []);
+});
 const snapshot = { generatedAt: '2026-11-14T01:02:03Z', threads: Array.from({length: 8}, (_, i) => ({root: {id: `root-${i}`}})) };
 test('checkpoint captures displayed cutoff across concurrent replacement and duplicate submission', async () => {
   let release; let body; let reconciled = 0; let count = 0;
