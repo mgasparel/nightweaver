@@ -115,6 +115,20 @@ desired-running intent and uses the existing Maintenance graceful-stop path.
 An uncertain reply retains the operation, interlock and journal. Stop remains
 available and can change durable intent during drain.
 
+The drain step reads the exact retained owner again before each request. It
+skips the control pipe only when the owner lock is absent, the original native
+process has exited and its Job descendants have settled. It retains that owner
+identity in the operation. All other cases still require the drain request and
+the separate settlement check before payload replacement.
+
+A direct console stop takes the Project command lock and records the same
+operation-bound stop evidence as a manager stop. It waits for sharing contention
+before it cancels graceful runtime work. A second console signal keeps the
+immediate force-exit path. Manual mode creates no supervision store. Intent
+capture also excludes a manual owner already in an intentional drain. A console
+stop after capture cancels activation and retains the operation, backup and
+startup suppression, even if the upgrade pipe later accepts a drain request.
+
 Settlement is an explicit observation, not expiration of the manager's stop
 wait. Confirmation requires the original PID/creation/run/runtime identity,
 native process exit and an empty named containment Job. PID reuse, missing

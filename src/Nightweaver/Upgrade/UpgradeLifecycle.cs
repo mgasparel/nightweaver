@@ -72,6 +72,8 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
             {
                 StartRequested = read?.State is { Enabled: true, DesiredRunning: true }
                     || read?.State is null && operations.OwnerActive(project.Name) == true
+                        && inventory.Owners.SingleOrDefault(o => o.Project == project.Name) is { } owner
+                        && owner.State != "stopping" && !DeploymentObserver.IsDeliberate(owner.StopReason)
             });
         }
         var owners = inventory.Owners.Select(OwnerEvidence).ToArray();
@@ -84,6 +86,13 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         configurations.Dispose();
         foreach (var owner in inventory.Owners)
         {
+            var fresh = await InspectAsync(progress, token).ConfigureAwait(false);
+            var current = fresh.Owners.SingleOrDefault(o => OwnerEvidence(o) == OwnerEvidence(owner))
+                ?? throw new InvalidOperationException("Original owner evidence changed before drain.");
+            var active = operations.OwnerActive(owner.Project);
+            var observation = operations.Observe(current);
+            if (active == false && observation is { State: OwnerProcessState.Exited, DescendantsSettled: true })
+                continue;
             var item = progress.Maintenance.Single(m => m.Project == owner.Project);
             if (!await operations.Drain(owner, progress.OperationId, item.Token, token).ConfigureAwait(false))
                 throw new InvalidOperationException("Upgrade drain is unconfirmed; retain the boundary and inspect the original owner.");

@@ -13,6 +13,13 @@ force-stop path after drain and settlement, and during the health interval.
 They check zero launches after the later stop, repeated stop, retained suppression
 and manual opt-out. Small file checks cover unrelated Projects and malformed,
 foreign or interrupted stop records. These add no native journey or publish.
+Stopped-owner repair adds two component cases with retained owner evidence and
+an unavailable control pipe. Four cases retain suppression for unsettled,
+reused or unavailable native evidence and an unknown owner lock. Two console
+stop cases cover intent capture and the later upgrade pipe request. Two small
+file-lock cases check command/admission contention and immediate second-signal
+force exit. They use injected native operations and the existing package setup.
+They add no native owner, Agent, Scheduler, browser or fixture publication.
 Existing Web journeys also exercise the compatible health endpoint; legacy/dev
 hosts omit release evidence and keep their exact health JSON. Normal owner startup validates a release
 inventory only when one exists, and each owner health probe checks the launched

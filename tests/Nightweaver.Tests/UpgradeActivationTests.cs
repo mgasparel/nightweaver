@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Nightweaver.Application;
 using Nightweaver.Background;
 using Nightweaver.Cli;
 using Nightweaver.Configuration;
@@ -9,6 +10,110 @@ namespace Nightweaver.Tests;
 
 public sealed class UpgradeActivationTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConsoleStopWaitsForSharedLocksButForceDoesNotWait(bool admission)
+    {
+        using var temp = new TempDirectory();
+        var paths = new HostPaths(temp.Path);
+        var project = ProjectSlug.Parse("demo");
+        var token = TestContext.Current.CancellationToken;
+        var reservation = new UpgradeReservation(1, paths.Root, new('a', 32), new('b', 64));
+        await UpgradeInterlock.ReserveAsync(paths, reservation, token);
+        using var state = new BackgroundOwnerState(new(1, "running", new('c', 32), 1234, DateTimeOffset.UtcNow,
+            paths.Root, "config", "demo", null, null, "http://127.0.0.1:5000", "healthy", "live", "", "", null));
+        var exits = 0;
+        using var signals = new RuntimeShutdownSignals(_ => exits++);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await BackgroundOwnerApplication.InitializeLifecycleAsync(signals, _ => Task.FromResult<SupervisionLifecycle?>(null), lifecycle =>
+        {
+            entered.SetResult();
+            BackgroundOwnerApplication.PersistConsoleStopAsync(paths, project, lifecycle, state,
+                BackgroundOwnerRecord.PathFor(paths, project)).GetAwaiter().GetResult();
+        });
+        using var held = admission ? UpgradeInterlock.AcquireAdmission(paths) : BackgroundFileLock.AcquireStart(paths, project);
+        var first = Task.Run(signals.RequestStop, token);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), token);
+            Assert.False(first.IsCompleted);
+            Assert.True(signals.StopGate.IsStopRequested);
+            Assert.False(signals.FirstStopToken.IsCancellationRequested);
+            signals.RequestStop();
+            Assert.Equal(1, exits);
+            Assert.True(signals.StopGate.IsForceStopRequested);
+        }
+        finally
+        {
+            held.Dispose();
+            await first.WaitAsync(TimeSpan.FromSeconds(5), token);
+        }
+        Assert.Null(signals.IntentPersistenceFailure);
+        Assert.Equal("OperatorDrain", state.Current.StopReason);
+        Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireActivationAllowed(paths, reservation, project));
+        Assert.False(Directory.Exists(paths.SupervisionRoot(project)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RetainedStoppedOwnerDoesNotNeedAControlPipe(bool supervised)
+    {
+        using var f = new Fixture(false, "retained-stopped", supervised);
+        await f.Prepare();
+        var original = UpgradeLifecycle.OwnerEvidence(f.Owner);
+        var result = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.PayloadVerifiedStopped, result.Outcome);
+        Assert.Contains(original, result.Progress!.Owners);
+        Assert.Equal(0, f.Drains);
+        Assert.Equal(0, f.Starts);
+        Assert.Equal(UpgradePhase.Accepted, result.Progress.Phase);
+        Assert.Equal(f.OldDigest, PreparedRelease.Inspect(f.Journal.RetainedPackageRoot, false).Digest);
+    }
+
+    [Theory]
+    [InlineData("unsettled")]
+    [InlineData("reused")]
+    [InlineData("unknown")]
+    [InlineData("lock-unknown")]
+    public async Task RetainedOwnerWithoutSettlementCannotReplacePayload(string fault)
+    {
+        using var f = new Fixture(false, fault, supervised: false);
+        await f.Prepare();
+        var result = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.Pending, result.Outcome);
+        Assert.Equal(0, f.Starts);
+        Assert.Equal(f.OldDigest, PreparedRelease.Inspect(f.Paths.Root, true).Digest);
+        Assert.Contains(UpgradeLifecycle.OwnerEvidence(f.Owner), f.Journal.Read().Progress!.Owners);
+        Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+    }
+
+    [Theory]
+    [InlineData("console-before-capture")]
+    [InlineData("console-before-drain")]
+    public async Task ManualConsoleStopPreventsReplacementLaunch(string fault)
+    {
+        using var f = new Fixture(true, fault, supervised: false);
+        await f.Prepare();
+        if (fault == "console-before-capture") await f.ConsoleStop();
+        var result = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        Assert.Equal(0, f.Starts);
+        if (fault == "console-before-capture")
+        {
+            Assert.Equal(UpgradeActivationOutcome.PayloadVerifiedStopped, result.Outcome);
+            Assert.False(Assert.Single(result.Progress!.Maintenance).StartRequested);
+        }
+        else
+        {
+            Assert.Equal(UpgradeActivationOutcome.Failed, result.Outcome);
+            Assert.True(Assert.Single(result.Progress!.Maintenance).StartRequested);
+            Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+        }
+        Assert.Equal(f.OldDigest, PreparedRelease.Inspect(f.Journal.RetainedPackageRoot, false).Digest);
+        Assert.False(Directory.Exists(f.Paths.SupervisionRoot(ProjectSlug.Parse("demo"))));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -231,6 +336,7 @@ public sealed class UpgradeActivationTests
         internal UpgradeJournal Journal { get; }
         internal BackgroundOwnerRecord Owner { get; private set; }
         internal int Starts { get; private set; }
+        internal int Drains { get; private set; }
         internal CancellationToken Token { get; } = TestContext.Current.CancellationToken;
         internal Fixture(bool running, string? fault = null, bool supervised = true)
         {
@@ -253,14 +359,35 @@ public sealed class UpgradeActivationTests
             scope = new(Paths.Root, "S-1-5-21-1001", [new("demo", config, Hash(File.ReadAllBytes(config)), repo, repo, "physical")]);
             Journal = new(scope, new('a', 32));
             store = new(Paths, ProjectSlug.Parse("demo"), new(Paths.Root, config, repo, scope.UserSid));
-            Owner = new(1, "running", new('b', 32), 1234, DateTimeOffset.UtcNow.AddMinutes(-1), Paths.Root,
+            Owner = new(1, running ? "running" : "stopped", new('b', 32), 1234, DateTimeOffset.UtcNow.AddMinutes(-1), Paths.Root,
                 config, "demo", repo, new('c', 32), "http://127.0.0.1:5000", "healthy", "live", "", "", null)
                 { ContainmentVersion = 1, GitCommonDirectory = repo };
             active = running;
-            lifecycle = new(Paths, Journal, new(_ => Task.FromResult(new UpgradeLifecycleInventory(scope, running ? [Owner] : [], true)),
+            lifecycle = new(Paths, Journal, new(_ => Task.FromResult(new UpgradeLifecycleInventory(scope, running || fault is not null ? [Owner] : [], true)),
                 (_, _) => unavailable ? throw new InvalidDataException("unavailable") : Task.FromResult<SupervisionLifecycle?>(supervised ? new(store) : null),
-                (_, _, _, _) => { active = false; return Task.FromResult(true); },
-                _ => new(active ? OwnerProcessState.Alive : OwnerProcessState.Exited, !active), _ => active), clock,
+                async (_, operation, maintenance, token) =>
+                {
+                    Drains++;
+                    if (fault == "retained-stopped") throw new IOException("Control pipe is unavailable.");
+                    if (fault == "console-before-drain") await ConsoleStop();
+                    if (fault is "console-before-capture" or "console-before-drain")
+                    {
+                        using var state = new BackgroundOwnerState(Owner);
+                        var project = ProjectConfigLoader.Load(scope.Projects[0].Configuration, ProjectSlug.Parse("demo"), Paths);
+                        var options = new BackgroundOwnerOptions(Paths.Root, Owner.ConfigPath, "demo", Owner.RunId, Owner.WebUrl);
+                        var reply = await BackgroundOwnerApplication.HandleRequestAsync(
+                            new("upgrade", Owner.RunId, Maintenance: true, UpgradeOperationId: operation, MaintenanceToken: maintenance),
+                            options, Paths, project, state, BackgroundOwnerRecord.PathFor(Paths, ProjectSlug.Parse("demo")),
+                            () => null, null, token);
+                        Assert.True(reply.Accepted);
+                        Owner = state.Current;
+                    }
+                    active = false;
+                    return true;
+                },
+                _ => new(!running && fault == "reused" ? OwnerProcessState.Reused : fault == "unknown" ? OwnerProcessState.Unavailable
+                    : active ? OwnerProcessState.Alive : OwnerProcessState.Exited, !active && fault != "unsettled"),
+                _ => fault == "lock-unknown" ? null : active), clock,
                 async (elapsed, token) =>
                 {
                     clock.Advance(fault == "expired" ? TimeSpan.FromSeconds(61) : elapsed);
@@ -296,6 +423,17 @@ public sealed class UpgradeActivationTests
         internal Task<int> Stop(bool force) => BackgroundManagerApplication.RunAsync(
             new(BackgroundAction.Stop, new ProjectSelector.ByConfigPath(scope.Projects[0].Configuration), Force: force),
             new AppEnvironment(Paths.Root, Paths.Root, new StringWriter(), new StringWriter()), Token);
+        internal async Task ConsoleStop()
+        {
+            using var state = new BackgroundOwnerState(Owner);
+            using var signals = new RuntimeShutdownSignals(_ => { });
+            await BackgroundOwnerApplication.InitializeLifecycleAsync(signals, _ => Task.FromResult<SupervisionLifecycle?>(null),
+                lifecycle => BackgroundOwnerApplication.PersistConsoleStopAsync(Paths, ProjectSlug.Parse("demo"), lifecycle,
+                    state, BackgroundOwnerRecord.PathFor(Paths, ProjectSlug.Parse("demo"))).GetAwaiter().GetResult());
+            signals.RequestStop();
+            Assert.Null(signals.IntentPersistenceFailure);
+            Owner = state.Current;
+        }
         private async Task Start(AffectedUpgradeProject project, string runId, CancellationToken token)
         {
             Starts++;

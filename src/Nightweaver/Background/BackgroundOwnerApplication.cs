@@ -79,11 +79,7 @@ internal static class BackgroundOwnerApplication
                 {
                     try
                     {
-                        lifecycle?.ApplyAsync(SupervisionLifecycleAction.Stop, null, null, CancellationToken.None)
-                            .GetAwaiter().GetResult();
-                        state.Update(record => record with { State = "stopping", StopReason = "OperatorDrain",
-                            Message = "Intentional console drain requested" });
-                        PersistAsync(recordPath, state).GetAwaiter().GetResult();
+                        PersistConsoleStopAsync(paths, projectSlug, lifecycle, state, recordPath).GetAwaiter().GetResult();
                     }
                     catch (Exception)
                     {
@@ -211,6 +207,46 @@ internal static class BackgroundOwnerApplication
             throw;
         }
     }
+
+    internal static async Task PersistConsoleStopAsync(HostPaths paths, ProjectSlug project, SupervisionLifecycle? lifecycle,
+        BackgroundOwnerState state, string recordPath)
+    {
+        // A direct console stop uses the same order as manager commands. Wait only
+        // for sharing contention. The independent second signal still exits at once.
+        using var command = await AcquireConsoleStopCommandAsync(paths, project).ConfigureAwait(false);
+        while (true)
+        {
+            try
+            {
+                await UpgradeInterlock.RecordStopAsync(paths, project, CancellationToken.None).ConfigureAwait(false);
+                break;
+            }
+            catch (IOException exception) when (SharingViolation(exception))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25)).ConfigureAwait(false);
+            }
+        }
+        if (lifecycle is not null)
+            await lifecycle.ApplyAsync(SupervisionLifecycleAction.Stop, null, null, CancellationToken.None).ConfigureAwait(false);
+        state.Update(record => record with { State = "stopping", StopReason = "OperatorDrain",
+            Message = "Intentional console drain requested" });
+        await PersistAsync(recordPath, state).ConfigureAwait(false);
+    }
+
+    private static async Task<IDisposable> AcquireConsoleStopCommandAsync(HostPaths paths, ProjectSlug project)
+    {
+        while (true)
+        {
+            try { return BackgroundFileLock.AcquireStart(paths, project); }
+            catch (IOException exception) when (SharingViolation(exception))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25)).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static bool SharingViolation(IOException exception) => (exception.HResult & 0xffff) is 32 or 33
+        || exception.InnerException is System.ComponentModel.Win32Exception { NativeErrorCode: 32 or 33 };
 
     internal static async Task<SupervisionLifecycle?> InitializeLifecycleAsync(RuntimeShutdownSignals shutdownSignals,
         Func<CancellationToken, Task<SupervisionLifecycle?>> openLifecycle, Action<SupervisionLifecycle?> persistStop)
