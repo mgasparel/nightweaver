@@ -1166,7 +1166,7 @@ public sealed class OperationalObservationSourceTests
             && !root.GetProperty("synchronization").GetProperty("pending").GetBoolean());
         var beforeMutation = journal.Count;
         var readsBeforeMutation = reads.Count;
-        var commandsBeforeMutation = measured.Count;
+        var commandsBeforeMutation = Volatile.Read(ref commandSequence);
         var coldSeconds = cold.Elapsed.TotalSeconds;
         var count = first.GetProperty("data").GetProperty("comments").GetArrayLength();
         var revision = first.GetProperty("revision").GetString();
@@ -1206,7 +1206,8 @@ public sealed class OperationalObservationSourceTests
         Assert.Contains(journal.Skip(beforeMutation).SelectMany(page => page.Hints), hint => hint.IssueId == bead && hint.Operation == "comment");
         Assert.Contains(journal.Skip(beforeMutation).SelectMany(page => page.Hints), hint => hint.IssueId == bead && hint.Operation == "dep_add");
         AssertJournalCausedReads(mutationReads, bead);
-        TestContext.Current.TestOutputHelper?.WriteLine($"Journal pages {journal.Count} ({journal.Count - beforeMutation} after baseline); source reads {reads.Count} ({mutationReads.Length} after baseline); native commands {measured.Count} ({measured.Count - commandsBeforeMutation} after baseline)");
+        var nativeCommands = Volatile.Read(ref commandSequence);
+        TestContext.Current.TestOutputHelper?.WriteLine($"Journal pages {journal.Count} ({journal.Count - beforeMutation} after baseline); source reads {reads.Count} ({mutationReads.Length} after baseline); native commands {nativeCommands} ({nativeCommands - commandsBeforeMutation} after baseline); timeline records {measured.Count}");
         Assert.NotEqual(revision, combined.GetProperty("revision").GetString());
         var combinedData = combined.GetProperty("data");
         Assert.Equal(count + 1, combinedData.GetProperty("comments").GetArrayLength());
