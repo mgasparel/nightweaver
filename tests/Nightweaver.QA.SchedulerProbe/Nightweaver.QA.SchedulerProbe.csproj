@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><UseAppHost>true</UseAppHost></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../../src/Nightweaver/Nightweaver.csproj" /></ItemGroup>
+</Project>

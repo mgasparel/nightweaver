@@ -460,3 +460,17 @@ failed-write interlocks and direct-stop versus internal-failure reasons. The sec
 signal is checked while persistence is deliberately blocked. These add no native
 runtime, Agent, scheduler or publish journey; existing control-pipe tests retain the
 peer deadline/disconnect boundary and existing background/native hosting coverage remains.
+
+Scheduled supervision adds 25 cheap parser/definition/recording-adapter/store cases
+for disabled install ordering, explicit first evaluation, retained retry budgets,
+foreign-definition rejection, response loss, policy denial and suppression/reservation
+invalidation. The separate Nightweaver.QA.SchedulerProbe is outside the ordinary
+suite and hosted checks: only an authorized disposable interactive context may run
+it. Real registration, timer activation and scheduler Job breakaway are boundaries
+recording adapters cannot prove. The native fixture shares one marker task/setup
+across these assertions, with a finite task end boundary and child lifetime. A local
+Win32 error 5 at the existing detached launcher blocked its positive survival proof;
+this failure is reported rather than skipped, replaced by XML validation, or hidden
+by credential/policy changes. No native journey or publish is added to the normal
+six-worker complete suite. See the supervision contract for artifact and cleanup
+semantics; actual logoff/reboot is not tested.

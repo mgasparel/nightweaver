@@ -20,10 +20,17 @@ internal static class BackgroundCommandParser
             return new(BackgroundAction.Status, null);
         }
 
+        var supervision = args[1] == "supervision";
         var maintenance = args[1] == "maintenance";
         if (maintenance && args.Count < 3) throw new UsageException("maintenance requires enter, status, or leave");
-        var action = (maintenance ? "maintenance-" + args[2] : args[1]) switch
+        if (supervision && args.Count < 3) throw new UsageException("supervision requires status, install, enable, disable, or uninstall");
+        var action = (supervision ? "supervision-" + args[2] : maintenance ? "maintenance-" + args[2] : args[1]) switch
         {
+            "supervision-status" => BackgroundAction.SupervisionStatus,
+            "supervision-install" => BackgroundAction.SupervisionInstall,
+            "supervision-enable" => BackgroundAction.SupervisionEnable,
+            "supervision-disable" => BackgroundAction.SupervisionDisable,
+            "supervision-uninstall" => BackgroundAction.SupervisionUninstall,
             "start" => BackgroundAction.Start,
             "status" => BackgroundAction.Status,
             "stop" => BackgroundAction.Stop,
@@ -44,7 +51,7 @@ internal static class BackgroundCommandParser
         string? maintenanceToken = null;
         long? revision = null;
 
-        for (var index = maintenance ? 3 : 2; index < args.Count; index++)
+        for (var index = maintenance || supervision ? 3 : 2; index < args.Count; index++)
         {
             var token = args[index];
             if (token is "--help" or "-h")
