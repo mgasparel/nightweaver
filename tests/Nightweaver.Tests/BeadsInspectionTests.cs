@@ -61,6 +61,72 @@ public sealed class BeadsInspectionTests
         Assert.Equal(1, calls);
     }
 
+    [Theory]
+    [InlineData("{}", true, false)]
+    [InlineData("{\"dependent_count\":0,\"comment_count\":0}", true, false)]
+    [InlineData("{\"comments\":[],\"dependents\":[]}", true, true)]
+    [InlineData("{\"comments\":[],\"comment_count\":99,\"dependents\":[],\"dependent_count\":99}", true, true)]
+    [InlineData("{\"comments\":null}", false, false)]
+    [InlineData("{\"comments\":[],\"comments_omitted\":true}", false, false)]
+    [InlineData("{\"dependents\":null}", false, false)]
+    [InlineData("{\"dependents\":[{\"id\":\"incoming\"}]}", false, false)]
+    [InlineData("{\"dependents\":[{\"issue_id\":\"incoming\",\"depends_on_id\":\"foreign\",\"type\":\"blocks\"}]}", false, false)]
+    [InlineData("{\"comments\":[{\"id\":\"1\",\"issue_id\":\"foreign\",\"author\":\"human\",\"text\":\"x\",\"created_at\":\"2026-01-01T00:00:00Z\"}]}", false, false)]
+    public async Task WorkspaceCombinedReadRequiresExplicitStreamsInsteadOfAggregateCounts(string fields, bool valid, bool streams)
+    {
+        var row = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(Row("selected"))!;
+        using var additions = JsonDocument.Parse(fields);
+        foreach (var property in additions.RootElement.EnumerateObject()) row[property.Name] = property.Value.Clone();
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            Assert.Equal(["--readonly", "--sandbox", "show", "selected", "--include-comments", "--include-dependents", "--json"], request.Arguments);
+            return Task.FromResult(new ProcessResult(0, JsonSerializer.Serialize(new[] { row }), ""));
+        });
+        var read = new BeadsReader(runner).ReadWorkspaceDetailAsync(new("target", "main"), "selected", TestContext.Current.CancellationToken);
+        if (!valid) { await Assert.ThrowsAsync<ToolExecutionException>(() => read); return; }
+        var result = await read;
+        Assert.Equal("selected", result.Bead.Id);
+        Assert.Equal(streams, result.Comments is not null);
+        Assert.Equal(streams, result.Incoming is not null);
+        // Row deliberately contains an unrelated outgoing dependency. It is not
+        // consumed as incoming evidence or used to certify any aggregate count.
+        if (streams) { Assert.Empty(result.Comments!); Assert.Empty(result.Incoming!); }
+    }
+
+    [Fact]
+    public async Task WorkspaceCombinedReadRetainsHistoryAndPayloadLimits()
+    {
+        foreach (var fields in new[]
+        {
+            new { comments = Enumerable.Range(0, 2049).Select(index => new { id = index.ToString(), issue_id = "selected", author = "human", text = "x", created_at = "2026-01-01T00:00:00Z" }) },
+            new { comments = Enumerable.Range(0, 1).Select(index => new { id = index.ToString(), issue_id = "selected", author = "human", text = new string('x', 2 * 1024 * 1024), created_at = "2026-01-01T00:00:00Z" }) }
+        })
+        {
+            var row = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(Row("selected"))!;
+            row["comments"] = JsonSerializer.SerializeToElement(fields.comments);
+            var runner = new RecordingProcessRunner((request, token) => Task.FromResult(new ProcessResult(0, JsonSerializer.Serialize(new[] { row }), "")));
+            await Assert.ThrowsAsync<ToolExecutionException>(() => new BeadsReader(runner).ReadWorkspaceDetailAsync(
+                new("target", "main"), "selected", TestContext.Current.CancellationToken));
+        }
+    }
+
+    [Theory]
+    [InlineData("{\"version\":\"1.3.1\",\"build\":\"c1c4b642a\",\"commit\":\"c1c4b642ac1c08d8c828007a1c2f96e47e43ef7c\",\"schema_version\":1}", true)]
+    [InlineData("{\"version\":\"1.3.1\",\"build\":\"c1c4b642a\"}", false)]
+    [InlineData("{\"version\":\"1.3.1\",\"build\":\"c1c4b642a\",\"commit\":\"foreign\",\"schema_version\":1}", false)]
+    [InlineData("{\"version\":\"9.0.0\",\"build\":\"c1c4b642a\",\"commit\":\"c1c4b642ac1c08d8c828007a1c2f96e47e43ef7c\",\"schema_version\":1}", false)]
+    [InlineData("[]", false)]
+    [InlineData("{\"version\":\"1.3.1\",\"version\":\"1.3.1\"}", false)]
+    public async Task EmptyTargetedStreamsRequireTheExactVerifiedProducer(string json, bool expected)
+    {
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            Assert.Equal(["--readonly", "--sandbox", "version", "--json"], request.Arguments);
+            return Task.FromResult(new ProcessResult(0, json, ""));
+        });
+        Assert.Equal(expected, await new BeadsReader(runner).QualifyTargetedEmptyStreamsAsync(new("target", "main"), TestContext.Current.CancellationToken));
+    }
+
     private static string Row(string id, string status = "in_progress", string? actor = "nightweaver:demo") => JsonSerializer.Serialize(new
     {
         id, status, issue_type = "custom", priority = 2, created_at = "2026-10-23T00:00:00Z", assignee = actor,

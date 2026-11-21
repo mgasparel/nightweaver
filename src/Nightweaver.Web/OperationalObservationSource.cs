@@ -98,6 +98,7 @@ internal sealed class OperationalObservationSource(
     private bool readyFirst;
     private TargetRepositoryValidator? repositoryValidator;
     private double nativeMilliseconds;
+    private bool? targetedStreamsQualified;
     internal long CommandCount { get; private set; }
     internal double NativeMilliseconds => nativeMilliseconds;
 
@@ -116,6 +117,7 @@ internal sealed class OperationalObservationSource(
         internal IReadOnlyList<BeadDependency> Outgoing { get; set; } = [];
         internal IReadOnlyList<BeadsCommentSnapshot> Comments { get; set; } = [];
         internal bool CommentsPrefetched { get; set; }
+        internal ObservationSourceState? CommentPrefetchFailure { get; set; }
         internal string IncomingState { get; set; } = "complete";
         internal string OutgoingState { get; set; } = "complete";
         internal BeadWorkspaceEnvironment? Environment { get; set; }
@@ -402,21 +404,34 @@ internal sealed class OperationalObservationSource(
             {
                 var cycle = new WorkspaceCycle(initial, clock.GetUtcNow());
                 workspaces[id] = cycle;
-                commentsThisSweep++;
                 var prefetchCommandsBefore = CommandCount;
-                var comments = await ReadAsync("comments:" + id, () => reader.ReadDetailCommentsAsync(repository, id, token), token);
-                cycle.Sources["comments:" + id] = states["comments:" + id];
-                try
+                var combined = await TryReadColdWorkspaceAsync(repository, reader, id, token);
+                commentsThisSweep++;
+                var combinedComments = combined && commentsReadThisSweep.Contains(id);
+                var readComments = !combinedComments && HasBudget;
+                var comments = combinedComments ? histories[id].Comments
+                    : readComments ? await ReadAsync("comments:" + id, () => reader.ReadDetailCommentsAsync(repository, id, token), token) : null;
+                // An actual failed prefetch must remain visible at the comments
+                // substep without retrying that command in the same sweep.
+                if (readComments && comments is null) cycle.CommentPrefetchFailure = states["comments:" + id];
+                // If the optional combined read spent the turn's budget, keep
+                // the cycle for continuation without inventing a comment result.
+                if (comments is not null)
                 {
-                    if (comments is not null) { StoreHistory(id, comments); cycle.Comments = comments; }
-                    cycle.CommentsPrefetched = true;
+                    cycle.Sources["comments:" + id] = states["comments:" + id];
+                    try
+                    {
+                        if (!combinedComments) StoreHistory(id, comments);
+                        cycle.Comments = comments;
+                        cycle.CommentsPrefetched = true;
+                    }
+                    catch (ToolExecutionException exception)
+                    {
+                        workspaces.Remove(id); failedPrefetch = id;
+                        result["workspace:" + id] = new(null, cycle.Started, null, cycle.Sources.ToDictionary(), Error(exception));
+                    }
+                }
                 cycle.RequiresConfirmation = CommandCount > prefetchCommandsBefore;
-                }
-                catch (ToolExecutionException exception)
-                {
-                    workspaces.Remove(id); failedPrefetch = id;
-                    result["workspace:" + id] = new(null, cycle.Started, null, cycle.Sources.ToDictionary(), Error(exception));
-                }
             }
         }
         // Alternate only on turns with detail capacity. Otherwise a slow core can
@@ -483,6 +498,62 @@ internal sealed class OperationalObservationSource(
         return result;
     }
 
+    private async Task<bool> TryReadColdWorkspaceAsync(ValidatedTargetRepository repository, BeadsReader reader,
+        string id, CancellationToken token)
+    {
+        var detailId = "detail:" + id;
+        var commentsId = "comments:" + id;
+        var incomingId = "relations-up:" + id;
+        // Coalesce only already-due cold inputs. Warm comments-only turns retain
+        // their small read and an incoming event cannot reuse an old generation.
+        if (!scheduled || states.ContainsKey(detailId) || !schedule.Due(detailId)
+            || !schedule.Due(commentsId) || !schedule.Due(incomingId)) return false;
+        var generations = new[] { detailId, commentsId, incomingId }
+            .ToDictionary(key => key, key => schedule.Begin(key), StringComparer.Ordinal);
+        var attempted = clock.GetUtcNow();
+        try
+        {
+            ReadStarted?.Invoke(detailId, "bootstrap-combined");
+            var combined = await reader.ReadWorkspaceDetailAsync(repository, id, token);
+            if (targetedStreamsQualified is null && HasBudget)
+            {
+                // One bounded discovery per collector, never per sweep. Only the
+                // pinned producer's successfully requested iterators certify that
+                // omitempty means empty. Counts and inventory play no part.
+                try { targetedStreamsQualified = await reader.QualifyTargetedEmptyStreamsAsync(repository, token); }
+                catch (Exception exception) when (IsSourceFailure(exception)) { targetedStreamsQualified = false; }
+            }
+            if (targetedStreamsQualified == true)
+                combined = (combined.Bead, combined.Comments ?? [], combined.Incoming ?? []);
+            else combined = (combined.Bead, null, null);
+            Accept(detailId, combined.Bead);
+            if (combined.Comments is not null)
+            {
+                Accept(commentsId, combined.Comments);
+                StoreHistory(id, combined.Comments);
+            }
+            if (combined.Incoming is not null) Accept(incomingId, combined.Incoming);
+            return true;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception exception) when (IsSourceFailure(exception))
+        {
+            // Unsupported flags, missing streams, limits and failed iterations
+            // establish no freshness; the ordinary bounded reads remain due.
+            schedule.InvalidateNames([detailId, commentsId, incomingId]);
+            states[detailId] = new("unavailable", null, attempted, Error(exception));
+            return false;
+        }
+
+        void Accept<T>(string key, T value) where T : class
+        {
+            RecordSuccessfulRead(key, value, attempted);
+            states[key] = states[key] with { SourceGeneration = generations[key].Source };
+            if (key == commentsId) historyGenerations[key] = generations[key];
+            else { StoreCached(key, value); schedule.Complete(key, generations[key], true); }
+        }
+    }
+
     private async Task<ObservationSample?> ReadWorkspaceAsync(ValidatedTargetRepository repository, BeadsReader reader,
         BeadsInventory inventory, string id, CancellationToken token)
     {
@@ -528,7 +599,12 @@ internal sealed class OperationalObservationSource(
                         break;
                     case 3:
                         sourceId = "comments:" + id;
-                        if (cycle.CommentsPrefetched)
+                        if (cycle.CommentPrefetchFailure is { } failure)
+                        {
+                            capturedState = failure;
+                            cycle.CommentPrefetchFailure = null;
+                        }
+                        else if (cycle.CommentsPrefetched)
                         {
                             capturedState = cycle.Sources[sourceId];
                             cycle.CommentsPrefetched = false;

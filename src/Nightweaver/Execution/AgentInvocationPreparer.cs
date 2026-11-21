@@ -49,7 +49,12 @@ internal sealed class AgentInvocationPreparer
             $"Stage: {context.StageLabel ?? "(none)"}",
             $"default_branch: {project.TargetRepository.DefaultBranch}",
             $"Remaining repair budget: {remainingRepairBudget.ToString(CultureInfo.InvariantCulture)}");
-        var standardInput = dispatchHeader + "\n\n" + prompt;
+        const string beadWritingInstruction =
+            "Use ASD-STE100 Simplified Technical English for all text you write for people in Bead updates. " +
+            "State the result first. Use short sentences and active voice. Use one term for each concept. " +
+            "If work stops, explain why. If someone must act, name the person or role and the action. " +
+            "Follow each required comment format exactly. Preserve identifiers, commands, and quoted evidence exactly as written.";
+        var standardInput = string.Join("\n\n", dispatchHeader, beadWritingInstruction, prompt);
         return BuildInvocation(hostPaths, project, context, workingDirectory, project.Roles[role], standardInput, roleSuffix);
     }
 

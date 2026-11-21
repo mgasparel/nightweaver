@@ -1,5 +1,36 @@
 ## Event-driven scheduling amendment (ns-sib.1)
 
+Cold selected Workspaces coalesce already-due detail, comments and incoming
+relations in a read-only `show --include-comments --include-dependents --json`.
+This uses the supported local embedded backend; other backend modes remain
+refused by the existing mutation-free inspection boundary. The pinned Beads
+1.3.1 c1c4b642a producer propagates requested comment/dependent iterator errors.
+Its embedded dependent iterator delegates to the same metadata read as native
+incoming relations, including durable and ephemeral owners. Both native incoming
+and show resolve only owners in the selected database; this establishes no
+cross-database inventory completeness.
+
+One bounded `version --json` discovery per collector qualifies the exact version,
+build and full commit above. Only this producer's requested streams are reused;
+successful iterator completion makes its omitted collections empty. This is a
+targeted-read contract, not an inventory completeness claim. Unknown versions or
+failed discovery retain native comments/incoming fallback, even when arrays are
+present. A retained comment source state alone cannot complete a Workspace
+history prefetch. If discovery exhausts the turn before a comment value is read,
+the cycle retains its comment substep for a later bounded native read. This also
+applies when an expired Attention history remains selected as a Workspace.
+The discovery shares the same native/sweep budgets and is not retried
+per sweep. Aggregate counts cannot establish emptiness or completeness.
+Unsupported flags, malformed streams, read failures and payload limits retain
+ordinary bounded reads and honest
+health. Outgoing relations always use native `dep list --direction down` because
+show's outgoing hydration is best effort. No inventory-derived edge shortcut is
+used. Each coalesced source captures its own generation before the native read;
+journal hints arriving during it remain pending. Final inventory identity
+confirmation, memory/payload bounds and mutation priority remain unchanged.
+Warm refreshes do not request combined streams. The finite-contention regression
+is an injected latency model, not proof of the historical hosted timeout's cause.
+
 The v1.2 contract amendment in `operational-observations-v1.md` supersedes the
 original one-second tracker schedule below. `ConsoleJournalReader` binds public
 bounded batches to Git/Dolt branch and host/repository identity and shares the
