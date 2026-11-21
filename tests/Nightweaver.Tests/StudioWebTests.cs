@@ -11,13 +11,14 @@ public sealed partial class StudioWebTests
     {
         using var factory = new NightweaverWebApplicationFactory();
         using var client = factory.CreateClient();
+        var hostState = factory.CaptureHostState();
         using var response = await client.GetAsync("/api/studio/context", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         Assert.Equal("web-test", json.RootElement.GetProperty("projectId").GetString());
         Assert.Single(json.RootElement.EnumerateObject());
-        Assert.Empty(Directory.EnumerateFileSystemEntries(factory.HostRoot));
+        Assert.Equal(hostState, factory.CaptureHostState());
         Assert.False(Directory.Exists(Path.Combine(factory.TargetRoot, ".beads")));
     }
 

@@ -6,6 +6,7 @@ using Nightweaver.Execution;
 using Nightweaver.Inspection;
 using Nightweaver.Telemetry;
 using Nightweaver.Supervision;
+using Nightweaver.Upgrade;
 
 namespace Nightweaver.Background;
 
@@ -228,7 +229,7 @@ internal static class BackgroundOwnerApplication
             var record = await ObserveAsync(paths, project, state.Current, webHostProvider(), cancellationToken).ConfigureAwait(false);
             return new BackgroundControlResponse(true, record, null);
         }
-        if (request.Operation is not ("stop" or "force" or "recover") || request.RunId != options.RunId)
+        if (request.Operation is not ("stop" or "force" or "recover" or "upgrade") || request.RunId != options.RunId)
             return new BackgroundControlResponse(false, state.Current, "control request identity or operation is invalid");
 
         if (request.Operation == "recover")
@@ -251,11 +252,23 @@ internal static class BackgroundOwnerApplication
 
         try
         {
+            if (request.Operation == "upgrade")
+            {
+                if (request.UpgradeOperationId is null || request.Force || !request.Maintenance)
+                    throw new InvalidOperationException("Upgrade drain requires current operation authority.");
+                UpgradeInterlock.RequireDrain(paths, request.UpgradeOperationId);
+                var read = lifecycle?.Read();
+                if (read?.Availability == SupervisionAvailability.Unavailable
+                    || read?.State is { } installed && (installed.MaintenanceToken is null
+                        || installed.MaintenanceToken != request.MaintenanceToken))
+                    throw new InvalidOperationException("Upgrade maintenance token changed.");
+            }
             if (lifecycle is not null)
             {
                 if (request.Maintenance)
                 {
-                    if (lifecycle.Read().State?.MaintenanceToken is null)
+                    if (!(request.Operation == "upgrade" && lifecycle.Read().Availability == SupervisionAvailability.Manual)
+                        && lifecycle.Read().State?.MaintenanceToken is null)
                         throw new InvalidOperationException("Maintenance suppression is not confirmed.");
                 }
                 else if (lifecycle.Read().State is not { DesiredRunning: false })
@@ -278,7 +291,7 @@ internal static class BackgroundOwnerApplication
     internal static void ApplyControlAction(BackgroundControlRequest request, string runId,
         RuntimeShutdownSignals shutdownSignals)
     {
-        if (request.Operation is not ("stop" or "force" or "recover") || request.RunId != runId) return;
+        if (request.Operation is not ("stop" or "force" or "recover" or "upgrade") || request.RunId != runId) return;
         if (request.Operation == "recover")
         {
             shutdownSignals.RequestGracefulStop(RuntimeShutdownReason.RuntimeFailure);

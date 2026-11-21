@@ -2,6 +2,7 @@ using Nightweaver.Cli;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
+using Nightweaver.Upgrade;
 
 namespace Nightweaver.Application;
 
@@ -51,7 +52,7 @@ internal static class DispatchApplication
 
         // The process-owned OS mutex precedes tracker recovery and every dispatch mutation.
         // Its dedicated owner thread remains alive until this native process exits.
-        ProcessLifetimeTargetRepositoryLock.Acquire(repository);
+        UpgradeInterlock.AcquireRuntime(hostPaths, project.Name, repository);
         SharedRuntimeRootValidator.EnsureUsable(hostPaths.WorktreesRoot(project.Name));
         SharedRuntimeRootValidator.EnsureUsable(hostPaths.TmpRoot(project.Name));
         SharedRuntimeRootValidator.EnsureUsable(hostPaths.LogsRoot(project.Name));

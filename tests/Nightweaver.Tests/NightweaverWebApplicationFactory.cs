@@ -12,6 +12,7 @@ internal sealed class NightweaverWebApplicationFactory : WebApplicationFactory<W
     private readonly TempDirectory directory = new();
     private readonly Action<IConfigurationBuilder>? configure;
     private readonly Action<IServiceCollection>? configureServices;
+    private readonly List<IDisposable> payloadLeases = [];
 
     internal NightweaverWebApplicationFactory(
         Action<IConfigurationBuilder>? configure = null,
@@ -33,6 +34,17 @@ internal sealed class NightweaverWebApplicationFactory : WebApplicationFactory<W
     internal string TargetRoot { get; }
     internal string WebRoot { get; }
     internal string ConfigPath { get; }
+
+    internal string CaptureHostState() => string.Join('\n', Directory.EnumerateFileSystemEntries(HostRoot, "*", SearchOption.AllDirectories)
+        .Order(StringComparer.Ordinal).Select(path =>
+        {
+            var entry = $"{Path.GetRelativePath(HostRoot, path)}:{File.GetAttributes(path)}:{File.GetLastWriteTimeUtc(path):O}";
+            if (Directory.Exists(path)) return entry;
+            // The Web lease shares reads and writes, but excludes deletion and
+            // exclusive opens. This snapshot changes no file or lease ownership.
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            return $"{entry}:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream))}";
+        }));
 
     private void StageBuiltWebAssets()
     {
@@ -74,7 +86,14 @@ internal sealed class NightweaverWebApplicationFactory : WebApplicationFactory<W
             });
             configure?.Invoke(configuration);
         });
-        builder.ConfigureTestServices(services => configureServices?.Invoke(services));
+        builder.ConfigureTestServices(services =>
+        {
+            // TestServer has no separate native process. Retain real admission and
+            // lease checks until this simulated process has stopped.
+            services.AddSingleton(new Web.WebStartupAdmission((paths, project) =>
+                payloadLeases.Add(Nightweaver.Upgrade.UpgradeInterlock.AcquireWeb(paths, project))));
+            configureServices?.Invoke(services);
+        });
     }
 
     protected override void Dispose(bool disposing)
@@ -82,6 +101,7 @@ internal sealed class NightweaverWebApplicationFactory : WebApplicationFactory<W
         base.Dispose(disposing);
         if (disposing)
         {
+            foreach (var lease in payloadLeases) lease.Dispose();
             directory.Dispose();
         }
     }

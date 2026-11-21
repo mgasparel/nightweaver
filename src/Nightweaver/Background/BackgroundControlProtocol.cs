@@ -3,7 +3,8 @@ using System.Text.Json;
 
 namespace Nightweaver.Background;
 
-internal sealed record BackgroundControlRequest(string Operation, string RunId, bool Force = false, bool Maintenance = false);
+internal sealed record BackgroundControlRequest(string Operation, string RunId, bool Force = false, bool Maintenance = false,
+    string? UpgradeOperationId = null, string? MaintenanceToken = null);
 internal sealed record BackgroundControlResponse(bool Accepted, BackgroundOwnerRecord? Owner, string? Error);
 
 internal static class BackgroundControlProtocol
@@ -41,7 +42,7 @@ internal static class BackgroundControlProtocol
                     var response = request is null
                         ? new BackgroundControlResponse(false, null, "invalid control request")
                         : await handle(request, clientLifetime.Token).ConfigureAwait(false);
-                    if (request is { Operation: "stop" or "force" or "recover" } && response.Accepted)
+                    if (request is { Operation: "stop" or "force" or "recover" or "upgrade" } && response.Accepted)
                         acceptedAction = request;
                     await WriteAsync(pipe, response, clientLifetime.Token).ConfigureAwait(false);
                     await pipe.FlushAsync(clientLifetime.Token).ConfigureAwait(false);
