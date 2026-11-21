@@ -1,6 +1,9 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using Nightweaver.Execution;
+using Nightweaver.Background;
+using System.Diagnostics;
+using System.Text.Json;
 
 namespace Nightweaver.Tests.ExecutionCrashHost;
 
@@ -27,7 +30,14 @@ public static class TerminalOwnerProbe
                 if (cleanupJob.IsInvalid || !AssignProcessToJobObject(cleanupJob, GetCurrentProcess()))
                     throw new Win32Exception(Marshal.GetLastWin32Error());
             }
-            using var ownerJob = WindowsProcessLauncher.AttachCurrentProcessToKillOnCloseJob();
+            using var current = Process.GetCurrentProcess();
+            var root = Path.GetDirectoryName(ready)!;
+            var record = new BackgroundOwnerRecord(1, "running", Guid.NewGuid().ToString("N"), current.Id,
+                current.StartTime.ToUniversalTime(), root, Path.Combine(root, "demo.json"), "demo", root,
+                Guid.NewGuid().ToString("N"), "http://127.0.0.1:5000", "healthy", "live", "", "", null)
+                { ContainmentVersion = 1, GitCommonDirectory = root };
+            using var ownerJob = WindowsProcessLauncher.AttachCurrentProcessToKillOnCloseJob(BackgroundContainment.Name(record));
+            File.WriteAllText(ready + ".owner.json", JsonSerializer.Serialize(record));
             using var child = WindowsProcessLauncher.Launch(Environment.ProcessPath!,
                 ["--terminal-owner-probe", "child"], Environment.CurrentDirectory,
                 new Dictionary<string, string>());

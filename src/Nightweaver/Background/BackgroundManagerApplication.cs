@@ -71,8 +71,11 @@ internal static class BackgroundManagerApplication
                     environment.Out.WriteLine(JsonSerializer.Serialize(supervision, OutputJson));
                     return supervision?.Availability == SupervisionAvailability.Unavailable ? ExitCodes.InspectionFailure : ExitCodes.Success;
                 }
-                return WriteStatus(await QueryAsync(paths, project, configPath, pipeName, recordPath,
-                    cancellationToken).ConfigureAwait(false), environment, supervision);
+                var query = await QueryAsync(paths, project, configPath, pipeName, recordPath,
+                    cancellationToken).ConfigureAwait(false);
+                var observation = await ObserveStatusAsync(paths, project, query, lifecycle, supervision,
+                    cancellationToken).ConfigureAwait(false);
+                return WriteStatus(query, environment, supervision, observation);
             }
             if (options.Action == BackgroundAction.MaintenanceLeave)
             {
@@ -386,14 +389,47 @@ internal static class BackgroundManagerApplication
         string.Equals(Path.GetFullPath(record.ConfigPath), Path.GetFullPath(configPath),
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
-    private static int WriteStatus(OwnerQuery query, AppEnvironment environment, SupervisionRead? supervision = null)
+    private static async Task<DeploymentObservation> ObserveStatusAsync(HostPaths paths, ProjectConfig project,
+        OwnerQuery query, SupervisionLifecycle? lifecycle, SupervisionRead supervision, CancellationToken token)
+    {
+        var identity = new DeploymentIdentity(paths.Root, project.ConfigFilePath, project.Name.Value,
+            project.TargetRepository.Path, string.Empty);
+        try
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+            deadline.CancelAfter(SupervisionPolicy.ProbeBudget);
+            var repository = await new TargetRepositoryValidator(new SystemProcessRunner())
+                .ValidateAsync(project.TargetRepository, project.ConfigFilePath, deadline.Token).ConfigureAwait(false);
+            identity = identity with { GitCommonDirectory = repository.GitCommonDirectory };
+            var observer = new DeploymentObserver(identity, new(
+                () => BackgroundOwnerRecord.TryRead(BackgroundOwnerRecord.PathFor(paths, project.Name)),
+                () => BackgroundFileLock.ObserveOwner(paths, project.Name), BackgroundContainment.Read,
+                _ => Task.FromResult(new BackgroundControlResponse(query.OwnerLockActive, query.Record, query.Failure)),
+                () => new Nightweaver.Telemetry.FactoryTelemetryReader(paths, project).Read(),
+                () => lifecycle?.Read() ?? supervision));
+            return await observer.ObserveAsync(deadline.Token).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException
+            or ProjectConfigurationException or TargetRepositoryException or ToolExecutionException or TimeoutException
+            or OperationCanceledException)
+        {
+            return new(1, DateTimeOffset.UtcNow, Guid.NewGuid().ToString("N"), 0, identity, null,
+                DeploymentHealth.Unknown, "identity-observation-unavailable", null, null, null, null);
+        }
+    }
+
+    private static int WriteStatus(OwnerQuery query, AppEnvironment environment, SupervisionRead? supervision = null,
+        DeploymentObservation? observation = null)
     {
         var record = query.Record ?? new BackgroundOwnerRecord(1,
             query.OwnerLockActive ? "unavailable" : "stopped", string.Empty, 0, DateTimeOffset.MinValue,
             string.Empty, string.Empty, string.Empty, null, null, string.Empty, "unknown",
             query.OwnerLockActive ? "unknown" : "stale", string.Empty, string.Empty,
             query.Failure ?? "no background owner has been recorded");
-        environment.Out.WriteLine(JsonSerializer.Serialize(record with { Supervision = supervision }, OutputJson));
+        var output = JsonSerializer.SerializeToNode(record with { Supervision = supervision }, OutputJson)!.AsObject();
+        if (observation is not null)
+            output["observation"] = JsonSerializer.SerializeToNode(DeploymentEvidenceStore.Sanitize(observation), OutputJson);
+        environment.Out.WriteLine(output.ToJsonString(OutputJson));
         if (supervision?.Availability == SupervisionAvailability.Unavailable) return ExitCodes.InspectionFailure;
         if (record.State == "running" || record.State == "stopped") return ExitCodes.Success;
         environment.Err.WriteLine("nightweaver: background runtime is " + record.State + ". " + (query.Failure ?? record.Message ?? string.Empty));

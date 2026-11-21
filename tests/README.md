@@ -38,6 +38,47 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Classifier telemetry fixtures use a controlled HTTP transport beneath the real
+OTLP serializers and safe export handler. The five successful active-phase cases
+still require loss-free diagnostics; a separate active metrics rejection requires
+the exact export-loss diagnostic, and a held response distinguishes request capture
+from acknowledgement before shutdown. Classifier records, private-data exclusion
+and absence of unverified lifecycle publications remain required in every case.
+Real loopback transport, response failures, privacy and native first-path coverage
+remain in `OperationalTelemetryTests` and `FirstPathTelemetryTests`. This adds one
+cheap deterministic case, no native journey or fixture publish, and changes no
+production export deadline, shutdown budget or six-thread scheduling.
+
+Identity-bound supervision adds cheap injected process/control/runtime/clock and
+collector cases for healthy/start/drain/failure/uncertainty, source identity and
+freshness, PID reuse, owner replacement, capture ordering/errors, bounded history,
+privacy and failed persistence. The existing detached-owner containment journey
+now names its Job and probes through the production observer before and after
+owner death. Its original owner/child launches, caller-policy checks and deadlines
+remain; no native journey or publish is added. This proves the uncovered Windows
+boundary that live observation holds no Job handle delaying kill-on-close and
+that original native exit plus Job accounting can establish descendant settlement.
+Report its measured cost against retained baseline XML with the full candidate run.
+
+Disposable capture-journal mutations cover missing/null required members, invalid
+enums and observation identity, duplicate/unknown fields and inconsistent incident
+history/capture state. Reads and preparation must reject them, invoke no collector
+and preserve the original bytes. Recovery-A/capture-B mutations cover explicit
+null and misdirected current pointers for Failed/Pending B, with both ordinary and
+failed-capture A. Positive cases retain recovery followed by uncertainty and a
+subsequent incident after the blocked record outlives bounded history eviction.
+These deterministic cases add no native journey.
+
+`OwnerFailurePublicationTests` inject sharing denial and publication cancellation
+for stop/force/maintenance, concurrent owner failure, and discovery/timer/completion
+infrastructure termination with a blocked pool drain. These cheap cases verify
+truthful control state and retained failure identity before drain without adding
+native journeys or fixture publishing. Deliberate cancellation remains distinct.
+Blocked Web-readiness cases cover control stop, maintenance and console stop,
+with and without prior failure evidence. They verify disposal and unchanged
+failure/incident history; genuine readiness errors still publish before disposal.
+These use injected operations without adding native launches or fixture publishing.
+
 Journal cancellation/deadline tests assert native process signaling before
 return and disposable-file teardown. Their 16 iterations per path cover Windows
 process rundown, where a managed exit notification can precede native settlement;

@@ -2,8 +2,9 @@
 
 This contract settles the policy and durable operational state for subsequent
 supervision work. The model/store installs no task and enables no supervision. Background lifecycle
-commands integrate intent and maintenance suppression; there is no automatic recovery
-launcher, scheduler installation or Web integration in this slice. Missing storage means manual opt-out; an existing
+commands integrate intent and maintenance suppression. Identity-bound observations and
+capture-first incident preparation are available, but there is no automatic recovery
+launcher, scheduler installation or Web UI integration in this slice. Missing storage means manual opt-out; an existing
 unreadable, malformed, foreign or interrupted store means unavailable.
 
 ## Execution boundary
@@ -209,3 +210,102 @@ owner shutdown retains supervision-unavailable evidence. No durable stop is ackn
 The second console stop closes Jobs and exits immediately, bypassing all persistence,
 callbacks and compensation. Graceful drain retains existing per-role deadlines and
 no total force deadline; the manager's two-minute wait only returns pending status.
+
+## Identity-bound observation and incidents
+
+`background status` adds an `observation` object (version 1) while preserving the
+existing owner fields and manual status exit codes. Consumers use observation health,
+not an exit code or `/health` alone. It contains observation UTC/monotonic time and
+epoch, root/configuration/Project/repository/common-directory identity, original
+owner PID/creation/run/runtime identity, owner-lock and process evidence, runtime
+and control source timestamps, and a fixed reason code. No telemetry slots,
+transcripts, configuration contents, environment or exception messages are copied
+into incident evidence. Status remains read-only; it creates no supervision store.
+
+| Health | Evidence |
+| --- | --- |
+| Healthy | Matching native owner and held lock, fresh current-user control, matching live runtime file and actual Web `/health` plus `/api/factory/state` |
+| Starting | Matching live owner and held lock, startup not complete |
+| Draining | Matching live owner deliberately stopping or entering maintenance; no total drain timeout |
+| Stopped | Matching exited owner, absent owner lock and deliberate stopped/maintenance intent |
+| Failed | Confirmed original owner exit or fresh matching explicit Web/runtime failure evidence |
+| Unknown | Missing/stale/inaccessible/mismatched source, PID reuse, owner replacement or uncertain intent |
+
+Freshness is at most ten seconds with at most one second future skew. Web bodies
+are bounded to 1 MiB/depth 32 and active Web checks have a four-second combined
+deadline. The observer has a ten-second pipe budget and fixed-size file reads.
+Status validates the configured repository independently and reuses its fresh pipe
+reply. A standalone `DeploymentObserver.Create` accepts the already independently
+validated physical common directory and a fresh intent reader; callers must not
+derive that expected identity from the untrusted owner file. Its scheduler consumer
+must supply a shared, boot-qualified observation epoch across ticks. Default manual
+status epochs are process-local and cannot qualify repeated recovery failures.
+The existing policy rejects large gaps, reboot/epoch changes, clock discontinuity,
+rapid duplicates and changed owners without refunding attempts.
+
+Owner Web/control/runtime failure publishes the first failure identity before
+requesting graceful drain or disposing Web. Successful later drain does not erase
+the failing runtime. Discovery, timer and completion-stream infrastructure failure
+notifies the owner before active pool drain begins, even while live telemetry
+continues during that drain. A deliberate cancellation publishes no such failure.
+The same distinction applies while waiting for Web readiness: caller-requested
+cancellation disposes Web and preserves stop/maintenance intent and any prior
+failure or incident without creating another. Real readiness errors, timeouts and
+unrequested cancellation retain the first failure before Web disposal.
+Control stop proposals share owner-state writer serialization with failure updates;
+only successful owner-record publication commits stopping state. A rejected or
+canceled publication leaves the prior state visible and accepts no shutdown action.
+`run/<Project>/background/owner-failures.json` retains at most
+32 historical failures, including failures before repository/runtime readiness.
+`observations.json` is a compact versioned local consumer surface with last
+observation, continuing incident, recovered incident, attempts, fixed reason,
+capture status/errors, local log paths and inspection instructions. Its history is
+bounded to 32 with a discarded count and a 256 KiB byte ceiling. Atomic no-reparse
+files and an exclusive writer lock preserve foreign/corrupt/unavailable evidence;
+reads require every serialized field, including explicit nullable incident/capture
+members, and reject duplicate/unknown fields, invalid enums, malformed identities
+and inconsistent incident/history/capture state before any replacement or collector
+call. Rejected journals remain byte-for-byte intact for inspection. Retention order
+binds the current/recovered pointers to history: an older recovery cannot account
+for a newer unresolved required capture, even if the current pointer is explicitly
+null or points at another failure. A blocked incident may outlive history eviction
+while later owner failures are retained without replacing its capture interlock;
+confirmed recovery followed by uncertainty remains valid in that case.
+Persistence failure retains `supervision-unavailable` on the owner and grants no
+automatic recovery permission. Uncertainty never clears a continuing incident;
+only a later confirmed Healthy observation records recovery separately.
+
+Containment version 1 names the owner's existing non-breakaway kill-on-close Job
+using root/config/Project/run/PID/creation identity. Creation refuses an existing
+name. Native process reads use limited-query/synchronize handles, compare creation
+time and require the actual process signal; reused PIDs remain Unknown. Observers
+open **no Job handle while the owner lives**, so they cannot postpone kill-on-close.
+Only after native owner rundown or confirmed PID absence can a short query handle
+prove zero active Job processes or that the named Job has already disappeared.
+Access denial, live descendants and old unnamed owner versions provide no settlement
+proof. Windows destroys a Job only after its handles close and processes terminate;
+see [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
+An owner-lock release alone never proves descendant settlement. This evidence is
+not permission to terminate or target a reused PID or foreign owner.
+
+`DeploymentIncidentRecorder.PrepareAsync` persists the triggering observation
+before invoking capture. Explicit comparable-slowdown, broad-native-timeout or
+sustained-resource-drift signals require capture; no background detector is added.
+`ResourceIncidentCapture` invokes the packaged observation-only PowerShell collector
+and its `TestSuiteMeasurement.psm1` dependency within the existing 45-second capture
+budget. It retains partial output and treats nonzero source-error counts, missing
+results, interruption and timeout as Failed capture even with process exit 0.
+The collector records Target Repository source identity plus separate installation
+identity. It does not copy secret command lines, environment or configuration bytes.
+Capture failures remain inspectable and block readiness for reconciliation; the
+failed/pending capture interlock survives quiet ticks, later failures and observer
+restart. It is retained for inspection without automatic capture retries; a new
+incident cannot downgrade it to NotRequired. A confirmed Healthy observation can
+record recovery separately without erasing the historical failed capture. The
+preparation API performs no restart, kill, cleanup or tracker writes.
+
+Future recovery consumers must still serialize the tick, hold repository exclusion,
+reread current intent/generation/owner and reserve the finite attempt durably before
+launch. Prepared evidence alone is never action authority. Maintenance consumers
+(`ns-qa2`) and notification consumers (`ns-qyk`) can inspect these local surfaces;
+this change installs no supervisor and sends no notification.

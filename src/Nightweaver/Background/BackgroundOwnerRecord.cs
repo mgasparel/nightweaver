@@ -23,6 +23,10 @@ internal sealed record BackgroundOwnerRecord(
     string? Message)
 {
     public string? StopReason { get; init; }
+    public string? GitCommonDirectory { get; init; }
+    public int ContainmentVersion { get; init; }
+    public DateTimeOffset? ObservedAtUtc { get; init; }
+    public BackgroundFailure? Failure { get; init; }
     public Nightweaver.Supervision.SupervisionRead? Supervision { get; init; }
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -60,14 +64,45 @@ internal sealed record BackgroundOwnerRecord(
     }
 }
 
-internal sealed class BackgroundOwnerState(BackgroundOwnerRecord initial)
+internal sealed record BackgroundFailure(DateTimeOffset Utc, string Reason, string RunId, string? RuntimeId,
+    int ProcessId, DateTimeOffset ProcessStartedAtUtc);
+
+internal sealed class BackgroundOwnerState(BackgroundOwnerRecord initial,
+    Func<string, BackgroundOwnerRecord, CancellationToken, Task>? write = null) : IDisposable
 {
     private readonly object sync = new();
     private BackgroundOwnerRecord current = initial;
+    private readonly SemaphoreSlim persistence = new(1, 1);
 
     internal BackgroundOwnerRecord Current { get { lock (sync) return current; } }
     internal void Update(Func<BackgroundOwnerRecord, BackgroundOwnerRecord> update)
     {
-        lock (sync) current = update(current);
+        persistence.Wait();
+        try { lock (sync) current = update(current); }
+        finally { persistence.Release(); }
     }
+
+    // Commit proposed control state only after publication. Serialize updates too,
+    // so a concurrent failure cannot be overwritten by an older proposal.
+    internal async Task PublishAsync(string path, Func<BackgroundOwnerRecord, BackgroundOwnerRecord> update,
+        CancellationToken token)
+    {
+        await persistence.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            var proposed = update(Current);
+            await (write ?? BackgroundOwnerRecord.WriteAsync)(path, proposed, token).ConfigureAwait(false);
+            lock (sync) current = proposed;
+        }
+        finally { persistence.Release(); }
+    }
+
+    internal async Task PersistAsync(string path, CancellationToken token)
+    {
+        await persistence.WaitAsync(token).ConfigureAwait(false);
+        try { await (write ?? BackgroundOwnerRecord.WriteAsync)(path, Current, token).ConfigureAwait(false); }
+        finally { persistence.Release(); }
+    }
+
+    public void Dispose() => persistence.Dispose();
 }

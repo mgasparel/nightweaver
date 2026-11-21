@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.ExceptionServices;
 using Nightweaver.Tests.ExecutionCrashHost;
+using Nightweaver.Background;
+using System.Text.Json;
 
 namespace Nightweaver.Tests;
 
@@ -112,6 +114,13 @@ public sealed class BackgroundTerminalLifetimeTests
             Assert.False(owner.HasExited);
             Assert.False(child.HasExited);
 
+            var containmentOwner = JsonSerializer.Deserialize<BackgroundOwnerRecord>(
+                await File.ReadAllTextAsync(ready + ".owner.json", deadline.Token))!;
+            for (var probe = 0; probe < 10; probe++)
+                Assert.Equal(new OwnerProcessObservation(OwnerProcessState.Alive, false), BackgroundContainment.Read(containmentOwner));
+            Assert.Equal(OwnerProcessState.Reused, BackgroundContainment.Read(containmentOwner with
+                { ProcessStartedAtUtc = containmentOwner.ProcessStartedAtUtc.AddTicks(1) }).State);
+
             // Closing a terminal kills its session job, not merely its shell.
             // Killing only this root closes its last job handle and triggers that policy.
             terminal.Kill(entireProcessTree: false);
@@ -122,6 +131,14 @@ public sealed class BackgroundTerminalLifetimeTests
             owner.Kill(entireProcessTree: false);
             await owner.WaitForExitAsync(deadline.Token);
             await child.WaitForExitAsync(deadline.Token);
+            OwnerProcessObservation settlement;
+            do
+            {
+                settlement = BackgroundContainment.Read(containmentOwner);
+                if (settlement is { State: OwnerProcessState.Exited, DescendantsSettled: true }) break;
+                await Task.Delay(10, deadline.Token);
+            } while (true);
+            Assert.True(settlement.DescendantsSettled);
         }
         Exception? failure = null;
         try
