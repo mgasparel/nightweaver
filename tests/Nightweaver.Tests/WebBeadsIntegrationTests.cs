@@ -362,13 +362,14 @@ public sealed class WebBeadsIntegrationTests
         using var factory = CreateFactory(target, runner);
         using var client = factory.CreateClient();
 
+        var hostState = factory.CaptureHostState();
         // 1. Fresh host GET /api/digest defaults to 24h, has null lastCaughtUpAt, and does not write to HostRoot.
         using (var initialResponse = await client.GetAsync("/api/digest", TestContext.Current.CancellationToken))
         {
             Assert.Equal(HttpStatusCode.OK, initialResponse.StatusCode);
             Assert.Equal("application/json", initialResponse.Content.Headers.ContentType?.MediaType);
             Assert.Equal("no-store", initialResponse.Headers.CacheControl?.ToString());
-            Assert.Empty(Directory.EnumerateFileSystemEntries(factory.HostRoot));
+            Assert.Equal(hostState, factory.CaptureHostState());
 
             using var document = JsonDocument.Parse(await initialResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
             var root = document.RootElement;
@@ -577,6 +578,7 @@ public sealed class WebBeadsIntegrationTests
         var runner = CreateFixtureRunner(target);
         using var factory = CreateFactory(target, runner);
         using var client = factory.CreateClient();
+        var hostState = factory.CaptureHostState();
 
         using (var missingHeader = CreateAttentionRequest(client, "/api/digest/catch-up", "{}", includeHeader: false))
         using (var response = await client.SendAsync(missingHeader, TestContext.Current.CancellationToken))
@@ -607,7 +609,7 @@ public sealed class WebBeadsIntegrationTests
             Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
         }
 
-        Assert.Empty(Directory.EnumerateFileSystemEntries(factory.HostRoot));
+        Assert.Equal(hostState, factory.CaptureHostState());
         Assert.Empty(runner.Requests);
     }
 

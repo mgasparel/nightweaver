@@ -35,6 +35,17 @@ internal sealed class NightweaverWebApplicationFactory : WebApplicationFactory<W
     internal string WebRoot { get; }
     internal string ConfigPath { get; }
 
+    internal string CaptureHostState() => string.Join('\n', Directory.EnumerateFileSystemEntries(HostRoot, "*", SearchOption.AllDirectories)
+        .Order(StringComparer.Ordinal).Select(path =>
+        {
+            var entry = $"{Path.GetRelativePath(HostRoot, path)}:{File.GetAttributes(path)}:{File.GetLastWriteTimeUtc(path):O}";
+            if (Directory.Exists(path)) return entry;
+            // The Web lease shares reads and writes, but excludes deletion and
+            // exclusive opens. This snapshot changes no file or lease ownership.
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            return $"{entry}:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream))}";
+        }));
+
     private void StageBuiltWebAssets()
     {
         var appDirectory = typeof(NightweaverWebApplicationFactory).Assembly
