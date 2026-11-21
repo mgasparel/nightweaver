@@ -11,10 +11,10 @@ export const windows = ["auto", "since_caught_up", "24h", "7d", "30d", "all"] as
 export type DigestWindow = typeof windows[number];
 export const digestWindow = (value: string | null): DigestWindow => windows.includes(value as DigestWindow) ? value as DigestWindow : "auto";
 
-/** Preview actual closed outcomes across lineage and standalone lists, once per Bead. */
+/** Preview window-active closed outcomes once; historical lineage context is not an outcome. */
 export function completedOutcomes(data: Digest) {
   const items = [...data.standaloneCompleted, ...data.threads.flatMap(thread => [thread.root, ...thread.items])];
-  return [...new Map(items.filter(item => item.status === "closed").map(item => [item.id, item])).values()]
+  return [...new Map(items.filter(item => item.status === "closed" && item.activityKind !== "context").map(item => [item.id, item])).values()]
     .sort((a, b) => Date.parse(b.activityAt) - Date.parse(a.activityAt));
 }
 

@@ -7,7 +7,8 @@ test('Overview outcomes include closed lineage roots and children once, newest f
   const child = item('child', 'closed', 19);
   const data = {standaloneCompleted: [child, item('standalone', 'closed', 18)], threads: [
     {root: item('open-root', 'open', 20), items: [child, item('open-child', 'in_progress', 20)]},
-    {root: item('closed-root', 'closed', 20), items: []}
+    {root: item('closed-root', 'closed', 20), items: []},
+    {root: {...item('historical-parent', 'closed', 17), activityKind: 'context'}, items: []}
   ]};
   assert.deepEqual(completedOutcomes(data).map(row => row.id), ['closed-root', 'child', 'standalone']);
   assert.deepEqual(completedOutcomes({standaloneCompleted: [], threads: []}), []);

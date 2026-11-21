@@ -63,6 +63,8 @@ and runtime Refresh. The existing Workspace Output projection is unchanged.
 Factory observations lack title/type fields: explicit unavailable fallbacks are
 retained rather than querying per-bay tracker history or substituting sample copy.
 
+Historical lineage roots marked context are excluded from completed outcomes even
+when their current tracker status is closed; they are not activity in this window.
 The same controlled read fixture in `overview-visual-checks.mjs`, called by the
 existing Studio journey, captures one decision, two Delivery bays and two closed
 outcomes before/after at 1440/720/375 with 900px viewport height. It adds digest

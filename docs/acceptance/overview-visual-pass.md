@@ -67,7 +67,10 @@ Every stack is started isolated and stopped by the existing wrapper's `finally`.
 Studio TypeScript/Vite build and all 78 component tests pass, including the added
 cheap closed-outcome deduplication/lineage/order case. No new native journey,
 fixture publication, polling request, coordinator or backend query was added.
-The additional controlled screenshots reuse the existing Studio native setup;
+The helper regression also rejects closed parents carried only as historical
+lineage context. A controlled assertion reproduced their erroneous inclusion before
+the filter correction; the final helper excludes them without changing this visual
+fixture's rendering. The additional controlled screenshots reuse the existing Studio native setup;
 the before-to-final probe difference includes the added twelve digest edge-state
 captures and is diagnostic, not a paired machine benchmark. The complete
 candidate measurement, retained baseline identity and comparability limitations
