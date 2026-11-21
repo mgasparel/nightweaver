@@ -24,6 +24,9 @@ internal static class NightweaverApp
         var dispatchCommand = args.Count > 0 && args[0] == "dispatch";
         try
         {
+            if (args.Count > 0 && args[0] == "upgrade")
+                return await Upgrade.UpgradePreflight.RunAsync(args, environment, processRunner, cancellationToken);
+
             if (args.Count > 0 && args[0] == "background")
             {
                 var background = BackgroundCommandParser.Parse(args, out var backgroundHelp);

@@ -1307,6 +1307,53 @@ public sealed class OperationalObservationSourceTests
         => id == "inventory" && reason is "dirty" or "confirmation" && dependencyHint;
 
     [Fact]
+    public async Task ScheduledWorkspaceRecoversFromColdSourceTimeoutsWithinTheNativeSmokeDeadline()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { TargetPath = target.Path };
+        var faults = new HashSet<string>(StringComparer.Ordinal);
+        // The scripted producer has no supported version identity. Keep the
+        // scheduled fallback boundary: detail, both relations and confirmation.
+        var inventories = 0;
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            if (request.FileName == "git") clock.Advance(TimeSpan.FromSeconds(.1));
+            else
+            {
+                var source = request.Arguments[2];
+                if (source == "dep") source += ":" + request.Arguments[^2];
+                if (source == "list") source += ":" + ++inventories;
+                var fail = (source is "show" or "dep:up" or "dep:down" or "list:2" or "list:3") && faults.Add(source);
+                clock.Advance(TimeSpan.FromSeconds(fail ? 2 : 1.6));
+                if (fail)
+                {
+                    throw new ToolExecutionException("Cold source timed out after 2s");
+                }
+            }
+            return native.RunAsync(request, token);
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        var sourceAdapter = Adapter(factory);
+        var started = clock.GetUtcNow();
+        ObservationSample? completed = null;
+        while (clock.GetUtcNow() - started < TimeSpan.FromSeconds(45))
+        {
+            var samples = await sourceAdapter.ReadScheduledAsync(Keys("workspace:task-1"), (_, _) => { }, TestContext.Current.CancellationToken);
+            if (samples.TryGetValue("workspace:task-1", out var sample) && sample.Data is not null && !sample.Pending && sample.Error is null)
+            { completed = sample; break; }
+            clock.Advance(TimeSpan.FromMilliseconds(250));
+        }
+        Assert.NotNull(completed);
+        Assert.Equal(5, faults.Count);
+        var workspace = Assert.IsType<BeadWorkspaceResponse>(completed.Data);
+        Assert.Equal("complete", workspace.RelationObservation.Incoming);
+        Assert.Equal("complete", workspace.RelationObservation.Outgoing);
+        Assert.All(completed.Sources.Values, state => Assert.Null(state.Error));
+        Assert.Null(sourceAdapter.PendingAge(completed.Sources.Keys));
+    }
+
+    [Fact]
     public async Task NativeBdSmokeDetectsExternalCommentsAndDependenciesAndReportsCost()
     {
         using var target = new BeadsFixture("operational observations native");

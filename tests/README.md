@@ -66,6 +66,14 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Prepared release fixtures validate complete paired inventories, assembly identities,
+strict schema/path/hash refusals, Project/root/repository inventory and read-only
+preflight command output. They retain sentinels and reject unavailable compatibility
+without lifecycle writes. One short junction helper proves link refusal; no owner,
+Agent, repeated publish or browser journey is added. Run publisher component checks
+with `pwsh -NoProfile -File scripts/tests/Publish-Nightweaver.Tests.ps1`; these reuse
+injected publishes. See [upgrade preflight](../docs/design/upgrade-v1.md#read-only-release-preflight).
+
 Upgrade contract fixtures exhaust the pure phase/step table and refuse missing
 identity, compatibility, interlock, native settlement, payload or fresh acceptance
 evidence. Stopped/disabled/maintenance intent and rollback-readable forward state
@@ -295,6 +303,15 @@ The independent two-second environment audit remains
 allowed. This observes the actual event path instead of treating total elapsed
 time below 30 seconds as proof of the 60-second tracker audit boundary. Command
 timings, source causes and exact page/read counts survive assertion failures.
+A controlled cold-start case injects one timeout in detail and each relation
+direction plus two inventory timeouts, then requires a complete error-free
+scheduled Workspace with no pending generation inside the same 45-second bound.
+It retains the unsupported-producer fallback path through the existing scripted
+runner and clock, without another native journey. The bounded native timeline
+described above supplies command outcomes, journal phases and source-read causes.
+The earlier separate journal diagnostic queue and full command records are
+superseded by that timeline. The five-timeout case proves fallback recovery;
+the merged cold coalescing regressions prove the independent production repair.
 A balanced local comparison after identical mutations measured 5/24 reads above
 two seconds with auto-commit off and 0/24 with it on; this is performance evidence,
 not a claim that off loses SQL-committed data. Both smoke phases retain command

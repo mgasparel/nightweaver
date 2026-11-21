@@ -9,6 +9,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Assert-NoLinkAncestors([string]$Path) {
+    $current = [IO.Path]::GetFullPath($Path)
+    while ($current) {
+        if (Test-Path -LiteralPath $current) {
+            if (((Get-Item -LiteralPath $current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'Publish roots must not contain reparse points.'
+            }
+        }
+        $current = Split-Path -Parent $current
+    }
+}
+
 function Get-FullPath([string]$Path) {
     $fullPath = [System.IO.Path]::GetFullPath($Path)
     $pathRoot = [System.IO.Path]::GetPathRoot($fullPath)
@@ -33,6 +45,7 @@ $repositoryRoot = Get-FullPath (Join-Path $PSScriptRoot '..')
 $destinationFull = Get-FullPath $Destination
 $targetRepositoryFull = Get-FullPath $TargetRepository
 $destinationParent = Split-Path -Parent $destinationFull
+Assert-NoLinkAncestors $destinationFull
 
 if (-not (Test-Path -LiteralPath $targetRepositoryFull -PathType Container)) {
     throw "Target Repository must be an existing directory: $targetRepositoryFull"
@@ -72,11 +85,14 @@ $webOutput = Join-Path $stageFull 'web'
 [System.IO.Directory]::CreateDirectory($webOutput) | Out-Null
 
 try {
-    $cliArgs = @('publish', $cliProject, '--configuration', 'Release', '--self-contained', 'false', '-p:UseAppHost=true', '--output', $cliOutput)
+    $buildVersion = (& git -C $repositoryRoot rev-parse --verify HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $buildVersion -cnotmatch '^[0-9a-f]{40}$') { throw 'Cannot publish an unknown build identity.' }
+    $identityArgs = @("-p:InformationalVersion=$buildVersion", '-p:IncludeSourceRevisionInInformationalVersion=false')
+    $cliArgs = @('publish', $cliProject, '--configuration', 'Release', '--self-contained', 'false', '-p:UseAppHost=true', '--output', $cliOutput) + $identityArgs
     & dotnet @cliArgs
     if ($LASTEXITCODE -ne 0) { throw "CLI publish failed with exit code $LASTEXITCODE" }
 
-    $webArgs = @('publish', $webProject, '--configuration', 'Release', '--self-contained', 'false', '-p:UseAppHost=true', '--output', $webOutput)
+    $webArgs = @('publish', $webProject, '--configuration', 'Release', '--self-contained', 'false', '-p:UseAppHost=true', '--output', $webOutput) + $identityArgs
     & dotnet @webArgs
     if ($LASTEXITCODE -ne 0) { throw "Web Console publish failed with exit code $LASTEXITCODE" }
 
@@ -113,8 +129,8 @@ try {
         throw 'Published Web Console Studio entry has no local JS/CSS bundles.'
     }
 
-    $buildVersion = (& git -C $repositoryRoot rev-parse --verify HEAD).Trim()
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($buildVersion)) { $buildVersion = 'unknown' }
+    $confirmedBuild = (& git -C $repositoryRoot rev-parse --verify HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $confirmedBuild -cne $buildVersion) { throw 'Source build identity changed during publish.' }
     $manifest = [ordered]@{
         schema_version = 1
         build_version = $buildVersion
@@ -124,6 +140,21 @@ try {
     $manifestPath = Join-Path $stageFull 'nightweaver-deployment.json'
     [System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 4) + [Environment]::NewLine,
         [System.Text.UTF8Encoding]::new($false))
+
+    # The sidecar inventories the legacy manifest too; its own exact bytes form
+    # the release digest. Do not claim capabilities that have not shipped.
+    foreach ($item in Get-ChildItem -LiteralPath $stageFull -Recurse -Force) {
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Unsafe publish payload link.' }
+    }
+    $files = @(Get-ChildItem -LiteralPath $stageFull -File -Recurse -Force | Sort-Object FullName | ForEach-Object {
+        if (($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Unsafe publish payload link.' }
+        [ordered]@{ path = $_.FullName.Substring($stageFull.Length + 1).Replace('\', '/'); length = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
+    })
+    if ($files.Count -gt 4096 -or ($files | ForEach-Object { [long]$_['length'] } | Measure-Object -Sum).Sum -gt 2GB) { throw 'Published payload exceeds inventory bounds.' }
+    $inventory = [ordered]@{ schema_version = 1; build_version = $buildVersion; capabilities = @('paired-inventory-v1'); files = $files }
+    $inventoryJson = ($inventory | ConvertTo-Json -Depth 6) + [Environment]::NewLine
+    if ([Text.Encoding]::UTF8.GetByteCount($inventoryJson) -gt 1MB) { throw 'Published inventory exceeds metadata bounds.' }
+    [IO.File]::WriteAllText((Join-Path $stageFull 'nightweaver-release.json'), $inventoryJson, [Text.UTF8Encoding]::new($false))
 
     if (Test-Path -LiteralPath $destinationFull) {
         $existingItems = @(Get-ChildItem -LiteralPath $destinationFull -Force)

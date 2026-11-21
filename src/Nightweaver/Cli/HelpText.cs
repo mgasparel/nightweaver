@@ -7,6 +7,7 @@ internal static class HelpText
         "       nightweaver dispatch <bead-id> [--role <role>] (--project <project-slug> | --config <path-to-project-json>)\n" +
         "       nightweaver background <start|status|stop|restart> (--project <project-slug> | --config <path-to-project-json>) [--urls <loopback-url>] [--force]\n" +
         "       nightweaver --help\n\n" +
+        "       nightweaver upgrade preflight --installation <root> --candidate <prepared-root> [--config <external-config>]...\n\n" +
         "Options:\n" +
         "  --project <project-slug>       Load <nightweaver-root>/projects/<project-slug>.json.\n" +
         "  --config <path-to-project-json> Load a Project configuration file.\n" +

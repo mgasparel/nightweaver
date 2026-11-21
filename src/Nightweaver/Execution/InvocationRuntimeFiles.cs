@@ -343,6 +343,22 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         catch { guard.Dispose(); throw; }
     }
 
+    internal static string ResolveExistingDirectoryPath(string path)
+    {
+        using var guard = (InvocationRuntimeFiles)PinExistingRuntimeDirectory(path);
+        var full = Path.GetFullPath(path);
+        var buffer = new char[32768];
+        var length = GetFinalPathNameByHandleW(guard.pinnedDirectories[full], buffer, (uint)buffer.Length, 0);
+        if (length == 0 || length >= buffer.Length)
+            throw new IOException("Could not resolve canonical directory path.");
+        var resolved = new string(buffer, 0, (int)length);
+        return resolved.StartsWith("\\\\?\\", StringComparison.Ordinal) ? resolved[4..] : resolved;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, [Out] char[] path,
+        uint pathLength, uint flags);
+
     /// <summary>Reads a bounded owned status file without following a file or directory reparse point.</summary>
     internal static byte[] ReadRuntimeFileBounded(string path, int maximumBytes)
     {
@@ -586,7 +602,11 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         return OpenPinnedReadOnlyFile(expected, FileShareRead, "settled suite measurement");
     }
 
-    private static PinnedLogReadStream OpenPinnedReadOnlyFile(string expected, uint shareMode, string description)
+    internal static PinnedLogReadStream OpenExistingPackageFileForRead(string path) =>
+        OpenPinnedReadOnlyFile(Path.GetFullPath(path), FileShareRead, "package file", rejectHardLinks: true);
+
+    private static PinnedLogReadStream OpenPinnedReadOnlyFile(string expected, uint shareMode, string description,
+        bool rejectHardLinks = false)
     {
         ValidatePathSegments(expected);
         var guard = new InvocationRuntimeFiles(string.Empty, expected, null!);
@@ -610,6 +630,8 @@ internal sealed class InvocationRuntimeFiles : IDisposable
                     throw new InvalidDataException($"Refusing reparse point in {description} path: '{expected}'.");
                 if ((info.FileAttributes & AttributeDirectory) != 0)
                     throw new InvalidDataException($"{description} path '{expected}' is a directory.");
+                if (rejectHardLinks && info.NumberOfLinks != 1)
+                    throw new InvalidDataException("Package files must have exactly one physical link.");
                 var stream = new FileStream(handle, FileAccess.Read, 4096, isAsync: true);
                 return new PinnedLogReadStream(stream, guard);
             }
