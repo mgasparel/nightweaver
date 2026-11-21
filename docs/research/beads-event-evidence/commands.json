@@ -1,0 +1,1393 @@
+[
+  {
+    "args": [
+      "git",
+      "init",
+      "-b",
+      "main"
+    ],
+    "exit": 0,
+    "ms": 39.79160000017146,
+    "stdout": "Initialized empty Git repository in C:/Users/mgasp/AppData/Local/Temp/ns-dkq-spike-20261117/run3/fixture/.git/\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "git",
+      "config",
+      "user.name",
+      "Isolated spike"
+    ],
+    "exit": 0,
+    "ms": 22.867700001370395,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "git",
+      "config",
+      "user.email",
+      "spike@example.invalid"
+    ],
+    "exit": 0,
+    "ms": 24.932100001024082,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "version"
+    ],
+    "exit": 0,
+    "ms": 126.78800000139745,
+    "stdout": "bd version 1.3.1 (c1c4b642a: HEAD@c1c4b642ac1c)\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "init",
+      "--prefix",
+      "probe",
+      "--skip-hooks",
+      "--skip-agents",
+      "--non-interactive",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 3253.438700001425,
+    "stdout": "  Repository ID: c1827327\n  Clone ID: d1744603423383c2\n  \u2713 Committed beads files to git\n\n\u2713 bd initialized successfully!\n\n  Backend: dolt\n  Mode: embedded\n  Database: probe\n  Issue prefix: probe\n  Issues will be named: probe-<hash> (e.g., probe-a3f2dd)\n\nRun bd quickstart to get started.\n\n",
+    "stderr": "\n\u26a0 No Dolt remote configured\n  Issues are stored in local Dolt. .beads/issues.jsonl is an export,\n  not cross-machine sync or the source of truth.\n  To enable durable sync, add a git origin and then run:\n    bd dolt push\n"
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "config",
+      "set",
+      "events-journal",
+      "true",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 232.35700000077486,
+    "stdout": "{\n  \"key\": \"events-journal\",\n  \"location\": \"config.yaml\",\n  \"schema_version\": 1,\n  \"value\": \"true\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "create",
+      "--title",
+      "A",
+      "--type",
+      "task",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 503.92330000249785,
+    "stdout": "{\n  \"created_at\": \"2026-11-17T00:24:54.7439145Z\",\n  \"created_by\": \"Isolated spike\",\n  \"id\": \"probe-c4c\",\n  \"issue_type\": \"task\",\n  \"owner\": \"spike@example.invalid\",\n  \"priority\": 2,\n  \"schema_version\": 1,\n  \"status\": \"open\",\n  \"title\": \"A\",\n  \"updated_at\": \"2026-11-17T00:24:54.7439145Z\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "create",
+      "--title",
+      "B",
+      "--type",
+      "task",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 501.50379999831785,
+    "stdout": "{\n  \"created_at\": \"2026-11-17T00:24:55.2731942Z\",\n  \"created_by\": \"Isolated spike\",\n  \"id\": \"probe-p2x\",\n  \"issue_type\": \"task\",\n  \"owner\": \"spike@example.invalid\",\n  \"priority\": 2,\n  \"schema_version\": 1,\n  \"status\": \"open\",\n  \"title\": \"B\",\n  \"updated_at\": \"2026-11-17T00:24:55.2731942Z\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 164.31830000146874,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "update",
+      "probe-c4c",
+      "--title",
+      "A revised",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 310.70719999843277,
+    "stdout": "[\n  {\n    \"id\": \"probe-c4c\",\n    \"title\": \"A revised\",\n    \"status\": \"open\",\n    \"priority\": 2,\n    \"issue_type\": \"task\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:24:56Z\"\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "2",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 154.98719999959576,
+    "stdout": "{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 164.5728000003146,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "label",
+      "add",
+      "probe-c4c",
+      "needs-human",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 309.08139999883133,
+    "stdout": "[\n  {\n    \"issue_id\": \"probe-c4c\",\n    \"label\": \"needs-human\",\n    \"status\": \"added\"\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "3",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 167.37280000234023,
+    "stdout": "{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 156.27429999949527,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "comments",
+      "add",
+      "probe-c4c",
+      "isolated evidence",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 300.27049999989686,
+    "stdout": "{\n  \"author\": \"Isolated spike\",\n  \"created_at\": \"2026-11-17T00:24:57Z\",\n  \"id\": \"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\n  \"issue_id\": \"probe-c4c\",\n  \"schema_version\": 1,\n  \"text\": \"isolated evidence\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "4",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 225.30829999959678,
+    "stdout": "{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 167.99639999953797,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "dep",
+      "add",
+      "probe-c4c",
+      "probe-p2x",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 376.47129999822937,
+    "stdout": "{\n  \"depends_on_id\": \"probe-p2x\",\n  \"issue_id\": \"probe-c4c\",\n  \"schema_version\": 1,\n  \"status\": \"added\",\n  \"type\": \"blocks\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "5",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 169.94420000264654,
+    "stdout": "{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "ready",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 226.6779999990831,
+    "stdout": "[\n  {\n    \"id\": \"probe-p2x\",\n    \"title\": \"B\",\n    \"status\": \"open\",\n    \"priority\": 2,\n    \"issue_type\": \"task\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:24:55Z\",\n    \"dependency_count\": 0,\n    \"dependent_count\": 1,\n    \"comment_count\": 0\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 179.11210000238498,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "dep",
+      "add",
+      "probe-c4c",
+      "probe-p2x",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 383.6678999978176,
+    "stdout": "{\n  \"depends_on_id\": \"probe-p2x\",\n  \"issue_id\": \"probe-c4c\",\n  \"schema_version\": 1,\n  \"status\": \"added\",\n  \"type\": \"blocks\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "6",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 195.1688999979524,
+    "stdout": "{\"seq\":7,\"ts\":\"2026-11-17T00:24:59Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 175.55480000009993,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":7,\"ts\":\"2026-11-17T00:24:59Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "close",
+      "probe-p2x",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 458.08410000245203,
+    "stdout": "[\n  {\n    \"id\": \"probe-p2x\",\n    \"title\": \"B\",\n    \"status\": \"closed\",\n    \"priority\": 2,\n    \"issue_type\": \"task\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:24:59Z\",\n    \"closed_at\": \"2026-11-17T00:24:59Z\",\n    \"close_reason\": \"Closed\"\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "7",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 165.00380000070436,
+    "stdout": "{\"seq\":8,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":9,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"close\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"closed\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:59Z\",\"closed_at\":\"2026-11-17T00:24:59Z\",\"close_reason\":\"Closed\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "ready",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 219.7641000020667,
+    "stdout": "[\n  {\n    \"id\": \"probe-c4c\",\n    \"title\": \"A revised\",\n    \"status\": \"open\",\n    \"priority\": 2,\n    \"issue_type\": \"task\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:24:56Z\",\n    \"labels\": [\n      \"needs-human\"\n    ],\n    \"dependencies\": [\n      {\n        \"issue_id\": \"probe-c4c\",\n        \"depends_on_id\": \"probe-p2x\",\n        \"type\": \"blocks\",\n        \"created_at\": \"2026-11-17T00:24:58Z\",\n        \"created_by\": \"Isolated spike\",\n        \"metadata\": \"{}\"\n      }\n    ],\n    \"dependency_count\": 1,\n    \"dependent_count\": 0,\n    \"comment_count\": 1\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 189.92119999893475,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":7,\"ts\":\"2026-11-17T00:24:59Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":8,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":9,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"close\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"closed\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:59Z\",\"closed_at\":\"2026-11-17T00:24:59Z\",\"close_reason\":\"Closed\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "reopen",
+      "probe-p2x",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 392.52829999895766,
+    "stdout": "[\n  {\n    \"id\": \"probe-p2x\",\n    \"title\": \"B\",\n    \"status\": \"open\",\n    \"priority\": 2,\n    \"issue_type\": \"task\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:25:01Z\"\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "9",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 173.21979999906034,
+    "stdout": "{\"seq\":10,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":11,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:01Z\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 203.0573000010918,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":7,\"ts\":\"2026-11-17T00:24:59Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":8,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":9,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"close\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"closed\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:59Z\",\"closed_at\":\"2026-11-17T00:24:59Z\",\"close_reason\":\"Closed\"}}\n{\"seq\":10,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":11,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:01Z\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "dep",
+      "remove",
+      "probe-c4c",
+      "probe-p2x",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 419.3794999991951,
+    "stdout": "{\n  \"depends_on_id\": \"probe-p2x\",\n  \"issue_id\": \"probe-c4c\",\n  \"schema_version\": 1,\n  \"status\": \"removed\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "11",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 174.29429999901913,
+    "stdout": "{\"seq\":12,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":13,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"dep_remove\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 164.16789999857428,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":7,\"ts\":\"2026-11-17T00:24:59Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":8,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":9,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"close\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"closed\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:59Z\",\"closed_at\":\"2026-11-17T00:24:59Z\",\"close_reason\":\"Closed\"}}\n{\"seq\":10,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":11,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:01Z\"}}\n{\"seq\":12,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":13,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"dep_remove\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "dep",
+      "remove",
+      "probe-c4c",
+      "probe-p2x",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 340.1698999987275,
+    "stdout": "{\n  \"depends_on_id\": \"probe-p2x\",\n  \"issue_id\": \"probe-c4c\",\n  \"schema_version\": 1,\n  \"status\": \"removed\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "13",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 170.88190000140457,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 207.5148999974772,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":7,\"ts\":\"2026-11-17T00:24:59Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":8,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":9,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"close\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"closed\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:59Z\",\"closed_at\":\"2026-11-17T00:24:59Z\",\"close_reason\":\"Closed\"}}\n{\"seq\":10,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":11,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:01Z\"}}\n{\"seq\":12,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":13,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"dep_remove\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--actor",
+      "probe-actor",
+      "update",
+      "probe-c4c",
+      "--claim",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 286.7641000011645,
+    "stdout": "[\n  {\n    \"id\": \"probe-c4c\",\n    \"title\": \"A revised\",\n    \"status\": \"in_progress\",\n    \"priority\": 2,\n    \"issue_type\": \"task\",\n    \"assignee\": \"probe-actor\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:25:03Z\",\n    \"started_at\": \"2026-11-17T00:25:03Z\",\n    \"lease_expires_at\": \"2026-11-17T00:30:03Z\",\n    \"heartbeat_at\": \"2026-11-17T00:25:03Z\",\n    \"labels\": [\n      \"needs-human\"\n    ]\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "13",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 189.6900000028836,
+    "stdout": "{\"seq\":14,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"probe-actor\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\",\"labels\":[\"needs-human\"]}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 158.22810000099707,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":7,\"ts\":\"2026-11-17T00:24:59Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":8,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":9,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"close\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"closed\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:59Z\",\"closed_at\":\"2026-11-17T00:24:59Z\",\"close_reason\":\"Closed\"}}\n{\"seq\":10,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":11,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:01Z\"}}\n{\"seq\":12,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":13,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"dep_remove\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":14,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"probe-actor\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\",\"labels\":[\"needs-human\"]}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "label",
+      "remove",
+      "probe-c4c",
+      "needs-human",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 311.64580000040587,
+    "stdout": "[\n  {\n    \"issue_id\": \"probe-c4c\",\n    \"label\": \"needs-human\",\n    \"status\": \"removed\"\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "14",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 218.83660000094096,
+    "stdout": "{\"seq\":15,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 162.24850000071456,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":7,\"ts\":\"2026-11-17T00:24:59Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":8,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":9,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"close\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"closed\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:59Z\",\"closed_at\":\"2026-11-17T00:24:59Z\",\"close_reason\":\"Closed\"}}\n{\"seq\":10,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":11,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:01Z\"}}\n{\"seq\":12,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":13,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"dep_remove\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":14,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"probe-actor\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":15,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "comments",
+      "add",
+      "probe-c4c",
+      "written while disconnected",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 301.6795000003185,
+    "stdout": "{\n  \"author\": \"Isolated spike\",\n  \"created_at\": \"2026-11-17T00:25:04Z\",\n  \"id\": \"ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7\",\n  \"issue_id\": \"probe-c4c\",\n  \"schema_version\": 1,\n  \"text\": \"written while disconnected\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "update",
+      "probe-p2x",
+      "--priority",
+      "1",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 330.76429999709944,
+    "stdout": "[\n  {\n    \"id\": \"probe-p2x\",\n    \"title\": \"B\",\n    \"status\": \"open\",\n    \"priority\": 1,\n    \"issue_type\": \"task\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:25:04Z\"\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "15",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 167.36699999819393,
+    "stdout": "{\"seq\":16,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"},\"comment\":{\"id\":\"ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7\",\"author\":\"Isolated spike\",\"text\":\"written while disconnected\",\"created_at\":\"2026-11-17T00:25:04Z\",\"source\":\"structured\"}}\n{\"seq\":17,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:04Z\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "15",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 183.75709999963874,
+    "stdout": "{\"seq\":16,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"},\"comment\":{\"id\":\"ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7\",\"author\":\"Isolated spike\",\"text\":\"written while disconnected\",\"created_at\":\"2026-11-17T00:25:04Z\",\"source\":\"structured\"}}\n{\"seq\":17,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:04Z\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 162.52480000184732,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":7,\"ts\":\"2026-11-17T00:24:59Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":8,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":9,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"close\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"closed\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:59Z\",\"closed_at\":\"2026-11-17T00:24:59Z\",\"close_reason\":\"Closed\"}}\n{\"seq\":10,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":11,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:01Z\"}}\n{\"seq\":12,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":13,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"dep_remove\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":14,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"probe-actor\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":15,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"}}\n{\"seq\":16,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"},\"comment\":{\"id\":\"ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7\",\"author\":\"Isolated spike\",\"text\":\"written while disconnected\",\"created_at\":\"2026-11-17T00:25:04Z\",\"source\":\"structured\"}}\n{\"seq\":17,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:04Z\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "sql",
+      "UPDATE issues SET title = 'SQL bypass' WHERE id = 'probe-p2x'",
+      "--json"
+    ],
+    "exit": 1,
+    "ms": 174.84999999942374,
+    "stdout": "",
+    "stderr": "Error: 'bd sql' is not yet supported in embedded mode\n"
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 163.99019999880693,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":7,\"ts\":\"2026-11-17T00:24:59Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":8,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":9,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"close\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"closed\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:59Z\",\"closed_at\":\"2026-11-17T00:24:59Z\",\"close_reason\":\"Closed\"}}\n{\"seq\":10,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":11,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:01Z\"}}\n{\"seq\":12,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":13,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"dep_remove\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":14,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"probe-actor\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":15,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"}}\n{\"seq\":16,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"},\"comment\":{\"id\":\"ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7\",\"author\":\"Isolated spike\",\"text\":\"written while disconnected\",\"created_at\":\"2026-11-17T00:25:04Z\",\"source\":\"structured\"}}\n{\"seq\":17,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:04Z\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "config",
+      "set",
+      "events-journal",
+      "false",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 197.60060000044177,
+    "stdout": "{\n  \"key\": \"events-journal\",\n  \"location\": \"config.yaml\",\n  \"schema_version\": 1,\n  \"value\": \"false\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "update",
+      "probe-p2x",
+      "--title",
+      "Unjournaled interval",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 298.913899998297,
+    "stdout": "[\n  {\n    \"id\": \"probe-p2x\",\n    \"title\": \"Unjournaled interval\",\n    \"status\": \"open\",\n    \"priority\": 1,\n    \"issue_type\": \"task\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:25:06Z\"\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "17",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 202.16760000039358,
+    "stdout": "",
+    "stderr": "note: the events journal is disabled for this workspace (enable with 'bd config set events-journal true'); any records shown were written while it was enabled, and new mutations are not being recorded\n"
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "17",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 170.08040000291658,
+    "stdout": "",
+    "stderr": "note: the events journal is disabled for this workspace (enable with 'bd config set events-journal true'); any records shown were written while it was enabled, and new mutations are not being recorded\n"
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "show",
+      "probe-p2x",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 300.3424000016821,
+    "stdout": "[\n  {\n    \"id\": \"probe-p2x\",\n    \"title\": \"Unjournaled interval\",\n    \"status\": \"open\",\n    \"priority\": 1,\n    \"issue_type\": \"task\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:25:06Z\",\n    \"dependent_count\": 0,\n    \"dependency_count\": 0,\n    \"comment_count\": 0,\n    \"revision\": \"-6239227253035173203\"\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "config",
+      "set",
+      "events-journal",
+      "true",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 188.9511000008497,
+    "stdout": "{\n  \"key\": \"events-journal\",\n  \"location\": \"config.yaml\",\n  \"schema_version\": 1,\n  \"value\": \"true\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 165.23269999743206,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":7,\"ts\":\"2026-11-17T00:24:59Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":8,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":9,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"close\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"closed\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:59Z\",\"closed_at\":\"2026-11-17T00:24:59Z\",\"close_reason\":\"Closed\"}}\n{\"seq\":10,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":11,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:01Z\"}}\n{\"seq\":12,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":13,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"dep_remove\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":14,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"probe-actor\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":15,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"}}\n{\"seq\":16,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"},\"comment\":{\"id\":\"ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7\",\"author\":\"Isolated spike\",\"text\":\"written while disconnected\",\"created_at\":\"2026-11-17T00:25:04Z\",\"source\":\"structured\"}}\n{\"seq\":17,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:04Z\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "delete",
+      "probe-p2x",
+      "--force",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 332.61920000222744,
+    "stdout": "{\n  \"deleted\": \"probe-p2x\",\n  \"dependencies_removed\": 0,\n  \"references_updated\": 0,\n  \"schema_version\": 1\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "17",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 162.38769999836222,
+    "stdout": "{\"seq\":18,\"ts\":\"2026-11-17T00:25:07Z\",\"op\":\"delete\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":null}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 162.5744000011764,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":7,\"ts\":\"2026-11-17T00:24:59Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":8,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":9,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"close\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"closed\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:59Z\",\"closed_at\":\"2026-11-17T00:24:59Z\",\"close_reason\":\"Closed\"}}\n{\"seq\":10,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":11,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:01Z\"}}\n{\"seq\":12,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":13,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"dep_remove\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":14,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"probe-actor\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":15,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"}}\n{\"seq\":16,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"},\"comment\":{\"id\":\"ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7\",\"author\":\"Isolated spike\",\"text\":\"written while disconnected\",\"created_at\":\"2026-11-17T00:25:04Z\",\"source\":\"structured\"}}\n{\"seq\":17,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:04Z\"}}\n{\"seq\":18,\"ts\":\"2026-11-17T00:25:07Z\",\"op\":\"delete\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":null}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "comments",
+      "add",
+      "probe-c4c",
+      "live follower delivery",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 387.2071000005235,
+    "stdout": "{\n  \"author\": \"Isolated spike\",\n  \"created_at\": \"2026-11-17T00:25:19Z\",\n  \"id\": \"d523110b-5635-5197-a7d8-f406276e2637\",\n  \"issue_id\": \"probe-c4c\",\n  \"schema_version\": 1,\n  \"text\": \"live follower delivery\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "18",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 188.43500000002678,
+    "stdout": "{\"seq\":19,\"ts\":\"2026-11-17T00:25:20Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"},\"comment\":{\"id\":\"d523110b-5635-5197-a7d8-f406276e2637\",\"author\":\"Isolated spike\",\"text\":\"live follower delivery\",\"created_at\":\"2026-11-17T00:25:19Z\",\"source\":\"structured\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 198.75899999897229,
+    "stdout": "{\"seq\":1,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":2,\"ts\":\"2026-11-17T00:24:55Z\",\"op\":\"create\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:55Z\"}}\n{\"seq\":3,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\"}}\n{\"seq\":4,\"ts\":\"2026-11-17T00:24:56Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":5,\"ts\":\"2026-11-17T00:24:57Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"comment\":{\"id\":\"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\"author\":\"Isolated spike\",\"text\":\"isolated evidence\",\"created_at\":\"2026-11-17T00:24:57Z\",\"source\":\"structured\"}}\n{\"seq\":6,\"ts\":\"2026-11-17T00:24:58Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":7,\"ts\":\"2026-11-17T00:24:59Z\",\"op\":\"dep_add\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":8,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":9,\"ts\":\"2026-11-17T00:25:00Z\",\"op\":\"close\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"closed\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:59Z\",\"closed_at\":\"2026-11-17T00:24:59Z\",\"close_reason\":\"Closed\"}}\n{\"seq\":10,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"is_blocked\":true,\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":11,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:01Z\"}}\n{\"seq\":12,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":13,\"ts\":\"2026-11-17T00:25:01Z\",\"op\":\"dep_remove\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:24:56Z\",\"labels\":[\"needs-human\"]},\"dep\":{\"kind\":\"blocks\",\"target\":\"probe-p2x\",\"metadata\":\"{}\"}}\n{\"seq\":14,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"probe-actor\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\",\"labels\":[\"needs-human\"]}}\n{\"seq\":15,\"ts\":\"2026-11-17T00:25:03Z\",\"op\":\"update\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"}}\n{\"seq\":16,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"},\"comment\":{\"id\":\"ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7\",\"author\":\"Isolated spike\",\"text\":\"written while disconnected\",\"created_at\":\"2026-11-17T00:25:04Z\",\"source\":\"structured\"}}\n{\"seq\":17,\"ts\":\"2026-11-17T00:25:04Z\",\"op\":\"update\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-p2x\",\"title\":\"B\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:04Z\"}}\n{\"seq\":18,\"ts\":\"2026-11-17T00:25:07Z\",\"op\":\"delete\",\"issue_id\":\"probe-p2x\",\"actor\":\"Isolated spike\",\"issue\":null}\n{\"seq\":19,\"ts\":\"2026-11-17T00:25:20Z\",\"op\":\"comment\",\"issue_id\":\"probe-c4c\",\"actor\":\"Isolated spike\",\"issue\":{\"id\":\"probe-c4c\",\"title\":\"A revised\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"assignee\":\"probe-actor\",\"owner\":\"spike@example.invalid\",\"created_at\":\"2026-11-17T00:24:55Z\",\"created_by\":\"Isolated spike\",\"updated_at\":\"2026-11-17T00:25:03Z\",\"started_at\":\"2026-11-17T00:25:03Z\",\"lease_expires_at\":\"2026-11-17T00:30:03Z\",\"heartbeat_at\":\"2026-11-17T00:25:03Z\"},\"comment\":{\"id\":\"d523110b-5635-5197-a7d8-f406276e2637\",\"author\":\"Isolated spike\",\"text\":\"live follower delivery\",\"created_at\":\"2026-11-17T00:25:19Z\",\"source\":\"structured\"}}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "list",
+      "--all",
+      "--limit",
+      "10001",
+      "--include-ephemeral",
+      "--include-gates",
+      "--include-infra",
+      "--include-templates",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 390.2609999968263,
+    "stdout": "[\n  {\n    \"id\": \"probe-c4c\",\n    \"title\": \"A revised\",\n    \"status\": \"in_progress\",\n    \"priority\": 2,\n    \"issue_type\": \"task\",\n    \"assignee\": \"probe-actor\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:25:03Z\",\n    \"started_at\": \"2026-11-17T00:25:03Z\",\n    \"lease_expires_at\": \"2026-11-17T00:30:03Z\",\n    \"heartbeat_at\": \"2026-11-17T00:25:03Z\",\n    \"dependency_count\": 0,\n    \"dependent_count\": 0,\n    \"comment_count\": 3\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "comments",
+      "probe-c4c",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 225.73560000091675,
+    "stdout": "[\n  {\n    \"id\": \"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"isolated evidence\",\n    \"created_at\": \"2026-11-17T00:24:57Z\"\n  },\n  {\n    \"id\": \"ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"written while disconnected\",\n    \"created_at\": \"2026-11-17T00:25:04Z\"\n  },\n  {\n    \"id\": \"d523110b-5635-5197-a7d8-f406276e2637\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"live follower delivery\",\n    \"created_at\": \"2026-11-17T00:25:19Z\"\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "ready",
+      "--limit",
+      "10001",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 216.56240000083926,
+    "stdout": "[]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "19",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 192.60059999942314,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "19",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 186.97259999680682,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "ready",
+      "--limit",
+      "10001",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 262.8895999987435,
+    "stdout": "[]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "comments",
+      "probe-c4c",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 225.11200000008103,
+    "stdout": "[\n  {\n    \"id\": \"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"isolated evidence\",\n    \"created_at\": \"2026-11-17T00:24:57Z\"\n  },\n  {\n    \"id\": \"ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"written while disconnected\",\n    \"created_at\": \"2026-11-17T00:25:04Z\"\n  },\n  {\n    \"id\": \"d523110b-5635-5197-a7d8-f406276e2637\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"live follower delivery\",\n    \"created_at\": \"2026-11-17T00:25:19Z\"\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "list",
+      "--all",
+      "--limit",
+      "10001",
+      "--include-ephemeral",
+      "--include-gates",
+      "--include-infra",
+      "--include-templates",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 347.9667999999947,
+    "stdout": "[\n  {\n    \"id\": \"probe-c4c\",\n    \"title\": \"A revised\",\n    \"status\": \"in_progress\",\n    \"priority\": 2,\n    \"issue_type\": \"task\",\n    \"assignee\": \"probe-actor\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:25:03Z\",\n    \"started_at\": \"2026-11-17T00:25:03Z\",\n    \"lease_expires_at\": \"2026-11-17T00:30:03Z\",\n    \"heartbeat_at\": \"2026-11-17T00:25:03Z\",\n    \"dependency_count\": 0,\n    \"dependent_count\": 0,\n    \"comment_count\": 3\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "list",
+      "--all",
+      "--limit",
+      "10001",
+      "--include-ephemeral",
+      "--include-gates",
+      "--include-infra",
+      "--include-templates",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 403.60579999833135,
+    "stdout": "[\n  {\n    \"id\": \"probe-c4c\",\n    \"title\": \"A revised\",\n    \"status\": \"in_progress\",\n    \"priority\": 2,\n    \"issue_type\": \"task\",\n    \"assignee\": \"probe-actor\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:25:03Z\",\n    \"started_at\": \"2026-11-17T00:25:03Z\",\n    \"lease_expires_at\": \"2026-11-17T00:30:03Z\",\n    \"heartbeat_at\": \"2026-11-17T00:25:03Z\",\n    \"dependency_count\": 0,\n    \"dependent_count\": 0,\n    \"comment_count\": 3\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "comments",
+      "probe-c4c",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 642.161899999337,
+    "stdout": "[\n  {\n    \"id\": \"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"isolated evidence\",\n    \"created_at\": \"2026-11-17T00:24:57Z\"\n  },\n  {\n    \"id\": \"ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"written while disconnected\",\n    \"created_at\": \"2026-11-17T00:25:04Z\"\n  },\n  {\n    \"id\": \"d523110b-5635-5197-a7d8-f406276e2637\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"live follower delivery\",\n    \"created_at\": \"2026-11-17T00:25:19Z\"\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "ready",
+      "--limit",
+      "10001",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 268.70099999723607,
+    "stdout": "[]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "19",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 187.56850000136183,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "19",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 233.74970000077155,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "ready",
+      "--limit",
+      "10001",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 316.8158000007679,
+    "stdout": "[]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "comments",
+      "probe-c4c",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 255.70710000101826,
+    "stdout": "[\n  {\n    \"id\": \"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"isolated evidence\",\n    \"created_at\": \"2026-11-17T00:24:57Z\"\n  },\n  {\n    \"id\": \"ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"written while disconnected\",\n    \"created_at\": \"2026-11-17T00:25:04Z\"\n  },\n  {\n    \"id\": \"d523110b-5635-5197-a7d8-f406276e2637\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"live follower delivery\",\n    \"created_at\": \"2026-11-17T00:25:19Z\"\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "list",
+      "--all",
+      "--limit",
+      "10001",
+      "--include-ephemeral",
+      "--include-gates",
+      "--include-infra",
+      "--include-templates",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 425.6915999976627,
+    "stdout": "[\n  {\n    \"id\": \"probe-c4c\",\n    \"title\": \"A revised\",\n    \"status\": \"in_progress\",\n    \"priority\": 2,\n    \"issue_type\": \"task\",\n    \"assignee\": \"probe-actor\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:25:03Z\",\n    \"started_at\": \"2026-11-17T00:25:03Z\",\n    \"lease_expires_at\": \"2026-11-17T00:30:03Z\",\n    \"heartbeat_at\": \"2026-11-17T00:25:03Z\",\n    \"dependency_count\": 0,\n    \"dependent_count\": 0,\n    \"comment_count\": 3\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "list",
+      "--all",
+      "--limit",
+      "10001",
+      "--include-ephemeral",
+      "--include-gates",
+      "--include-infra",
+      "--include-templates",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 425.48059999899124,
+    "stdout": "[\n  {\n    \"id\": \"probe-c4c\",\n    \"title\": \"A revised\",\n    \"status\": \"in_progress\",\n    \"priority\": 2,\n    \"issue_type\": \"task\",\n    \"assignee\": \"probe-actor\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:25:03Z\",\n    \"started_at\": \"2026-11-17T00:25:03Z\",\n    \"lease_expires_at\": \"2026-11-17T00:30:03Z\",\n    \"heartbeat_at\": \"2026-11-17T00:25:03Z\",\n    \"dependency_count\": 0,\n    \"dependent_count\": 0,\n    \"comment_count\": 3\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "comments",
+      "probe-c4c",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 348.34500000215485,
+    "stdout": "[\n  {\n    \"id\": \"9185cc31-5c49-569c-b07f-7dd3159aa07a\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"isolated evidence\",\n    \"created_at\": \"2026-11-17T00:24:57Z\"\n  },\n  {\n    \"id\": \"ae0a5fbe-c04f-598a-aef2-a7eb0abd24b7\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"written while disconnected\",\n    \"created_at\": \"2026-11-17T00:25:04Z\"\n  },\n  {\n    \"id\": \"d523110b-5635-5197-a7d8-f406276e2637\",\n    \"issue_id\": \"probe-c4c\",\n    \"author\": \"Isolated spike\",\n    \"text\": \"live follower delivery\",\n    \"created_at\": \"2026-11-17T00:25:19Z\"\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "ready",
+      "--limit",
+      "10001",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 370.7068000003346,
+    "stdout": "[]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "19",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 196.66309999956866,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "config",
+      "set",
+      "events-journal-retain-days",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 647.9938000011316,
+    "stdout": "{\n  \"key\": \"events-journal-retain-days\",\n  \"location\": \"config.yaml\",\n  \"schema_version\": 1,\n  \"value\": \"0\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "config",
+      "set",
+      "events-journal-retain-rows",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 1635.3042000009737,
+    "stdout": "{\n  \"key\": \"events-journal-retain-rows\",\n  \"location\": \"config.yaml\",\n  \"schema_version\": 1,\n  \"value\": \"0\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "events",
+      "prune",
+      "--before",
+      "18",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 357.90600000109407,
+    "stdout": "{\n  \"pruned\": 17,\n  \"schema_version\": 1\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "1",
+      "--json"
+    ],
+    "exit": 1,
+    "ms": 181.84780000228784,
+    "stdout": "{\n  \"code\": \"events_journal_truncated\",\n  \"error\": \"events journal truncated: checkpoint 1 is below the retained window [18..19]; records 2..17 were pruned\",\n  \"floor\": 18,\n  \"head\": 19,\n  \"schema_version\": 1,\n  \"since\": 1\n}\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "list",
+      "--all",
+      "--limit",
+      "0",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 480.08170000321115,
+    "stdout": "[\n  {\n    \"id\": \"probe-c4c\",\n    \"title\": \"A revised\",\n    \"status\": \"in_progress\",\n    \"priority\": 2,\n    \"issue_type\": \"task\",\n    \"assignee\": \"probe-actor\",\n    \"owner\": \"spike@example.invalid\",\n    \"created_at\": \"2026-11-17T00:24:55Z\",\n    \"created_by\": \"Isolated spike\",\n    \"updated_at\": \"2026-11-17T00:25:03Z\",\n    \"started_at\": \"2026-11-17T00:25:03Z\",\n    \"lease_expires_at\": \"2026-11-17T00:30:03Z\",\n    \"heartbeat_at\": \"2026-11-17T00:25:03Z\",\n    \"dependency_count\": 0,\n    \"dependent_count\": 0,\n    \"comment_count\": 3\n  }\n]\n",
+    "stderr": ""
+  },
+  {
+    "args": [
+      "bd",
+      "--sandbox",
+      "--readonly",
+      "events",
+      "tail",
+      "--since",
+      "19",
+      "--json"
+    ],
+    "exit": 0,
+    "ms": 244.01760000182549,
+    "stdout": "",
+    "stderr": ""
+  }
+]

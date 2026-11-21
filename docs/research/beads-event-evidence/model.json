@@ -1,0 +1,12 @@
+{
+  "assertions": "passed",
+  "unique_real_events": 19,
+  "duplicate_prefix_ignored": 18,
+  "first_read_completion_pending": [
+    "comments:probe-c4c",
+    "inventory"
+  ],
+  "modeled_read_turns": 2,
+  "final_inventory_core_fields_equal": true,
+  "limitation": "Deterministic model, not production scheduler integration or a race stress test"
+}
