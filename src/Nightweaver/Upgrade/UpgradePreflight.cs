@@ -99,7 +99,9 @@ internal static class UpgradePreflight
                     ["rev-parse", "--path-format=absolute", "--git-common-dir"], repository) with
                     { MaximumOutputBytes = 4096, Timeout = TimeSpan.FromSeconds(10) }, cancellationToken);
                 if (result.ExitCode != 0) throw new InvalidDataException("identity-unknown");
-                var common = PreparedRelease.CanonicalRoot(result.StandardOutput.Trim());
+                // Git's absolute path output uses '/' on Windows. Normalize that
+                // representation before enforcing the filesystem identity rules.
+                var common = PreparedRelease.CanonicalRoot(Path.GetFullPath(result.StandardOutput.Trim()));
                 var physical = ProcessLifetimeTargetRepositoryLock.ResolveIdentity(common);
                 // Re-read under the retained handle: a concurrent edit invalidates the whole observation.
                 var confirmed = PreparedRelease.Read(configPath, 1024 * 1024);

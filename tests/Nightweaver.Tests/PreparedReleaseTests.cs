@@ -238,7 +238,7 @@ public sealed class PreparedReleaseTests : IDisposable
             Calls++;
             Assert.True(request.FileName == "dotnet" || request.Arguments.SequenceEqual(GitArguments));
             return Task.FromResult(new ProcessResult(missingRuntime ? 1 : 0, request.FileName == "dotnet"
-                ? "Microsoft.NETCore.App 10.0.8 [runtime]\nMicrosoft.AspNetCore.App 10.0.8 [runtime]" : common, ""));
+                ? "Microsoft.NETCore.App 10.0.8 [runtime]\nMicrosoft.AspNetCore.App 10.0.8 [runtime]" : common.Replace('\\', '/'), ""));
         }
     }
     [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
