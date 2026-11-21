@@ -33,18 +33,18 @@ public sealed class AgentInvocationPreparerTests
             var prepared = await preparer.PrepareAsync(host, project, role,
                 new("ns-xci.2", "task", "stage:review", 3), worktree, TestContext.Current.CancellationToken);
 
-            Assert.Equal(
-                "Bead ID: ns-xci.2\nBead type: task\nStage: stage:review\ndefault_branch: release/next\nRemaining repair budget: 4\n\n" + body,
-                prepared.StandardInput);
+            var sections = prepared.StandardInput.Split("\n\n", 3, StringSplitOptions.None);
+            Assert.Equal("Bead ID: ns-xci.2\nBead type: task\nStage: stage:review\ndefault_branch: release/next\nRemaining repair budget: 4", sections[0]);
+            Assert.Contains("ASD-STE100 Simplified Technical English", sections[1], StringComparison.Ordinal);
+            Assert.Equal(body, sections[2]);
         }
 
         var editedPath = Path.Combine(host.Root, "prompts", "reviewer.md");
         await File.WriteAllTextAsync(editedPath, "Edited after the first dispatch {verbatim}\n", new UTF8Encoding(false), TestContext.Current.CancellationToken);
         var secondRead = await preparer.PrepareAsync(host, project, AgentRole.Reviewer,
             new("ns-xci.2", "task", null, 7), worktree, TestContext.Current.CancellationToken);
-        Assert.Equal(
-            "Bead ID: ns-xci.2\nBead type: task\nStage: (none)\ndefault_branch: release/next\nRemaining repair budget: 0\n\nEdited after the first dispatch {verbatim}\n",
-            secondRead.StandardInput);
+        Assert.StartsWith("Bead ID: ns-xci.2\nBead type: task\nStage: (none)\ndefault_branch: release/next\nRemaining repair budget: 0\n\n", secondRead.StandardInput, StringComparison.Ordinal);
+        Assert.EndsWith("\n\nEdited after the first dispatch {verbatim}\n", secondRead.StandardInput, StringComparison.Ordinal);
 
         var overBudget = await preparer.PrepareAsync(host, project, AgentRole.Planner,
             new("ns-xci.2", "feature", null, 8), worktree, TestContext.Current.CancellationToken);
