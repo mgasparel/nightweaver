@@ -9,9 +9,26 @@ namespace Nightweaver.Tests;
 
 public sealed class UpgradeLifecycleTests
 {
+    [Fact]
+    public async Task CompetingProcessLeavesFreshHostRootUnchanged()
+    {
+        using var temp = new TempDirectory();
+        var repository = temp.CreateDirectory("repository");
+        var root = Path.Combine(temp.Path, "fresh-host");
+        ProcessLifetimeTargetRepositoryLock.Acquire(new(repository, "main"));
+        var result = await ProcessTool.RunAsync("dotnet",
+            [typeof(ExecutionCrashHost.CrashHostMarker).Assembly.Location, "--upgrade-runtime-admission", root, repository],
+            temp.Path, null, TimeSpan.FromSeconds(15));
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("another Nightweaver Orchestrator already owns", result.StandardErrorText, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(root));
+    }
+
     [Theory]
     [InlineData("manual")]
     [InlineData("background")]
+    [InlineData("standalone-web")]
+    [InlineData("background-and-web")]
     [InlineData("foreground")]
     [InlineData("unknown-runtime")]
     [InlineData("unknown-config")]
@@ -27,9 +44,10 @@ public sealed class UpgradeLifecycleTests
         var project = fixture.Scope.Projects[0] with { Repository = Path.Combine(fixture.Temp.Path, "repo"),
             PhysicalRepositoryIdentity = ProcessLifetimeTargetRepositoryLock.ResolveIdentity(fixture.Scope.Projects[0].GitCommonDirectory) };
         var expected = fixture.Scope with { UserSid = user.User!.Value, Projects = [project] };
-        using var payload = scenario is "foreground" or "background" ? UpgradeInterlock.AcquirePayload(fixture.Paths, fixture.Slug) : null;
-        using var owner = scenario == "background" ? BackgroundFileLock.AcquireOwner(fixture.Paths, fixture.Slug) : null;
-        if (scenario == "background") await BackgroundOwnerRecord.WriteAsync(BackgroundOwnerRecord.PathFor(fixture.Paths, fixture.Slug), fixture.Owner, fixture.Token);
+        using var payload = scenario is "foreground" or "background" or "background-and-web" ? UpgradeInterlock.AcquirePayload(fixture.Paths, fixture.Slug) : null;
+        using var owner = scenario is "background" or "background-and-web" ? BackgroundFileLock.AcquireOwner(fixture.Paths, fixture.Slug) : null;
+        using var web = scenario is "standalone-web" or "background-and-web" ? UpgradeInterlock.AcquireWeb(fixture.Paths, fixture.Slug) : null;
+        if (owner is not null) await BackgroundOwnerRecord.WriteAsync(BackgroundOwnerRecord.PathFor(fixture.Paths, fixture.Slug), fixture.Owner, fixture.Token);
         if (scenario == "unknown-runtime") fixture.Temp.WriteFile("run/foreign/retained", "preserve");
         if (scenario == "unknown-config") fixture.Temp.WriteFile("projects/foreign.json", "{}");
         if (scenario == "malformed-owner") fixture.Temp.WriteFile("run/demo/background/owner.json", "{");
@@ -54,7 +72,7 @@ public sealed class UpgradeLifecycleTests
     }
 
     [Fact]
-    public async Task ForegroundAdmissionRefusesBeforeRepositoryOwnershipAndPayloadLease()
+    public async Task ForegroundAdmissionRefusesBeforePayloadLease()
     {
         using var fixture = new Fixture();
         await fixture.Prepare();
@@ -62,6 +80,31 @@ public sealed class UpgradeLifecycleTests
         Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.AcquireRuntime(fixture.Paths, fixture.Slug,
             new Nightweaver.Inspection.ValidatedTargetRepository(fixture.Temp.Path, "main")));
         Assert.False(File.Exists(Path.Combine(fixture.Temp.Path, "run", "demo", "payload.lock")));
+    }
+
+    [Fact]
+    public async Task StandaloneWebLeasesShareAndReservedMutationDeniesStartup()
+    {
+        using var fixture = new Fixture();
+        await fixture.Prepare();
+        using (var first = UpgradeInterlock.AcquireWeb(fixture.Paths, fixture.Slug))
+        using (var second = UpgradeInterlock.AcquireWeb(fixture.Paths, fixture.Slug))
+            Assert.Throws<IOException>(() => Nightweaver.Execution.InvocationRuntimeFiles.OpenExclusiveRuntimeFile(
+                UpgradeInterlock.WebPayloadPath(fixture.Paths, fixture.Slug), false));
+        using (Nightweaver.Execution.InvocationRuntimeFiles.OpenExclusiveRuntimeFile(
+            UpgradeInterlock.WebPayloadPath(fixture.Paths, fixture.Slug), false)) { }
+        await fixture.Coordinator.BeginDrainAsync(1, fixture.Token);
+        Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.AcquireWeb(fixture.Paths, fixture.Slug));
+        fixture.Native = new(OwnerProcessState.Exited, true);
+        await fixture.Coordinator.ConfirmSettlementAsync(2, fixture.Token);
+        await fixture.Coordinator.WithMutationAsync(3, _ =>
+        {
+            Assert.Throws<IOException>(() => UpgradeInterlock.AcquireWeb(fixture.Paths, fixture.Slug));
+            return Task.CompletedTask;
+        }, fixture.Token);
+        await fixture.Coordinator.ReleaseAsync(3, fixture.Token);
+        using var resumed = UpgradeInterlock.AcquireWeb(fixture.Paths, fixture.Slug);
+        Assert.False(Directory.Exists(fixture.Paths.SupervisionRoot(fixture.Slug)));
     }
 
     [Fact]

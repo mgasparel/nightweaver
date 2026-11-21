@@ -49,6 +49,18 @@ internal static class UpgradeLifecycleInventoryReader
             projects.Add(new(item.Name, config.ConfigFilePath, Convert.ToHexString(SHA256.HashData(bytes)),
                 repository.Path, Path.TrimEndingDirectorySeparator(Path.GetFullPath(repository.GitCommonDirectory)),
                 ProcessLifetimeTargetRepositoryLock.ResolveIdentity(repository.GitCommonDirectory)));
+            // Standalone Web hosts have no owner drain endpoint. Every such host
+            // holds a shared lease until native exit, independently of background owners.
+            try
+            {
+                using var web = InvocationRuntimeFiles.OpenExclusiveRuntimeFile(UpgradeInterlock.WebPayloadPath(paths, slug), false);
+            }
+            catch (IOException exception) when (Missing(exception)) { }
+            catch (IOException exception) when ((exception.HResult & 0xffff) is 32 or 33
+                || exception.InnerException is Win32Exception { NativeErrorCode: 32 or 33 })
+            {
+                throw new InvalidDataException("An unsupported standalone Web consumer uses the payload.", exception);
+            }
             var recordPath = BackgroundOwnerRecord.PathFor(paths, slug);
             BackgroundOwnerRecord? owner = null;
             try

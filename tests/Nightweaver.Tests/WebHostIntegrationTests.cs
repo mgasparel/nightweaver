@@ -13,6 +13,18 @@ namespace Nightweaver.Tests;
 public sealed class WebHostIntegrationTests
 {
     [Fact]
+    public async Task ReservedUpgradePreventsStandaloneHostStartup()
+    {
+        using var factory = new NightweaverWebApplicationFactory();
+        var paths = new HostPaths(factory.HostRoot);
+        await Nightweaver.Upgrade.UpgradeInterlock.ReserveAsync(paths,
+            new(1, paths.Root, new('a', 32), new('b', 64)), TestContext.Current.CancellationToken);
+        var exception = Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
+        Assert.Contains("suppresses startup", exception.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(Nightweaver.Upgrade.UpgradeInterlock.WebPayloadPath(paths, ProjectSlug.Parse("web-test"))));
+    }
+
+    [Fact]
     public async Task HostBootsWithPlainTargetAndHealthReturnsStableJson()
     {
         using var factory = new NightweaverWebApplicationFactory();
@@ -29,7 +41,8 @@ public sealed class WebHostIntegrationTests
         Assert.Equal(3, config.Concurrency.MaxConcurrentDelivery);
         Assert.Equal(2, config.Limits.MaxOperationalRetries);
         Assert.False(Directory.Exists(Path.Combine(factory.TargetRoot, ".beads")));
-        Assert.Empty(Directory.EnumerateFileSystemEntries(factory.HostRoot));
+        Assert.True(File.Exists(Nightweaver.Upgrade.UpgradeInterlock.WebPayloadPath(new HostPaths(factory.HostRoot), config.Name)));
+        Assert.False(Directory.Exists(new HostPaths(factory.HostRoot).SupervisionRoot(config.Name)));
 
         using var unavailable = await client.GetAsync("/api/beads", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailable.StatusCode);
@@ -157,7 +170,9 @@ public sealed class WebHostIntegrationTests
             Assert.Equal("{\"status\":\"ok\"}", await response.Content.ReadAsStringAsync(timeout.Token));
             using var unknown = await client.GetAsync("/unknown", timeout.Token);
             Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
-            Assert.Empty(Directory.EnumerateFileSystemEntries(host));
+            Assert.Throws<IOException>(() => Nightweaver.Execution.InvocationRuntimeFiles.OpenExclusiveRuntimeFile(
+                Nightweaver.Upgrade.UpgradeInterlock.WebPayloadPath(new HostPaths(host), ProjectSlug.Parse("standalone")), false));
+            Assert.False(Directory.Exists(new HostPaths(host).SupervisionRoot(ProjectSlug.Parse("standalone"))));
             using var observation = await client.GetAsync("/api/operations/v1/projects/standalone/resources?key=factory", timeout.Token);
             Assert.Equal(HttpStatusCode.OK, observation.StatusCode);
             await receiver.WaitForSignalAsync("traces");
@@ -268,7 +283,8 @@ public sealed class WebHostIntegrationTests
             Assert.Contains(ready.RootElement.EnumerateArray(), bead => bead.GetProperty("id").GetString() == createdId);
 
             await AssertDashboardPageAsync(client, "/", timeout.Token);
-            Assert.Empty(Directory.EnumerateFileSystemEntries(host));
+            Assert.Throws<IOException>(() => Nightweaver.Execution.InvocationRuntimeFiles.OpenExclusiveRuntimeFile(
+                Nightweaver.Upgrade.UpgradeInterlock.WebPayloadPath(new HostPaths(host), ProjectSlug.Parse("web-smoke")), false));
         }
         finally
         {

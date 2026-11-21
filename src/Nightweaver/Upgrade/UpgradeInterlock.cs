@@ -26,11 +26,24 @@ internal static class UpgradeInterlock
 
     internal static void AcquireRuntime(HostPaths paths, ProjectSlug project, ValidatedTargetRepository repository)
     {
+        ProcessLifetimeTargetRepositoryLock.Acquire(repository);
         using var admission = AcquireAdmission(paths);
         RequireStartupAllowed(paths);
-        ProcessLifetimeTargetRepositoryLock.Acquire(repository);
         ProcessPayloadLeases.Add(AcquirePayload(paths, project));
     }
+
+    internal static string WebPayloadPath(HostPaths paths, ProjectSlug project) =>
+        Path.Combine(paths.Root, "run", project.Value, "web-payload.lock");
+
+    internal static IDisposable AcquireWeb(HostPaths paths, ProjectSlug project)
+    {
+        using var admission = AcquireAdmission(paths);
+        RequireStartupAllowed(paths);
+        return InvocationRuntimeFiles.OpenSharedRuntimeFile(WebPayloadPath(paths, project));
+    }
+
+    internal static void AcquireWebForProcessLifetime(HostPaths paths, ProjectSlug project) =>
+        ProcessPayloadLeases.Add(AcquireWeb(paths, project));
 
     internal static void RequireStartupAllowed(HostPaths paths)
     {

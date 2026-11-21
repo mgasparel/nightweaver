@@ -9,6 +9,21 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--upgrade-runtime-admission")
+        {
+            try
+            {
+                Nightweaver.Upgrade.UpgradeInterlock.AcquireRuntime(new HostPaths(args[1]), ProjectSlug.Parse("demo"),
+                    new Nightweaver.Inspection.ValidatedTargetRepository(args[2], "main"));
+                return 0;
+            }
+            catch (Nightweaver.ToolExecutionException exception)
+            {
+                Console.Error.WriteLine(exception.Message);
+                return 1;
+            }
+        }
+
         if (args.Length > 0 && args[0] == "--terminal-owner-probe")
             return await TerminalOwnerProbe.RunAsync(args.Skip(1).ToArray()).ConfigureAwait(false);
 

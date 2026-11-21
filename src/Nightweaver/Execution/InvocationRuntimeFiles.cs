@@ -388,13 +388,20 @@ internal sealed class InvocationRuntimeFiles : IDisposable
 
     /// <summary>Opens a per-Project lock file without following reparse points and pins its parent chain.</summary>
     internal static PinnedRuntimeFile OpenExclusiveRuntimeFile(string path, bool createMissingDirectories)
+        => OpenRuntimeFile(path, createMissingDirectories, FileShare.None);
+
+    /// <summary>Shares a payload lease among consumers while denying exclusive upgrade inventory access.</summary>
+    internal static PinnedRuntimeFile OpenSharedRuntimeFile(string path)
+        => OpenRuntimeFile(path, true, FileShare.ReadWrite);
+
+    private static PinnedRuntimeFile OpenRuntimeFile(string path, bool createMissingDirectories, FileShare share)
     {
         if (OperatingSystem.IsWindows()) ValidatePathSegments(path);
         var fullPath = Path.GetFullPath(path);
         if (!OperatingSystem.IsWindows())
         {
             if (createMissingDirectories) Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-            var portable = new FileStream(fullPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            var portable = new FileStream(fullPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, share);
             return new PinnedRuntimeFile(portable, null);
         }
 
@@ -403,7 +410,7 @@ internal sealed class InvocationRuntimeFiles : IDisposable
         try
         {
             guard.PinDirectoryChain(Path.GetDirectoryName(fullPath)!, createMissingDirectories, exclusiveLeaf: false);
-            var handle = CreateFileW(ToExtendedLengthPath(fullPath), GenericRead | GenericWrite, FileShareNone, IntPtr.Zero,
+            var handle = CreateFileW(ToExtendedLengthPath(fullPath), GenericRead | GenericWrite, (uint)share, IntPtr.Zero,
                 OpenAlways, FileFlagOpenReparsePoint, IntPtr.Zero);
             if (handle.IsInvalid)
             {

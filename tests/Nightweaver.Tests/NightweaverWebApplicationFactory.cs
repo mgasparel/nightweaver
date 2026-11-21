@@ -12,6 +12,7 @@ internal sealed class NightweaverWebApplicationFactory : WebApplicationFactory<W
     private readonly TempDirectory directory = new();
     private readonly Action<IConfigurationBuilder>? configure;
     private readonly Action<IServiceCollection>? configureServices;
+    private readonly List<IDisposable> payloadLeases = [];
 
     internal NightweaverWebApplicationFactory(
         Action<IConfigurationBuilder>? configure = null,
@@ -74,7 +75,14 @@ internal sealed class NightweaverWebApplicationFactory : WebApplicationFactory<W
             });
             configure?.Invoke(configuration);
         });
-        builder.ConfigureTestServices(services => configureServices?.Invoke(services));
+        builder.ConfigureTestServices(services =>
+        {
+            // TestServer has no separate native process. Retain real admission and
+            // lease checks until this simulated process has stopped.
+            services.AddSingleton(new Web.WebStartupAdmission((paths, project) =>
+                payloadLeases.Add(Nightweaver.Upgrade.UpgradeInterlock.AcquireWeb(paths, project))));
+            configureServices?.Invoke(services);
+        });
     }
 
     protected override void Dispose(bool disposing)
@@ -82,6 +90,7 @@ internal sealed class NightweaverWebApplicationFactory : WebApplicationFactory<W
         base.Dispose(disposing);
         if (disposing)
         {
+            foreach (var lease in payloadLeases) lease.Dispose();
             directory.Dispose();
         }
     }

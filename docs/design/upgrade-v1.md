@@ -64,6 +64,13 @@ explicit dispatch holds a Project payload lease until native process exit,
 including after the runtime method returns. This version refuses an active
 foreground consumer because it has no background drain endpoint.
 
+Standalone Web hosts check admission before listening and hold a shared
+`run/<project>/web-payload.lock` lease until native process exit. Multiple Web
+hosts can share this lease. The inventory refuses an active standalone Web host,
+including when a background owner is also present, because standalone hosts have
+no drain endpoint. The embedded Web host remains contained by its background
+owner. A Web host cannot start across a reserved or active mutation boundary.
+
 The caller must independently prove that the source implements the upgrade
 boundary. An inventory capability string does not supply this proof. Legacy
 sources remain unsupported. Public preflight still refuses mutation until the
@@ -71,8 +78,9 @@ replacement, recovery and cross-version compatibility adapters are delivered.
 
 The manager takes `run/upgrade/manager.lock`, each affected `start.lock` in
 ordinal Project order, then `run/upgrade/admission.lock`. Foreground startup and
-explicit dispatch take admission serialization through their interlock check,
-payload lease and ordinary physical-repository mutex acquisition. They release
+explicit dispatch first acquire the ordinary physical-repository mutex, before
+creating runtime files or directories. They then take admission serialization
+through their interlock check and payload lease acquisition. They release
 admission serialization before runtime work. Background start/restart and finite
 ticks check the interlock under `start.lock`; restart checks again after drain.
 The upgrade manager never acquires or substitutes for repository exclusion.

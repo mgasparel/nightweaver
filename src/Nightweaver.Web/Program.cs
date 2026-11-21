@@ -4,8 +4,11 @@ using Nightweaver.Inspection;
 using Nightweaver.Telemetry;
 using System.Text.Json;
 using System.Net.Http.Headers;
+using Nightweaver.Upgrade;
 
 namespace Nightweaver.Web;
+
+internal sealed record WebStartupAdmission(Action<HostPaths, ProjectSlug> Acquire);
 
 public sealed class Program
 {
@@ -69,6 +72,7 @@ public sealed class Program
         });
 
         builder.Services.AddSingleton<IProcessRunner, SystemProcessRunner>();
+        builder.Services.AddSingleton(new WebStartupAdmission(UpgradeInterlock.AcquireWebForProcessLifetime));
         builder.Services.AddSingleton<TargetRepositoryValidator>();
         builder.Services.AddSingleton<BeadsReader>();
         builder.Services.AddSingleton<BeadsWriter>();
@@ -86,7 +90,8 @@ public sealed class Program
 
         var app = builder.Build();
         // Resolve before listening, after all host configuration providers have been applied.
-        _ = app.Services.GetRequiredService<ProjectConfig>();
+        var startupProject = app.Services.GetRequiredService<ProjectConfig>();
+        app.Services.GetRequiredService<WebStartupAdmission>().Acquire(app.Services.GetRequiredService<HostPaths>(), startupProject.Name);
         // Environment-only opt-in, with a dedicated log pipeline; application/request logs stay local.
         using var telemetryLifetime = new WebTelemetryLifetime(app.Lifetime, startupTimestamp);
         app.Services.GetRequiredService<OperationalObservationService>().Telemetry = telemetryLifetime.Telemetry;
