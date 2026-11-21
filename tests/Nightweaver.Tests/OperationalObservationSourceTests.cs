@@ -1095,6 +1095,51 @@ public sealed class OperationalObservationSourceTests
         => id == "inventory" && reason is "dirty" or "confirmation" && dependencyHint;
 
     [Fact]
+    public async Task ScheduledWorkspaceRecoversFromColdSourceTimeoutsWithinTheNativeSmokeDeadline()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { TargetPath = target.Path };
+        var faults = new HashSet<string>(StringComparer.Ordinal);
+        var inventories = 0;
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            if (request.FileName == "git") clock.Advance(TimeSpan.FromSeconds(.1));
+            else
+            {
+                var source = request.Arguments[2];
+                if (source == "dep") source += ":" + request.Arguments[^2];
+                if (source == "list") source += ":" + ++inventories;
+                var fail = (source is "show" or "dep:up" or "dep:down" or "list:2" or "list:3") && faults.Add(source);
+                clock.Advance(TimeSpan.FromSeconds(fail ? 2 : 1.6));
+                if (fail)
+                {
+                    throw new ToolExecutionException("Cold source timed out after 2s");
+                }
+            }
+            return native.RunAsync(request, token);
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        var sourceAdapter = Adapter(factory);
+        var started = clock.GetUtcNow();
+        ObservationSample? completed = null;
+        while (clock.GetUtcNow() - started < TimeSpan.FromSeconds(45))
+        {
+            var samples = await sourceAdapter.ReadScheduledAsync(Keys("workspace:task-1"), (_, _) => { }, TestContext.Current.CancellationToken);
+            if (samples.TryGetValue("workspace:task-1", out var sample) && sample.Data is not null && !sample.Pending && sample.Error is null)
+            { completed = sample; break; }
+            clock.Advance(TimeSpan.FromMilliseconds(250));
+        }
+        Assert.NotNull(completed);
+        Assert.Equal(5, faults.Count);
+        var workspace = Assert.IsType<BeadWorkspaceResponse>(completed.Data);
+        Assert.Equal("complete", workspace.RelationObservation.Incoming);
+        Assert.Equal("complete", workspace.RelationObservation.Outgoing);
+        Assert.All(completed.Sources.Values, state => Assert.Null(state.Error));
+        Assert.Null(sourceAdapter.PendingAge(completed.Sources.Keys));
+    }
+
+    [Fact]
     public async Task NativeBdSmokeDetectsExternalCommentsAndDependenciesAndReportsCost()
     {
         using var target = new BeadsFixture("operational observations native");
@@ -1105,17 +1150,25 @@ public sealed class OperationalObservationSourceTests
         var runner = new RecordingProcessRunner(async (request, token) =>
         {
             var commandTimer = Stopwatch.StartNew();
+            var outcome = "incomplete";
             var environment = target.Environment.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
             foreach (var pair in request.Environment) environment[pair.Key] = pair.Value;
-            try { return await actual.RunAsync(request with { Environment = environment }, token); }
-            finally { measured.Enqueue($"{request.FileName} {string.Join(' ', request.Arguments)}: {commandTimer.Elapsed.TotalMilliseconds:F1}ms"); }
+            try
+            {
+                var result = await actual.RunAsync(request with { Environment = environment }, token);
+                outcome = "exit " + result.ExitCode.ToString(CultureInfo.InvariantCulture);
+                return result;
+            }
+            catch (Exception exception) { outcome = exception.GetType().Name; throw; }
+            finally { measured.Enqueue($"{request.FileName} {string.Join(' ', request.Arguments)}: {commandTimer.Elapsed.TotalMilliseconds:F1}ms; {outcome}"); }
         });
         var journal = new ConcurrentQueue<ConsoleJournalPage>();
+        var journalDiagnostics = new ConcurrentQueue<string>();
         using var factory = Factory(target.Path, runner, configure: services =>
         {
             services.RemoveAll<IConsoleJournalReader>();
             services.AddSingleton<IConsoleJournalReader>(provider => new RecordingJournalReader(
-                ActivatorUtilities.CreateInstance<ConsoleJournalReader>(provider), journal));
+                ActivatorUtilities.CreateInstance<ConsoleJournalReader>(provider), journal, journalDiagnostics));
         });
         using var client = factory.CreateClient();
         var token = TestContext.Current.CancellationToken;
@@ -1133,6 +1186,8 @@ public sealed class OperationalObservationSourceTests
             catch (TimeoutException)
             {
                 foreach (var measurement in measured) TestContext.Current.TestOutputHelper?.WriteLine(measurement);
+                foreach (var diagnostic in journalDiagnostics) TestContext.Current.TestOutputHelper?.WriteLine(diagnostic);
+                foreach (var read in reads) TestContext.Current.TestOutputHelper?.WriteLine($"Source {read.Id}: {read.Reason}; comment hint {read.CommentHint}; dependency hint {read.DependencyHint}");
                 throw;
             }
         }
@@ -1176,6 +1231,7 @@ public sealed class OperationalObservationSourceTests
         var mutationReads = reads.Skip(readsBeforeMutation).ToArray();
         // Keep diagnostics even if a causal assertion fails on a slower host.
         foreach (var measurement in measured) TestContext.Current.TestOutputHelper?.WriteLine(measurement);
+        foreach (var diagnostic in journalDiagnostics) TestContext.Current.TestOutputHelper?.WriteLine(diagnostic);
         foreach (var read in mutationReads) TestContext.Current.TestOutputHelper?.WriteLine($"Source {read.Id}: {read.Reason}; comment hint {read.CommentHint}; dependency hint {read.DependencyHint}");
         Assert.Contains(journal.Skip(beforeMutation).SelectMany(page => page.Hints), hint => hint.IssueId == bead && hint.Operation == "comment");
         Assert.Contains(journal.Skip(beforeMutation).SelectMany(page => page.Hints), hint => hint.IssueId == bead && hint.Operation == "dep_add");
@@ -1195,13 +1251,24 @@ public sealed class OperationalObservationSourceTests
         // UntilAsync still enforces the functional observation bound.
     }
 
-    private sealed class RecordingJournalReader(IConsoleJournalReader inner, ConcurrentQueue<ConsoleJournalPage> pages) : IConsoleJournalReader
+    private sealed class RecordingJournalReader(IConsoleJournalReader inner, ConcurrentQueue<ConsoleJournalPage> pages,
+        ConcurrentQueue<string>? diagnostics = null) : IConsoleJournalReader
     {
         public async Task<ConsoleJournalPage> ReadAsync(long cursor, CancellationToken token)
         {
-            var page = await inner.ReadAsync(cursor, token);
-            pages.Enqueue(page);
-            return page;
+            var timer = Stopwatch.StartNew();
+            try
+            {
+                var page = await inner.ReadAsync(cursor, token);
+                pages.Enqueue(page);
+                diagnostics?.Enqueue($"Journal page: {timer.Elapsed.TotalMilliseconds:F1}ms; hints {page.Hints.Count}");
+                return page;
+            }
+            catch (Exception exception)
+            {
+                diagnostics?.Enqueue($"Journal page: {timer.Elapsed.TotalMilliseconds:F1}ms; {exception.GetType().Name}");
+                throw;
+            }
         }
     }
 

@@ -275,6 +275,16 @@ The independent two-second environment audit remains
 allowed. This observes the actual event path instead of treating total elapsed
 time below 30 seconds as proof of the 60-second tracker audit boundary. Command
 timings, source causes and exact page/read counts survive assertion failures.
+A controlled cold-start case injects one timeout in detail and each relation
+direction plus two inventory timeouts, then requires a complete error-free
+scheduled Workspace with no pending generation inside the same 45-second bound.
+It uses the existing scripted runner and clock, without another native journey.
+The native smoke also records command exit/exception types and journal page
+durations/outcomes, including source-read causes on cold-start failure. These
+diagnostics contain no tool output, configuration contents or environment dump;
+they distinguish failed commands from successful commands whose settlement was
+slow. This coverage and instrumentation do not establish the cause or repair of
+an intermittent hosted timeout by themselves.
 A balanced local comparison after identical mutations measured 5/24 reads above
 two seconds with auto-commit off and 0/24 with it on; this is performance evidence,
 not a claim that off loses SQL-committed data. Both smoke phases retain command
