@@ -1,5 +1,18 @@
 # Test suite
 
+Cold Workspace coalescing adds deterministic parser/fallback, generation-race and
+finite-contention cases. The identical command-independent simulated contention
+interval fails the old cold predicate and permits the combined path to complete;
+it does not identify the historical hosted cause. The existing native observer
+smoke now seeds one closed and one ephemeral incoming owner plus an initial
+comment and compares the resulting incoming relations with native `up`. This
+extends its existing journey rather than adding another native fixture launch:
+the uncovered boundary is actual embedded show iterator parity, which injected
+responses cannot establish. Native outgoing reads and combined external
+comment/dependency journal-causality assertions remain. Omission, malformed or
+unsupported responses, limits, permanent outgoing failure and warm budgets are
+covered cheaply. Deadlines and committed six-thread scheduling are unchanged.
+
 The cold native observer smoke retains at most 512 payload-free timeline records
 with monotonic offsets, source/reason, command class, requested deadline and
 outcome. Opt-in process phases distinguish launch, managed exit, native settlement

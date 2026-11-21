@@ -859,6 +859,146 @@ public sealed class OperationalObservationSourceTests
     }
 
     [Fact]
+    public async Task ColdWorkspaceCompletesBeforeFiniteContentionInterval()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { TargetPath = target.Path, Rows = 2, OutgoingDependency = true };
+        var started = clock.GetUtcNow();
+        var trace = new List<string>();
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            if (request.FileName != "bd") return await native.RunAsync(request, token);
+            var offset = (clock.GetUtcNow() - started).TotalSeconds;
+            trace.Add($"{offset:F3}s {request.Arguments[2]}");
+            // Injected command-independent contention, not a claimed hosted cause.
+            // Every bd command uses the same clock and rule before and after repair.
+            clock.Advance(TimeSpan.FromSeconds(offset >= 8 && offset < 45 ? 2 : 1.6));
+            if (offset >= 8 && offset < 45) throw new ToolExecutionException("Injected native command timed out after 2s");
+            var result = await native.RunAsync(request, token);
+            if (request.Arguments[2] != "show") return result;
+            var rows = System.Text.Json.Nodes.JsonNode.Parse(result.StandardOutput)!.AsArray();
+            rows[0]!["comments"] = System.Text.Json.Nodes.JsonNode.Parse("[{\"id\":\"comment-1\",\"issue_id\":\"task-1\",\"author\":\"human\",\"text\":\"Initial comment\",\"created_at\":\"2026-01-01T00:00:00Z\"}]");
+            // Omitted incoming array deliberately exercises native up fallback.
+            return result with { StandardOutput = rows.ToJsonString() };
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        ObservationSample? completed = null;
+        while (clock.GetUtcNow() - started < TimeSpan.FromSeconds(45))
+        {
+            var samples = await source.ReadScheduledAsync(Keys("workspace:task-1"), (_, _) => { }, TestContext.Current.CancellationToken);
+            if (samples.TryGetValue("workspace:task-1", out var sample) && sample.Data is not null && !sample.Pending && sample.Error is null)
+            { completed = sample; break; }
+            clock.Advance(TimeSpan.FromSeconds(1));
+        }
+        TestContext.Current.TestOutputHelper?.WriteLine(string.Join("\n", trace));
+        TestContext.Current.TestOutputHelper?.WriteLine($"Simulated cold completion: {(clock.GetUtcNow() - started).TotalSeconds:F3}s; commands {source.CommandCount}");
+        Assert.NotNull(completed);
+        var workspace = Assert.IsType<BeadWorkspaceResponse>(completed.Data);
+        Assert.Contains(workspace.Relations, relation => relation.Id == "task-2" && relation.Type == "blocks" && relation.Direction == "outgoing");
+        Assert.Single(workspace.Comments);
+        Assert.Contains(runner.Requests, request => request.Arguments.Contains("down"));
+    }
+
+    [Theory]
+    [InlineData("supported")]
+    [InlineData("unsupported")]
+    [InlineData("malformed")]
+    [InlineData("limited")]
+    [InlineData("dep-failure")]
+    [InlineData("invalidation")]
+    public async Task ColdCombinedReadPreservesNativeFallbackGenerationsAndWarmReadBudget(string mode)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { TargetPath = target.Path, Rows = 2, OutgoingDependency = true, FailRelations = mode == "dep-failure" };
+        OperationalObservationSource? source = null;
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            var result = await native.RunAsync(request, token);
+            if (!request.Arguments.Contains("--include-dependents")) return result;
+            if (mode == "unsupported") return new ProcessResult(1, "", "unsupported flags");
+            if (mode == "limited") return result with { StandardOutput = new string('x', 2 * 1024 * 1024 + 1) };
+            if (mode == "malformed") return result with { StandardOutput = "[{}]" };
+            var rows = System.Text.Json.Nodes.JsonNode.Parse(result.StandardOutput)!.AsArray();
+            rows[0]!["comments"] = System.Text.Json.Nodes.JsonNode.Parse("[{\"id\":\"comment-1\",\"issue_id\":\"task-1\",\"author\":\"human\",\"text\":\"Initial comment\",\"created_at\":\"2026-01-01T00:00:00Z\"}]");
+            rows[0]!["dependents"] = System.Text.Json.Nodes.JsonNode.Parse("[{\"id\":\"task-2\",\"dependency_type\":\"related\"}]");
+            if (mode == "invalidation") source!.Invalidate([new(1, "dep_add", "task-1", null)]);
+            return result with { StandardOutput = rows.ToJsonString() };
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        source = Adapter(factory);
+        var key = Keys("workspace:task-1");
+        var sample = (await source.ReadScheduledAsync(key, (_, _) => { }, TestContext.Current.CancellationToken))[key[0].Value];
+        var workspace = Assert.IsType<BeadWorkspaceResponse>(sample.Data);
+        Assert.Single(workspace.Comments);
+        Assert.Contains(runner.Requests, request => request.Arguments.Contains("down"));
+        if (mode == "dep-failure")
+        {
+            Assert.NotNull(sample.Error);
+            Assert.True(sample.Partial);
+            Assert.Equal("unavailable", sample.Sources["relations-down:task-1"].Health);
+            return;
+        }
+        Assert.Null(sample.Error);
+        Assert.Equal(mode == "invalidation", sample.Pending);
+        if (mode == "supported")
+        {
+            Assert.DoesNotContain(runner.Requests, request => request.Arguments.Contains("up"));
+            Assert.Contains(workspace.Relations, relation => relation.Id == "task-2" && relation.Direction == "incoming" && relation.Type == "related");
+        }
+        else Assert.Contains(runner.Requests, request => request.Arguments.Contains("up"));
+        var before = runner.Requests.Count;
+        native.Comment = "Warm comment";
+        source.Invalidate([new(2, "comment", "task-1", null)]);
+        sample = (await source.ReadScheduledAsync(key, (_, _) => { }, TestContext.Current.CancellationToken))[key[0].Value];
+        Assert.Null(sample.Error);
+        Assert.False(sample.Pending);
+        Assert.Equal("Warm comment", Assert.Single(Assert.IsType<BeadWorkspaceResponse>(sample.Data).Comments).Body);
+        Assert.DoesNotContain(runner.Requests.Skip(before), request => request.Arguments.Contains("--include-dependents"));
+    }
+
+    [Fact]
+    public async Task FailedCombinedReadCannotRepeatOrDiscardProgressAfterSpendingTheTurnBudget()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { TargetPath = target.Path };
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            if (request.FileName == "bd")
+            {
+                if (request.Arguments.Contains("--include-dependents"))
+                {
+                    // Inject settlement overhead after the original 2s command
+                    // bound, as allowed by the retained native timeline evidence.
+                    clock.Advance(TimeSpan.FromSeconds(3.2));
+                    throw new ToolExecutionException("Injected native command timed out after 2s");
+                }
+                clock.Advance(TimeSpan.FromSeconds(1.6));
+            }
+            return await native.RunAsync(request, token);
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var started = clock.GetUtcNow();
+        ObservationSample? complete = null;
+        while (clock.GetUtcNow() - started < TimeSpan.FromSeconds(45))
+        {
+            var samples = await source.ReadScheduledAsync(Keys("workspace:task-1"), (_, _) => { }, TestContext.Current.CancellationToken);
+            if (samples.TryGetValue("workspace:task-1", out var sample) && sample.Data is not null && !sample.Pending && sample.Error is null)
+            { complete = sample; break; }
+            clock.Advance(TimeSpan.FromSeconds(1));
+        }
+        Assert.NotNull(complete);
+        Assert.Single(runner.Requests, request => request.Arguments.Contains("--include-dependents"));
+        Assert.Contains(runner.Requests, request => request.Arguments.Contains("comments"));
+        Assert.Contains(runner.Requests, request => request.Arguments.Contains("up"));
+        Assert.Contains(runner.Requests, request => request.Arguments.Contains("down"));
+    }
+
+    [Fact]
     public async Task SlowWorkspaceWithTransientHistoryTimeoutsPublishesWithinTheNativeSmokeDeadline()
     {
         using var target = new ObservationTargetFixture();
@@ -1100,6 +1240,12 @@ public sealed class OperationalObservationSourceTests
         using var target = new BeadsFixture("operational observations native");
         var bead = target.Create("Observed task", labels: ["product-decision-required"]);
         var blocker = target.Create("Blocker");
+        var incoming = target.Create("Closed incoming owner", status: "closed");
+        using var wispRow = JsonDocument.Parse(target.Run("bd", ["create", "Ephemeral incoming owner", "--ephemeral", "--json"]));
+        var wisp = wispRow.RootElement.GetProperty("id").GetString()!;
+        target.Run("bd", ["dep", "add", incoming, bead, "--type", "related"]);
+        target.Run("bd", ["dep", "add", wisp, bead, "--type", "blocks"]);
+        target.Run("bd", ["comments", "add", bead, "Cold combined read marker"]);
         var measured = new ConcurrentQueue<string>();
         var timeline = Stopwatch.StartNew();
         var commandSequence = 0;
@@ -1165,6 +1311,17 @@ public sealed class OperationalObservationSourceTests
             && root.GetProperty("synchronization").GetProperty("journal").GetString() == "current"
             && !root.GetProperty("synchronization").GetProperty("pending").GetBoolean());
         var beforeMutation = journal.Count;
+        using (var nativeUp = JsonDocument.Parse(target.Run("bd", BeadsCommand.CreateUpDependencies(target.Path, bead).Arguments)))
+        {
+            var expected = BeadsReader.ParseUpDependencies(nativeUp.RootElement, bead)
+                .Select(edge => (edge.IssueId, edge.Type)).Order().ToArray();
+            var actual = first.GetProperty("data").GetProperty("relations").EnumerateArray()
+                .Where(relation => relation.GetProperty("direction").GetString() == "incoming")
+                .Select(relation => (relation.GetProperty("id").GetString()!, relation.GetProperty("type").GetString()!)).Order().ToArray();
+            Assert.Equal(expected, actual);
+            Assert.Contains((incoming, "related"), actual);
+            Assert.Contains((wisp, "blocks"), actual);
+        }
         var readsBeforeMutation = reads.Count;
         var commandsBeforeMutation = Volatile.Read(ref commandSequence);
         var coldSeconds = cold.Elapsed.TotalSeconds;
