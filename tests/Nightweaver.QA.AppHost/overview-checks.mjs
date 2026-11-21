@@ -9,6 +9,7 @@ export async function overviewChecks(page, url, base, projectId, output) {
   let mode = 'decision';
   let releaseFactory;
   let factoryGate;
+  let liveItems;
   await page.route('**/api/operations/v1/projects/*/resources?**', async route => {
     const key = new URL(route.request().url()).searchParams.get('key');
     if (!['attention', 'factory'].includes(key)) return route.continue();
@@ -20,6 +21,7 @@ export async function overviewChecks(page, url, base, projectId, output) {
     for (const source of Object.values(value.sources)) { source.health = 'fresh'; source.error = null; source.observedAt = value.observedAt; }
     if (key === 'attention') {
       value.data = mode === 'empty' ? [] : mode === 'unavailable' ? null : [structuredClone(decision)];
+      if (mode === 'disclosure') value.data = liveItems;
       if (mode === 'long-question' || mode === 'recovering-long-question') value.data[0].question = longQuestion;
       if (mode === 'long') value.data = Array.from({length: 12}, (_, i) => ({ ...decision, beadId: 'qa-long-identity-' + i + '-'.repeat(90), title: 'Long operational title '.repeat(12), kind: i ? 'needs-human' : 'product-decision-required' }));
       if (mode === 'stale') { value.health = 'stale'; value.error = {code: 'fixture-stale', message: 'Retained attention requires current verification', retryable: true}; }
@@ -77,4 +79,56 @@ export async function overviewChecks(page, url, base, projectId, output) {
       } finally { releaseFactory(); }
     }
   }
+
+  // Replace observations in the mounted Overview, rather than reloading away
+  // the disclosure. Native stream resync hints trigger read-only replacements.
+  await page.addInitScript(() => {
+    const Native = window.EventSource;
+    window.EventSource = class extends Native {
+      constructor(...args) {
+        super(...args);
+        if (String(args[0]).includes('/operations/v1/')) {
+          window.overviewStream = this;
+          this.addEventListener('hello', event => { window.overviewHello = JSON.parse(event.data); });
+        }
+      }
+    };
+  });
+  mode = 'disclosure';
+  const rows = Array.from({length: 12}, (_, i) => ({...decision, beadId: `qa-context-${i}`, question: longQuestion}));
+  liveItems = rows;
+  await page.setViewportSize({width: 720, height: 900});
+  await page.goto(url + base + '/overview');
+  const row = page.locator('.attention-row').filter({has: page.getByRole('link', {name: 'Review qa-context-0', exact: true})});
+  const context = row.locator('.attention-context');
+  await context.locator('summary').click();
+  await page.locator('h1').focus();
+  const replace = async (items, expectedIds) => {
+    liveItems = items;
+    const response = page.waitForResponse(r => new URL(r.url()).searchParams.get('key') === 'attention');
+    await page.waitForFunction(() => !!window.overviewHello);
+    await page.evaluate(() => window.overviewStream.dispatchEvent(new MessageEvent('resync', {data: JSON.stringify(window.overviewHello)})));
+    await response;
+    await page.waitForFunction(ids => JSON.stringify([...document.querySelectorAll('.attention-row .bead-row-meta > span:first-child')].map(node => node.textContent)) === JSON.stringify(ids), expectedIds);
+  };
+  const reordered = [...rows.slice(1), rows[0]];
+  await replace(reordered, ['qa-context-1', 'qa-context-2', 'qa-context-3', 'qa-context-0']);
+  assert.equal(await context.getAttribute('open'), '');
+  assert.equal(await context.locator('p').first().innerText(), longQuestion);
+  assert.equal(await page.locator('h1').evaluate(node => node === document.activeElement), true);
+  await page.screenshot({path: `${output}/overview-open-context-reordered-720.png`, fullPage: true});
+  await replace(rows, ['qa-context-0', 'qa-context-1', 'qa-context-2']);
+  assert.equal(await context.getAttribute('open'), '');
+  // Closing releases the retained row once focus moves outside the inventory.
+  await context.locator('summary').click();
+  await page.locator('h1').focus();
+  await replace(reordered, ['qa-context-1', 'qa-context-2', 'qa-context-3']);
+  await replace(rows, ['qa-context-0', 'qa-context-1', 'qa-context-2']);
+  assert.equal(await context.getAttribute('open'), null);
+  await context.locator('summary').click();
+  await page.locator('h1').focus();
+  await replace(rows.slice(1), ['qa-context-1', 'qa-context-2', 'qa-context-3']);
+  await replace(rows, ['qa-context-0', 'qa-context-1', 'qa-context-2']);
+  assert.equal(await context.getAttribute('open'), null, 'Removed identity returns closed');
+  console.log('Overview disclosure survives live reorder without focus; close and actual removal retire retention.');
 }

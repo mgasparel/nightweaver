@@ -4,6 +4,8 @@ The existing `studio-qa.mjs` shell journey includes the attention-first Overview
 matrix in `overview-checks.mjs`: one decision and visible Review action, bounded
 long inventories, bounded multiline questions with keyboard-accessible complete
 context, long questions during deterministic updates-channel recovery,
+opened context surviving live reorder after focus moves elsewhere (including
+closing and actual removal),
 empty/stale/unavailable states, and 1440/375/720 CSS-pixel
 captures. Run `studio-cutover.ps1 -Only studio-qa -OutputDirectory <fresh-path>`;
 the exact isolated stack is always stopped in finally. See

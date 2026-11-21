@@ -9,12 +9,15 @@ Reading and keyboard order is the factual heading and summary, full-width
 Attention, Delivery activity, then Catch up. The last two share a row above
 1150 CSS pixels. Attention uses content height and keeps its Review action
 next to the exact Bead identity and question. It previews three paused Beads,
-retains a surviving focused row during live reorder, and links to the complete
+retains surviving focused rows and opened context disclosures during live reorder, and links to the complete
 Attention Desk. Decision and recovery labels retain the server's distinction.
 Current question (or recovery diagnostic) previews use the first 140 Unicode
 characters with whitespace collapsed so multiline evidence cannot displace
 Review. A native keyboard-accessible disclosure after Review retains the complete
 context and source comment attribution; the Workspace link remains available.
+Open context is keyed by Bead identity, independently of focus. Closing releases
+the extra preview row; an authoritative removal retires its disclosure state so
+a later reappearance starts closed. Unavailable observations preserve that state.
 On mobile, freshness status and Refresh share a row, with source details and
 warnings below. Compact spacing keeps Review visible even while the longer
 recovering-updates header is displayed; warnings and type sizes remain intact.
@@ -40,5 +43,7 @@ coordinator recovering), empty, stale, and unavailable observations at
 1440x900, 375x900, and 720x900 (the effective width of a 1440px screen at 200%).
 The native shell journey retains reload/history, keyboard navigation, sidebar
 dialogs and focus, legacy routes and current-project scoping. Two cheap Studio
-tests cover bounded preview and focused-row retention/removal; no new native
+tests cover bounded preview and focused/open-row retention, closing and removal.
+The existing browser journey replaces observations without navigation to verify
+open context survives reorder after focus moves elsewhere. No new native
 journey or fixture publication is added.
