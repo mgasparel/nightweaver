@@ -187,10 +187,13 @@ export function AttentionView({ project, compact = false }: { project: string; c
   const reviewHeading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { if (selected) reviewHeading.current?.focus(); }, [selected]);
   const item = items?.find(row => row.beadId === selected);
+  const attentionWarning = snapshot.stale || snapshot.error || snapshot.observation?.health !== "fresh"
+    || snapshot.dataState === "delayed" || snapshot.connectionState === "disconnected"
+    || snapshot.observation?.synchronization?.error || snapshot.observation?.synchronization?.journal === "catching-up";
   // Keep the identity selected even after it leaves the live collection.
   return <FocusBoundary>
     {!compact && <Heading title="Attention">Decisions and recovery, with the evidence close at hand.</Heading>}
-    <Freshness snapshot={snapshot} project={project} resource="attention" />
+    {(!compact || attentionWarning) && <Freshness snapshot={snapshot} project={project} resource="attention" />}
     <div className={compact ? "" : "attention-board"}><div>
     {!compact && <p className="eyebrow attention-list-title">Paused Beads · {items?.length ?? "Unavailable"}</p>}
     {!items ? <p className="bead-empty">Attention is unavailable. Refresh to try again.</p> : items.length === 0
@@ -198,11 +201,15 @@ export function AttentionView({ project, compact = false }: { project: string; c
       : <div className={compact ? "attention-inventory" : "attention-layout"}>
         <section className="attention-inventory" aria-label="Paused Beads" onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(undefined); }}>
           {visibleAttention(items, compact ? 3 : limit, focused, disclosed).map(row => <article key={row.beadId} onFocusCapture={() => setFocused(row.beadId)} className={`attention-row ${selected === row.beadId ? "selected" : ""}`}>
-            <div className="bead-row-meta"><span>{row.beadId}</span><Status tone="warn">{row.kind === "product-decision-required" ? "Decision needed" : "Recovery needed"}</Status></div>
-            <h2><Link to={beadPath(project, row.beadId)}>{row.title}</Link></h2>
+            {compact && <p className="attention-kicker">{row.kind === "product-decision-required" ? "Needs your decision" : "Recovery needs attention"} · {project}</p>}
+            {!compact && <><div className="bead-row-meta"><span>{row.beadId}</span><Status tone="warn">{row.kind === "product-decision-required" ? "Decision needed" : "Recovery needed"}</Status></div>
+            <h2><Link to={beadPath(project, row.beadId)}>{row.title}</Link></h2></>}
             {compact && <>
-              {(row.question || row.diagnostic) && <p className="attention-question">{attentionPreview(row.question || row.diagnostic!)}</p>}
-              <Link className="button primary" to={beadPath(project, row.beadId)}>Review {row.beadId}</Link>
+              <h2 className="attention-question">{attentionPreview(row.question || row.diagnostic || row.title)}</h2>
+              {decisionSections(row).filter(section => section.label === "Recommended answer").slice(0, 1).map(section => <p className="attention-recommendation" key={section.label}>{row.message?.role ?? "Source"} recommendation: {attentionPreview(section.text)}</p>)}
+              {attentionWarningSections(row).map(section => <p className="bead-notice" key={section.label}>{section.text}</p>)}
+              {row.unavailableReason && <p className="bead-notice">{row.unavailableReason}</p>}
+              <Link className="button primary" aria-label={`Review ${row.beadId}`} to={beadPath(project, row.beadId)}>{row.kind === "product-decision-required" ? "Review decision" : "Review recovery"} <span aria-hidden="true">→</span></Link>
               {(row.question || row.diagnostic) && <details className="attention-context" open={disclosed.has(row.beadId)} onToggle={event => {
                 const open = event.currentTarget.open;
                 setDisclosed(previous => {
@@ -212,11 +219,12 @@ export function AttentionView({ project, compact = false }: { project: string; c
               }}>
                 <summary>Read full context &amp; pause details</summary>
                 <p>{row.question || row.diagnostic}</p>
+                <p>{row.title} · {row.stage ?? "Stage unavailable"} · P{row.priority} · Repairs {row.repairCycles ?? 0}/{row.maxRepairCycles}</p>
                 <p>{row.sourceCommentId ? `Source comment ${row.sourceCommentId}` : "Source comment unavailable"}</p>
                 {row.contextNotice && <p>{row.contextNotice}</p>}
               </details>}
             </>}
-            <p>{row.stage ?? "Stage unavailable"} · P{row.priority} · Repairs {row.repairCycles ?? 0}/{row.maxRepairCycles}</p>
+            {compact ? <div className="bead-row-meta"><span>{row.beadId}</span><span>{row.kind === "product-decision-required" ? "Decision waiting" : "Recovery waiting"}</span></div> : <p>{row.stage ?? "Stage unavailable"} · P{row.priority} · Repairs {row.repairCycles ?? 0}/{row.maxRepairCycles}</p>}
             {!compact && <button className="text-link" aria-pressed={selected === row.beadId} onClick={() => setSelected(row.beadId)}>Review {row.beadId}</button>}
           </article>)}
           {!compact && items.length > limit && <button className="button" onClick={() => setLimit(value => value + 8)}>Show more paused Beads ({items.length - limit})</button>}
@@ -233,6 +241,7 @@ export function AttentionView({ project, compact = false }: { project: string; c
       <Link className="text-link" to={beadPath(project, selected)}>Open Full Bead Workspace and evidence</Link>
     </Panel>}
     </div>
+    {compact && !attentionWarning && <details className="overview-observation"><summary>Observation details &amp; refresh</summary><Freshness snapshot={snapshot} project={project} resource="attention" /></details>}
   </FocusBoundary>;
 }
 
