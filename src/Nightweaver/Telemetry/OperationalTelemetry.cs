@@ -39,6 +39,7 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     private readonly Action<string> diagnostic;
     private readonly Channel<string> diagnosticMessages = Channel.CreateBounded<string>(12);
     private readonly List<HttpClient> httpClients = [];
+    private readonly Func<string, HttpMessageHandler>? createExportTransport;
     private readonly int[] reported = new int[12];
     private readonly Counter<long> operations;
     private readonly Histogram<double> duration;
@@ -119,9 +120,11 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     }
 
     internal OperationalTelemetry(OperationalHost host, OperationalTelemetryConfiguration configuration,
-        Action<string> diagnostic, TimeProvider? clock = null, int metricIntervalMilliseconds = 60_000)
+        Action<string> diagnostic, TimeProvider? clock = null, int metricIntervalMilliseconds = 60_000,
+        Func<string, HttpMessageHandler>? createExportTransport = null)
     {
         this.diagnostic = diagnostic;
+        this.createExportTransport = createExportTransport;
         spanAdmission = new(clock ?? TimeProvider.System);
         eventAdmission = new(clock ?? TimeProvider.System);
         var service = host switch
@@ -573,7 +576,7 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     {
         var client = new HttpClient(new SafeHttpHandler(signal == "metrics" ? 64 * 1024 : TelemetryAdmission.RecordBytes,
             signal == "metrics" ? null : new TelemetryAdmission(TimeProvider.System),
-            () => Failed(signal), stop.Token)) { Timeout = TimeSpan.FromSeconds(3) };
+            () => Failed(signal), createExportTransport?.Invoke(signal), stop.Token)) { Timeout = TimeSpan.FromSeconds(3) };
         httpClients.Add(client);
         return new()
         {
@@ -618,7 +621,7 @@ internal sealed class OperationalTelemetry : IAsyncDisposable
     public ValueTask DisposeAsync() => StopAsync(force: false);
 
     private sealed class SafeHttpHandler(int maxBytes, TelemetryAdmission? admission, Action failed,
-        CancellationToken stop) : DelegatingHandler(new SocketsHttpHandler
+        HttpMessageHandler? transport, CancellationToken stop) : DelegatingHandler(transport ?? new SocketsHttpHandler
         { AllowAutoRedirect = false, UseCookies = false, UseProxy = false, ActivityHeadersPropagator = null,
             ConnectTimeout = TimeSpan.FromSeconds(3) })
     {

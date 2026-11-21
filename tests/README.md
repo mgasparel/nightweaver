@@ -38,6 +38,17 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Classifier telemetry fixtures use a controlled HTTP transport beneath the real
+OTLP serializers and safe export handler. The five successful active-phase cases
+still require loss-free diagnostics; a separate active metrics rejection requires
+the exact export-loss diagnostic, and a held response distinguishes request capture
+from acknowledgement before shutdown. Classifier records, private-data exclusion
+and absence of unverified lifecycle publications remain required in every case.
+Real loopback transport, response failures, privacy and native first-path coverage
+remain in `OperationalTelemetryTests` and `FirstPathTelemetryTests`. This adds one
+cheap deterministic case, no native journey or fixture publish, and changes no
+production export deadline, shutdown budget or six-thread scheduling.
+
 Identity-bound supervision adds cheap injected process/control/runtime/clock and
 collector cases for healthy/start/drain/failure/uncertainty, source identity and
 freshness, PID reuse, owner replacement, capture ordering/errors, bounded history,

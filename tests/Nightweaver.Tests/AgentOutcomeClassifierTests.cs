@@ -92,19 +92,20 @@ public sealed class AgentOutcomeClassifierTests
     }
 
     [Theory]
-    [InlineData("primary", "success", false, false, false)]
-    [InlineData("unavailable", "unavailable", true, false, false)]
-    [InlineData("invalid", "invalid", true, false, false)]
-    [InlineData("unavailable", "unavailable", true, true, false)]
-    [InlineData("invalid", "invalid", true, false, true)]
+    [InlineData("primary", "success", false, false, false, false)]
+    [InlineData("unavailable", "unavailable", true, false, false, false)]
+    [InlineData("invalid", "invalid", true, false, false, false)]
+    [InlineData("unavailable", "unavailable", true, true, false, false)]
+    [InlineData("invalid", "invalid", true, false, true, false)]
+    [InlineData("unavailable", "unavailable", true, true, false, true)]
     public async Task ClassifierDiagnosticsAreSeparateFromVerifiedLifecycleOutcomes(string mode, string primaryResult, bool fallback,
-        bool concurrentDecorator, bool holdMetricsResponse)
+        bool concurrentDecorator, bool holdMetricsResponse, bool rejectActiveMetrics)
     {
         using var fixture = new OutcomeFixture();
-        await using var receiver = await Receiver.StartAsync(heldSignal: holdMetricsResponse ? "metrics" : null, heldStatus: 503);
+        using var receiver = new ClassifierTelemetryReceiver(holdMetricsResponse, rejectActiveMetrics);
         ConcurrentQueue<string> diagnostics = new();
         await using var telemetry = new OperationalTelemetry(OperationalHost.Runtime, new(receiver.Endpoint, "", 1),
-            diagnostics.Enqueue, metricIntervalMilliseconds: 100);
+            diagnostics.Enqueue, metricIntervalMilliseconds: 100, createExportTransport: receiver.CreateTransport);
         using var runtime = telemetry.EnterRuntime("0123456789abcdef0123456789abcdef");
         const string canary = "PRIVATE_CLASSIFIER_EVIDENCE_AND_SECRET";
         File.AppendAllText(fixture.Invocation.LogFilePath, canary);
@@ -136,19 +137,26 @@ public sealed class AgentOutcomeClassifierTests
         // Assert records before bounded best-effort shutdown can cancel pending work.
         await receiver.WaitForWorkflowKindsAsync(fallback ? ["LifecyclePrimary", "LifecycleFallback"] : ["LifecyclePrimary"], diagnostics);
         await receiver.WaitForSignalsAsync();
+        if (rejectActiveMetrics) await Receiver.WaitForExportFailureAsync("metrics", diagnostics);
         var spans = receiver.Captures.Where(c => c.Signal == "traces").SelectMany(FirstPathTelemetryTests.DecodeRecords)
             .Select(span => Attributes(span, 9)).ToArray();
         Assert.Contains(spans, tags => tags.GetValueOrDefault("kind") == "LifecyclePrimary" && tags["outcome"] == primaryResult);
         Assert.True(fallback == spans.Any(tags => tags.GetValueOrDefault("kind") == "LifecycleFallback"),
             $"Expected fallback={fallback}; kinds={string.Join(",", spans.Select(t => t.GetValueOrDefault("kind")))}; losses={string.Join(";", diagnostics)}");
         if (fallback) Assert.Contains(spans, tags => tags.GetValueOrDefault("kind") == "LifecycleFallback" && tags["outcome"] == "success");
-        Assert.Empty(diagnostics);
-        // The active classifier evidence must be complete and loss-free. Best-effort
-        // shutdown can report independent export loss after that evidence is verified.
+        if (rejectActiveMetrics)
+            Assert.Equal("Operational telemetry loss: metrics/export (further losses counted in metrics).",
+                Assert.Single(diagnostics));
+        else
+            Assert.Empty(diagnostics);
+        if (holdMetricsResponse) Assert.DoesNotContain("metrics", receiver.CompletedSignals);
+        // Successful acknowledgements remain loss-free during classification.
+        // Deliberate active rejection and shutdown rejection are separate cases;
+        // neither may erase classifier records or manufacture lifecycle outcomes.
         var shutdown = telemetry.StopAsync(false).AsTask();
         if (holdMetricsResponse) receiver.ReleaseHeldResponse();
         await shutdown;
-        if (holdMetricsResponse)
+        if (holdMetricsResponse || rejectActiveMetrics)
         {
             await Receiver.WaitForExportFailureAsync("metrics", diagnostics);
             Assert.Equal("Operational telemetry loss: metrics/export (further losses counted in metrics).",
