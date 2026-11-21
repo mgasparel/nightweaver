@@ -9,6 +9,8 @@ namespace Nightweaver.Inspection;
 
 internal sealed class SystemProcessRunner : IProcessRunner
 {
+    // Opt-in, payload-free phase observations for native boundary diagnosis.
+    internal Action<string>? PhaseObserved { get; init; }
     public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
     {
         var startInfo = new ProcessStartInfo
@@ -42,6 +44,7 @@ internal sealed class SystemProcessRunner : IProcessRunner
         }
 
         using var process = new Process { StartInfo = startInfo };
+        PhaseObserved?.Invoke("start-requested");
         try
         {
             bool started;
@@ -69,6 +72,7 @@ internal sealed class SystemProcessRunner : IProcessRunner
         }
 
         process.StandardInput.Close();
+        PhaseObserved?.Invoke("started");
         using var outputLimit = new CancellationTokenSource();
         var exceeded = false;
         async Task<string> ReadOutputAsync(StreamReader reader)
@@ -101,10 +105,11 @@ internal sealed class SystemProcessRunner : IProcessRunner
 
         try
         {
-            await WaitForSettlementAsync(process, linkedCancellation.Token);
+            await WaitForSettlementAsync(process, linkedCancellation.Token, PhaseObserved);
         }
         catch (OperationCanceledException)
         {
+            PhaseObserved?.Invoke("cancellation-observed");
             try
             {
                 if (!HasSettled(process))
@@ -117,7 +122,7 @@ internal sealed class SystemProcessRunner : IProcessRunner
                 // The child exited while cancellation was being handled.
             }
 
-            await WaitForSettlementAsync(process, CancellationToken.None);
+            await WaitForSettlementAsync(process, CancellationToken.None, PhaseObserved);
             var timedOut = timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested;
             var stderr = await stderrTask;
             _ = await stdoutTask;
@@ -133,6 +138,7 @@ internal sealed class SystemProcessRunner : IProcessRunner
 
         var standardOutput = await stdoutTask;
         var standardError = await stderrTask;
+        PhaseObserved?.Invoke("streams-drained");
         if (exceeded) throw new ToolExecutionException("observer output exceeded read limit");
         return new ProcessResult(ReadExitCode(process), standardOutput, standardError);
     }
@@ -140,11 +146,13 @@ internal sealed class SystemProcessRunner : IProcessRunner
     // Process.HasExited/WaitForExitAsync can observe an exit code during Windows
     // process rundown, before the native handle signals and file locks settle.
     // Keep the original wait token; cancellation still kills and settles the child.
-    internal static async Task WaitForSettlementAsync(Process process, CancellationToken cancellationToken)
+    internal static async Task WaitForSettlementAsync(Process process, CancellationToken cancellationToken, Action<string>? phaseObserved = null)
     {
         await process.WaitForExitAsync(cancellationToken);
+        phaseObserved?.Invoke("managed-exit");
         while (!HasSettled(process))
             await Task.Delay(1, cancellationToken);
+        phaseObserved?.Invoke("native-settled");
     }
 
     internal static bool HasSettled(Process process)

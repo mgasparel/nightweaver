@@ -1100,22 +1100,43 @@ public sealed class OperationalObservationSourceTests
         using var target = new BeadsFixture("operational observations native");
         var bead = target.Create("Observed task", labels: ["product-decision-required"]);
         var blocker = target.Create("Blocker");
-        var actual = new SystemProcessRunner();
         var measured = new ConcurrentQueue<string>();
+        var timeline = Stopwatch.StartNew();
+        var commandSequence = 0;
+        void Trace(string message)
+        {
+            // Bound diagnostic retention even if a future retry loop regresses.
+            if (measured.Count < 512) measured.Enqueue($"[native-observer] +{timeline.Elapsed.TotalMilliseconds:F1}ms {message}");
+        }
         var runner = new RecordingProcessRunner(async (request, token) =>
         {
+            var sequence = Interlocked.Increment(ref commandSequence);
+            // Command class only: no arguments, output, environment or paths.
+            var command = request.FileName == "git" ? "git"
+                : request.Arguments.Contains("dep") ? "dep-" + request.Arguments[^2]
+                : request.Arguments.FirstOrDefault(argument => argument is "list" or "show" or "comments" or "branch" or "config") ?? "other";
+            var actual = new SystemProcessRunner { PhaseObserved = phase => Trace($"command {sequence} {command}: {phase}") };
             var commandTimer = Stopwatch.StartNew();
+            var outcome = "incomplete";
             var environment = target.Environment.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
             foreach (var pair in request.Environment) environment[pair.Key] = pair.Value;
-            try { return await actual.RunAsync(request with { Environment = environment }, token); }
-            finally { measured.Enqueue($"{request.FileName} {string.Join(' ', request.Arguments)}: {commandTimer.Elapsed.TotalMilliseconds:F1}ms"); }
+            Trace($"command {sequence} {command}: requested; timeout {request.Timeout.TotalMilliseconds:F0}ms");
+            try
+            {
+                var result = await actual.RunAsync(request with { Environment = environment }, token);
+                outcome = "exit-" + result.ExitCode.ToString(CultureInfo.InvariantCulture);
+                return result;
+            }
+            catch (Exception exception) { outcome = exception.GetType().Name; throw; }
+            finally { Trace($"command {sequence} {command}: completed {outcome}; {commandTimer.Elapsed.TotalMilliseconds:F1}ms"); }
         });
         var journal = new ConcurrentQueue<ConsoleJournalPage>();
         using var factory = Factory(target.Path, runner, configure: services =>
         {
             services.RemoveAll<IConsoleJournalReader>();
             services.AddSingleton<IConsoleJournalReader>(provider => new RecordingJournalReader(
-                ActivatorUtilities.CreateInstance<ConsoleJournalReader>(provider), journal));
+                ActivatorUtilities.CreateInstance<ConsoleJournalReader>(provider,
+                    new BeadsJournalClient(runner) { PhaseObserved = phase => Trace("journal-native: " + phase) }), journal, Trace));
         });
         using var client = factory.CreateClient();
         var token = TestContext.Current.CancellationToken;
@@ -1124,6 +1145,8 @@ public sealed class OperationalObservationSourceTests
         var reads = new ConcurrentQueue<(string Id, string Reason, bool CommentHint, bool DependencyHint)>();
         source.ReadStarted += (id, reason) =>
         {
+            var sourceClass = id.Split(':')[0];
+            Trace($"source {sourceClass}: {reason}; commands {source.CommandCount}; native {source.NativeMilliseconds:F1}ms");
             var hints = journal.SelectMany(page => page.Hints).Where(hint => hint.IssueId == bead).ToArray();
             reads.Enqueue((id, reason, hints.Any(hint => hint.Operation == "comment"), hints.Any(hint => hint.Operation == "dep_add")));
         };
@@ -1137,6 +1160,7 @@ public sealed class OperationalObservationSourceTests
             }
         }
         var cold = Stopwatch.StartNew();
+        Trace("phase cold-workspace");
         var first = await ReadObservedAsync(root => root.GetProperty("data").ValueKind == JsonValueKind.Object
             && root.GetProperty("synchronization").GetProperty("journal").GetString() == "current"
             && !root.GetProperty("synchronization").GetProperty("pending").GetBoolean());
@@ -1149,12 +1173,14 @@ public sealed class OperationalObservationSourceTests
         // The fixture's default environment is for read-only probes. Model the
         // production write profile explicitly while retaining external overlap.
         var mutation = Stopwatch.StartNew();
+        Trace("phase external-mutations");
         target.Run("bd", ["--dolt-auto-commit", "on", "comments", "add", bead, "External combined observer comment marker"]);
         measured.Enqueue($"external comment write (auto-commit on): {mutation.Elapsed.TotalMilliseconds:F1}ms");
         mutation.Restart();
         target.Run("bd", ["--dolt-auto-commit", "on", "dep", "add", bead, blocker]);
         measured.Enqueue($"external dependency write (auto-commit on): {mutation.Elapsed.TotalMilliseconds:F1}ms");
         var changed = Stopwatch.StartNew();
+        Trace("phase combined-visibility");
         const string commentMarker = "External combined observer comment marker";
         var combined = await ReadObservedAsync(root =>
         {
@@ -1195,13 +1221,20 @@ public sealed class OperationalObservationSourceTests
         // UntilAsync still enforces the functional observation bound.
     }
 
-    private sealed class RecordingJournalReader(IConsoleJournalReader inner, ConcurrentQueue<ConsoleJournalPage> pages) : IConsoleJournalReader
+    private sealed class RecordingJournalReader(IConsoleJournalReader inner, ConcurrentQueue<ConsoleJournalPage> pages,
+        Action<string>? trace = null) : IConsoleJournalReader
     {
         public async Task<ConsoleJournalPage> ReadAsync(long cursor, CancellationToken token)
         {
-            var page = await inner.ReadAsync(cursor, token);
-            pages.Enqueue(page);
-            return page;
+            trace?.Invoke("journal-page: requested");
+            try
+            {
+                var page = await inner.ReadAsync(cursor, token);
+                pages.Enqueue(page);
+                trace?.Invoke($"journal-page: completed; hints {page.Hints.Count}");
+                return page;
+            }
+            catch (Exception exception) { trace?.Invoke("journal-page: " + exception.GetType().Name); throw; }
         }
     }
 

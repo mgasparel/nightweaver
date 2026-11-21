@@ -1,5 +1,15 @@
 # Test suite
 
+The cold native observer smoke retains at most 512 payload-free timeline records
+with monotonic offsets, source/reason, command class, requested deadline and
+outcome. Opt-in process phases distinguish launch, managed exit, native settlement
+and stream drain; journal phases distinguish preparation from page parsing and
+settlement. These callbacks are unset in production. Diagnostics add no native
+journey or command and preserve the two-second command, four-second sweep,
+45-second functional bound and six-worker scheduling. Passing instrumentation
+alone does not establish a repair for the intermittent hosted cold timeout
+tracked by ns-a3d4/ns-5uk.
+
 Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection; use at least the committed floor of 995 tests and report the actual discovered total.
 
 Use PowerShell 7 and the single retained measurement entry point:

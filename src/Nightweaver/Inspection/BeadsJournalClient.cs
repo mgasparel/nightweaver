@@ -24,6 +24,7 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient, IBeadsInvalidati
     private readonly IProcessRunner processRunner;
     private readonly Func<ProcessRequest, Process> startProcess;
     private readonly TimeProvider timeProvider;
+    internal Action<string>? PhaseObserved { get; init; }
 
     internal BeadsJournalClient(IProcessRunner processRunner, Func<ProcessRequest, Process>? startProcess = null, TimeProvider? timeProvider = null)
     {
@@ -58,7 +59,9 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient, IBeadsInvalidati
         cancellationToken.ThrowIfCancellationRequested();
         using var timeout = new CancellationTokenSource(request.Timeout, timeProvider);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        PhaseObserved?.Invoke("start-requested");
         using var process = startProcess(request);
+        PhaseObserved?.Invoke("started");
         var standardError = ReadBoundedAsync(process.StandardError, MaximumStandardErrorCharacters, linked.Token);
 
         try
@@ -67,7 +70,8 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient, IBeadsInvalidati
             long? truncatedHead = null;
             try { sequences = await ParseInvalidationsAsync(process.StandardOutput, maxRecords, linked.Token).ConfigureAwait(false); }
             catch (BeadsJournalTruncatedException exception) { truncatedHead = exception.Head; }
-            await SystemProcessRunner.WaitForSettlementAsync(process, linked.Token).ConfigureAwait(false);
+            PhaseObserved?.Invoke("page-parsed");
+            await SystemProcessRunner.WaitForSettlementAsync(process, linked.Token, PhaseObserved).ConfigureAwait(false);
             var diagnostic = await standardError.ConfigureAwait(false);
             linked.Token.ThrowIfCancellationRequested();
             if (truncatedHead is { } reportedHead) throw new BeadsJournalTruncatedException(reportedHead);
@@ -82,7 +86,9 @@ internal sealed class BeadsJournalClient : IBeadsJournalClient, IBeadsInvalidati
         }
         catch
         {
+            PhaseObserved?.Invoke("failure-settling");
             await StopProcessAsync(process).ConfigureAwait(false);
+            PhaseObserved?.Invoke("failure-settled");
             try { _ = await standardError.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false); }
             catch (OperationCanceledException) { }
             catch (TimeoutException exception)
