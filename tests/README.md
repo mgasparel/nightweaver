@@ -20,6 +20,13 @@ stop cases cover intent capture and the later upgrade pipe request. Two small
 file-lock cases check command/admission contention and immediate second-signal
 force exit. They use injected native operations and the existing package setup.
 They add no native owner, Agent, Scheduler, browser or fixture publication.
+Final acceptance adds seven component cases. Two Healthy probes precede a final
+inventory with Web/runtime failure or an independently invalid state, failure,
+stop reason, Web health or runtime health. The exact native owner stays alive
+and holds its lock. These cases require retained pending evidence, backup and
+startup suppression, with no acceptance or repeated launch. They reuse the same
+package setup and add no native journey or fixture publication. Production adds
+five field checks to the final inventory already read during activation.
 Existing Web journeys also exercise the compatible health endpoint; legacy/dev
 hosts omit release evidence and keep their exact health JSON. Normal owner startup validates a release
 inventory only when one exists, and each owner health probe checks the launched

@@ -264,6 +264,32 @@ public sealed class UpgradeActivationTests
     }
 
     [Theory]
+    [InlineData("final-web-failure")]
+    [InlineData("final-runtime-failure")]
+    [InlineData("final-state")]
+    [InlineData("final-failure")]
+    [InlineData("final-stop-reason")]
+    [InlineData("final-web-health")]
+    [InlineData("final-runtime-health")]
+    public async Task FinalOwnerFailureRejectsAcceptanceWhileNativeOwnerRemainsAlive(string fault)
+    {
+        using var f = new Fixture(true, fault);
+        await f.Prepare();
+        var result = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        Assert.Equal(2, f.Observations);
+        Assert.True(f.Active);
+        Assert.Equal(UpgradeActivationOutcome.Pending, result.Outcome);
+        Assert.Equal(UpgradePhase.Verifying, result.Progress!.Phase);
+        Assert.NotNull(result.Progress.PendingOperation);
+        Assert.Null(result.Progress.AcceptedPairs);
+        Assert.Equal(1, f.Starts);
+        Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+        Assert.Equal(f.OldDigest, PreparedRelease.Inspect(f.Journal.RetainedPackageRoot, false).Digest);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Coordinator().ApplyAsync(result.Progress.Revision, f.Candidate, f.Token));
+        Assert.Equal(1, f.Starts);
+    }
+
+    [Theory]
     [InlineData("legacy-cli")]
     [InlineData("legacy-web")]
     [InlineData("old-cli")]
@@ -329,6 +355,8 @@ public sealed class UpgradeActivationTests
         private bool active;
         private bool unavailable;
         private int observations;
+        internal int Observations => observations;
+        internal bool Active => active;
         private readonly Clock clock = new();
         internal HostPaths Paths { get; }
         internal string Candidate { get; }
@@ -363,7 +391,7 @@ public sealed class UpgradeActivationTests
                 config, "demo", repo, new('c', 32), "http://127.0.0.1:5000", "healthy", "live", "", "", null)
                 { ContainmentVersion = 1, GitCommonDirectory = repo };
             active = running;
-            lifecycle = new(Paths, Journal, new(_ => Task.FromResult(new UpgradeLifecycleInventory(scope, running || fault is not null ? [Owner] : [], true)),
+            lifecycle = new(Paths, Journal, new(_ => Task.FromResult(Inventory()),
                 (_, _) => unavailable ? throw new InvalidDataException("unavailable") : Task.FromResult<SupervisionLifecycle?>(supervised ? new(store) : null),
                 async (_, operation, maintenance, token) =>
                 {
@@ -399,6 +427,30 @@ public sealed class UpgradeActivationTests
                     if (fault == "manual-stop-during-health") Assert.Equal(0, await Stop(false));
                 });
             temp.WriteFile("installed/worktrees/sentinel", "preserve");
+        }
+        private UpgradeLifecycleInventory Inventory()
+        {
+            // Both live probes have succeeded. Only the final inventory records
+            // failure; the original native identity and held owner lock remain.
+            if (observations == 2)
+            {
+                var failure = new BackgroundFailure(clock.GetUtcNow(), "WebFailure", Owner.RunId,
+                    Owner.RuntimeId, Owner.ProcessId, Owner.ProcessStartedAtUtc);
+                Owner = fault switch
+                {
+                    "final-web-failure" => Owner with { State = "degraded", WebHealth = "stopped", RuntimeHealth = "stale",
+                        StopReason = "WebFailure", Failure = failure },
+                    "final-runtime-failure" => Owner with { State = "degraded", RuntimeHealth = "failed",
+                        StopReason = "RuntimeFailure", Failure = failure with { Reason = "RuntimeFailure" } },
+                    "final-state" => Owner with { State = "degraded" },
+                    "final-failure" => Owner with { Failure = failure },
+                    "final-stop-reason" => Owner with { StopReason = "RuntimeFailure" },
+                    "final-web-health" => Owner with { WebHealth = "unavailable" },
+                    "final-runtime-health" => Owner with { RuntimeHealth = "unavailable" },
+                    _ => Owner
+                };
+            }
+            return new(scope, running || fault is not null ? [Owner] : [], true);
         }
         internal async Task Prepare()
         {

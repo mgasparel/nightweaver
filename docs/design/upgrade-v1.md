@@ -483,7 +483,11 @@ backup and root interlock; the one-shot coordinator cannot replay it.
 Command locks cover the final launch boundary and are released for health
 observation. Stop remains usable. Final publication reacquires all affected
 command locks and admission, then rechecks intent, inventory, native identity
-and installed hashes. Running acceptance requires the same CLI/Web pair in two
+and installed hashes. The final owner inventory must still report running state,
+healthy Web and live runtime, with no failure or stop reason. A recorded failure
+rejects acceptance even while the exact native owner remains alive and holds its
+lock. It retains the pending operation, backup and root interlock.
+Running acceptance requires the same CLI/Web pair in two
 fresh Healthy observations at least ten seconds apart within sixty seconds.
 The journal retains actual PID/creation/run/runtime/Job identities and each
 pair's first and final observation times. Stopped acceptance verifies payload

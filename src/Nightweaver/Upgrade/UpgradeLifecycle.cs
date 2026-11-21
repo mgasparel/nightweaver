@@ -260,6 +260,9 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
                 : current is null || OwnerEvidence(current) != expected.Owner || operations.OwnerActive(project.Name) != true
                     || operations.Observe(current).State != OwnerProcessState.Alive)
                 throw new InvalidOperationException("Final replacement native identity is unconfirmed.");
+            if (expected is not null && (current!.State != "running" || current.Failure is not null
+                || current.StopReason is not null || current.WebHealth != "healthy" || current.RuntimeHealth != "live"))
+                throw new InvalidOperationException("Final replacement health is unconfirmed; retain the upgrade interlock.");
             if (expected is null && current is not null && (!progress.Owners.Contains(OwnerEvidence(current))
                 || operations.Observe(current) is not { State: OwnerProcessState.Exited, DescendantsSettled: true }))
                 throw new InvalidOperationException("Stopped installation settlement is unconfirmed.");
