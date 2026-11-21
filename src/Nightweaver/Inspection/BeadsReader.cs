@@ -102,6 +102,66 @@ internal sealed class BeadsReader(IProcessRunner processRunner)
         }
     }
 
+    internal async Task<bool> QualifyTargetedEmptyStreamsAsync(ValidatedTargetRepository repository, CancellationToken token)
+    {
+        var json = await RunQueryAsync(repository, BeadsCommand.CreateVersion(repository.Path), "bd version", token);
+        if (Encoding.UTF8.GetByteCount(json) > 4096) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in root.EnumerateObject()) if (!names.Add(property.Name)) return false;
+            return root.TryGetProperty("version", out var version) && version.ValueKind == JsonValueKind.String && version.GetString() == "1.3.1"
+                && root.TryGetProperty("build", out var build) && build.ValueKind == JsonValueKind.String && build.GetString() == "c1c4b642a"
+                && root.TryGetProperty("commit", out var commit) && commit.ValueKind == JsonValueKind.String
+                && commit.GetString() == "c1c4b642ac1c08d8c828007a1c2f96e47e43ef7c"
+                && root.TryGetProperty("schema_version", out var schema) && schema.ValueKind == JsonValueKind.Number
+                && schema.TryGetInt32(out var schemaVersion) && schemaVersion == 1;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    // Workspace-only coalescing. Never interpret show.Dependencies or its best-effort
+    // aggregate counts as relation evidence. Missing streams retain native fallback.
+    internal async Task<(BeadSnapshot Bead, IReadOnlyList<BeadsCommentSnapshot>? Comments,
+        IReadOnlyList<Execution.BeadDependency>? Incoming)> ReadWorkspaceDetailAsync(
+        ValidatedTargetRepository repository, string beadId, CancellationToken cancellationToken)
+    {
+        var json = await RunQueryAsync(repository, BeadsCommand.CreateWorkspaceDetail(repository.Path, beadId),
+            "bd selected Workspace detail", cancellationToken);
+        try
+        {
+            if (Encoding.UTF8.GetByteCount(json) > MaxCommentsJsonBytes)
+                throw new JsonException("$: combined detail exceeded the 2 MiB read limit");
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array || document.RootElement.GetArrayLength() != 1)
+                throw new JsonException("$: expected exactly the requested Bead");
+            var inventory = Parse(json);
+            if (inventory.ById.Count != 1 || !inventory.ById.TryGetValue(beadId, out var bead))
+                throw new JsonException("$: show returned a different Bead");
+            if (bead.Payload.TryGetProperty("comments_omitted", out var omitted) && omitted.ValueKind != JsonValueKind.False)
+                throw new JsonException("$: requested comments were omitted");
+            var parsedComments = bead.Payload.TryGetProperty("comments", out var comments)
+                ? ParseAttentionComments(comments.GetRawText(), beadId, rejectCrossBeadRows: true) : null;
+            IReadOnlyList<Execution.BeadDependency>? incoming = null;
+            if (bead.Payload.TryGetProperty("dependents", out var dependents))
+            {
+                if (dependents.ValueKind != JsonValueKind.Array || dependents.GetArrayLength() > 10000)
+                    throw new JsonException("$: invalid or oversized incoming stream");
+                incoming = ParseUpDependencies(dependents, beadId);
+                if (incoming.Any(edge => edge.DependsOnId != beadId))
+                    throw new JsonException("$: incoming stream has a foreign target");
+            }
+            return (bead, parsedComments, incoming);
+        }
+        catch (JsonException exception)
+        {
+            throw new ToolExecutionException($"bd selected Workspace detail: incompatible JSON: {exception.Message}");
+        }
+    }
+
     internal async Task<BeadsReadiness> ReadReadinessAsync(ValidatedTargetRepository repository, BeadsInventory inventory,
         string recoveryActor, CancellationToken cancellationToken)
     {

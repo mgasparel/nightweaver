@@ -1,5 +1,33 @@
 # Test suite
 
+Cold Workspace coalescing adds deterministic parser/fallback, generation-race and
+finite-contention cases. The identical command-independent simulated contention
+interval fails the old cold predicate and permits the combined path to complete;
+it does not identify the historical hosted cause. The existing native observer
+smoke now seeds one closed and one ephemeral incoming owner, retains the empty
+cold comment history and compares incoming relations with native `up`. This
+extends its existing journey rather than adding another native fixture launch:
+the uncovered boundary is actual embedded show iterator parity, which injected
+responses cannot establish. Native outgoing reads and combined external
+comment/dependency journal-causality assertions remain. Omission, malformed or
+unsupported producer/flag responses, discovery failure, limits, permanent outgoing failure and warm budgets are
+covered cheaply. Deadlines and committed six-thread scheduling are unchanged.
+Two deterministic cases also retain a nonempty Attention history across an
+expired audit and Workspace selection. Failed or unsupported producer discovery
+exhausts the injected turn budget. Both cases require a later native comment
+read and the actual history before successful Workspace publication. They add
+no native journey or fixture publish.
+
+The cold native observer smoke retains at most 512 payload-free timeline records
+with monotonic offsets, source/reason, command class, requested deadline and
+outcome. Opt-in process phases distinguish launch, managed exit, native settlement
+and stream drain; journal phases distinguish preparation from page parsing and
+settlement. These callbacks are unset in production. Diagnostics add no native
+journey or command and preserve the two-second command, four-second sweep,
+45-second functional bound and six-worker scheduling. Passing instrumentation
+alone does not establish a repair for the intermittent hosted cold timeout
+tracked by ns-a3d4/ns-5uk.
+
 Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection; use at least the committed floor of 995 tests and report the actual discovered total.
 
 Use PowerShell 7 and the single retained measurement entry point:
