@@ -8,6 +8,15 @@ namespace Nightweaver.Tests;
 public sealed class SupervisionTickTests
 {
     [Fact]
+    public void NativeTokenLogonIdentityIsAvailableAndStableAcrossTokenHandles()
+    {
+        var first = SupervisionLogon.ReadIdentity();
+        Assert.Equal(16, first.Length);
+        Assert.NotEqual("0000000000000000", first);
+        Assert.Equal(first, SupervisionLogon.ReadIdentity());
+    }
+
+    [Fact]
     public void FiniteInvocationEpochSurvivesProcessReconstructionButNotBootOrLogonChange()
     {
         var epoch = BackgroundManagerApplication.TickEpoch(123, "S-1-5-5-1-2");

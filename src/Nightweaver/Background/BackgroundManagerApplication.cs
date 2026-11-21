@@ -301,17 +301,7 @@ internal static class BackgroundManagerApplication
             { MaximumOutputBytes = 1024 }, token).ConfigureAwait(false);
         if (result.ExitCode != 0 || !long.TryParse(result.StandardOutput.Trim(), out var boot) || boot <= 0)
             throw new InvalidDataException("Boot identity unavailable; supervision tick suppressed.");
-        using var user = System.Security.Principal.WindowsIdentity.GetCurrent();
-        string? logon = null;
-        if (user.Groups is { } groups)
-            foreach (System.Security.Principal.IdentityReference group in groups)
-                if (group.Value.StartsWith("S-1-5-5-", StringComparison.Ordinal))
-                {
-                    if (logon is not null) throw new InvalidDataException("Current logon identity is ambiguous.");
-                    logon = group.Value;
-                }
-        if (logon is null) throw new InvalidDataException("Current logon identity unavailable; supervision tick suppressed.");
-        return TickEpoch(boot, logon);
+        return TickEpoch(boot, SupervisionLogon.ReadIdentity());
     }
 
     internal static string TickEpoch(long boot, string logon)

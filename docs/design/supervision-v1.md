@@ -154,8 +154,12 @@ and notification consumers use this contract; neither is a prerequisite here.
 
 `background tick --project <slug>` (or `--config <absolute-path>`) runs once under
 the same start.lock as manual lifecycle mutations. It never initializes or enables
-supervision. Boot time from a bounded CIM child plus the current logon SID qualifies
+supervision. Boot time from a bounded CIM child plus the current token authentication ID qualifies
 the observation epoch across finite invocations; missing boot identity fails visibly.
+The authentication ID comes from [TOKEN_STATISTICS](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_statistics)
+through GetTokenInformation; it identifies the logon session across token handles.
+Neither managed group enumeration nor a reusable terminal session number establishes
+that identity. A cheap in-process native-token check verifies availability and stability.
 Stop, maintenance, gaps and deliberate drain grant no launch. Existing explicit-reset
 policy remains: stable health and short-lived readiness never replenish retries.
 
