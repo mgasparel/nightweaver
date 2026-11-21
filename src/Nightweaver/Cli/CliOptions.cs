@@ -24,4 +24,5 @@ internal sealed record BackgroundOwnerOptions(
     string RunId,
     string Urls);
 
-internal enum BackgroundAction { Start, Status, Stop, Restart, Owner, MaintenanceEnter, MaintenanceStatus, MaintenanceLeave, Tick }
+internal enum BackgroundAction { Start, Status, Stop, Restart, Owner, MaintenanceEnter, MaintenanceStatus, MaintenanceLeave, Tick,
+    SupervisionStatus, SupervisionInstall, SupervisionEnable, SupervisionDisable, SupervisionUninstall }

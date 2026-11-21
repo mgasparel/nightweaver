@@ -1,5 +1,9 @@
 # Nightweaver
 
+Explicit current-user scheduled supervision commands and their local verification
+limitations are documented in [the supervision contract](docs/design/supervision-v1.md#explicit-task-scheduler-lifecycle).
+Ordinary deployment remains manual and registers no task.
+
 Optional operational export for the runtime and Web host is documented in
 [Operational telemetry v1](docs/design/operational-telemetry.md). Export is off by
 default and never replaces local Factory snapshots or invocation logs.

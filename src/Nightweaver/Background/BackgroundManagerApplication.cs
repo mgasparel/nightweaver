@@ -63,8 +63,33 @@ internal static class BackgroundManagerApplication
         try
         {
             // Future recovery launchers must hold this same lock through final intent check and launch.
-            using var commandLock = options.Action is BackgroundAction.Status or BackgroundAction.MaintenanceStatus
+            using var commandLock = options.Action is BackgroundAction.Status or BackgroundAction.MaintenanceStatus or BackgroundAction.SupervisionStatus
                 ? null : BackgroundFileLock.AcquireStart(paths, project.Name);
+            if (options.Action is BackgroundAction.SupervisionStatus or BackgroundAction.SupervisionInstall
+                or BackgroundAction.SupervisionEnable or BackgroundAction.SupervisionDisable or BackgroundAction.SupervisionUninstall)
+            {
+                var installation = await SupervisionLifecycle.ForInstallationAsync(paths, project, cancellationToken).ConfigureAwait(false);
+                var manifest = BackgroundDeploymentManifest.Load(paths.Root);
+                var executable = manifest.ResolveCliExecutable(paths.Root);
+                using var rootPins = InvocationRuntimeFiles.PinExistingRuntimeDirectory(paths.Root);
+                using var executablePins = InvocationRuntimeFiles.PinExistingRuntimeDirectory(Path.GetDirectoryName(executable)!);
+                _ = InvocationRuntimeFiles.ReadRuntimeFileBounded(executable, 32 * 1024 * 1024);
+                var definition = ScheduledTaskDefinition.Build(installation.Store.Identity, executable,
+                    ["background", "tick", "--config", configPath], paths.Root);
+                using var scheduler = new WindowsSupervisionScheduler();
+                var action = options.Action switch
+                {
+                    BackgroundAction.SupervisionInstall => ScheduledSupervisionAction.Install,
+                    BackgroundAction.SupervisionEnable => ScheduledSupervisionAction.Enable,
+                    BackgroundAction.SupervisionDisable => ScheduledSupervisionAction.Disable,
+                    BackgroundAction.SupervisionUninstall => ScheduledSupervisionAction.Uninstall,
+                    _ => ScheduledSupervisionAction.Status
+                };
+                var status = await new ScheduledSupervision(installation.Store, installation.Store.Identity, definition, scheduler)
+                    .ApplyAsync(action, cancellationToken).ConfigureAwait(false);
+                environment.Out.WriteLine(JsonSerializer.Serialize(status, OutputJson));
+                return ExitCodes.Success;
+            }
             var lifecycle = await (openLifecycle ?? SupervisionLifecycle.OpenAsync)(paths, project, cancellationToken).ConfigureAwait(false);
             if (options.Action == BackgroundAction.Tick)
             {
@@ -191,9 +216,9 @@ internal static class BackgroundManagerApplication
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException
             or InvalidOperationException or TargetRepositoryException or ToolExecutionException or ProjectConfigurationException
-            or TimeoutException)
+            or TimeoutException or System.Runtime.InteropServices.COMException)
         {
-            environment.Err.WriteLine($"nightweaver: lifecycle command unavailable; durable intent was not confirmed: {exception.Message}");
+            environment.Err.WriteLine($"nightweaver: lifecycle command unavailable; inspect retained intent and scheduler status: {exception.Message}");
             return ExitCodes.InspectionFailure;
         }
     }

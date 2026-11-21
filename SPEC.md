@@ -506,7 +506,10 @@ The optional top-level `decisions_api_key` (legacy alias `openai_api_key`) accep
 The [supervision v1 model and store](docs/design/supervision-v1.md) define
 bounded operational recovery intent, attempt reservations and incident retention.
 The background lifecycle integrates durable stop/start intent and explicit token/revision
-maintenance suppression; it installs no scheduler and grants no Beads workflow authority.
+maintenance suppression. Explicit current-user Task Scheduler lifecycle commands
+install disabled and require a separate enable; ordinary deployment registers no
+task. Scheduler or job-breakaway denial remains visible without policy fallback.
+Supervision grants no Beads workflow authority.
 An explicitly invoked `background tick` serializes with manual lifecycle commands,
 qualifies repeated identity-bound failures, reserves before launch and reconciles
 the exact reserved owner across crashes. Unknown launch acknowledgement retains

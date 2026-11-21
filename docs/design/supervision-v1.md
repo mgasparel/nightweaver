@@ -4,7 +4,8 @@ This contract settles the policy and durable operational state for subsequent
 supervision work. The model/store installs no task and enables no supervision. Background lifecycle
 commands integrate intent and maintenance suppression. Identity-bound observations and
 capture-first incident preparation and an explicitly invoked finite recovery tick
-are available. There is no scheduler installation or Web UI integration in this slice. Missing storage means manual opt-out; an existing
+are available. Explicit scheduler lifecycle commands are described below; ordinary
+deployment remains manual. Missing storage means manual opt-out; an existing
 unreadable, malformed, foreign or interrupted store means unavailable.
 
 ## Execution boundary
@@ -350,3 +351,87 @@ reread current intent/generation/owner and reserve the finite attempt durably be
 launch. Prepared evidence alone is never action authority. Maintenance consumers
 (`ns-qa2`) and notification consumers (`ns-qyk`) can inspect these local surfaces;
 this change installs no supervisor and sends no notification.
+
+## Explicit Task Scheduler lifecycle
+
+Use the installed CLI with the selected Project or absolute config selector:
+
+```powershell
+nightweaver background supervision status --project demo
+nightweaver background supervision install --project demo
+nightweaver background supervision enable --project demo
+nightweaver background supervision disable --project demo
+nightweaver background supervision uninstall --project demo
+```
+
+These commands are explicit opt-in. Publishing, manual start and ordinary deployment
+register no task. Install persists disabled/stopped intent before creating a disabled
+task; enable preserves attempts, exhaustion and incident history, establishes running
+intent and requests an immediate finite evaluation for an already logged-on user.
+Disable/uninstall persist suppression before scheduler mutation. They advance the
+intent generation to revoke pending launch authority, retaining unresolved attempt
+identity for exact reconciliation, and leave an existing owner running until an
+explicit background stop. Stop and maintenance suppress future ticks even while
+the task remains enabled. An interrupted or lost mutation response is reconciled
+from the actual task definition, never by overwriting an uncertain registration.
+A lost first-evaluation response is reported without replay; the recurring trigger
+provides the next opportunity. Failed intent persistence retains the existing
+fail-closed uncertain-stop interlock.
+
+The deterministic task name binds root, config path, physical Git common directory
+and current user SID. The complete normalized definition must match before any
+existing-task mutation; changed actions, principals, triggers, policy or old-root
+identity fail visibly. Task Scheduler resolves logon account names, localizes times
+and supplies default XML fields; comparison normalizes those representations while
+allowing only the task Enabled setting to change. Create uses TASK_CREATE, never
+create-or-update. Status returns task identity, complete definition and actual
+registration/enabled/running/result state alongside durable intent, maintenance,
+next attempt, pending reservation and exhaustion.
+
+The task uses the selected user's InteractiveToken and least privilege, a user-specific
+logon trigger plus one-minute repetition, IgnoreNew and the application's existing
+start.lock. It has a four-minute scheduler action limit around the three-minute
+finite tick and no independent scheduler restart-on-failure budget. Absolute,
+validated deployment executable, config arguments and working directory use the
+existing Windows quoting routine. The owner still acquires physical repository
+exclusion; the scheduler grants no tracker or worktree authority.
+
+An existing interactive session, Task Scheduler access and successful native detached
+launch are prerequisites. Unavailable sessions, access/policy errors and denied job
+breakaway remain failures; no S4U/password/service logon, elevation, credentials,
+execution-policy bypass or launch fallback is used. Sleep, logoff, a stopped scheduler
+or other unavailable periods are observation gaps. Recovery resumes qualification at
+the next eligible tick; it does not imply continuous monitoring or refund retries.
+See Microsoft's [logon types](https://learn.microsoft.com/en-us/windows/win32/api/taskschd/ne-taskschd-task_logon_type),
+[registration flags](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskfolder-registertask)
+and [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
+
+### Separate native adapter verification
+
+The ordinary suite uses recording adapters and never registers tasks. Build the
+separate probe, then invoke its executable in an authorized disposable interactive
+context with an existing absolute evidence directory and a fresh 32-hex nonce:
+
+```powershell
+dotnet build tests/Nightweaver.QA.SchedulerProbe/Nightweaver.QA.SchedulerProbe.csproj
+# The probe executable accepts: proof <evidence-directory> <nonce>
+```
+
+The probe validates production-shaped XML with TASK_VALIDATE_ONLY, then registers
+only a nonce-named marker task whose action calls the probe itself. It has no real
+installation, Project, tracker or recovery authority. It reuses the principal,
+settings and definition builder with a future time trigger and two-minute end
+boundary, confirms actual definition/SID, waits for an actual timer activation,
+and requires a detached marker child to remain alive after the action completes.
+The child has a finite lifetime and release marker; exact removal and native child
+settlement are required. Definition/registration/action/process/cleanup artifacts
+remain in the supplied directory. Failure retains diagnostics and never changes
+scheduler policy. The cleanup mode accepts only an exact retained definition for
+a disabled stopped marker. An actual logoff/reboot is not exercised.
+
+Local verification on 2026-11-21 established real registration and time-triggered
+marker activation, but the existing detached launcher returned Win32 error 5 at
+CreateProcessW under Task Scheduler. No detached child was created. Exact task
+removal was confirmed. This is a blocking prerequisite failure, not a successful
+native acceptance result or authority to change policy. No Nightweaver supervisor
+was installed. Positive detached survival/settlement acceptance remains outstanding.
