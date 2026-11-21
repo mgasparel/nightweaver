@@ -228,7 +228,7 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
             throw new InvalidOperationException("Unexpected replacement owner.");
         var pairs = new List<UpgradeAcceptedPair>();
         var firstTimes = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
-        var confirmedTimes = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var confirmedObservations = new Dictionary<string, DeploymentObservation>(StringComparer.Ordinal);
         var verificationStarted = time.GetTimestamp();
         for (var round = 0; round < 2; round++)
         {
@@ -249,7 +249,7 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
                 {
                     if (observation.Utc - firstTimes[project.Name] < TimeSpan.FromSeconds(10))
                         throw new InvalidOperationException("Replacement observations are too close together.");
-                    confirmedTimes.Add(project.Name, observation.Utc);
+                    confirmedObservations.Add(project.Name, observation);
                 }
                 var owner = observation.Owner!;
                 var current = inventory.Owners.SingleOrDefault(o => o.Project == project.Name);
@@ -284,12 +284,15 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         if (PreparedRelease.Inspect(paths.Root, true).Digest != package.Digest)
             throw new InvalidDataException("Installed payload changed during acceptance.");
         if (launches.Length > 0 && (time.GetElapsedTime(verificationStarted) < TimeSpan.FromSeconds(10)
-            || time.GetElapsedTime(verificationStarted) > TimeSpan.FromSeconds(60)
-            || confirmedTimes.Values.Any(utc => !DeploymentObserver.Fresh(utc, time.GetUtcNow()))))
+            || time.GetElapsedTime(verificationStarted) > TimeSpan.FromSeconds(60)))
             throw new InvalidOperationException("Replacement acceptance observations expired before publication.");
         await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
+        // Inventory, hashing, intent reads and other Project probes can expire any proof.
+        foreach (var launch in launches)
+            UpgradeAcceptance.Confirm(progress, progress.Scope.Projects.Single(p => p.Name == launch.Project),
+                package.BuildVersion, launch.RunId, confirmedObservations[launch.Project], time.GetUtcNow());
         var accepted = progress with { Phase = UpgradePhase.Accepted, PendingOperation = null, LastConfirmedOperation = intent,
-            AcceptedPairs = pairs.Select(p => p with { FirstObservedUtc = firstTimes[p.Owner.Project], ConfirmedUtc = confirmedTimes[p.Owner.Project] }).ToArray(),
+            AcceptedPairs = pairs.Select(p => p with { FirstObservedUtc = firstTimes[p.Owner.Project], ConfirmedUtc = confirmedObservations[p.Owner.Project].Utc }).ToArray(),
             Evidence = [.. progress.Evidence, new(Guid.NewGuid().ToString("N"),
                 launches.Length == 0 ? UpgradeEvidenceKind.StoppedAcceptance : UpgradeEvidenceKind.RunningAcceptance,
                 launches.Length == 0 ? "payload-verified-stopped" : "live-pair-accepted", DateTimeOffset.UtcNow)] };

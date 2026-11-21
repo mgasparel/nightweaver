@@ -531,7 +531,9 @@ and settlement without launching or inventing supervision state.
 Accepted resume also releases command and admission locks during health probes.
 It reacquires both locks before release, then checks the journal revision,
 current intent, native identity and installed hashes. It checks observation,
-control and runtime timestamps again after those reads. A proof that expires
+control and runtime timestamps again after those reads. Verifying resume retains
+each final full observation and checks all three timestamps after final inventory,
+package and intent reads, before acceptance. A proof that expires
 during another Project's probe cannot release suppression.
 For each stopped Project with an original journaled owner, both verification
 resume and accepted resume require a fresh exact owner record and confirmed

@@ -44,22 +44,33 @@ public sealed class UpgradeActivationTests
         Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
     }
 
-    [Fact]
-    public async Task AcceptedResumeRejectsEvidenceThatExpiresDuringAnotherProbe()
+    [Theory]
+    [InlineData("lost-acceptance-reply")]
+    [InlineData("lost-launch-reply")]
+    public async Task ResumeRejectsEvidenceThatExpiresDuringAnotherProbe(string fault)
     {
-        using var f = new Fixture(true, "lost-acceptance-reply", twoProjects: true);
+        using var f = new Fixture(true, fault, twoProjects: true);
         await f.Prepare();
         var pending = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
-        Assert.Equal(UpgradePhase.Accepted, pending.Progress!.Phase);
-        Assert.Equal(2, pending.Progress.AcceptedPairs!.Length);
-        var evidence = f.RecoveryEvidence();
-        foreach (var timestamp in new[] { "observation", "control", "runtime" })
+        Assert.Equal(fault == "lost-launch-reply" ? UpgradeActivationOutcome.Pending : UpgradeActivationOutcome.Failed, pending.Outcome);
+        Assert.Equal(fault == "lost-launch-reply" ? UpgradePhase.Verifying : UpgradePhase.Accepted, pending.Progress!.Phase);
+        if (fault == "lost-launch-reply")
         {
+            Assert.NotNull(pending.Progress.PendingOperation);
+            Assert.Null(pending.Progress.AcceptedPairs);
+        }
+        else Assert.Equal(2, pending.Progress.AcceptedPairs!.Length);
+        var evidence = f.RecoveryEvidence();
+        foreach (var timestamp in fault == "lost-launch-reply" ? new[] { "control", "runtime" }
+            : new[] { "observation", "control", "runtime" })
+        {
+            var probes = 0;
             var result = await f.Coordinator(async (project, token) =>
             {
-                if (project.Name == "other") f.Advance(TimeSpan.FromSeconds(2));
+                var finalRound = fault == "lost-acceptance-reply" || ++probes > 2;
+                if (finalRound && project.Name == "other") f.Advance(TimeSpan.FromSeconds(2));
                 var observation = await f.Observe(project, token);
-                if (project.Name != "demo") return observation;
+                if (!finalRound || project.Name != "demo") return observation;
                 return timestamp switch
                 {
                     "observation" => observation with { Utc = observation.Utc.AddSeconds(-9) },
@@ -69,10 +80,16 @@ public sealed class UpgradeActivationTests
             }).ResumeAsync(pending.Progress.Revision, f.Candidate, f.Token);
             Assert.Equal(UpgradeActivationOutcome.Pending, result.Outcome);
             Assert.Equal("Fresh live CLI and Web replacement acceptance is unconfirmed.", result.Code);
+            Assert.Equal(pending.Progress.Revision, result.Progress!.Revision);
+            Assert.Equal(pending.Progress.PendingOperation, result.Progress.PendingOperation);
             Assert.Equal(evidence, f.RecoveryEvidence());
             Assert.Equal(2, f.Starts);
             Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
         }
+        var accepted = await f.Coordinator().ResumeAsync(pending.Progress.Revision, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.LiveAccepted, accepted.Outcome);
+        Assert.Equal(2, f.Starts);
+        UpgradeInterlock.RequireStartupAllowed(f.Paths);
     }
 
     [Theory]
@@ -814,7 +831,8 @@ public sealed class UpgradeActivationTests
                 Project = project.Name, ConfigPath = project.Configuration, TargetRepository = project.Repository,
                 GitCommonDirectory = project.GitCommonDirectory };
             replacements[project.Name] = Owner;
-            if (fault == "lost-launch-reply") throw new IOException("launch reply lost");
+            if (fault == "lost-launch-reply" && project.Name == scope.Projects[^1].Name)
+                throw new IOException("launch reply lost");
             if (fault is "stop" or "disable" or "maintenance")
             {
                 var state = store.Read().State!;
