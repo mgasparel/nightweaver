@@ -5,7 +5,7 @@ import { DeliveryView } from "./delivery-views";
 import { operations, interactions } from "./operations-browser";
 import { useObservation } from "./use-observation";
 import { observationStatus, type Snapshot } from "./operations";
-import { attentionPreview, beadPath, safeBeadId, survivingAttentionDisclosures, visibleAttention, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
+import { attentionWarningSections, decisionSections, attentionPreview, beadPath, safeBeadId, survivingAttentionDisclosures, visibleAttention, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
 import { AttentionCommands } from "./attention-commands";
 import { PlanningAuthorization } from "./product-views";
 import { Relations } from "./workspace-relations";
@@ -76,6 +76,30 @@ function Evidence({ message, fallback }: { message?: Message | null; fallback: s
   </div>;
 }
 
+/** Prose is never parsed into choices: only the server-attributed context is shown. */
+function DecisionContext({ item }: { item: AttentionItem }) {
+  const history = useContext(EvidenceHistory);
+  return <section className="decision-context" aria-label="Pause question and context">
+    <div className="bead-row-meta"><Status tone="warn">{item.kind === "product-decision-required" ? "Decision needed" : "Technical recovery"}</Status>
+      <span>{item.beadId} · {item.stage ?? "Stage unavailable"} · Repairs {item.repairCycles ?? 0}/{item.maxRepairCycles}</span></div>
+    <h2 tabIndex={-1}>{item.kind === "product-decision-required" ? "Your decision" : "Recovery context"}</h2>
+    <Markdown text={item.question || item.diagnostic || "No attributable question is available. Review the source evidence before acting."} />
+    {item.message && <><p className="eyebrow">{item.message.role ?? "Role unavailable"}</p>
+      {item.message.summary !== item.question && item.message.summary !== item.diagnostic && <Markdown text={item.message.summary} />}</>}
+    {decisionSections(item).map((section, index) => <section key={`${section.label}:${index}`}>
+      <h3>{section.label}</h3><EvidenceSection section={section} /></section>)}
+    {attentionWarningSections(item).map((section, index) => <section className="bead-notice" key={`${section.label}:${index}`}>
+      <h3>{section.label}</h3><EvidenceSection section={section} /></section>)}
+    {item.contextNotice && <p className="bead-notice">{item.contextNotice}</p>}
+    {history && item.sourceCommentId && <Link className="text-link" to={`${history.path}?${new URLSearchParams({ tab: "history", comment: item.sourceCommentId })}`}>Source comment {item.sourceCommentId}</Link>}
+  </section>;
+}
+function DecisionEvidence({ item }: { item: AttentionItem }) {
+  return <details className="decision-evidence"><summary>Original evidence and additional context</summary>
+    <Evidence message={item.message} fallback={item.question || item.diagnostic || "No source evidence available."} />
+  </details>;
+}
+
 /** A removed focused disclosure/control returns to this surviving heading, never another Bead. */
 export function FocusBoundary({ children }: { children: ReactNode }) {
   const host = useRef<HTMLDivElement>(null);
@@ -120,12 +144,12 @@ function Guidance({ project, id, item, current }: { project: string; id: string;
   // this exact Bead's confirmation or its focused Cancel control.
   useEffect(() => { if (!item?.canAbort) setConfirm(false); }, [item?.canAbort]);
   return <FocusBoundary><section className="guidance" aria-label={`Actions for ${id}`}>
-    <h2 tabIndex={-1}>Human guidance</h2>
-    <p>Save Note preserves the pause. Resume and Retry allow ordinary scheduling; they do not launch an Agent directly. The host checks fresh tracker state before every action, including when the displayed source is stale.</p>
+    {item?.kind !== "product-decision-required" && <h2 tabIndex={-1}>Human guidance</h2>}
+    <p>{item?.kind === "product-decision-required" ? "Resume permits ordinary scheduling for this Bead. It does not directly launch an Agent or override a paused Project. Save Note keeps the pause." : "Retry permits ordinary scheduling for this Bead; it does not launch an Agent directly or override a paused Project. The host checks fresh tracker state before every action."}</p>
     {(!current || !item) && <p className="bead-notice" role="status">The previous action is unavailable: this Bead resolved, was removed, or its current pause cannot be verified. Your draft stays with {id}.</p>}
     {item?.unavailableReason && <p className="bead-notice">{item.unavailableReason}</p>}
     {(item?.kind === "product-decision-required" || draft || !item) && <label>Guidance for {id}
-      <textarea value={draft} rows={6} onChange={event => {
+      <textarea data-focus-fallback value={draft} rows={4} onChange={event => {
         try { interactions.set(project, id, event.target.value); setDraft(event.target.value); setError(""); }
         catch (reason) { setError(String(reason)); }
       }} /></label>}
@@ -134,8 +158,8 @@ function Guidance({ project, id, item, current }: { project: string; id: string;
     {invalidDraft && <p role="alert">Guidance must be at most 16 KiB of UTF-8 text and contain no NUL characters. Your draft is retained.</p>}
     <div className="bead-actions">
       {item?.kind === "product-decision-required" && <>
-        <button className="button" disabled={blocked || invalidDraft || !item.canDecide || !draft.trim()} onClick={() => void commands.submit(project, item, "note_only", draft)}>Save Note</button>
         <button className="button primary" disabled={blocked || invalidDraft || !item.canDecide || !draft.trim()} onClick={() => void commands.submit(project, item, "resume", draft)}>Send &amp; Resume</button>
+        <button className="button" disabled={blocked || invalidDraft || !item.canDecide || !draft.trim()} onClick={() => void commands.submit(project, item, "note_only", draft)}>Save Note</button>
       </>}
       {item?.kind !== "product-decision-required" && item && <>
         <button className="button primary" disabled={blocked || !item.canRetry} onClick={() => void commands.submit(project, item, "retry", "")}>Reset Budget &amp; Retry</button>
@@ -203,10 +227,10 @@ export function AttentionView({ project, compact = false }: { project: string; c
     {!compact && !selected && <Panel title="Choose a paused Bead"><p>Select Review to read evidence and prepare guidance, or open its Full Bead Workspace.</p></Panel>}
     {!compact && selected && <Panel title={`Review ${selected}`}>
       <h2 ref={reviewHeading} tabIndex={-1}>{item?.title ?? `Retained draft · ${selected}`}</h2>
-      {item && <EvidenceHistory value={{ path: beadPath(project, selected) }}><Evidence message={item.message} fallback={item.question || item.diagnostic || "No attributable pause message is available. Review history before acting."} />
-        {item.contextNotice && <p className="bead-notice">{item.contextNotice}</p>}</EvidenceHistory>}
-      <Link className="text-link" to={beadPath(project, selected)}>Open Full Bead Workspace and evidence</Link>
+      {item && <DecisionContext item={item} />}
       <Guidance key={selected} project={project} id={selected} item={item} current={snapshot.synchronized === true && !snapshot.stale && snapshot.observation?.health !== "unavailable" && !!item} />
+      {item && <EvidenceHistory value={{ path: beadPath(project, selected) }}><DecisionEvidence item={item} /></EvidenceHistory>}
+      <Link className="text-link" to={beadPath(project, selected)}>Open Full Bead Workspace and evidence</Link>
     </Panel>}
     </div>
   </FocusBoundary>;
@@ -277,6 +301,12 @@ function WorkspaceIdentity({ project, id }: { project: string; id: string }) {
     {missing && <p className="bead-notice" role="status">This Bead no longer exists. Retained details are historical; actions are unavailable.</p>}
     {!valid && <Panel title={missing ? "Bead unavailable" : "Waiting for Bead details"}><p>Current details cannot be read. Use Refresh to try again.</p></Panel>}
     {valid && <>
+      {(valid.attention || hadAttention || interactions.get(project, id)) && <Panel title="Attention and guidance" className="workspace-guidance">
+        {valid.attention && <DecisionContext item={valid.attention} />}
+        <Guidance project={project} id={id} item={valid.attention} current={snapshot.synchronized === true && !missing && !snapshot.stale && snapshot.observation?.health !== "unavailable"} />
+        {valid.attention && <DecisionEvidence item={valid.attention} />}
+        <Link className="text-link" to={`?${new URLSearchParams({ ...Object.fromEntries(params), tab: "history" })}`}>Read active evidence and full history</Link>
+      </Panel>}
       <div hidden={tab !== "summary"}><Panel title="Summary" accessory={<Status>{valid.bead.status}</Status>}>
         <div className="bead-facts"><span>{valid.bead.type} · P{valid.bead.priority}</span><span>{valid.bead.stage ?? "No stage"}</span>
           <span>Repairs {valid.bead.repairCycles ?? 0}</span><span>Assignee: {valid.bead.assignee ?? "Unassigned"}</span></div>
@@ -309,12 +339,6 @@ function WorkspaceIdentity({ project, id }: { project: string; id: string }) {
       </Panel></div>
       <div hidden={tab !== "history"}><History data={valid} /></div>
       <div hidden={tab !== "output"}><Panel title="Invocation output">{tab === "output" && <DeliveryView project={project} compact bead={id} />}</Panel></div>
-      {(valid.attention || hadAttention || interactions.get(project, id)) && <Panel title="Attention and guidance" className="workspace-guidance">
-        {valid.attention && <><Evidence message={valid.attention.message} fallback={valid.attention.question || valid.attention.diagnostic || "Review history before acting."} />
-          {valid.attention.contextNotice && <p>{valid.attention.contextNotice}</p>}
-          <Link className="text-link" to={`?${new URLSearchParams({ ...Object.fromEntries(params), tab: "history" })}`}>Read active evidence and full history</Link></>}
-        <Guidance project={project} id={id} item={valid.attention} current={snapshot.synchronized === true && !missing && !snapshot.stale && snapshot.observation?.health !== "unavailable"} />
-      </Panel>}
     </>}
     {!valid && interactions.get(project, id) && <Guidance project={project} id={id} current={false} />}
   </FocusBoundary></EvidenceHistory>;

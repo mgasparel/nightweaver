@@ -8,6 +8,17 @@ export type AttentionItem = {
   sourceCommentId: string | null; contextNotice: string | null;
   message?: Message | null; otherPauseReports?: Message[];
 };
+/** Labels come from the validated server presenter, never inferred from original prose. */
+export function decisionSections(item: AttentionItem) {
+  if (item.kind !== "product-decision-required" || item.message?.state !== "supported") return [];
+  return item.message.sections.filter(section => ["Question", "Recommended answer", "Tradeoffs"].includes(section.label)
+    && section.text !== item.question);
+}
+/** Material retention warnings remain visible for either pause kind before actions. */
+export function attentionWarningSections(item: AttentionItem) {
+  if (item.message?.state !== "supported") return [];
+  return item.message.sections.filter(section => ["Environment retention", "Historical cleanup warning"].includes(section.label));
+}
 /** Retain surviving focused/open rows across live reorder without opening the inventory. */
 export function visibleAttention(items: AttentionItem[], limit: number, focused?: string, disclosed: ReadonlySet<string> = new Set()) {
   return items.filter((row, index) => index < limit || row.beadId === focused || disclosed.has(row.beadId));

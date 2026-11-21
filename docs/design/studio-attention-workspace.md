@@ -7,6 +7,27 @@ there is no feature-owned response cache, polling loop or EventSource. Legacy
 root-console links translate into Studio routes. Summary, History and Output are native
 query links, with direct loads and browser history supported by the shell.
 
+Review links from Overview enter the exact Project+Bead Workspace. Its Attention
+and guidance panel precedes Summary, History and environment content. The explicit
+Attention Desk selection uses the same question-first presentation: pause kind,
+stage and repair count, the attributable question and server-presented summary,
+validated Question/Recommended answer/Tradeoffs sections when present, then
+editable guidance with adjacent Send & Resume and Save Note controls.
+Original evidence and additional context are a stable disclosure below the editor;
+source-comment links still open the native History route. Freshness and material
+context warnings remain visible. Supported Environment retention and Historical
+cleanup warning sections stay above the actions for both pause kinds, outside the
+evidence disclosure. Discarding a decision draft returns keyboard focus to its
+guidance textarea. Resume permits ordinary scheduling for this Bead and does not
+directly launch an Agent or override a paused Project.
+
+The current observation contract has no structured alternatives. Guidance remains
+freeform; arbitrary prose is never converted into choice buttons, consequences or
+a fabricated recommendation. Technical recovery retains its distinct Retry/Abort
+controls and confirmation flow. The frozen refined-A design reference is
+`H:/Nightweaver/design-handoffs/ns-aki/45d03c7b940269cd98c970bd46c35fcf509eb7ff12315cf46d733060c6a20514.html`
+(SHA256 `45D03C7B940269CD98C970BD46C35FCF509EB7FF12315CF46D733060C6A20514`).
+
 Attention is an explicit selection: incoming rows never select themselves.
 Removing a selected row leaves its editor and exact Bead identity in place with
 an unavailable-action explanation. Guidance lives in the shared Project+Bead

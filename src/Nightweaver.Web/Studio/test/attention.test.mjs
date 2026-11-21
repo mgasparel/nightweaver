@@ -1,9 +1,31 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AttentionCommands } from '../src/attention-commands.ts';
-import { actionRequest, safeBeadId, safeEvidenceUrl } from '../src/bead-model.ts';
+import { actionRequest, attentionWarningSections, decisionSections, safeBeadId, safeEvidenceUrl } from '../src/bead-model.ts';
 const item = { beadId: 'qa.1', stage: 'stage:review', labels: ['other', 'needs-human', 'product-decision-required'], repairCycles: 3 };
 const receipt = action => new Response(JSON.stringify({ beadId: item.beadId, action, resolved: action !== 'note_only', commentRecorded: true, stateChanged: action !== 'note_only' }));
+
+test('decision context preserves attributable multiple questions/recommendations without interpreting prose as choices', () => {
+  const section = (label, text) => ({ label, text, details: true, commentId: null });
+  const sections = [section('Question', 'First question'), section('Recommended answer', 'First direction'),
+    section('Tradeoffs', 'Source-provided consequence'), section('Question', 'Second question'),
+    section('Recommended answer', 'Second direction'), section('Invocation', 'Technical context')];
+  const decision = { kind: 'product-decision-required', question: 'First question', message: { state: 'supported', sections } };
+  assert.deepEqual(decisionSections(decision), sections.slice(1, 5));
+  for (const state of ['ordinary', 'fallback']) assert.deepEqual(decisionSections({ ...decision, message: { ...decision.message, state } }), []);
+  assert.deepEqual(decisionSections({ ...decision, kind: 'needs-human' }), []);
+  assert.deepEqual(decisionSections({ ...decision, message: null }), []);
+});
+test('material retention warnings are promoted from supported evidence for either pause kind', () => {
+  const sections = ['Invocation', 'Environment retention', 'Historical cleanup warning', 'Log references']
+    .map(label => ({ label, text: `Source ${label}`, details: true, commentId: null }));
+  for (const kind of ['needs-human', 'product-decision-required']) {
+    const item = { kind, message: { state: 'supported', sections } };
+    assert.deepEqual(attentionWarningSections(item), sections.slice(1, 3));
+    for (const state of ['ordinary', 'fallback']) assert.deepEqual(attentionWarningSections({ ...item, message: { state, sections } }), []);
+    assert.deepEqual(attentionWarningSections({ ...item, message: null }), []);
+  }
+});
 test('Workspace admits canonical dotted identities and rejects unsafe/unbounded IDs before subscription', () => {
   for (const id of ['ns-mbd.4', 'ns-mbd.4.2', 'QA_task-1']) assert(safeBeadId(id));
   for (const id of ['../foreign', 'qa-<script>', '', 'x'.repeat(129), 'qa/1', 'qa.', 'CON', 'nul.data', 'LPT1']) assert(!safeBeadId(id));

@@ -112,13 +112,13 @@ h1:focus:not(:focus-visible) {
   border-color: var(--accent);
   background: #24273c;
 }
-.overview .button.primary {
+.overview .button.primary, .guidance .button.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: #1b1530;
   font-size: 14px;
 }
-.overview .button.primary:hover { background: #c9bcff; }
+.overview .button.primary:hover, .guidance .button.primary:hover { background: #c9bcff; }
 .text-link {
   display: inline-flex;
   align-items: center;
@@ -826,7 +826,11 @@ summary:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
 .attention-board .attention-inventory { max-height:760px; overflow:auto; padding:4px; }
 @media(max-width:1000px) { .attention-board { grid-template-columns:minmax(0,1fr); } .attention-board .attention-inventory { max-height:400px; } }
 .attention-list-title { margin:0 4px 14px; }
-.workspace-guidance { margin-top:24px; }
+.workspace-guidance { margin-bottom:24px; }
+.decision-context h2 { font-size:20px; overflow-wrap:anywhere; }
+.decision-context .bead-row-meta { justify-content:flex-start; }
+.decision-evidence { margin:20px 0 12px; border-top:1px solid var(--line); }
+.guidance h2 { font-size:17px; }
 .workspace-guidance + .text-link { display:inline-block; margin-top:16px; }
 .explorer-policy { color:var(--muted); font-size:12px; line-height:1.6; max-width:75ch; margin-bottom:20px; }
 .explorer-pagination, .explorer-row-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; }
