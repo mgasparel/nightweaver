@@ -202,6 +202,24 @@ internal static class BackgroundManagerApplication
         }
     }
 
+    // Called only by the upgrade boundary with all affected command locks held.
+    internal static async Task StartUpgradeAsync(HostPaths paths, AffectedUpgradeProject item, string runId,
+        string operationId, string packageDigest, AppEnvironment environment, CancellationToken token)
+    {
+        var project = ProjectConfigLoader.Load(item.Configuration, ProjectSlug.Parse(item.Name), paths);
+        var recordPath = BackgroundOwnerRecord.PathFor(paths, project.Name);
+        var urls = BackgroundOwnerRecord.TryRead(recordPath)?.WebUrl ?? "http://127.0.0.1:5000";
+        var result = await StartAsync(paths, project, item.Configuration, urls,
+            BackgroundIdentity.PipeName(paths, project.Name), recordPath, environment, token, runId, _ =>
+            {
+                UpgradeInterlock.RequireDrain(paths, operationId);
+                if (PreparedRelease.Inspect(paths.Root, true).Digest != packageDigest)
+                    throw new InvalidDataException("Replacement payload changed before launch.");
+                return Task.FromResult(true);
+            }).ConfigureAwait(false);
+        if (result != ExitCodes.Success) throw new IOException("Replacement owner startup is unconfirmed.");
+    }
+
     private static async Task<int> StartAsync(HostPaths paths, ProjectConfig project, string configPath,
         string urls, string pipeName, string recordPath, AppEnvironment environment,
         CancellationToken cancellationToken, string? reservedRunId = null,

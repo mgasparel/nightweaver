@@ -7,7 +7,10 @@ using Nightweaver.Supervision;
 namespace Nightweaver.Upgrade;
 
 internal sealed record UpgradeScope(string Root, string UserSid, AffectedUpgradeProject[] Projects);
-internal sealed record UpgradeMaintenance(string Project, string? Token, long Generation, long Revision);
+internal sealed record UpgradeMaintenance(string Project, string? Token, long Generation, long Revision)
+{
+    public bool StartRequested { get; init; }
+}
 internal sealed record UpgradeOwner(string Project, int ProcessId, DateTimeOffset CreatedUtc,
     string RunId, string OwnerId, string RuntimeId, string JobName);
 internal enum UpgradeFileResult { Pending, Old, New, Removed, Unknown }
@@ -18,7 +21,15 @@ internal sealed record UpgradeEvidence(string Id, UpgradeEvidenceKind Kind, stri
 internal sealed record UpgradeProgress(int Version, string OperationId, long Revision, UpgradeScope Scope,
     string OldPackageDigest, string NewPackageDigest, string ManagerDigest, UpgradePhase Phase,
     string? PendingOperation, string? LastConfirmedOperation, string BackupId,
-    UpgradeMaintenance[] Maintenance, UpgradeOwner[] Owners, UpgradeFileProgress[] Files, UpgradeEvidence[] Evidence);
+    UpgradeMaintenance[] Maintenance, UpgradeOwner[] Owners, UpgradeFileProgress[] Files, UpgradeEvidence[] Evidence)
+{
+    public UpgradeAcceptedPair[]? AcceptedPairs { get; init; }
+}
+internal sealed record UpgradeAcceptedPair(UpgradeOwner Owner, LiveRelease Cli, LiveRelease Web)
+{
+    public DateTimeOffset FirstObservedUtc { get; init; }
+    public DateTimeOffset ConfirmedUtc { get; init; }
+}
 internal enum UpgradeJournalAvailability { Missing, Available, Unavailable }
 internal enum UpgradePublicationBoundary { Flushed, Renamed }
 internal sealed record UpgradeJournalRead(UpgradeJournalAvailability Availability, UpgradeProgress? Progress,
@@ -187,6 +198,32 @@ internal sealed class UpgradeJournal
         if (progress.PendingOperation is not null) SupervisionValidation.ValidateId(progress.PendingOperation);
         if (progress.LastConfirmedOperation is not null) SupervisionValidation.ValidateId(progress.LastConfirmedOperation);
         var projects = progress.Scope.Projects.Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
+        if (progress.AcceptedPairs is { } pairs && (pairs.Length > 256
+            || pairs.Any(p => p is null || p.Owner is null || p.Cli is null || p.Web is null)
+            || pairs.Select(p => p.Owner.Project).Distinct().Count() != pairs.Length
+            || pairs.Any(p => !projects.Contains(p.Owner.Project) || p.Cli.PackageDigest != progress.NewPackageDigest
+                || p.Web.PackageDigest != progress.NewPackageDigest || p.FirstObservedUtc == default
+                || p.FirstObservedUtc.Offset != TimeSpan.Zero || p.ConfirmedUtc.Offset != TimeSpan.Zero
+                || p.ConfirmedUtc - p.FirstObservedUtc < TimeSpan.FromSeconds(10)
+                || p.ConfirmedUtc - p.FirstObservedUtc > TimeSpan.FromSeconds(60))))
+            throw new InvalidDataException("Invalid replacement acceptance evidence.");
+        foreach (var pair in progress.AcceptedPairs ?? [])
+        {
+            var project = progress.Scope.Projects.Single(p => p.Name == pair.Owner.Project);
+            if (!LiveReleaseIdentity.Matches(pair.Cli, progress.NewPackageDigest, pair.Web.Build,
+                pair.Owner.ProcessId, pair.Owner.CreatedUtc, progress.Scope.Root, project.Configuration, project.Name)
+                || !LiveReleaseIdentity.Matches(pair.Web, progress.NewPackageDigest, pair.Cli.Build,
+                    pair.Web.ProcessId, pair.Web.CreatedUtc, progress.Scope.Root, project.Configuration, project.Name)
+                || pair.Web.ProcessId <= 0 || pair.Web.ProcessId == pair.Owner.ProcessId
+                || pair.Owner.ProcessId <= 0 || pair.Owner.CreatedUtc == default || pair.Owner.CreatedUtc.Offset != TimeSpan.Zero
+                || pair.Web.CreatedUtc == default || pair.Web.CreatedUtc.Offset != TimeSpan.Zero
+                || pair.Cli.Build is not { Length: 40 } || !pair.Cli.Build.All(char.IsAsciiHexDigit)
+                || string.IsNullOrEmpty(pair.Owner.JobName) || pair.Owner.JobName.Length > 256 || pair.Owner.JobName.Any(char.IsControl))
+                throw new InvalidDataException("Invalid accepted live pair identity.");
+            SupervisionValidation.ValidateId(pair.Owner.RunId);
+            SupervisionValidation.ValidateId(pair.Owner.OwnerId);
+            SupervisionValidation.ValidateId(pair.Owner.RuntimeId);
+        }
         var maintenance = new HashSet<string>(StringComparer.Ordinal);
         foreach (var item in progress.Maintenance)
         {
@@ -232,5 +269,7 @@ internal sealed class UpgradeJournal
             || old.Evidence.Any(e => !next.Evidence.Contains(e))
             || old.Owners.Any(o => !next.Owners.Contains(o)))
             throw new InvalidDataException("Upgrade binding or retained evidence changed.");
+        if (old.AcceptedPairs is { } accepted && (next.AcceptedPairs is null || accepted.Any(p => !next.AcceptedPairs.Contains(p))))
+            throw new InvalidDataException("Replacement acceptance evidence changed.");
     }
 }

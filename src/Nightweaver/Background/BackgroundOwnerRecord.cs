@@ -27,6 +27,8 @@ internal sealed record BackgroundOwnerRecord(
     public int ContainmentVersion { get; init; }
     public DateTimeOffset? ObservedAtUtc { get; init; }
     public BackgroundFailure? Failure { get; init; }
+    public Nightweaver.Upgrade.LiveRelease? CliRelease { get; init; }
+    public Nightweaver.Upgrade.LiveRelease? WebRelease { get; init; }
     public Nightweaver.Supervision.SupervisionRead? Supervision { get; init; }
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)

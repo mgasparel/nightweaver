@@ -443,3 +443,44 @@ permits `Installed`, which grants no acceptance or startup authority. The
 component does not retry, release suppression, restore owner records or remove
 retained evidence. It reserves enough journal revisions before it changes files;
 budget exhaustion refuses. Recovery and rollback remain later work.
+
+## Internal activation and live release evidence
+
+`UpgradeCoordinator` composes a fresh compatible preflight report, prepared
+journal, drain, native settlement, replacement and activation. Its production
+factory uses the existing inventory, ordinary background startup and shared
+deployment observer. The external manager supplies independently proven
+compatibility; untrusted inventory capabilities cannot enable it. Public
+preflight still refuses mutation until recovery and rollback are delivered.
+An unsettled drain returns pending. The coordinator never repeats a launch or
+an uncertain mutation. Cancellation retains the operation for explicit recovery.
+
+Activation persists `activation.json` under the current root interlock before
+launch. It binds the operation, new package digest and exact Project/run pairs.
+The manager compares configuration, journal, maintenance generation/token/revision,
+old native settlement and both payloads under the existing command/admission
+locks. It leaves only its own maintenance and keeps desired intent unchanged.
+Ordinary starts and ticks remain suppressed. Only the reserved owner process
+and its contained Web child can obtain payload leases. Missing, malformed,
+foreign or interrupted activation evidence refuses startup, even beside a
+historical release record. A failed launch retains the grant, pending intent,
+backup and root interlock; the one-shot coordinator cannot replay it.
+
+Command locks cover the final launch boundary and are released for health
+observation. Stop remains usable. Final publication reacquires all affected
+command locks and admission, then rechecks intent, inventory, native identity
+and installed hashes. Running acceptance requires the same CLI/Web pair in two
+fresh Healthy observations at least ten seconds apart within sixty seconds.
+The journal retains actual PID/creation/run/runtime/Job identities and each
+pair's first and final observation times. Stopped acceptance verifies payload
+and settlement without launching or inventing supervision state.
+
+CLI and Web capture startup release evidence once from a validated installed
+inventory. Loaded assembly location, informational build and module identity
+must agree with the package. Web `/health` returns that captured identity with
+`Cache-Control: no-store`. The owner compares its HTTP response with the exact
+launched Web PID and creation time. Its fresh control response carries both
+release identities alongside the existing runtime health. Legacy/dev installs
+without release inventories report no attestation and cannot establish upgrade
+acceptance. A later disk manifest cannot change a captured live identity.
+Representative native cross-version confirmation remains in `upgrade-proof`.

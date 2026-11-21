@@ -1,0 +1,297 @@
+using System.Security.Cryptography;
+using Nightweaver.Background;
+using Nightweaver.Configuration;
+using Nightweaver.Supervision;
+using Nightweaver.Upgrade;
+
+namespace Nightweaver.Tests;
+
+public sealed class UpgradeActivationTests
+{
+    [Theory]
+    [InlineData(1234, 0, 1, true)]
+    [InlineData(1235, 0, 1, false)]
+    [InlineData(1234, 1, 1, false)]
+    [InlineData(1234, 0, 2, false)]
+    public void WebAttestationMustMatchLaunchedNativeChild(int pid, int seconds, int version, bool expected)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var release = new LiveRelease(version, new('a', 64), new('b', 40), 1234, now, "root", "config", "demo");
+        Assert.Equal(expected, LiveReleaseIdentity.MatchesProcess(release, pid, now.AddSeconds(seconds)));
+    }
+
+    [Fact]
+    public async Task MalformedActivationRemainsSuppressedEvenWithAReleaseRecord()
+    {
+        using var temp = new TempDirectory();
+        var paths = new HostPaths(temp.Path);
+        var reservation = new UpgradeReservation(1, paths.Root, new('a', 32), new('b', 64));
+        var token = TestContext.Current.CancellationToken;
+        await UpgradeInterlock.ReserveAsync(paths, reservation, token);
+        await UpgradeInterlock.ActivateAsync(paths, reservation, new(1, reservation.OperationId, new('c', 64), []), token);
+        await UpgradeInterlock.ReleaseAsync(paths, reservation, token);
+        var path = Path.Combine(UpgradeInterlock.Root(paths), reservation.OperationId, "activation.json");
+        File.WriteAllText(path, "{}");
+        Assert.Throws<System.Text.Json.JsonException>(() => UpgradeInterlock.RequireStartupAllowed(paths));
+        Assert.True(File.Exists(path));
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public async Task ComposesReplacementAndRecordsActualPairOrStoppedPayload(bool running, bool supervised)
+    {
+        using var f = new Fixture(running, supervised: supervised);
+        await f.Prepare();
+        var result = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        Assert.Equal(running ? UpgradeActivationOutcome.LiveAccepted : UpgradeActivationOutcome.PayloadVerifiedStopped, result.Outcome);
+        Assert.Equal(UpgradePhase.Accepted, result.Progress!.Phase);
+        Assert.Equal(running ? 1 : 0, f.Starts);
+        Assert.Equal(running ? 1 : 0, result.Progress.AcceptedPairs!.Length);
+        if (running)
+        {
+            var pair = Assert.Single(result.Progress.AcceptedPairs);
+            Assert.Equal(f.Owner.ProcessId, pair.Owner.ProcessId);
+            Assert.Equal(f.Owner.RuntimeId, pair.Owner.RuntimeId);
+            Assert.Equal(f.Owner.CliRelease, pair.Cli);
+            Assert.Equal(f.Owner.WebRelease, pair.Web);
+        }
+        Assert.Equal(f.OldDigest, PreparedRelease.Inspect(f.Journal.RetainedPackageRoot, false).Digest);
+        UpgradeInterlock.RequireStartupAllowed(f.Paths);
+        Assert.Equal("preserve", File.ReadAllText(Path.Combine(f.Paths.Root, "worktrees", "sentinel")));
+    }
+
+    [Theory]
+    [InlineData("launch")]
+    [InlineData("stop")]
+    [InlineData("disable")]
+    [InlineData("maintenance")]
+    [InlineData("unavailable")]
+    [InlineData("payload")]
+    [InlineData("second-owner")]
+    [InlineData("too-close")]
+    [InlineData("expired")]
+    [InlineData("cancel")]
+    [InlineData("stop-during-health")]
+    public async Task RefusesFalseAcceptanceAndRetainsOperationWithoutReplay(string fault)
+    {
+        using var f = new Fixture(true, fault);
+        await f.Prepare();
+        var result = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.Pending, result.Outcome);
+        Assert.Equal(1, f.Starts);
+        Assert.Equal(UpgradePhase.Verifying, result.Progress!.Phase);
+        Assert.NotNull(result.Progress.PendingOperation);
+        Assert.Null(result.Progress.AcceptedPairs);
+        Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Coordinator().ApplyAsync(result.Progress.Revision, f.Candidate, f.Token));
+        Assert.Equal(1, f.Starts);
+        Assert.Equal(f.OldDigest, PreparedRelease.Inspect(f.Journal.RetainedPackageRoot, false).Digest);
+    }
+
+    [Fact]
+    public async Task UnsupportedPreflightDoesNotDrainOrReserve()
+    {
+        using var f = new Fixture(true, "preflight");
+        await f.Prepare();
+        var result = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.Refused, result.Outcome);
+        Assert.Equal(UpgradePhase.Prepared, f.Journal.Read().Progress!.Phase);
+        Assert.Equal(0, f.Starts);
+        UpgradeInterlock.RequireStartupAllowed(f.Paths);
+    }
+
+    [Theory]
+    [InlineData("legacy-cli")]
+    [InlineData("legacy-web")]
+    [InlineData("old-cli")]
+    [InlineData("old-web")]
+    [InlineData("wrong-build")]
+    [InlineData("wrong-web-project")]
+    [InlineData("wrong-web-root")]
+    [InlineData("wrong-cli-process")]
+    [InlineData("same-process")]
+    [InlineData("stale")]
+    [InlineData("future")]
+    [InlineData("runtime-stale")]
+    [InlineData("control-stale")]
+    [InlineData("failed")]
+    [InlineData("wrong-repository")]
+    [InlineData("reused")]
+    [InlineData("healthy")]
+    public void ChecksLivePairWithoutPackageOrNativeSetup(string fault)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var root = Path.GetFullPath(".");
+        var project = new AffectedUpgradeProject("demo", Path.Combine(root, "demo.json"), new('0', 64), root, root, "physical");
+        var scope = new UpgradeScope(root, "sid", [project]);
+        var progress = new UpgradeProgress(1, new('a', 32), 1, scope, new('0', 64), new('1', 64), new('2', 64),
+            UpgradePhase.Verifying, null, null, new('b', 32), [], [], [], []);
+        var cli = new LiveRelease(1, progress.NewPackageDigest, new('3', 40), 1234, now, root, project.Configuration, "demo");
+        var owner = new BackgroundOwnerRecord(1, "running", new('c', 32), cli.ProcessId, now, root, project.Configuration,
+            "demo", root, new('d', 32), "http://127.0.0.1:5000", "healthy", "live", "", "", null)
+            { CliRelease = cli, WebRelease = cli with { ProcessId = 1235 }, GitCommonDirectory = root, ContainmentVersion = 1 };
+        owner = fault switch
+        {
+            "legacy-cli" => owner with { CliRelease = null },
+            "legacy-web" => owner with { WebRelease = null },
+            "old-cli" => owner with { CliRelease = cli with { PackageDigest = progress.OldPackageDigest } },
+            "old-web" => owner with { WebRelease = owner.WebRelease! with { PackageDigest = progress.OldPackageDigest } },
+            "wrong-build" => owner with { WebRelease = owner.WebRelease! with { Build = new('0', 40) } },
+            "wrong-web-project" => owner with { WebRelease = owner.WebRelease! with { Project = "other" } },
+            "wrong-web-root" => owner with { WebRelease = owner.WebRelease! with { Root = "other" } },
+            "wrong-cli-process" => owner with { CliRelease = cli with { ProcessId = 9999 } },
+            "same-process" => owner with { WebRelease = cli },
+            "wrong-repository" => owner with { TargetRepository = Path.Combine(root, "other") },
+            _ => owner
+        };
+        var observation = new DeploymentObservation(1, fault == "stale" ? now.AddSeconds(-30) : fault == "future" ? now.AddSeconds(30) : now,
+            "test", 1, new(root, project.Configuration, "demo", root, root), owner,
+            fault == "failed" ? DeploymentHealth.Failed : DeploymentHealth.Healthy, "test", true,
+            new(fault == "reused" ? OwnerProcessState.Reused : OwnerProcessState.Alive, false),
+            fault == "runtime-stale" ? now.AddSeconds(-30) : now, fault == "control-stale" ? now.AddSeconds(-30) : now);
+        if (fault == "healthy") Assert.Equal(cli, UpgradeAcceptance.Confirm(progress, project, cli.Build, owner.RunId, observation, now).Cli);
+        else Assert.Throws<InvalidOperationException>(() => UpgradeAcceptance.Confirm(progress, project, cli.Build, owner.RunId, observation, now));
+    }
+    private sealed class Fixture : IDisposable
+    {
+        private readonly TempDirectory temp = new();
+        private readonly bool running;
+        private readonly bool supervised;
+        private readonly string? fault;
+        private readonly UpgradeScope scope;
+        private readonly UpgradeLifecycle lifecycle;
+        private readonly SupervisionStore store;
+        private readonly string nextDigest;
+        private readonly string build;
+        private bool active;
+        private bool unavailable;
+        private int observations;
+        private readonly Clock clock = new();
+        internal HostPaths Paths { get; }
+        internal string Candidate { get; }
+        internal string OldDigest { get; }
+        internal UpgradeJournal Journal { get; }
+        internal BackgroundOwnerRecord Owner { get; private set; }
+        internal int Starts { get; private set; }
+        internal CancellationToken Token { get; } = TestContext.Current.CancellationToken;
+        internal Fixture(bool running, string? fault = null, bool supervised = true)
+        {
+            this.running = running;
+            this.fault = fault;
+            this.supervised = supervised;
+            Paths = new(temp.CreateDirectory("installed"));
+            Candidate = temp.CreateDirectory("candidate");
+            UpgradeReplacementTests.Package(Paths.Root, false);
+            UpgradeReplacementTests.Package(Candidate, true);
+            var old = PreparedRelease.Inspect(Paths.Root, true);
+            OldDigest = old.Digest;
+            build = old.BuildVersion;
+            nextDigest = PreparedRelease.Inspect(Candidate, false).Digest;
+            var config = temp.WriteFile("demo.json", "configuration");
+            var repo = temp.CreateDirectory("repository");
+            scope = new(Paths.Root, "S-1-5-21-1001", [new("demo", config, Hash(File.ReadAllBytes(config)), repo, repo, "physical")]);
+            Journal = new(scope, new('a', 32));
+            store = new(Paths, ProjectSlug.Parse("demo"), new(Paths.Root, config, repo, scope.UserSid));
+            Owner = new(1, "running", new('b', 32), 1234, DateTimeOffset.UtcNow.AddMinutes(-1), Paths.Root,
+                config, "demo", repo, new('c', 32), "http://127.0.0.1:5000", "healthy", "live", "", "", null)
+                { ContainmentVersion = 1, GitCommonDirectory = repo };
+            active = running;
+            lifecycle = new(Paths, Journal, new(_ => Task.FromResult(new UpgradeLifecycleInventory(scope, running ? [Owner] : [], true)),
+                (_, _) => unavailable ? throw new InvalidDataException("unavailable") : Task.FromResult<SupervisionLifecycle?>(supervised ? new(store) : null),
+                (_, _, _, _) => { active = false; return Task.FromResult(true); },
+                _ => new(active ? OwnerProcessState.Alive : OwnerProcessState.Exited, !active), _ => active), clock,
+                async (elapsed, token) =>
+                {
+                    clock.Advance(fault == "expired" ? TimeSpan.FromSeconds(61) : elapsed);
+                    if (fault == "stop-during-health")
+                    {
+                        using var command = BackgroundFileLock.AcquireStart(Paths, ProjectSlug.Parse("demo"));
+                        await new SupervisionLifecycle(store).ApplyAsync(SupervisionLifecycleAction.Stop, null, null, token);
+                    }
+                });
+            temp.WriteFile("installed/worktrees/sentinel", "preserve");
+        }
+        internal async Task Prepare()
+        {
+            var project = scope.Projects[0];
+            var initial = SupervisionState.Manual(new(Paths.Root, project.Configuration, project.GitCommonDirectory, scope.UserSid))
+                with { Enabled = true, DesiredRunning = running };
+            if (supervised) await store.SaveAsync(null, initial, Token);
+            await Journal.SaveAsync(null, new(1, new('a', 32), 0, scope, OldDigest, nextDigest,
+                Hash(File.ReadAllBytes(typeof(UpgradeCoordinator).Assembly.Location)), UpgradePhase.Prepared, null, null,
+                new('d', 32), [], [], [], []), Token);
+        }
+        internal UpgradeCoordinator Coordinator() => new(Journal, lifecycle, new(Journal, lifecycle),
+            _ => Task.FromResult(new UpgradePreflightReport("test", Paths.Root, Candidate, OldDigest, nextDigest, scope.Projects,
+                fault != "preflight", true, [])), Start, Observe);
+        private async Task Start(AffectedUpgradeProject project, string runId, CancellationToken token)
+        {
+            Starts++;
+            Assert.Throws<IOException>(() => BackgroundFileLock.AcquireStart(Paths, ProjectSlug.Parse(project.Name)));
+            Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(Paths));
+            if (fault == "launch") throw new IOException("launch failed");
+            if (fault == "cancel") throw new OperationCanceledException(token);
+            active = true;
+            var created = DateTimeOffset.UtcNow;
+            var cli = new LiveRelease(1, nextDigest, build, 5678, created, Paths.Root, project.Configuration, project.Name);
+            var web = cli with { ProcessId = 5679 };
+            Owner = Owner with { RunId = runId, RuntimeId = new('e', 32), ProcessId = cli.ProcessId,
+                ProcessStartedAtUtc = created, CliRelease = cli, WebRelease = web, ObservedAtUtc = created };
+            if (fault is "stop" or "disable" or "maintenance")
+            {
+                var state = store.Read().State!;
+                var changed = fault switch
+                {
+                    "stop" => SupervisionLifecycle.Transition(state, SupervisionLifecycleAction.Stop),
+                    "maintenance" => SupervisionLifecycle.Transition(state, SupervisionLifecycleAction.EnterMaintenance),
+                    _ => SupervisionPolicy.SetIntent(state, false, state.DesiredRunning, null)
+                };
+                await store.SaveAsync(state.Revision, changed, token);
+            }
+            if (fault == "unavailable") unavailable = true;
+            if (fault == "payload") File.WriteAllText(Path.Combine(Paths.Root, "added.txt"), "changed");
+        }
+        private Task<DeploymentObservation> Observe(AffectedUpgradeProject project, CancellationToken token)
+        {
+            var owner = Owner;
+            var now = clock.GetUtcNow();
+            observations++;
+            if (fault == "second-owner" && observations == 2) owner = owner with { RuntimeId = new('f', 32) };
+            if (fault == "too-close" && observations == 2) now -= TimeSpan.FromSeconds(10);
+            owner = fault switch
+            {
+                "legacy-cli" => owner with { CliRelease = null },
+                "legacy-web" => owner with { WebRelease = null },
+                "old-cli" => owner with { CliRelease = owner.CliRelease! with { PackageDigest = OldDigest } },
+                "old-web" => owner with { WebRelease = owner.WebRelease! with { PackageDigest = OldDigest } },
+                "wrong-build" => owner with { WebRelease = owner.WebRelease! with { Build = new('0', 40) } },
+                "wrong-web-project" => owner with { WebRelease = owner.WebRelease! with { Project = "other" } },
+                "wrong-web-root" => owner with { WebRelease = owner.WebRelease! with { Root = Candidate } },
+                "wrong-cli-process" => owner with { CliRelease = owner.CliRelease! with { ProcessId = 9999 } },
+                "same-process" => owner with { WebRelease = owner.WebRelease! with { ProcessId = owner.ProcessId } },
+                "wrong-repository" => owner with { TargetRepository = Candidate },
+                _ => owner
+            };
+            return Task.FromResult(new DeploymentObservation(1, fault == "stale" ? now.AddSeconds(-30) : fault == "future" ? now.AddSeconds(30) : now,
+                "test", 1, new(Paths.Root, project.Configuration, project.Name, project.Repository, project.GitCommonDirectory),
+                owner, fault == "failed" ? DeploymentHealth.Failed : DeploymentHealth.Healthy, "test", true,
+                new(fault == "reused" ? OwnerProcessState.Reused : OwnerProcessState.Alive, false),
+                fault == "runtime-stale" ? now.AddSeconds(-30) : now, fault == "control-stale" ? now.AddSeconds(-30) : now));
+        }
+        private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
+        public void Dispose() => temp.Dispose();
+    }
+
+    private sealed class Clock : TimeProvider
+    {
+        private DateTimeOffset utc = DateTimeOffset.UtcNow;
+        private long ticks;
+        public override DateTimeOffset GetUtcNow() => utc;
+        public override long GetTimestamp() => ticks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        internal void Advance(TimeSpan elapsed) { utc += elapsed; ticks += elapsed.Ticks; }
+    }
+}

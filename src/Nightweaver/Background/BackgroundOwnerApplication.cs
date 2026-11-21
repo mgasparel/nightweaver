@@ -69,6 +69,8 @@ internal static class BackgroundOwnerApplication
             {
                 await BackgroundOwnerRecord.WriteAsync(recordPath, state.Current, CancellationToken.None).ConfigureAwait(false);
                 _ = BackgroundDeploymentManifest.Load(paths.Root);
+                state.Update(record => record with { CliRelease = LiveReleaseIdentity.Capture(paths.Root,
+                    options.ConfigPath, projectSlug.Value, typeof(BackgroundOwnerApplication).Assembly, "nightweaver.dll") });
                 var projectConfig = ProjectConfigLoader.Load(options.ConfigPath, projectSlug, paths);
                 if (!PathEquals(projectConfig.ConfigFilePath, options.ConfigPath))
                     throw new InvalidDataException("background owner config path did not resolve to the requested Project file");
@@ -130,6 +132,7 @@ internal static class BackgroundOwnerApplication
                         RuntimeId = telemetry.RuntimeId,
                         GitCommonDirectory = repository.GitCommonDirectory,
                         WebHealth = "healthy",
+                        WebRelease = startedWebHost.Release,
                         RuntimeHealth = "live",
                         Message = null
                     });
@@ -331,7 +334,7 @@ internal static class BackgroundOwnerApplication
         }
         else
         {
-            record = record with { WebHealth = webHealth, RuntimeHealth = runtimeHealth };
+            record = record with { WebHealth = webHealth, RuntimeHealth = runtimeHealth, WebRelease = webHost?.Release };
         }
         return record;
     }

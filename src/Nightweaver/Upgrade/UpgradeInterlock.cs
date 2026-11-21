@@ -10,6 +10,8 @@ using Nightweaver.Background;
 namespace Nightweaver.Upgrade;
 
 internal sealed record UpgradeReservation(int Version, string Root, string OperationId, string ScopeDigest);
+internal sealed record UpgradeLaunch(string Project, string RunId);
+internal sealed record UpgradeActivation(int Version, string OperationId, string PackageDigest, UpgradeLaunch[] Launches);
 
 /// <summary>Durable root-wide suppression. A partial publication never permits startup.</summary>
 internal static class UpgradeInterlock
@@ -29,7 +31,7 @@ internal static class UpgradeInterlock
     {
         ProcessLifetimeTargetRepositoryLock.Acquire(repository);
         using var admission = AcquireAdmission(paths);
-        RequireStartupAllowed(paths);
+        RequireOwnerStartupAllowed(paths, project, false);
         ProcessPayloadLeases.Add(AcquirePayload(paths, project));
     }
 
@@ -42,13 +44,16 @@ internal static class UpgradeInterlock
         Func<BackgroundOwnerRecord, bool>? contained = null)
     {
         using var admission = AcquireAdmission(paths);
-        RequireStartupAllowed(paths);
         var owner = BackgroundOwnerRecord.TryRead(BackgroundOwnerRecord.PathFor(paths, project));
         if (owner is { ContainmentVersion: 1, RuntimeId: not null }
             && owner.Root == paths.Root && owner.Project == project.Value
             && BackgroundFileLock.ObserveOwner(paths, project) == true
             && (contained ?? IsContainedWeb)(owner))
+        {
+            RequireOwnerStartupAllowed(paths, project, true);
             return InvocationRuntimeFiles.OpenSharedRuntimeFile(OwnedWebPayloadPath(paths, project));
+        }
+        RequireStartupAllowed(paths);
         return InvocationRuntimeFiles.OpenSharedRuntimeFile(WebPayloadPath(paths, project));
     }
 
@@ -64,6 +69,39 @@ internal static class UpgradeInterlock
         foreach (var reservation in ReadAll(paths))
             if (!reservation.Released)
                 throw new InvalidOperationException($"Upgrade {reservation.Reservation.OperationId} suppresses startup. Inspect the retained upgrade operation.");
+    }
+
+    private static void RequireOwnerStartupAllowed(HostPaths paths, ProjectSlug project, bool web)
+    {
+        var active = ReadAll(paths).Where(r => !r.Released).ToArray();
+        if (active.Length == 0) return;
+        if (active.Length != 1) throw new InvalidDataException("Upgrade activation is unavailable.");
+        var reservation = active[0].Reservation;
+        var activationPath = Path.Combine(Root(paths), reservation.OperationId, "activation.json");
+        if (!File.Exists(activationPath))
+            throw new InvalidOperationException("Upgrade suppresses startup until an exact replacement is reserved.");
+        var bytes = InvocationRuntimeFiles.ReadRuntimeFileBounded(activationPath, 65536);
+        var grant = ReadActivation(bytes, reservation);
+        var owner = BackgroundOwnerRecord.TryRead(BackgroundOwnerRecord.PathFor(paths, project));
+        using var current = System.Diagnostics.Process.GetCurrentProcess();
+        if (owner is null || owner.Root != paths.Root || owner.Project != project.Value
+            || !grant.Launches.Contains(new(project.Value, owner.RunId))
+            || owner.CliRelease?.PackageDigest != grant.PackageDigest
+            || BackgroundFileLock.ObserveOwner(paths, project) != true
+            || (!web && (owner.ProcessId != current.Id || owner.ProcessStartedAtUtc != current.StartTime.ToUniversalTime())))
+            throw new InvalidOperationException("Upgrade permits only its exact replacement owner.");
+    }
+
+    internal static async Task ActivateAsync(HostPaths paths, UpgradeReservation reservation, UpgradeActivation activation, CancellationToken token)
+    {
+        RequireCurrent(paths, reservation);
+        await PublishActivationAsync(paths, reservation, activation, token).ConfigureAwait(false);
+    }
+
+    private static async Task PublishActivationAsync(HostPaths paths, UpgradeReservation reservation, UpgradeActivation activation, CancellationToken token)
+    {
+        ReadActivation(JsonSerializer.SerializeToUtf8Bytes(activation, PreparedRelease.JsonOptions), reservation);
+        await PublishAsync(Path.Combine(Root(paths), reservation.OperationId), "activation.json", activation, token).ConfigureAwait(false);
     }
 
     internal static void RequireCurrent(HostPaths paths, UpgradeReservation expected)
@@ -117,10 +155,12 @@ internal static class UpgradeInterlock
                 SupervisionValidation.ValidateId(Path.GetFileName(directory));
                 using var operationPin = InvocationRuntimeFiles.PinExistingRuntimeDirectory(directory);
                 var entries = Directory.EnumerateFileSystemEntries(directory).Select(Path.GetFileName).ToArray();
-                if (!entries.Contains("reservation.json") || entries.Any(n => n is not ("reservation.json" or "released.json" or "writer.lock")))
+                if (!entries.Contains("reservation.json") || entries.Any(n => n is not ("reservation.json" or "released.json" or "activation.json" or "writer.lock")))
                     throw new InvalidDataException($"Interrupted upgrade interlock at '{directory}'. Retain all files.");
                 var reservation = Read(paths, Path.Combine(directory, "reservation.json"));
                 if (reservation.OperationId != Path.GetFileName(directory)) throw new InvalidDataException("Foreign upgrade interlock.");
+                if (entries.Contains("activation.json"))
+                    ReadActivation(InvocationRuntimeFiles.ReadRuntimeFileBounded(Path.Combine(directory, "activation.json"), 65536), reservation);
                 var released = entries.Contains("released.json");
                 if (released && Read(paths, Path.Combine(directory, "released.json")) != reservation)
                     throw new InvalidDataException("Upgrade release identity changed.");
@@ -141,6 +181,24 @@ internal static class UpgradeInterlock
         return value;
     }
 
+    private static UpgradeActivation ReadActivation(byte[] bytes, UpgradeReservation reservation)
+    {
+        using var json = JsonDocument.Parse(bytes);
+        PreparedRelease.RejectDuplicateProperties(json.RootElement);
+        var activation = JsonSerializer.Deserialize<UpgradeActivation>(bytes, PreparedRelease.JsonOptions);
+        if (activation is not { Version: 1, PackageDigest.Length: 64, Launches.Length: <= 256 }
+            || activation.OperationId != reservation.OperationId || !activation.PackageDigest.All(char.IsAsciiHexDigit)
+            || activation.Launches.Any(l => l is null)
+            || activation.Launches.Select(l => l.Project).Distinct(StringComparer.Ordinal).Count() != activation.Launches.Length)
+            throw new InvalidDataException("Invalid upgrade activation.");
+        foreach (var launch in activation.Launches)
+        {
+            ProjectSlug.Parse(launch.Project);
+            SupervisionValidation.ValidateId(launch.RunId);
+        }
+        return activation;
+    }
+
     private static void Validate(HostPaths paths, UpgradeReservation reservation)
     {
         SupervisionValidation.ValidateId(reservation.OperationId);
@@ -148,7 +206,7 @@ internal static class UpgradeInterlock
             || !reservation.ScopeDigest.All(char.IsAsciiHexDigit)) throw new InvalidDataException("Foreign upgrade interlock.");
     }
 
-    private static async Task PublishAsync(string directory, string name, UpgradeReservation value, CancellationToken token)
+    private static async Task PublishAsync<T>(string directory, string name, T value, CancellationToken token)
     {
         using var pin = InvocationRuntimeFiles.PinExistingRuntimeDirectory(directory);
         var path = Path.Combine(directory, name);

@@ -1,5 +1,18 @@
 # Test suite
 
+Upgrade activation adds a pure live-identity matrix and disposable component
+checks for composed replacement, stopped intent, launch failure, cancellation,
+stop/disable/maintenance changes, unavailable stores, changed payload, changed
+second observation and the verification time window. Controlled time supplies
+the ten-second observation interval. The identity matrix uses no package copies
+or native setup; file/lock cases retain the real journal and replacement boundary.
+These cases add no native owner, Agent, Scheduler or fixture-publish journey.
+The representative native release-attestation proof belongs to `upgrade-proof`.
+Existing Web journeys also exercise the compatible health endpoint; legacy/dev
+hosts return null release evidence. Normal owner startup validates a release
+inventory only when one exists, and each owner health probe checks the launched
+Web process identity. Complete-suite measurements include that production cost.
+
 Upgrade drain uses disposable store/command-lock fixtures and injected native
 operations. Cases cover manual opt-out, exact maintenance ownership, root-wide
 startup suppression, lost drain replies, PID reuse, unsettled descendants,
