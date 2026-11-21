@@ -66,6 +66,15 @@ latest-main acceptance remain required. For draft CI and final hosted checks see
 
 ## Coverage pyramid
 
+Upgrade journal fixtures use disposable files for restart inspection, immutable
+history, stale writers, strict schema and identity rejection, sharing denial,
+cancellation and lost replies before/after atomic rename. One short junction
+helper verifies that the journal's actual no-reparse access cannot touch an
+outside sentinel. Existing supervision tests prove the common primitive; this
+case proves this store uses it for reads and writes. No owner, Agent, browser,
+fixture publish or lifecycle journey is added. See the
+[internal progress contract](../docs/design/upgrade-v1.md#internal-progress-storage).
+
 Prepared release fixtures validate complete paired inventories, assembly identities,
 strict schema/path/hash refusals, Project/root/repository inventory and read-only
 preflight command output. They retain sentinels and reject unavailable compatibility

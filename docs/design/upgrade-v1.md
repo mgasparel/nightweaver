@@ -8,6 +8,49 @@ Production release selection and each production operation require explicit
 operator authorization. This contract installs no supervisor and starts no
 collector, unattended run or automatic self-update.
 
+## Internal progress storage
+
+`UpgradeJournal` stores evidence at
+`run/upgrade/operations/<32-hex-operation-id>/<8-digit-revision>.json`.
+It derives storage paths from the caller's canonical root and operation ID.
+`RetainedPackageRoot` identifies the separate
+`run/upgrade/packages/<operation-id>` location; this store does not copy or
+delete package bytes. The replacement adapter must retain and verify old bytes
+there before it changes live payload. Neither location is replaceable payload.
+
+Each immutable revision binds the root, SID, affected Project/configuration and
+physical repository inventory, old/new package and manager digests, and backup
+ID. It records exact phase, pending and last confirmed operation IDs, saved
+maintenance tokens/generations/revisions, historical native PID/creation/run/
+owner/runtime/Job identities, per-file intent/result hashes and bounded failure,
+recovery and acceptance references. Configuration contents and process command
+lines have no fields. Evidence references use operational IDs and fixed-format
+codes; they are not paths to follow or proof that external evidence exists.
+
+Read-only `Read()` creates nothing. Missing operation directories are distinct
+from unavailable evidence. Empty existing directories, revision gaps, unknown or
+duplicate properties, invalid enums, foreign bindings, inaccessible files and
+interrupted siblings return unavailable. Writers hold a pinned exclusive lock,
+compare the observed revision, flush a unique sibling, then rename without
+overwrite. They retain interrupted siblings and all prior revisions. Old/new
+package bindings and prior failure/owner evidence cannot be removed by a later
+revision. A first-write interruption cannot be initialized over.
+
+Metadata is limited to 1 MiB per revision, 4,096 file entries, 256 evidence
+references and 4,096 revisions per operation. Budget exhaustion requires attention;
+the store never evicts history to permit progress. Publication has a ten-second
+cancellation budget. A synchronous native flush/rename cannot be forcibly
+cancelled; it must settle before the caller can continue.
+
+A lost reply is not a failed disk commit. A new manager must read durable state:
+an interrupted sibling blocks progress, while a complete renamed revision can
+still contain an unresolved operation. `SaveAsync` rereads before it reports
+success. Both its return and persisted acceptance remain historical evidence.
+Consumers must reconcile actual files/native owners and fresh intent under the
+boundary locks before they act. This store enforces no phase transition and
+grants no filesystem, launch, maintenance, cleanup or Beads authority. Public
+mutating upgrade commands remain unavailable.
+
 ## Installation and ownership
 
 V1 replaces only inventoried package files **in place at the same canonical
