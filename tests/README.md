@@ -7,6 +7,12 @@ lost retirement/inventory confirmations, lost launch replies, phase continuation
 stale revisions and repeated completion. Controlled time retains the activation
 health interval. These checks add no native owner, Agent, Scheduler, browser or
 fixture publish journey. The normal application paths do not invoke resume.
+Three publication interruption cases reuse one retained operation per boundary.
+They check missing activation evidence, an interrupted activation file, and a
+two-Project maintenance release interrupted after the first release. Each case
+checks unchanged intent, a later stop, and then foreign maintenance. Two resume
+calls per intent must retain the exact journal, interlock and store bytes, root
+suppression, and zero launches. These cases add no native journey or publish.
 
 Upgrade activation adds a pure live-identity matrix and disposable component
 checks for composed replacement, stopped intent, launch failure, cancellation,
