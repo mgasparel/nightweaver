@@ -4,6 +4,7 @@ using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
 using Nightweaver.Telemetry;
+using Nightweaver.Upgrade;
 
 namespace Nightweaver.Application;
 
@@ -41,7 +42,7 @@ internal static class ContinuousApplication
             .ValidateAsync(project.TargetRepository, project.ConfigFilePath, cancellationToken).ConfigureAwait(false);
 
         // The process-owned lock precedes startup recovery and every live Delivery admission.
-        ProcessLifetimeTargetRepositoryLock.Acquire(repository);
+        using var payloadLifetime = UpgradeInterlock.AcquireRuntime(hostPaths, project.Name, repository);
         EnsureInitialRoots(hostPaths, project.Name);
 
         var beadsReader = new BeadsReader(processRunner);

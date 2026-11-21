@@ -6,6 +6,7 @@ using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Supervision;
 using Nightweaver.Inspection;
+using Nightweaver.Upgrade;
 
 namespace Nightweaver.Background;
 
@@ -65,6 +66,8 @@ internal static class BackgroundManagerApplication
             // Future recovery launchers must hold this same lock through final intent check and launch.
             using var commandLock = options.Action is BackgroundAction.Status or BackgroundAction.MaintenanceStatus
                 ? null : BackgroundFileLock.AcquireStart(paths, project.Name);
+            if (options.Action is BackgroundAction.Start or BackgroundAction.Restart or BackgroundAction.Tick)
+                UpgradeInterlock.RequireStartupAllowed(paths);
             var lifecycle = await (openLifecycle ?? SupervisionLifecycle.OpenAsync)(paths, project, cancellationToken).ConfigureAwait(false);
             if (options.Action == BackgroundAction.Tick)
             {
@@ -179,6 +182,7 @@ internal static class BackgroundManagerApplication
                     if (stopped != ExitCodes.Success || BackgroundFileLock.IsOwnerActive(paths, project.Name))
                         return ExitCodes.InspectionFailure;
                     using var restartLock = BackgroundFileLock.AcquireStart(paths, project.Name);
+                    UpgradeInterlock.RequireStartupAllowed(paths);
                     if (lifecycle is not null && lifecycle.Read().State?.Generation != intent?.State?.Generation)
                         throw new InvalidOperationException("Intent changed during restart drain; no owner launched.");
                     if (lifecycle is not null)

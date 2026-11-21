@@ -51,6 +51,76 @@ boundary locks before they act. This store enforces no phase transition and
 grants no filesystem, launch, maintenance, cleanup or Beads authority. Public
 mutating upgrade commands remain unavailable.
 
+## Upgrade drain boundary
+
+`UpgradeLifecycle` is the internal drain and mutation boundary for the later
+replacement adapter. It accepts only a prepared journal revision and a fresh,
+complete installation inventory. The production inventory adapter reads all
+configured Projects, external configurations in the bound scope, runtime
+directories and retained background owners. It checks configuration hashes,
+physical Git identities and the current SID. Unknown consumers, unreadable
+evidence and changed membership refuse the operation. A foreground runtime or
+explicit dispatch holds a Project payload lease. This version refuses an active
+foreground consumer because it has no background drain endpoint.
+
+The caller must independently prove that the source implements the upgrade
+boundary. An inventory capability string does not supply this proof. Legacy
+sources remain unsupported. Public preflight still refuses mutation until the
+replacement, recovery and cross-version compatibility adapters are delivered.
+
+The manager takes `run/upgrade/manager.lock`, each affected `start.lock` in
+ordinal Project order, then `run/upgrade/admission.lock`. Foreground startup and
+explicit dispatch take admission serialization through their interlock check,
+payload lease and ordinary physical-repository mutex acquisition. They release
+admission serialization before runtime work. Background start/restart and finite
+ticks check the interlock under `start.lock`; restart checks again after drain.
+The upgrade manager never acquires or substitutes for repository exclusion.
+
+Reservation publishes an immutable root-bound record at
+`run/upgrade/interlocks/<operation-id>/reservation.json`. Its digest binds the
+complete journal scope. The manager reserves before maintenance or drain. It
+enters exact-token maintenance only for existing supervision stores. Manual
+installations acquire the same root interlock without creating supervision.
+Enabled/desired state, attempts and incident history remain intact. The manager
+records maintenance tokens, generations, revisions and original native identities
+in a new journal revision. It releases command, configuration and admission
+locks before sending drain requests. No wait or total force deadline is added.
+Existing role drain and successor/retry suppression remain authoritative.
+
+The internal `upgrade` owner-control request requires the original run ID,
+current root operation and exact installed maintenance token. It preserves
+desired-running intent and uses the existing Maintenance graceful-stop path.
+An uncertain reply retains the operation, interlock and journal. Stop remains
+available and can change durable intent during drain.
+
+Settlement is an explicit observation, not expiration of the manager's stop
+wait. Confirmation requires the original PID/creation/run/runtime identity,
+native process exit and an empty named containment Job. PID reuse, missing
+original records, foreign owners, active owner locks and inaccessible native
+evidence refuse mutation. Before each mutation callback, the manager reacquires
+command/admission locks, pins configuration files against writes, verifies their
+hashes and the current journal revision under its writer lock, and repeats
+inventory, maintenance and native settlement checks. A settled journal phase
+alone grants no mutation authority. The callback must not launch an owner or
+write the journal; the replacement adapter retains its per-file intent first.
+
+Explicit reconciled release requires a settled, accepted or rolled-back
+operation, fresh native settlement and the saved exact maintenance revisions.
+It clears only owned maintenance and publishes matching immutable
+`released.json` evidence. It starts nothing and never restores saved running
+intent. A later stop/disable, changed generation or foreign maintenance token
+prevents stale release and mutation. Missing, malformed, unknown or interrupted
+interlock files suppress startup. Partial multi-Project maintenance/release and
+lost publication replies retain all files for the later explicit recovery
+adapter; this boundary never clears them automatically. Interlock history is
+bounded at 4,096 operations and requires explicit inspection at that limit.
+
+`UpgradeLifecycleTests` use real disposable command/store locks and injected
+native settlement/control operations. They cover manual and supervised drain,
+concurrent command exclusion, interrupted requests and files, stale revisions,
+later stop/disable, configuration writes, foreground admission and root-wide
+inventory refusal. They add no owner, Agent, Scheduler or browser journey.
+
 ## Installation and ownership
 
 V1 replaces only inventoried package files **in place at the same canonical

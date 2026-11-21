@@ -1,5 +1,14 @@
 # Test suite
 
+Upgrade drain uses disposable store/command-lock fixtures and injected native
+operations. Cases cover manual opt-out, exact maintenance ownership, root-wide
+startup suppression, lost drain replies, PID reuse, unsettled descendants,
+foreign/unknown owners, changed configuration and later stop/disable. The
+inventory adapter uses injected Git output with real files and leases. These
+cases add no native process or fixture-publish journey. Existing continuous and
+explicit-dispatch native journeys now acquire two short startup file locks and
+read the root interlock; complete-suite timing includes this production cost.
+
 Cold Workspace coalescing adds deterministic parser/fallback, generation-race and
 finite-contention cases. The identical command-independent simulated contention
 interval fails the old cold predicate and permits the combined path to complete;
