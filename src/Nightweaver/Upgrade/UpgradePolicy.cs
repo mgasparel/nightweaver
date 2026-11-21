@@ -19,6 +19,9 @@ internal sealed record UpgradeFacts
     internal bool EvidenceReconciled { get; init; }
     internal bool SuppressionConfirmed { get; init; }
     internal bool AllOriginalOwnersAndJobsSettled { get; init; }
+    // True only after every candidate owner and its native descendants have
+    // settled, or reconciled evidence proves no candidate was launched.
+    internal bool AllCandidateOwnersAndJobsSettled { get; init; }
     internal bool OldPayloadRetained { get; init; }
     internal bool NewPayloadMatches { get; init; }
     internal bool OldPayloadMatches { get; init; }
@@ -77,6 +80,8 @@ internal static class UpgradePolicy
             && !facts.NewPayloadMatches) return Refuse(UpgradeRefusal.PayloadMismatch);
         if (step is UpgradeStep.BeginRollback or UpgradeStep.CommitRollback)
         {
+            if (!facts.AllCandidateOwnersAndJobsSettled)
+                return Refuse(UpgradeRefusal.NativeSettlementPending);
             if (!facts.RollbackStateReadable) return Refuse(UpgradeRefusal.RollbackIncompatible);
             if (step == UpgradeStep.CommitRollback && !facts.OldPayloadMatches)
                 return Refuse(UpgradeRefusal.PayloadMismatch);

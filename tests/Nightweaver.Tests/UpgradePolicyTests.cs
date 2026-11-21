@@ -9,6 +9,7 @@ public sealed class UpgradePolicyTests
         IdentityAndRootInventoryMatch = true, CompatibilityProven = true,
         JournalAndLocksAvailable = true, EvidenceReconciled = true, SuppressionConfirmed = true,
         AllOriginalOwnersAndJobsSettled = true, OldPayloadRetained = true,
+        AllCandidateOwnersAndJobsSettled = true,
         NewPayloadMatches = true, OldPayloadMatches = true, RollbackStateReadable = true,
         CurrentIntentMatches = true, ExplicitStartAuthorized = true,
         Enabled = true, DesiredRunning = true, FreshRunningAcceptance = true, FreshStoppedAcceptance = true
@@ -76,6 +77,38 @@ public sealed class UpgradePolicyTests
             Proven with { AllOriginalOwnersAndJobsSettled = false }, UpgradeRefusal.NativeSettlementPending);
         Refused(UpgradePhase.Prepared, UpgradeStep.BeginDrain,
             Proven with { SuppressionConfirmed = false }, UpgradeRefusal.InterlockUnavailable);
+    }
+
+    [Fact]
+    public void RollbackRequiresCandidateSettlementIndependentlyOfOriginalOwners()
+    {
+        // Original owners remain settled while a candidate is live, draining,
+        // or unknown. None of those states establishes candidate settlement.
+        var pending = Proven with { AllCandidateOwnersAndJobsSettled = false };
+        foreach (var (phase, step, next) in Transitions.Where(row =>
+            row.Step is UpgradeStep.BeginRollback or UpgradeStep.CommitRollback))
+        {
+            Refused(phase, step, pending, UpgradeRefusal.NativeSettlementPending);
+            var settled = UpgradePolicy.Evaluate(phase, step,
+                pending with { AllCandidateOwnersAndJobsSettled = true });
+            Assert.True(settled.Allowed);
+            Assert.Equal(next, settled.Phase);
+        }
+    }
+
+    [Fact]
+    public void MatchingLiveCandidateCanVerifyAndAcceptWithoutCandidateSettlement()
+    {
+        var live = Proven with { AllCandidateOwnersAndJobsSettled = false };
+        Assert.True(UpgradePolicy.Evaluate(UpgradePhase.Installed, UpgradeStep.BeginVerification, live).Allowed);
+        foreach (var step in new[] { UpgradeStep.Verify, UpgradeStep.Accept })
+        {
+            var decision = UpgradePolicy.Evaluate(UpgradePhase.Verifying, step, live);
+            Assert.True(decision.Allowed);
+            Assert.Equal(step == UpgradeStep.Accept ? UpgradePhase.Accepted : UpgradePhase.Verifying, decision.Phase);
+            Refused(UpgradePhase.Verifying, step,
+                live with { FreshRunningAcceptance = false }, UpgradeRefusal.AcceptanceUnproven);
+        }
     }
 
     [Fact]

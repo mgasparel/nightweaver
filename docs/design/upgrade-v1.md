@@ -115,12 +115,18 @@ verified evidence; it is separate from launch or maintenance leave.
 | Verifying -> Verifying / Verify | Fresh running or stopped acceptance below; verification expiry or a new intent change invalidates the proof. No implicit launch/retry. |
 | Verifying -> Accepted / Accept | Revalidate the same fresh proof and exact installed pair; atomically persist acceptance before releasing this operation's remaining root interlock. Release starts nothing. |
 | Replacing/Installed/Verifying -> RollingBack / BeginRollback | Reestablish root/maintenance suppression, gracefully drain any candidate owner and confirm its original native Job settlement too. Exact old bytes available, current forward state readable by old package. |
-| RollingBack -> RolledBack / CommitRollback | Restored old live inventory exact, current operator state preserved, journal commit durable. RolledBack means bytes restored, **not** running/healthy; separate explicit start and the same fresh acceptance checks prove usability. |
+| RollingBack -> RolledBack / CommitRollback | Original and candidate owners and their native descendants still confirmed settled/absent under suppression; restored old live inventory exact, current operator state preserved, journal commit durable. RolledBack means bytes restored, **not** running/healthy; separate explicit start and the same fresh acceptance checks prove usability. |
 
 `UpgradeFacts.AllOriginalOwnersAndJobsSettled` covers the pre-replacement owners;
-rollback additionally requires settlement of the candidate being replaced. A
-permitted live verification owner is excluded during Verify/Accept and instead
-must match fresh running acceptance. The fact never means merely absence of a PID.
+`UpgradeFacts.AllCandidateOwnersAndJobsSettled` independently covers every
+candidate owner and its original native Job descendants. Both BeginRollback and
+CommitRollback require this fact as well as original-owner settlement. True means
+confirmed native settlement of every candidate, or reconciled launch/reservation
+evidence proving none was launched; live, draining, unknown or lost-reply state
+must supply false and returns `NativeSettlementPending` without advancing.
+A permitted live verification owner does not require candidate settlement during
+BeginVerification/Verify/Accept and instead must match fresh running acceptance.
+Neither settlement fact means merely absence of a PID.
 `SuppressionConfirmed` means either full durable root/maintenance suppression or,
 during running verification only, the exact controlled handoff below; it must
 never be supplied merely because a maintenance command returned exit zero.
