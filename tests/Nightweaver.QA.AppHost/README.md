@@ -1,5 +1,15 @@
 # QA AppHost
 
+The existing `factory-qa` probe also checks compact/full Delivery stage geometry
+(four equal 5px rounded segments, 6px gaps), exact stage captions and repair return,
+paused/unknown/stale positions, long Bead identities, separate keyboard Bead
+navigation and immutable invocation inspection at 1440x900, 375x900 and 720x900.
+It retains the existing pool/capacity, diagnostics, focus, refresh and bounded log
+checks without another native journey. Run `studio-cutover.ps1 -Group Invocation
+-Only factory-qa -OutputDirectory <fresh-path>`; inspect captures and retain the
+probe's measured wall time. Title/type fallbacks are explicit because the factory
+wire schema does not currently include those tracker fields.
+
 The existing `studio-qa.mjs` shell journey includes the attention-first Overview
 matrix in `overview-checks.mjs`: one decision and visible Review action, bounded
 long inventories, bounded multiline questions with keyboard-accessible complete

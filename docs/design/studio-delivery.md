@@ -9,6 +9,47 @@ shows the runtime's bounded Planning, Delivery and singleton Merger inventory.
 Diagnostics contain paths, branch, runtime identity, configured model and observed
 model. Missing observed model remains Unavailable, never inferred from configuration.
 
+## Delivery stage position
+
+The immutable refined A handoff is
+`H:/Nightweaver/design-handoffs/ns-aki/45d03c7b940269cd98c970bd46c35fcf509eb7ff12315cf46d733060c6a20514.html`
+(SHA256 `45D03C7B940269CD98C970BD46C35FCF509EB7FF12315CF46D733060C6A20514`).
+Production uses its thin, rounded violet segments and single caption, without
+shipping the prototype or its sample data.
+
+`FactoryTelemetryPublisher.ObservePreparedInvocation` copies the prepared
+invocation's `Stage` from `AgentInvocationPreparer`'s `context.StageLabel`.
+The Web `ReadRuntimeAsync` factory projection serializes that snapshot directly,
+independently of tracker inventory. `deliveryProgress` maps only these exact values:
+
+| Runtime slot stage | Display position | Active caption |
+| --- | --- | --- |
+| `stage:implement` | Stage 1 of 4 | Implement → Review |
+| `stage:review` | Stage 2 of 4 | Review → QA |
+| `stage:qa` | Stage 3 of 4 | QA → Merge |
+| `stage:merge` | Stage 4 of 4 | Merge · final stage |
+
+Only a live running slot with a running invocation gets the active violet segment
+and current-to-next caption. Paused slots retain position with a neutral current
+segment and “Paused at …”. Other retained/preparing/settling states use “Observed
+at …”; stale, stopped and unavailable snapshots additionally keep their qualifier
+in the caption. Missing/unsupported stages show “Stage unavailable”, all slate
+segments and no ordinal. Repairs can return to Implement: preceding muted violet
+segments mean position only, never verified approval or percent completion.
+Equivalent explicit text accompanies the decorative, aria-hidden track.
+
+Tracks appear only in the Delivery pool, in both Overview and the full floor;
+Planning and singleton Merger retain their separate inventories and semantics.
+The current factory schema supplies neither native type nor task title. Cards
+therefore show explicit “Title unavailable” and secondary “Type unavailable”
+fallbacks beside exact Project/Bead identity, role, start time and invocation
+status. They do not infer failure from native type or fetch per-card Workspace
+data. Bead links and immutable invocation inspection remain separate controls.
+Timing, repairs, diffs and technical metadata remain in floor diagnostics.
+No observation, subscription, polling or log ownership changes are introduced.
+
+## Inspection lifetime
+
 Runtime Refresh stays available while reconciliation is pending, labelled
 Refresh runtime again. A 202 acceptance followed by unchanged cached attempt
 timestamps must not block an explicit retry. The shared coordinator coalesces

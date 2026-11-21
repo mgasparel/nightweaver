@@ -3,6 +3,19 @@ export type Slot = { slot_id: string; status: string; bead_id?: string; role?: s
 export type Pool = { capacity: number; slots: Slot[] };
 export type Factory = { availability: string; reason?: string; snapshot?: { runtime_id: string; observed_at: string; runtime_status: string; target_repository: string; planning?: Pool; delivery: Pool; merger: Pool } };
 export type Selection = { runtime: string; slot: Slot };
+const deliveryStages = ['Implement', 'Review', 'QA', 'Merge'] as const;
+/** Position is an observed stage, never a completion percentage or approval history. */
+export function deliveryProgress(slot: Slot, state: string) {
+  const index = ['stage:implement', 'stage:review', 'stage:qa', 'stage:merge'].indexOf(slot.stage ?? '');
+  const retained = state !== 'live' && state !== 'idle';
+  const paused = slot.status === 'paused';
+  const neutral = retained || paused || slot.status !== 'running' || slot.invocation?.status !== 'running';
+  const qualifier = retained ? `Last observed · ${state} · ` : '';
+  if (index < 0) return { index, neutral: true, caption: qualifier + 'Stage unavailable', position: undefined };
+  const current = deliveryStages[index];
+  const caption = paused ? `Paused at ${current}` : neutral ? `Observed at ${current}` : index === 3 ? 'Merge · final stage' : `${current} → ${deliveryStages[index + 1]}`;
+  return { index, neutral, caption: qualifier + caption, position: `Stage ${index + 1} of 4` };
+}
 export function isCurrent(factory: Factory | null | undefined, selected: Selection) {
   const s = factory?.snapshot;
   return s?.runtime_id === selected.runtime && [s.planning, s.delivery, s.merger].some(pool => pool?.slots.some(slot => slot.slot_id === selected.slot.slot_id && slot.invocation?.invocation_id === selected.slot.invocation?.invocation_id));

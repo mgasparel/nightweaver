@@ -849,11 +849,26 @@ summary:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
 .delivery-pool-heading > span { font-size:12px; color:var(--muted); }
 .delivery-bays { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr)); gap:14px; margin-top:12px; }
 .delivery-bay { padding:18px; background:rgba(255,255,255,.025); border:1px solid var(--line); border-radius:12px; min-width:0; overflow-wrap:anywhere; }
-.delivery-bay[data-status="running"] { border-color:#547e9c; }
+.delivery-bay[data-status="running"] { border-color:#655983; }
 .delivery-bay[data-status="idle"] { border-style:dashed; }
 .delivery-bay h3 { margin:15px 0 8px; }
 .delivery-bay p, .delivery-timing { color:var(--muted); font-size:13px; line-height:1.7; }
 .delivery-bay .button { margin-top:14px; }
+.delivery-bay .delivery-task-title { margin:14px 0 8px; font-size:17px; line-height:1.4; }
+.delivery-task-identity { font-size:12px; color:var(--muted); line-height:1.6; }
+.delivery-task-identity a { color:var(--ink); }
+.delivery-bay .delivery-activity { margin:12px 0 4px; font-size:12px; line-height:1.6; }
+.delivery-type { display:inline-block; font-size:11px; padding:1px 6px; margin-right:4px; border:1px solid var(--line); border-radius:5px; }
+.delivery-bay .delivery-outcome { margin:4px 0; font-size:12px; }
+.delivery-progress { margin-top:20px; }
+.delivery-segments { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px; }
+.delivery-segments span { height:5px; border-radius:999px; background:#3f4c68; }
+.delivery-segments [data-position="preceding"] { background:#887bac; }
+.delivery-segments [data-position="current"] { background:#c5b7ff; }
+.delivery-progress[data-neutral="true"] [data-position="current"] { background:#929bad; }
+.delivery-progress-caption { display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-top:9px; font-size:11px; line-height:1.6; color:var(--muted); }
+.delivery-progress-caption > :first-child { min-width:0; }
+.delivery-stage-position { flex-shrink:0; white-space:nowrap; }
 .delivery-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:14px; }
 .delivery-fields div { min-width:0; } .delivery-fields dt { color:var(--muted); font-size:12px; } .delivery-fields dd { margin:4px 0 0; overflow-wrap:anywhere; white-space:pre-wrap; font-size:13px; }
 .invocation-dialog { width:min(1000px,calc(100vw - 24px)); max-width:calc(100vw - 24px); max-height:calc(100dvh - 24px); padding:0; overflow:hidden; }

@@ -9,7 +9,7 @@ export async function studioDeliveryQA(mode) {
   await mkdir(output, { recursive: true });
   const browser = await chromium.launch({ headless: true });
   try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => {
@@ -24,6 +24,9 @@ export async function studioDeliveryQA(mode) {
     assert(original.snapshot?.runtime_id);
     let data = structuredClone(original);
     const slot = data.snapshot.delivery.slots[0];
+    slot.stage = 'stage:implement';
+    slot.status = 'running';
+    slot.invocation.status = 'running';
     slot.branch = 'nightweaver/' + 'long-branch-'.repeat(18);
     slot.worktree_path = 'H:\\Target Repository\\' + 'long-path-'.repeat(30);
     slot.invocation.configured_model = 'configured-only';
@@ -38,10 +41,15 @@ export async function studioDeliveryQA(mode) {
     });
         await page.goto(base + '/projects/qa/overview');
     await page.waitForFunction(() => document.querySelector('#factory-status')?.dataset.state === 'live');
-    assert.equal(await page.locator('.metric').first().locator('strong').innerText(), '2');
+    const deliveryPool = page.getByRole('region', { name: 'Delivery pool', exact: true });
+    const occupied = data.snapshot.delivery.slots.filter(row => row.status !== 'idle').length;
+    assert.match(await deliveryPool.locator('.delivery-pool-heading').first().innerText(), new RegExp(`${occupied} of ${data.snapshot.delivery.capacity} occupied`));
     assert.equal(await page.locator('.delivery-bay').count(), 3);
+    assert.equal(await page.locator('[data-slot-id="delivery-1"] .delivery-progress-caption').innerText(), 'Implement → Review\nStage 1 of 4');
+    assert.equal(await page.getByRole('region', { name: 'Merger pool', exact: true }).locator('.delivery-progress').count(), 0);
+    assert.equal(await page.getByRole('region', { name: 'Planning pool', exact: true }).locator('.delivery-progress').count(), 0);
     for (const width of [1440, 375, 720]) {
-      await page.setViewportSize({ width, height: 1000 });
+      await page.setViewportSize({ width, height: 900 });
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       await page.screenshot({ path: `${output}/overview-${width}.png`, fullPage: true });
     }
@@ -50,6 +58,16 @@ export async function studioDeliveryQA(mode) {
     await page.waitForFunction(() => document.querySelector('#factory-status')?.dataset.state === 'live');
     const first = page.locator('[data-slot-id="delivery-1"]');
     assert.match(await first.innerText(), /qa-live-1/);
+    assert.match(await first.innerText(), /Title unavailable/);
+    assert.match(await first.innerText(), /Type unavailable/);
+    const beadLink = first.getByRole('link', { name: slot.bead_id, exact: true });
+    assert.equal(await beadLink.getAttribute('href'), `/projects/qa/beads/${slot.bead_id}`);
+    await beadLink.focus();
+    assert(await beadLink.evaluate(node => node === document.activeElement && !node.closest('button')));
+    await beadLink.press('Enter');
+    await page.waitForURL(base + `/projects/qa/beads/${slot.bead_id}`);
+    await page.goto(base + '/projects/qa/delivery');
+    await first.waitFor();
     assert.equal(await first.locator('details[open]').count(), 0);
     await first.locator('summary').click(); await first.locator('summary').focus();
     assert.match(await first.innerText(), /Configured model\nconfigured-only/);
@@ -59,13 +77,39 @@ export async function studioDeliveryQA(mode) {
     assert(await first.locator('details').evaluate(node => node.open));
     const capture = async name => {
       for (const width of [1440, 375, 720]) {
-        await page.setViewportSize({ width, height: 1000 });
+        await page.setViewportSize({ width, height: 900 });
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+        for (const track of await page.locator('.delivery-progress').all()) {
+          assert.equal(await track.locator('.delivery-segments').getAttribute('aria-hidden'), 'true');
+          assert(await track.evaluate(node => node.scrollWidth <= node.clientWidth));
+          assert(await track.locator('.delivery-segments').evaluate(node => {
+            const boxes = [...node.children].map(segment => segment.getBoundingClientRect());
+            return boxes.length === 4 && boxes.every(box => box.height === 5 && Math.abs(box.width - boxes[0].width) < 1) && Math.abs(boxes[1].left - boxes[0].right - 6) < 1;
+          }));
+        }
         await page.screenshot({ path: `${output}/${name}-${width}.png`, fullPage: true });
         await page.screenshot({ path: `${output}/${name}-${width}-viewport.png` });
       }
     };
     await capture('busy');
+    for (const [stage, caption] of [['review', 'Review → QA'], ['qa', 'QA → Merge'], ['merge', 'Merge · final stage'], ['implement', 'Implement → Review']]) {
+      slot.stage = `stage:${stage}`;
+      await first.locator('.delivery-progress-caption').getByText(caption, { exact: true }).waitFor();
+    }
+    slot.stage = 'stage:review'; slot.status = 'paused';
+    await first.getByText('Paused at Review', { exact: true }).waitFor();
+    assert.equal(await first.locator('.delivery-progress').getAttribute('data-neutral'), 'true');
+    const originalBead = slot.bead_id;
+    slot.bead_id = 'qa-' + 'long-bead-identity-'.repeat(14);
+    await first.getByRole('link', { name: slot.bead_id, exact: true }).waitFor();
+    await capture('paused-long-identity');
+    slot.stage = 'stage:future';
+    await first.getByText('Stage unavailable', { exact: true }).waitFor();
+    assert.equal(await first.locator('.delivery-stage-position').count(), 0);
+    assert.equal(await first.locator('[data-position="current"]').count(), 0);
+    await capture('unknown');
+    slot.bead_id = originalBead; slot.stage = 'stage:implement'; slot.status = 'running';
+    await first.getByText('Implement → Review', { exact: true }).waitFor();
     await first.getByRole('button').click();
     const emit = async (type, data) => { await page.evaluate(({ type, data }) => window.logs.findLast(s => !s.closed).dispatchEvent(new MessageEvent(type, { data: JSON.stringify(data) })), { type, data }); await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))); };
     const logCount = await page.evaluate(() => window.logs.length);
@@ -111,6 +155,8 @@ export async function studioDeliveryQA(mode) {
     await page.waitForFunction(() => document.activeElement.matches('[data-open-telemetry-slot="delivery-1"]'));
     data.availability = 'stale'; health = 'stale';
     await page.waitForFunction(() => document.querySelector('#factory-status')?.dataset.state === 'stale');
+    await first.getByText('Last observed · stale · Observed at Implement', { exact: true }).waitFor();
+    assert.equal(await first.locator('.delivery-progress').getAttribute('data-neutral'), 'true');
     await capture('stale');
     data.availability = 'stopped'; health = 'fresh';
     await page.waitForFunction(() => document.querySelector('#factory-status')?.dataset.state === 'stopped');

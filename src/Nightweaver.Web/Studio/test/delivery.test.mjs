@@ -1,6 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { InvocationController, isCurrent, runtimeState } from '../src/delivery-model.ts';
+import { InvocationController, isCurrent, runtimeState, deliveryProgress } from '../src/delivery-model.ts';
+test('Delivery position maps only exact observed stages, including repair return', () => {
+  const slot = { status: 'running', invocation: { status: 'running' } };
+  for (const [index, stage] of ['implement', 'review', 'qa', 'merge', 'implement'].entries()) {
+    const actual = deliveryProgress({ ...slot, stage: `stage:${stage}` }, 'live');
+    assert.equal(actual.index, index % 4);
+    assert.equal(actual.position, `Stage ${index % 4 + 1} of 4`);
+    assert.equal(actual.neutral, false);
+    assert(!/passed|complete|percent/i.test(actual.caption));
+  }
+  assert.equal(deliveryProgress({ ...slot, stage: 'stage:implement' }, 'live').caption, 'Implement → Review');
+  assert.equal(deliveryProgress({ ...slot, stage: 'stage:merge' }, 'live').caption, 'Merge · final stage');
+  for (const stage of [undefined, '', 'review', 'stage:plan', 'future']) {
+    const actual = deliveryProgress({ ...slot, stage, role: 'reviewer', repair_cycles: 2 }, 'live');
+    assert.equal(actual.index, -1); assert.equal(actual.position, undefined);
+    assert.equal(actual.caption, 'Stage unavailable'); assert(actual.neutral);
+  }
+});
+test('pause and retained runtime states preserve position without active progress', () => {
+  const slot = { stage: 'stage:review', status: 'running', invocation: { status: 'running' } };
+  assert.equal(deliveryProgress({ ...slot, status: 'paused' }, 'live').caption, 'Paused at Review');
+  for (const state of ['stale', 'stopped', 'unavailable']) {
+    const actual = deliveryProgress(slot, state);
+    assert(actual.neutral); assert.equal(actual.index, 1);
+    assert.equal(actual.caption, `Last observed · ${state} · Observed at Review`);
+    assert.equal(deliveryProgress({ ...slot, stage: null }, state).position, undefined);
+  }
+  for (const status of ['reserved', 'preparing', 'settling', 'idle']) {
+    assert.equal(deliveryProgress({ ...slot, status }, 'live').caption, 'Observed at Review');
+  }
+  assert(deliveryProgress({ ...slot, invocation: { status: 'failed' } }, 'live').neutral);
+});
 const selected = { runtime: 'runtime-one', slot: { slot_id: 'delivery-1', status: 'running', invocation: { invocation_id: 'invocation-one' } } };
 function setup() {
   const streams = [];
