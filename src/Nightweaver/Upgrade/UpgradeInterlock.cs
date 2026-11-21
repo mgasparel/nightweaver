@@ -77,6 +77,7 @@ internal static class UpgradeInterlock
         if (active.Length == 0) return;
         if (active.Length != 1) throw new InvalidDataException("Upgrade activation is unavailable.");
         var reservation = active[0].Reservation;
+        RequireActivationAllowed(paths, reservation, project);
         var activationPath = Path.Combine(Root(paths), reservation.OperationId, "activation.json");
         if (!File.Exists(activationPath))
             throw new InvalidOperationException("Upgrade suppresses startup until an exact replacement is reserved.");
@@ -111,6 +112,23 @@ internal static class UpgradeInterlock
             throw new InvalidOperationException("Upgrade operation authority changed. Retain the boundary.");
     }
 
+    // The caller holds the Project command lock. Admission serializes stop records
+    // across Projects without taking the manager lock held by an upgrade in progress.
+    internal static async Task RecordStopAsync(HostPaths paths, ProjectSlug project, CancellationToken token)
+    {
+        using var admission = AcquireAdmission(paths);
+        foreach (var item in ReadAll(paths).Where(r => !r.Released && !r.StoppedProjects.Contains(project.Value)))
+            await PublishAsync(Path.Combine(Root(paths), item.Reservation.OperationId),
+                $"stopped-{project.Value}.json", item.Reservation, token).ConfigureAwait(false);
+    }
+
+    internal static void RequireActivationAllowed(HostPaths paths, UpgradeReservation expected, ProjectSlug project)
+    {
+        var active = ReadAll(paths).Where(r => !r.Released).ToArray();
+        if (active.Length != 1 || active[0].Reservation != expected || active[0].StoppedProjects.Contains(project.Value))
+            throw new InvalidOperationException("Activation intent changed; retain the upgrade interlock.");
+    }
+
     internal static void RequireDrain(HostPaths paths, string operationId)
     {
         var active = ReadAll(paths).Where(r => !r.Released).ToArray();
@@ -139,9 +157,9 @@ internal static class UpgradeInterlock
         await PublishAsync(Path.Combine(Root(paths), expected.OperationId), "released.json", expected, token).ConfigureAwait(false);
     }
 
-    private static List<(UpgradeReservation Reservation, bool Released)> ReadAll(HostPaths paths)
+    private static List<(UpgradeReservation Reservation, bool Released, string[] StoppedProjects)> ReadAll(HostPaths paths)
     {
-        var result = new List<(UpgradeReservation, bool)>();
+        var result = new List<(UpgradeReservation, bool, string[])>();
         IDisposable pin;
         try { pin = InvocationRuntimeFiles.PinExistingRuntimeDirectory(Root(paths)); }
         catch (IOException exception) when (exception is FileNotFoundException or DirectoryNotFoundException
@@ -155,7 +173,10 @@ internal static class UpgradeInterlock
                 SupervisionValidation.ValidateId(Path.GetFileName(directory));
                 using var operationPin = InvocationRuntimeFiles.PinExistingRuntimeDirectory(directory);
                 var entries = Directory.EnumerateFileSystemEntries(directory).Select(Path.GetFileName).ToArray();
-                if (!entries.Contains("reservation.json") || entries.Any(n => n is not ("reservation.json" or "released.json" or "activation.json" or "writer.lock")))
+                var stops = entries.Where(n => n is not null && n.StartsWith("stopped-", StringComparison.Ordinal)
+                    && n.EndsWith(".json", StringComparison.Ordinal)).ToArray();
+                if (!entries.Contains("reservation.json") || entries.Any(n => n is not ("reservation.json" or "released.json" or "activation.json" or "writer.lock")
+                    && !stops.Contains(n)))
                     throw new InvalidDataException($"Interrupted upgrade interlock at '{directory}'. Retain all files.");
                 var reservation = Read(paths, Path.Combine(directory, "reservation.json"));
                 if (reservation.OperationId != Path.GetFileName(directory)) throw new InvalidDataException("Foreign upgrade interlock.");
@@ -164,7 +185,11 @@ internal static class UpgradeInterlock
                 var released = entries.Contains("released.json");
                 if (released && Read(paths, Path.Combine(directory, "released.json")) != reservation)
                     throw new InvalidDataException("Upgrade release identity changed.");
-                result.Add((reservation, released));
+                var stoppedProjects = stops.Select(n => ProjectSlug.Parse(n![8..^5]).Value).ToArray();
+                foreach (var stop in stops)
+                    if (Read(paths, Path.Combine(directory, stop!)) != reservation)
+                        throw new InvalidDataException("Upgrade stop identity changed.");
+                result.Add((reservation, released, stoppedProjects));
             }
         }
         return result;

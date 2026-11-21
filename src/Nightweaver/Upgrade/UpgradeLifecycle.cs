@@ -160,6 +160,7 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         using var configurations = PinConfigurations(progress.Scope);
         await ConfirmAsync(progress, token).ConfigureAwait(false);
         var package = PreparedRelease.Inspect(paths.Root, true);
+        await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
         if (package.Digest != progress.NewPackageDigest
             || PreparedRelease.Inspect(journal.RetainedPackageRoot, false).Digest != progress.OldPackageDigest)
             throw new InvalidDataException("Activation payload or backup changed.");
@@ -278,6 +279,7 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         foreach (var item in progress.Maintenance)
         {
             var lifecycle = await operations.OpenLifecycle(item.Project, token).ConfigureAwait(false);
+            UpgradeInterlock.RequireActivationAllowed(paths, Reservation(progress), ProjectSlug.Parse(item.Project));
             var read = lifecycle?.Read();
             RequireNoPendingAttempt(read);
             if (read?.Availability == SupervisionAvailability.Unavailable

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Nightweaver.Background;
+using Nightweaver.Cli;
 using Nightweaver.Configuration;
 using Nightweaver.Supervision;
 using Nightweaver.Upgrade;
@@ -8,6 +9,59 @@ namespace Nightweaver.Tests;
 
 public sealed class UpgradeActivationTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ManualStopAfterSettlementPreventsReplacementLaunch(bool force)
+    {
+        using var f = new Fixture(true, supervised: false);
+        await f.Prepare();
+        var installed = await f.Install();
+        Assert.True(Assert.Single(installed.Maintenance).StartRequested);
+        Assert.Equal(0, await f.Stop(force));
+        // A repeated stop must preserve the same durable suppression.
+        Assert.Equal(0, await f.Stop(force));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Activate(installed.Revision));
+        Assert.Equal(0, f.Starts);
+        Assert.Equal(UpgradePhase.Installed, f.Journal.Read().Progress!.Phase);
+        Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+        Assert.False(Directory.Exists(f.Paths.SupervisionRoot(ProjectSlug.Parse("demo"))));
+        Assert.Equal(f.OldDigest, PreparedRelease.Inspect(f.Journal.RetainedPackageRoot, false).Digest);
+    }
+
+    [Fact]
+    public async Task StopForAnotherProjectDoesNotInvalidateReplacement()
+    {
+        using var f = new Fixture(true, supervised: false);
+        await f.Prepare();
+        var installed = await f.Install();
+        using (BackgroundFileLock.AcquireStart(f.Paths, ProjectSlug.Parse("other")))
+            await UpgradeInterlock.RecordStopAsync(f.Paths, ProjectSlug.Parse("other"), f.Token);
+        Assert.Equal(UpgradePhase.Accepted, (await f.Activate(installed.Revision)).Phase);
+        Assert.Equal(1, f.Starts);
+    }
+
+    [Theory]
+    [InlineData("malformed")]
+    [InlineData("foreign")]
+    [InlineData("partial")]
+    public async Task InvalidStopRecordRetainsSuppressionEvenAfterRelease(string fault)
+    {
+        using var temp = new TempDirectory();
+        var paths = new HostPaths(temp.Path);
+        var reservation = new UpgradeReservation(1, paths.Root, new('a', 32), new('b', 64));
+        var token = TestContext.Current.CancellationToken;
+        await UpgradeInterlock.ReserveAsync(paths, reservation, token);
+        await UpgradeInterlock.ReleaseAsync(paths, reservation, token);
+        var directory = Path.Combine(UpgradeInterlock.Root(paths), reservation.OperationId);
+        var path = Path.Combine(directory, fault == "partial" ? "stopped-demo.json.partial.tmp" : "stopped-demo.json");
+        File.WriteAllText(path, fault == "foreign"
+            ? System.Text.Json.JsonSerializer.Serialize(reservation with { OperationId = new('c', 32) }, PreparedRelease.JsonOptions)
+            : "{}");
+        Assert.ThrowsAny<Exception>(() => UpgradeInterlock.RequireStartupAllowed(paths));
+        Assert.True(File.Exists(path));
+    }
+
     [Theory]
     [InlineData(1234, 0, 1, true)]
     [InlineData(1235, 0, 1, false)]
@@ -75,9 +129,10 @@ public sealed class UpgradeActivationTests
     [InlineData("expired")]
     [InlineData("cancel")]
     [InlineData("stop-during-health")]
+    [InlineData("manual-stop-during-health")]
     public async Task RefusesFalseAcceptanceAndRetainsOperationWithoutReplay(string fault)
     {
-        using var f = new Fixture(true, fault);
+        using var f = new Fixture(true, fault, supervised: fault != "manual-stop-during-health");
         await f.Prepare();
         var result = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
         Assert.Equal(UpgradeActivationOutcome.Pending, result.Outcome);
@@ -190,8 +245,11 @@ public sealed class UpgradeActivationTests
             OldDigest = old.Digest;
             build = old.BuildVersion;
             nextDigest = PreparedRelease.Inspect(Candidate, false).Digest;
-            var config = temp.WriteFile("demo.json", "configuration");
             var repo = temp.CreateDirectory("repository");
+            var config = temp.WriteFile("demo.json", System.Text.Json.JsonSerializer.Serialize(new
+            {
+                name = "demo", target_repository = new { path = repo }
+            }));
             scope = new(Paths.Root, "S-1-5-21-1001", [new("demo", config, Hash(File.ReadAllBytes(config)), repo, repo, "physical")]);
             Journal = new(scope, new('a', 32));
             store = new(Paths, ProjectSlug.Parse("demo"), new(Paths.Root, config, repo, scope.UserSid));
@@ -211,6 +269,7 @@ public sealed class UpgradeActivationTests
                         using var command = BackgroundFileLock.AcquireStart(Paths, ProjectSlug.Parse("demo"));
                         await new SupervisionLifecycle(store).ApplyAsync(SupervisionLifecycleAction.Stop, null, null, token);
                     }
+                    if (fault == "manual-stop-during-health") Assert.Equal(0, await Stop(false));
                 });
             temp.WriteFile("installed/worktrees/sentinel", "preserve");
         }
@@ -227,6 +286,16 @@ public sealed class UpgradeActivationTests
         internal UpgradeCoordinator Coordinator() => new(Journal, lifecycle, new(Journal, lifecycle),
             _ => Task.FromResult(new UpgradePreflightReport("test", Paths.Root, Candidate, OldDigest, nextDigest, scope.Projects,
                 fault != "preflight", true, [])), Start, Observe);
+        internal async Task<UpgradeProgress> Install()
+        {
+            var progress = await lifecycle.BeginDrainAsync(1, Token);
+            progress = await lifecycle.ConfirmSettlementAsync(progress.Revision, Token);
+            return await new UpgradeReplacement(Journal, lifecycle).ReplaceAsync(progress.Revision, Candidate, Token);
+        }
+        internal Task<UpgradeProgress> Activate(long revision) => lifecycle.ActivateAsync(revision, Start, Observe, Token);
+        internal Task<int> Stop(bool force) => BackgroundManagerApplication.RunAsync(
+            new(BackgroundAction.Stop, new ProjectSelector.ByConfigPath(scope.Projects[0].Configuration), Force: force),
+            new AppEnvironment(Paths.Root, Paths.Root, new StringWriter(), new StringWriter()), Token);
         private async Task Start(AffectedUpgradeProject project, string runId, CancellationToken token)
         {
             Starts++;

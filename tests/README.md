@@ -8,6 +8,11 @@ the ten-second observation interval. The identity matrix uses no package copies
 or native setup; file/lock cases retain the real journal and replacement boundary.
 These cases add no native owner, Agent, Scheduler or fixture-publish journey.
 The representative native release-attestation proof belongs to `upgrade-proof`.
+Manual stop repair adds component checks through the actual manager stop and
+force-stop path after drain and settlement, and during the health interval.
+They check zero launches after the later stop, repeated stop, retained suppression
+and manual opt-out. Small file checks cover unrelated Projects and malformed,
+foreign or interrupted stop records. These add no native journey or publish.
 Existing Web journeys also exercise the compatible health endpoint; legacy/dev
 hosts omit release evidence and keep their exact health JSON. Normal owner startup validates a release
 inventory only when one exists, and each owner health probe checks the launched

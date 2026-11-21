@@ -475,6 +475,15 @@ The journal retains actual PID/creation/run/runtime/Job identities and each
 pair's first and final observation times. Stopped acceptance verifies payload
 and settlement without launching or inventing supervision state.
 
+Manager stop and force stop record `stopped-<Project>.json` in each active root
+interlock under the Project command lock and shared admission lock, before querying
+the owner. The record binds the exact reservation. A repeated stop is idempotent.
+This records a later manual stop even after the old owner has settled, without
+creating supervision state. Activation checks affected Project stop records before
+grant publication, each launch and final acceptance. A stop for another Project
+does not cancel activation. Malformed, foreign or interrupted records retain
+suppression. No automatic path clears these records or restores saved start intent.
+
 CLI and Web capture startup release evidence once from a validated installed
 inventory. Loaded assembly location, informational build and module identity
 must agree with the package. Web `/health` returns that captured identity with

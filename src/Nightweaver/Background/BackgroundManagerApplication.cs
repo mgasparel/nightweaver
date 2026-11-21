@@ -163,6 +163,8 @@ internal static class BackgroundManagerApplication
                     environment, cancellationToken, maintenance: true, releaseCommand: commandLock!.Dispose, supervision: entered).ConfigureAwait(false);
             }
             SupervisionRead? intent = null;
+            if (options.Action == BackgroundAction.Stop)
+                await UpgradeInterlock.RecordStopAsync(paths, project.Name, cancellationToken).ConfigureAwait(false);
             if (lifecycle is not null)
                 intent = await lifecycle.ApplyAsync(options.Action is BackgroundAction.Stop or BackgroundAction.Restart
                     ? SupervisionLifecycleAction.Stop : SupervisionLifecycleAction.Start,
