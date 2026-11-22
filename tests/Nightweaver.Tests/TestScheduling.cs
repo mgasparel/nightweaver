@@ -4,6 +4,8 @@ using Xunit.v3;
 // Start the longest collections first so their serial tail overlaps smaller tests.
 // Weights refreshed from ns-3i4-prepared-complete.xml (1,297 passing tests),
 // with the observer component cost updated from ns-3i4-observer-components.xml.
+// Upgrade weights use cost-before.xml (110 passing tests) from the ns-qa2
+// resume cost repair. Activation must overlap the native collections.
 // Keep the six-thread cap and isolated fixtures intact.
 [assembly: Parallelization(MaxThreads = 6)]
 [assembly: AssemblyFixture(typeof(Nightweaver.Tests.PublishedCliArtifactFixture))]
@@ -15,6 +17,8 @@ public sealed class IntegrationFirstCollectionOrderer : ITestCollectionOrderer
 {
     private static readonly (string Name, double Seconds)[] MeasuredCollectionWeights =
     [
+        (nameof(UpgradeActivationTests), 150.465),
+        (nameof(UpgradeReplacementTests), 38.491),
         (nameof(AgentStageDeliveryIntegrationTests), 114.906),
         (nameof(ManualDeliveryPilotSecondSignalTests), 125.621),
         (nameof(MergerPoolIntegrationTests), 97.970),
