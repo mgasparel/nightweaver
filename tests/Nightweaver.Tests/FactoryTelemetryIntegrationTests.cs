@@ -18,6 +18,208 @@ namespace Nightweaver.Tests;
 public sealed class FactoryTelemetryIntegrationTests
 {
     [Theory]
+    [InlineData("delivery", true)]
+    [InlineData("planning", true)]
+    [InlineData("merger", true)]
+    [InlineData("delivery", false)]
+    [InlineData("planning", false)]
+    [InlineData("merger", false)]
+    public async Task CoordinatorsUseAdmissionPayloadWithoutTrackerCommands(string pool, bool validTitle)
+    {
+        using var directory = new TempDirectory();
+        var host = new HostPaths(directory.CreateDirectory("host"));
+        var target = directory.CreateDirectory("target");
+        var project = CreateProject(host, target, "admission-title", capacity: 2);
+        var repository = new ValidatedTargetRepository(target, "main");
+        var publisher = new FactoryTelemetryPublisher(host, project, repository, 2, 1);
+        var runner = new RecordingProcessRunner((_, _) => throw new InvalidOperationException("No tracker commands are permitted."));
+        string[] ids = ["ns-title-a", "ns-title-b"];
+        string[] labels = pool == "planning" ? ["ready-for-planning"] : pool == "merger" ? ["stage:merge"] : [];
+        var rows = ids.Select(id => JsonSerializer.Serialize(new
+        {
+            id, title = validTitle ? id + " title" : null, status = "open",
+            issue_type = pool == "planning" ? "feature" : "task", priority = 1,
+            created_at = "2026-01-01T00:00:00Z", assignee = (string?)null,
+            labels
+        }));
+        var inventory = BeadsReader.Parse("[" + string.Join(',', rows) + "]");
+        var readiness = BeadsReadiness.Create(ids, []);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task[] completions = [];
+        try
+        {
+            if (pool == "delivery")
+            {
+                var coordinator = new DeliveryPoolCoordinator(host, project, repository, runner,
+                    (_, _, _) => Task.FromResult(new DeliveryPoolSnapshot(inventory, readiness)),
+                    async (_, _, _, _, _) => { await release.Task; throw new IOException("controlled end"); }, telemetry: publisher);
+                completions = (await coordinator.EvaluateAsync(TestContext.Current.CancellationToken)).Admitted.Select(row => (Task)row.Completion).ToArray();
+            }
+            else if (pool == "planning")
+            {
+                var coordinator = new PlanningPoolCoordinator(host, project, repository, runner,
+                    (_, _, _) => Task.FromResult(new PlanningPoolSnapshot(inventory, readiness)),
+                    async (_, _, _, _, _) => { await release.Task; throw new IOException("controlled end"); }, telemetry: publisher);
+                completions = (await coordinator.EvaluateAsync(TestContext.Current.CancellationToken)).Admitted.Select(row => (Task)row.Completion).ToArray();
+            }
+            else
+            {
+                var coordinator = new MergerPoolCoordinator(host, project, repository, runner,
+                    (_, _, _) => Task.FromResult(new MergerPoolSnapshot(inventory, readiness)),
+                    async (_, _, _, _, _, _) => { await release.Task; throw new IOException("controlled end"); }, telemetry: publisher);
+                completions = (await coordinator.EvaluateAsync(TestContext.Current.CancellationToken)).Admitted.Select(row => (Task)row.Completion).ToArray();
+            }
+            Assert.NotEmpty(completions);
+            await publisher.DisposeAsync();
+            var snapshot = new FactoryTelemetryReader(host, project).Read().Snapshot!;
+            var slots = pool == "delivery" ? snapshot.Delivery.Slots : pool == "planning" ? snapshot.Planning!.Slots : snapshot.Merger.Slots;
+            foreach (var slot in slots.Where(slot => slot.BeadId is not null))
+                Assert.Equal(validTitle ? slot.BeadId + " title" : null, slot.BeadTitle);
+            Assert.Empty(runner.Requests);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await Task.WhenAll(completions);
+            await publisher.DisposeAsync();
+        }
+    }
+
+    [Theory]
+    [InlineData("{}", null)]
+    [InlineData("{\"title\":null}", null)]
+    [InlineData("{\"title\":42}", null)]
+    [InlineData("{\"title\":\"  \\t\"}", null)]
+    [InlineData("{\"title\":\"first\",\"title\":\"second\"}", null)]
+    [InlineData("{\"title\":\"<script>alert(1)</script>\"}", "<script>alert(1)</script>")]
+    public void AdmissionTitleRequiresExactlyOneNonblankString(string payload, string? expected)
+    {
+        using var json = JsonDocument.Parse(payload);
+        var bead = new BeadSnapshot("ns-title", "open", "task", 1, DateTimeOffset.UtcNow, null, [], json.RootElement);
+        Assert.Equal(expected, bead.AdmissionTitle());
+        Assert.Null(BeadSnapshot.BoundDisplayTitle(new string(' ', 512) + "later text"));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task ReaderKeepsOptionalTitlesAcrossSupportedSchemasAndRejectsUnsafeMetadata(int version)
+    {
+        using var directory = new TempDirectory();
+        var host = new HostPaths(directory.CreateDirectory("host"));
+        var target = directory.CreateDirectory("target");
+        var project = CreateProject(host, target, "title-reader", capacity: 1);
+        var publisher = new FactoryTelemetryPublisher(host, project, new(target, "main"), 1, 1);
+        publisher.Reserve("delivery", "delivery-1", "ns-title", "Observed title");
+        await publisher.DisposeAsync();
+        var reader = new FactoryTelemetryReader(host, project);
+        var root = JsonSerializer.SerializeToNode(reader.Read().Snapshot, JsonOptions)!.AsObject();
+        root["schema_version"] = version;
+        root["runtime_status"] = "live";
+        root["observed_at"] = DateTimeOffset.UtcNow.AddSeconds(-30);
+        if (version == 1) root.Remove("planning");
+        var path = host.FactoryTelemetryPath(project.Name);
+        async Task WriteAsync(JsonObject value) => await File.WriteAllTextAsync(path, value.ToJsonString(), TestContext.Current.CancellationToken);
+        await WriteAsync(root);
+        Assert.Equal(FactoryTelemetryAvailability.Stale, reader.Read().Availability);
+        Assert.Equal("Observed title", reader.Read().Snapshot!.Delivery.Slots[0].BeadTitle);
+        foreach (var invalid in new[] { "", "  ", new string('a', 513) })
+        {
+            var changed = root.DeepClone().AsObject();
+            changed["delivery"]!["slots"]![0]!["bead_title"] = invalid;
+            await WriteAsync(changed);
+            Assert.Equal(FactoryTelemetryAvailability.Unavailable, reader.Read().Availability);
+        }
+        root["delivery"]!["slots"]![0]!.AsObject().Remove("bead_title");
+        await WriteAsync(root);
+        Assert.Equal(FactoryTelemetryAvailability.Stale, reader.Read().Availability);
+        Assert.Null(reader.Read().Snapshot!.Delivery.Slots[0].BeadTitle);
+        root["project"] = "foreign-project";
+        await WriteAsync(root);
+        Assert.Null(reader.Read().Snapshot);
+        await File.WriteAllTextAsync(path, new string(' ', 1024 * 1024 + 1), TestContext.Current.CancellationToken);
+        Assert.Equal("invalid-size", reader.Read().Reason);
+    }
+
+    [Theory]
+    [InlineData("delivery")]
+    [InlineData("planning")]
+    [InlineData("merger")]
+    public async Task AdmissionTitlesFollowSlotIdentityAndRemainBounded(string pool)
+    {
+        using var directory = new TempDirectory();
+        var host = new HostPaths(directory.CreateDirectory("host"));
+        var target = directory.CreateDirectory("target");
+        var project = CreateProject(host, target, "title-test", capacity: 2);
+        var publisher = new FactoryTelemetryPublisher(host, project, new(target, "main"), 2, 1);
+        // No timer, process, tracker or native invocation is needed for these writes.
+        var reader = new FactoryTelemetryReader(host, project);
+        var slotId = pool + "-1";
+        var title = string.Concat(Enumerable.Repeat("😀", 512));
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(new { title = title + "overflow" }));
+        var bead = new BeadSnapshot("ns-first", "open", "task", 1, DateTimeOffset.UtcNow, null, [], json.RootElement);
+        Assert.Equal(title, bead.AdmissionTitle());
+        publisher.Reserve(pool, slotId, bead.Id, bead.AdmissionTitle());
+        publisher.Reserve("delivery", "delivery-2", "ns-second", "Second title");
+        publisher.UpdateSlot(pool, slotId, "preparing", bead.Id, "stage:review");
+        var prepared = new PreparedAgentInvocation("codex", [], target, "", new Dictionary<string, string>(),
+            TimeSpan.FromSeconds(1), "20261122T0000000000000Z-title", target, Path.Combine(target, "log"), stage: "stage:qa");
+        publisher.ObservePreparedInvocation(pool, slotId, bead.Id, prepared);
+        var invocation = new FactoryInvocationObservation(bead.Id, prepared.InvocationId, "qa", "codex", null,
+            "low", "running", null, null, null, null);
+        publisher.SetInvocation(pool, slotId, invocation);
+        await publisher.DisposeAsync();
+        FactorySlotObservation ReadSlot() => pool switch
+        {
+            "planning" => reader.Read().Snapshot!.Planning!.Slots[0],
+            "merger" => reader.Read().Snapshot!.Merger.Slots[0],
+            _ => reader.Read().Snapshot!.Delivery.Slots[0]
+        };
+        Assert.Equal(title, ReadSlot().BeadTitle);
+        Assert.Equal("stage:qa", ReadSlot().Stage);
+        Assert.Equal("Second title", reader.Read().Snapshot!.Delivery.Slots[1].BeadTitle);
+
+        // A second publisher represents a fresh runtime, with no inherited metadata.
+        await using var next = new FactoryTelemetryPublisher(host, project, new(target, "main"), 2, 1);
+        next.Reserve(pool, slotId, "ns-new", "New title");
+        next.Release(pool, slotId, bead.Id); // delayed release of the previous occupant
+        next.SetInvocation(pool, slotId, invocation); // delayed invocation of the previous occupant
+        await next.DisposeAsync();
+        Assert.Equal("ns-new", ReadSlot().BeadId);
+        Assert.Equal("New title", ReadSlot().BeadTitle);
+        Assert.Null(ReadSlot().Invocation);
+        Assert.NotEqual(publisher.RuntimeId, reader.Read().Snapshot!.RuntimeId);
+    }
+
+    [Theory]
+    [InlineData("reserve")]
+    [InlineData("update")]
+    [InlineData("prepared")]
+    [InlineData("release")]
+    [InlineData("idle")]
+    public async Task IdentityWritersClearPreviousTitle(string writer)
+    {
+        using var directory = new TempDirectory();
+        var host = new HostPaths(directory.CreateDirectory("host"));
+        var target = directory.CreateDirectory("target");
+        var project = CreateProject(host, target, "title-clear", capacity: 1);
+        var publisher = new FactoryTelemetryPublisher(host, project, new(target, "main"), 1, 1);
+        publisher.Reserve("delivery", "delivery-1", "ns-old", "Old title");
+        switch (writer)
+        {
+            case "reserve": publisher.Reserve("delivery", "delivery-1", "ns-new"); break;
+            case "update": publisher.UpdateSlot("delivery", "delivery-1", "preparing", "ns-new"); break;
+            case "prepared": publisher.ObservePreparedInvocation("delivery", "delivery-1", "ns-new",
+                new("codex", [], target, "", new Dictionary<string, string>(), TimeSpan.FromSeconds(1),
+                    "20261122T0000000000000Z-title", target, Path.Combine(target, "log"))); break;
+            case "release": publisher.Release("delivery", "delivery-1", "ns-old"); break;
+            case "idle": publisher.UpdateSlot("delivery", "delivery-1", "idle"); break;
+        }
+        await publisher.DisposeAsync();
+        Assert.Null(new FactoryTelemetryReader(host, project).Read().Snapshot!.Delivery.Slots[0].BeadTitle);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task PublisherDisposalSettlesOpenSnapshotBeforeFixtureCleanup(bool backgroundWrite)

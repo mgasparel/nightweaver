@@ -209,7 +209,7 @@ internal sealed class DeliveryPoolCoordinator
         {
             cancellationToken.ThrowIfCancellationRequested();
             var bead = eligible[index];
-            var reservation = TryReserve(bead.Id, out var reservationDiagnostic);
+            var reservation = TryReserve(bead, out var reservationDiagnostic);
             if (reservation is null)
             {
                 if (reservationDiagnostic!.Code == DeliveryPoolDiagnosticCode.AlreadyReserved)
@@ -296,10 +296,11 @@ internal sealed class DeliveryPoolCoordinator
         return eligible;
     }
 
-    private ReservationState? TryReserve(string beadId, out DeliveryPoolDiagnostic? diagnostic)
+    private ReservationState? TryReserve(BeadSnapshot bead, out DeliveryPoolDiagnostic? diagnostic)
     {
         ReservationState? reservation = null;
         DeliveryPoolDiagnostic? refusal = null;
+        var beadId = bead.Id;
         bool TryReserveLocal()
         {
             lock (stateGate)
@@ -330,7 +331,7 @@ internal sealed class DeliveryPoolCoordinator
                 reservation = new ReservationState(beadId, slotId) { EnvironmentLease = environmentLease, Timing = WorkflowTiming.Reserve("delivery", beadId) };
                 reservations.Add(beadId, reservation);
                 observation?.Reserve(beadId, reservation.Timing);
-                telemetry?.Reserve("delivery", slotId, beadId);
+                telemetry?.Reserve("delivery", slotId, beadId, bead.AdmissionTitle());
                 return true;
             }
         }

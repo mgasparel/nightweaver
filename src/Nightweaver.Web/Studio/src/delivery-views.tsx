@@ -61,7 +61,7 @@ function BayWork({ slot, project, state, delivery, preview = false }: { slot: Sl
   const progress = deliveryProgress(slot, state);
   return <>
     {preview && <div className="delivery-preview-stage"><Status>{state === 'live' || state === 'idle' ? '' : 'Last observed · '}{slot.status} · {slot.stage?.replace('stage:', '') ?? 'Stage unavailable'}</Status></div>}
-    <h3 className="delivery-task-title">Title unavailable</h3>
+    <h3 className="delivery-task-title">{slot.bead_title?.trim() ? slot.bead_title : "Title unavailable"}</h3>
     <div className="delivery-task-identity"><span>{project}</span><span aria-hidden="true"> / </span>{slot.bead_id ? <Link to={`/projects/${encodeURIComponent(project)}/beads/${encodeURIComponent(slot.bead_id)}`}>{slot.bead_id}</Link> : <span>Bead unavailable</span>}</div>
     <p className="delivery-activity"><span className="delivery-type">Type unavailable</span> {slot.role ?? 'Role unavailable'} · {slot.invocation?.started_at ? `Started ${time(slot.invocation.started_at)}` : 'Start time unavailable'}</p>
     <p className="delivery-outcome">Invocation: {slot.invocation?.status ?? 'Unavailable'}</p>

@@ -22,6 +22,17 @@ export async function studioDeliveryQA(mode) {
     });
     const original = await (await page.request.get(base + '/api/factory/state')).json();
     assert(original.snapshot?.runtime_id);
+    // Native publisher/reader evidence, before response substitution.
+    assert.equal(original.snapshot.delivery.slots[0].bead_title, 'Admitted slot-one title');
+    assert.equal(original.snapshot.delivery.slots[1].bead_title, 'Admitted slot-two title');
+    assert.equal(original.snapshot.planning.slots[0].bead_title, 'Admitted planning-native title');
+    const checkTitles = async rows => {
+      for (const row of rows) {
+        const card = page.locator('[data-slot-id="' + row.slot_id + '"]');
+        assert.equal(await card.locator('.delivery-task-title').textContent(), row.bead_title || 'Title unavailable');
+        assert.equal(await card.getByRole('link', { name: row.bead_id, exact: true }).getAttribute('href'), '/projects/qa/beads/' + row.bead_id);
+      }
+    };
     let data = structuredClone(original);
     const slot = data.snapshot.delivery.slots[0];
     slot.stage = 'stage:implement';
@@ -41,6 +52,7 @@ export async function studioDeliveryQA(mode) {
     });
         await page.goto(base + '/projects/qa/overview');
     await page.waitForFunction(() => document.querySelector('#factory-status')?.dataset.state === 'live');
+    await checkTitles(data.snapshot.delivery.slots.filter(row => row.status !== 'idle'));
     const deliveryPool = page.getByRole('region', { name: 'Delivery pool', exact: true });
     const occupied = data.snapshot.delivery.slots.filter(row => row.status !== 'idle').length;
     assert.match(await page.locator('#factory-status').innerText(), new RegExp(`${occupied} occupied Delivery bays`));
@@ -60,7 +72,7 @@ export async function studioDeliveryQA(mode) {
     await page.waitForFunction(() => document.querySelector('#factory-status')?.dataset.state === 'live');
     const first = page.locator('[data-slot-id="delivery-1"]');
     assert.match(await first.innerText(), /qa-live-1/);
-    assert.match(await first.innerText(), /Title unavailable/);
+    await checkTitles([...data.snapshot.delivery.slots.filter(row => row.status !== 'idle'), ...data.snapshot.planning.slots.filter(row => row.status !== 'idle')]);
     assert.match(await first.innerText(), /Type unavailable/);
     const beadLink = first.getByRole('link', { name: slot.bead_id, exact: true });
     assert.equal(await beadLink.getAttribute('href'), `/projects/qa/beads/${slot.bead_id}`);
@@ -101,16 +113,29 @@ export async function studioDeliveryQA(mode) {
     slot.stage = 'stage:review'; slot.status = 'paused';
     await first.getByText('Paused at Review', { exact: true }).waitFor();
     assert.equal(await first.locator('.delivery-progress').getAttribute('data-neutral'), 'true');
+    const admittedTitle = slot.bead_title;
+    for (const title of [undefined, '', '   ', null]) {
+      slot.bead_title = title;
+      await first.locator('.delivery-task-title').getByText('Title unavailable', { exact: true }).waitFor();
+    }
+    slot.bead_title = '<script>window.titleExecuted = true</script><img src=x onerror=alert(1)>';
+    await first.locator('.delivery-task-title').getByText(slot.bead_title, { exact: true }).waitFor();
+    assert.equal(await first.locator('.delivery-task-title script, .delivery-task-title img').count(), 0);
+    assert.equal(await page.evaluate(() => window.titleExecuted), undefined);
+    slot.bead_title = admittedTitle;
+    await first.locator('.delivery-task-title').getByText(admittedTitle, { exact: true }).waitFor();
     const originalBead = slot.bead_id;
     slot.bead_id = 'qa-' + 'long-bead-identity-'.repeat(14);
+    slot.bead_title = 'Replacement title ' + 'long title '.repeat(40);
     await first.getByRole('link', { name: slot.bead_id, exact: true }).waitFor();
+    await first.locator('.delivery-task-title').getByText(slot.bead_title, { exact: true }).waitFor();
     await capture('paused-long-identity');
     slot.stage = 'stage:future';
     await first.getByText('Stage unavailable', { exact: true }).waitFor();
     assert.equal(await first.locator('.delivery-stage-position').count(), 0);
     assert.equal(await first.locator('[data-position="current"]').count(), 0);
     await capture('unknown');
-    slot.bead_id = originalBead; slot.stage = 'stage:implement'; slot.status = 'running';
+    slot.bead_id = originalBead; slot.bead_title = admittedTitle; slot.stage = 'stage:implement'; slot.status = 'running';
     await first.getByText('Implement → Review', { exact: true }).waitFor();
     await first.getByRole('button').click();
     const emit = async (type, data) => { await page.evaluate(({ type, data }) => window.logs.findLast(s => !s.closed).dispatchEvent(new MessageEvent(type, { data: JSON.stringify(data) })), { type, data }); await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))); };
@@ -151,6 +176,7 @@ export async function studioDeliveryQA(mode) {
     slot.invocation.status = 'failed'; slot.status = 'settling';
     await page.getByText('Invocation: failed', { exact: true }).waitFor();
     data.snapshot.runtime_id = 'replacement-runtime';
+    slot.bead_title = 'New runtime title';
     await first.locator('summary').focus();
     await page.waitForFunction(() => document.activeElement.id === 'factory-title');
     await first.getByRole('button').click(); await page.keyboard.press('Escape');
@@ -159,6 +185,7 @@ export async function studioDeliveryQA(mode) {
     await page.waitForFunction(() => document.querySelector('#factory-status')?.dataset.state === 'stale');
     await first.getByText('Last observed · stale · Observed at Implement', { exact: true }).waitFor();
     assert.equal(await first.locator('.delivery-progress').getAttribute('data-neutral'), 'true');
+    await first.locator('.delivery-task-title').getByText('New runtime title', { exact: true }).waitFor();
     await capture('stale');
     data.availability = 'stopped'; health = 'fresh';
     await page.waitForFunction(() => document.querySelector('#factory-status')?.dataset.state === 'stopped');
@@ -172,7 +199,7 @@ export async function studioDeliveryQA(mode) {
     assert.match(await healthNode.innerText(), /unavailable/);
     await capture('unavailable');
     assert.deepEqual(errors, []);
-    await writeFile(`${output}/results.json`, JSON.stringify({ passed: true, mode, checks: ['shared operational interleaving', 'exact retained identity', 'runtime replacement', 'line/UTF-8 bounds', 'reset', 'failed terminal cessation', 'disconnect', 'follow/focus', 'live/idle/stale/stopped/unavailable', '1440/375/720 geometry'] }, null, 2));
+    await writeFile(`${output}/results.json`, JSON.stringify({ passed: true, mode, checks: ['native admitted titles', 'Activity and Floor title/ID/link pairs', 'plain text safety', 'title fallback and slot reuse', 'shared operational interleaving', 'exact retained identity', 'runtime replacement', 'line/UTF-8 bounds', 'reset', 'failed terminal cessation', 'disconnect', 'follow/focus', 'live/idle/stale/stopped/unavailable', '1440/375/720 geometry'] }, null, 2));
     console.log('Studio ' + mode + ' QA passed');
   } finally { await browser.close(); }
 }

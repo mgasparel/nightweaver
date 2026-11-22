@@ -1,5 +1,5 @@
 export type Invocation = { bead_id: string; invocation_id: string; cli: string; configured_model?: string; actual_model?: string; effort: string; status: string; started_at?: string; deadline_at?: string; process_id?: number; exit_code?: number };
-export type Slot = { slot_id: string; status: string; bead_id?: string; role?: string; stage?: string; branch?: string; worktree_path?: string; repair_cycles?: number; max_repair_cycles?: number; invocation?: Invocation; diff?: { status: string; added?: number; deleted?: number; binary?: number; untracked?: number } };
+export type Slot = { slot_id: string; status: string; bead_id?: string; bead_title?: string; role?: string; stage?: string; branch?: string; worktree_path?: string; repair_cycles?: number; max_repair_cycles?: number; invocation?: Invocation; diff?: { status: string; added?: number; deleted?: number; binary?: number; untracked?: number } };
 export type Pool = { capacity: number; slots: Slot[] };
 export type Factory = { availability: string; reason?: string; snapshot?: { runtime_id: string; observed_at: string; runtime_status: string; target_repository: string; planning?: Pool; delivery: Pool; merger: Pool } };
 export type Selection = { runtime: string; slot: Slot };

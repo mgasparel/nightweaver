@@ -1,5 +1,14 @@
 # Test suite
 
+Admission titles use deterministic payload, publisher/reader and injected pool
+checks. They cover invalid title metadata, scalar bounds, slot identity changes,
+same-Bead stage updates, idle clearing, delayed foreign observations, both wire
+schemas and Project/runtime replacement. Injected admission permits zero tracker
+commands. The existing `factory-qa` browser journey adds title/ID/link and plain
+text checks to its current isolated stack; no normal-suite native journey or
+fixture publish is added. Production adds bounded title projection once per
+admission and one optional field per slot in the existing snapshot.
+
 Scheduler registration and owner admission use deterministic store/adapter tests
 in `ScheduledSupervisionTests`. These cover partial registration, lost responses,
 foreign definitions, suppression, stale and duplicate requests, lock contention

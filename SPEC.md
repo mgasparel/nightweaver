@@ -573,6 +573,19 @@ does no per-request history scan. See [digest merge acceptance](docs/acceptance/
 
 ### 7.4 Studio console entry and interaction lifetime
 
+Occupied Studio cards use optional `bead_title` metadata from the existing factory
+snapshot, including the shared Planning, Delivery and Merger renderer. Admission
+reads exactly one nonblank string `title` from the admitted `BeadSnapshot.Payload`
+and binds it to that snapshot's Bead ID. It adds no tracker read or subscription.
+The display bound is 512 Unicode scalar values, truncated without splitting a
+scalar. An unavailable or blank bounded title uses `Title unavailable`. React
+renders the title as plain text beside the same Bead's Workspace link. Metadata
+refreshes on the next admission, not on each runtime update or tracker title edit.
+Same-Bead stage changes retain the title. Identity changes and idle clear it;
+delayed foreign invocation and release observations cannot restore an old title.
+Schema versions 1 and 2 accept absent title metadata. The reader preserves the
+existing Project checks, runtime freshness and 1 MiB total snapshot bound.
+
 Studio is the default local Web Console at `/` and `/index.html`, with compatible
 `/studio` entry and dedicated `/projects/:projectId` routes. Root `#bead/` links
 translate to the exact current-project Workspace; old section hashes translate
