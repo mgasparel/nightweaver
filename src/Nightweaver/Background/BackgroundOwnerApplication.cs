@@ -38,6 +38,32 @@ internal static class BackgroundOwnerApplication
             return ExitCodes.UsageOrConfiguration;
         }
 
+        using var scheduledCommand = new ConsoleStopCommand(options.ScheduledGeneration is null ? null
+            : await AcquireScheduledCommandAsync(paths, projectSlug, cancellationToken).ConfigureAwait(false));
+        SupervisionLifecycle? scheduledLifecycle = null;
+        if (options.ScheduledGeneration is not null)
+        {
+            try
+            {
+                UpgradeInterlock.RequireStartupAllowed(paths);
+                var project = ProjectConfigLoader.Load(options.ConfigPath, projectSlug, paths);
+                scheduledLifecycle = await SupervisionLifecycle.ForInstallationAsync(paths, project, cancellationToken).ConfigureAwait(false);
+                var executable = BackgroundDeploymentManifest.Load(paths.Root).ResolveCliExecutable(paths.Root);
+                if (!PathEquals(Environment.ProcessPath!, executable))
+                    throw new InvalidDataException("Scheduled owner must use the installed executable.");
+                using var scheduler = new WindowsSupervisionScheduler();
+                var definition = ScheduledTaskDefinition.Owner(scheduledLifecycle.Store.Identity, executable, projectSlug.Value);
+                var registration = scheduler.Read(definition.Name) ?? throw new InvalidDataException("Scheduled owner task is absent.");
+                definition.RequireOwned(scheduler, registration);
+                if (!registration.Enabled) throw new InvalidDataException("Scheduled owner task is disabled.");
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException
+                or ProjectConfigurationException or TargetRepositoryException or ToolExecutionException or System.Runtime.InteropServices.COMException)
+            {
+                environment.Err.WriteLine($"nightweaver: scheduled owner request rejected: {exception.Message}");
+                return ExitCodes.InspectionFailure;
+            }
+        }
         InvocationRuntimeFiles.PinnedRuntimeFile ownerLock;
         try { ownerLock = BackgroundFileLock.AcquireOwner(paths, projectSlug); }
         catch (IOException)
@@ -48,6 +74,29 @@ internal static class BackgroundOwnerApplication
 
         using (ownerLock)
         {
+            if (scheduledLifecycle is not null)
+            {
+                try
+                {
+                    var previous = scheduledLifecycle.Read().State?.PendingAttempt?.PreviousOwner;
+                    var retained = BackgroundOwnerRecord.TryRead(BackgroundOwnerRecord.PathFor(paths, projectSlug));
+                    if (options.Urls != (retained?.WebUrl ?? "http://127.0.0.1:5000"))
+                        throw new InvalidDataException("Scheduled owner URL does not match the retained owner.");
+                    if (previous is null ? retained is not null
+                        : retained is null || previous.ProcessId != retained.ProcessId
+                            || previous.StartedUtc != retained.ProcessStartedAtUtc || previous.OwnerId != retained.RunId
+                            || previous.RuntimeId != retained.RuntimeId
+                            || BackgroundContainment.Read(retained) is not { State: OwnerProcessState.Exited, DescendantsSettled: true })
+                        throw new InvalidDataException("Previous owner identity or Job settlement changed before scheduled launch.");
+                    await ScheduledOwnerLaunch.ConsumeAsync(scheduledLifecycle.Store, options.RunId,
+                        options.ScheduledGeneration!.Value, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+                {
+                    environment.Err.WriteLine($"nightweaver: scheduled owner request rejected: {exception.Message}");
+                    return ExitCodes.InspectionFailure;
+                }
+            }
             var backgroundRoot = paths.BackgroundRoot(projectSlug);
             var hostLogPath = Path.Combine(paths.LogsRoot(projectSlug), "background-host.log");
             var webLogPath = Path.Combine(paths.LogsRoot(projectSlug), "background-web.log");
@@ -79,7 +128,7 @@ internal static class BackgroundOwnerApplication
                 {
                     try
                     {
-                        PersistConsoleStopAsync(paths, projectSlug, lifecycle, state, recordPath).GetAwaiter().GetResult();
+                        scheduledCommand.Persist(paths, projectSlug, lifecycle, state, recordPath);
                     }
                     catch (Exception)
                     {
@@ -102,6 +151,7 @@ internal static class BackgroundOwnerApplication
                     serverLifetime.Token,
                     request => ApplyControlAction(request, options.RunId, shutdownSignals));
                 _ = WatchControlServerAsync(controlServer, state, recordPath, shutdownSignals, serverLifetime.Token);
+                scheduledCommand.Dispose();
                 Func<FactoryTelemetryPublisher, ProjectConfig, HostPaths, ValidatedTargetRepository,
                     CancellationToken, Task> onReady = async (telemetry, readyProject, readyPaths, repository, token) =>
                 {
@@ -190,6 +240,19 @@ internal static class BackgroundOwnerApplication
         }
     }
 
+    internal static async Task<IDisposable> AcquireScheduledCommandAsync(HostPaths paths, ProjectSlug project, CancellationToken token)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(SupervisionPolicy.ReconciliationBudget);
+        while (true)
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            try { return BackgroundFileLock.AcquireStart(paths, project); }
+            catch (IOException exception) when (SharingViolation(exception))
+            { await Task.Delay(25, deadline.Token).ConfigureAwait(false); }
+        }
+    }
+
     internal static async Task CheckWebReadinessAsync(Func<CancellationToken, Task> checkReady,
         Func<ValueTask> disposeWeb, BackgroundOwnerState state, string recordPath, CancellationToken token)
     {
@@ -208,12 +271,42 @@ internal static class BackgroundOwnerApplication
         }
     }
 
-    internal static async Task PersistConsoleStopAsync(HostPaths paths, ProjectSlug project, SupervisionLifecycle? lifecycle,
-        BackgroundOwnerState state, string recordPath)
+    // Serialize startup lock release with the console callback. A callback that
+    // starts before release borrows that lock; later callbacks acquire their own.
+    internal sealed class ConsoleStopCommand(IDisposable? startupCommand) : IDisposable
+    {
+        private readonly object gate = new();
+        private IDisposable? command = startupCommand;
+
+        internal void Persist(HostPaths paths, ProjectSlug project, SupervisionLifecycle? lifecycle,
+            BackgroundOwnerState state, string recordPath)
+        {
+            lock (gate)
+                PersistConsoleStopAsync(paths, project, lifecycle, state, recordPath, command is not null)
+                    .GetAwaiter().GetResult();
+        }
+
+        public void Dispose()
+        {
+            lock (gate)
+            {
+                command?.Dispose();
+                command = null;
+            }
+        }
+    }
+
+    internal static Task PersistConsoleStopAsync(HostPaths paths, ProjectSlug project, SupervisionLifecycle? lifecycle,
+        BackgroundOwnerState state, string recordPath) =>
+        PersistConsoleStopAsync(paths, project, lifecycle, state, recordPath, commandAlreadyHeld: false);
+
+    private static async Task PersistConsoleStopAsync(HostPaths paths, ProjectSlug project, SupervisionLifecycle? lifecycle,
+        BackgroundOwnerState state, string recordPath, bool commandAlreadyHeld)
     {
         // A direct console stop uses the same order as manager commands. Wait only
         // for sharing contention. The independent second signal still exits at once.
-        using var command = await AcquireConsoleStopCommandAsync(paths, project).ConfigureAwait(false);
+        using var command = commandAlreadyHeld ? null
+            : await AcquireConsoleStopCommandAsync(paths, project).ConfigureAwait(false);
         while (true)
         {
             try

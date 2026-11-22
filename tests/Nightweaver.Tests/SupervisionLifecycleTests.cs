@@ -18,7 +18,15 @@ public sealed class SupervisionLifecycleTests
     {
         using var temp = new TempDirectory();
         var identity = SupervisionPolicyTests.Identity(temp.Path);
-        var store = new SupervisionStore(new HostPaths(temp.Path), ProjectSlug.Parse("demo"), identity);
+        var paths = new HostPaths(temp.Path);
+        var project = ProjectSlug.Parse("demo");
+        var store = new SupervisionStore(paths, project, identity);
+        var recordPath = BackgroundOwnerRecord.PathFor(paths, project);
+        var state = new BackgroundOwnerState(new(1, "starting", Guid.NewGuid().ToString("N"), 123,
+            SupervisionPolicyTests.Start, temp.Path, identity.ConfigPath, "demo", null, null,
+            "http://127.0.0.1:5000", "starting", "starting", "", "", null));
+        using var startupLock = BackgroundFileLock.AcquireStart(paths, project);
+        using var command = new BackgroundOwnerApplication.ConsoleStopCommand(startupLock);
         var token = TestContext.Current.CancellationToken;
         await store.SaveAsync(null, SupervisionPolicy.SetIntent(SupervisionState.Manual(identity), true, true, null), token);
         using var shutdown = new RuntimeShutdownSignals();
@@ -32,20 +40,79 @@ public sealed class SupervisionLifecycleTests
         }, lifecycle =>
         {
             persists++;
-            lifecycle!.ApplyAsync(SupervisionLifecycleAction.Stop, null, null, CancellationToken.None).GetAwaiter().GetResult();
+            Assert.Throws<IOException>(() => BackgroundFileLock.AcquireStart(paths, project));
+            command.Persist(paths, project, lifecycle, state, recordPath);
+            Assert.Throws<IOException>(() => BackgroundFileLock.AcquireStart(paths, project));
         });
         if (!beforeInitialization) shutdown.RequestStop();
         Assert.False(opening.IsCompleted);
         Assert.True(shutdown.StopGate.IsStopRequested);
         Assert.True(shutdown.FirstStopToken.IsCancellationRequested);
         initialization.SetResult(new(store));
-        await opening.WaitAsync(TimeSpan.FromSeconds(5), token);
+        try { await opening.WaitAsync(TimeSpan.FromSeconds(5), token); }
+        finally
+        {
+            // Release a failed candidate's lock so its waiting callback can settle.
+            startupLock.Dispose();
+            command.Dispose();
+            await opening.WaitAsync(TimeSpan.FromSeconds(5), token);
+        }
 
         var reloaded = new SupervisionStore(new HostPaths(temp.Path), ProjectSlug.Parse("demo"), identity).Read();
         Assert.Equal(SupervisionAvailability.Available, reloaded.Availability);
         Assert.False(reloaded.State!.DesiredRunning);
         Assert.Equal(1, persists);
         Assert.Null(shutdown.IntentPersistenceFailure);
+        Assert.Equal("OperatorDrain", BackgroundOwnerRecord.TryRead(recordPath)!.StopReason);
+        Assert.False(shutdown.StopGate.TryReserve(() => true, out _));
+        using (ContinuousAgentLaunchContext.Enter(shutdown.StopGate))
+            Assert.False(ContinuousAgentLaunchContext.TryLaunch(() => throw new InvalidOperationException("launch admitted")));
+        using var nextCommand = BackgroundFileLock.AcquireStart(paths, project);
+    }
+
+    [Fact]
+    public async Task ConsoleStopAfterStartupLockReleaseAcquiresCommandLockBeforePersistence()
+    {
+        using var temp = new TempDirectory();
+        var identity = SupervisionPolicyTests.Identity(temp.Path);
+        var paths = new HostPaths(temp.Path);
+        var project = ProjectSlug.Parse("demo");
+        var store = new SupervisionStore(paths, project, identity);
+        var token = TestContext.Current.CancellationToken;
+        await store.SaveAsync(null, SupervisionPolicy.SetIntent(SupervisionState.Manual(identity), true, true, null), token);
+        var recordPath = BackgroundOwnerRecord.PathFor(paths, project);
+        var state = new BackgroundOwnerState(new(1, "starting", Guid.NewGuid().ToString("N"), 123,
+            SupervisionPolicyTests.Start, temp.Path, identity.ConfigPath, "demo", null, null,
+            "http://127.0.0.1:5000", "starting", "starting", "", "", null));
+        using var command = new BackgroundOwnerApplication.ConsoleStopCommand(BackgroundFileLock.AcquireStart(paths, project));
+        using var shutdown = new RuntimeShutdownSignals();
+        var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await BackgroundOwnerApplication.InitializeLifecycleAsync(shutdown,
+            _ => Task.FromResult<SupervisionLifecycle?>(new(store)), lifecycle =>
+            {
+                callbackEntered.SetResult();
+                command.Persist(paths, project, lifecycle, state, recordPath);
+            });
+        command.Dispose();
+        using var interveningCommand = BackgroundFileLock.AcquireStart(paths, project);
+        var stopping = Task.Run(shutdown.RequestStop, token);
+        try
+        {
+            await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5), token);
+            Assert.False(stopping.IsCompleted);
+            Assert.True(store.Read().State!.DesiredRunning);
+            Assert.True(shutdown.StopGate.IsStopRequested);
+            Assert.False(shutdown.FirstStopToken.IsCancellationRequested);
+        }
+        finally
+        {
+            interveningCommand.Dispose();
+            await stopping.WaitAsync(TimeSpan.FromSeconds(5), token);
+        }
+        Assert.False(store.Read().State!.DesiredRunning);
+        Assert.Null(shutdown.IntentPersistenceFailure);
+        Assert.True(shutdown.FirstStopToken.IsCancellationRequested);
+        using var nextCommand = BackgroundFileLock.AcquireStart(paths, project);
     }
 
     [Theory]

@@ -4,22 +4,61 @@ This contract settles the policy and durable operational state for subsequent
 supervision work. The model/store installs no task and enables no supervision. Background lifecycle
 commands integrate intent and maintenance suppression. Identity-bound observations and
 capture-first incident preparation and an explicitly invoked finite recovery tick
-are available. There is no scheduler installation or Web UI integration in this slice. Missing storage means manual opt-out; an existing
+are available. Explicit current-user Scheduler registration is available. Missing storage means manual opt-out; an existing
 unreadable, malformed, foreign or interrupted store means unavailable.
 
 ## Execution boundary
 
-The selected future adapter is a Windows Task Scheduler task for the selected
+`background supervision status|install|enable|disable|uninstall` requires an
+explicit Project selector. Install persists disabled/stopped intent before it
+creates disabled tasks. Enable preserves the recovery budget and enables both
+tasks before it requests a first tick. Disable and uninstall persist suppression
+and advance generation before task mutation. They leave an active owner available
+for explicit `background stop`. Partial registration can be repaired by install.
+Each mutation checks the complete Scheduler-normalized definition. Lost mutation
+responses are reconciled by reads; foreign tasks are never replaced or removed.
+
+The tick task has logon and one-minute triggers, IgnoreNew and a 240-second limit.
+The owner task has no triggers, allows demand start, uses IgnoreNew and has no
+Scheduler execution deadline. Both use the same limited InteractiveToken user.
+The tick persists a reservation and calls Run with its exact ID and generation.
+It releases start.lock and exits without waiting for the owner action. The action
+waits at most 20 seconds for start.lock. It validates the installed executable,
+manifest, Project, physical repository, task definition, enabled state, current
+intent and previous owner settlement. It acquires owner.lock and durably consumes
+the reservation before it publishes an owner. A consumed, absent, foreign, stale
+or suppressed request cannot start another owner. Manual start remains available.
+The owner retains the normal repository mutex and named kill-on-close Job.
+
+Pending attempts now retain `launchConsumed`. Older v1 records that omit this
+field mean unconsumed. A new writer includes it; older readers reject that field
+instead of silently replaying a consumed request. No deployment occurs here.
+Tick output distinguishes requested startup, observed-running, observed-absent and
+uncertain startup. A successful COM reply establishes only a request. A lost Run
+reply reports failure and retains the reservation. Later ticks observe the exact
+run and never replay it. Stop, disable, uninstall and maintenance revoke a queued
+request through generation/intent checks even if Scheduler has already queued it.
+
+`Nightweaver.QA.SchedulerProbe` uses a copied executable and isolated root and
+repository directory. A real timer starts the production finite tick coordinator
+with controlled failure observations. A separate demand action uses the production
+reservation consumer, locks, repository mutex and named owner Job. It checks two
+overlapping requests, exact PID/creation identity after tick exit, stop suppression,
+child settlement and removal of both exact fixture tasks. Failure qualification
+and resource capture use controlled inputs; this is topology proof. The independent
+installed CLI/runtime/Web recovery proof and operator runbook belong to ns-8s1h.
+
+The adapter uses two Windows Task Scheduler tasks for the selected
 current user: **InteractiveToken**, least privilege, logon trigger and recurring
 one-minute ticks. Reboot recovery begins only after that user next logs on.
 There is no password, service, S4U, boot-before-logon, session provisioning or
-credential-management fallback. No supervisor is installed by this change or its
-tests. Logout, sleep, task-service failure and absence of an interactive session
+credential-management fallback. Deployment and manual start install no task.
+The native proof registers only disposable fixture tasks. Logout, sleep, task-service failure and absence of an interactive session
 are observation gaps, never proof of health or permission to launch elsewhere.
 See Microsoft's [logon types](https://learn.microsoft.com/en-us/windows/win32/api/taskschd/ne-taskschd-task_logon_type).
 
 The installation identity binds canonical local host root, selected configuration
-path, **physical Git common directory** and user SID. The future installer must
+path, **physical Git common directory** and user SID. The installer must
 resolve the physical repository using the existing repository validator and obtain
 the actual selected Windows SID. A copied store is not an installation. State
 paths are derived only from HostPaths and ProjectSlug, never serialized paths.
@@ -231,7 +270,10 @@ it persists stopped intent before cancellation and records OperatorDrain. It als
 retains intent if the first signal precedes lifecycle callback registration: owner
 identity initialization settles independently of first-stop cancellation, and
 registration reconciles the retained intentional stop exactly once before startup
-continues. Initialization failure retains supervision-unavailable owner evidence.
+continues. During scheduled startup, the console callback uses the held start.lock
+for stop persistence. Callback execution and startup lock release are serialized.
+After release, the callback acquires start.lock in the normal command order.
+Initialization failure retains supervision-unavailable owner evidence.
 Deferred registration after force begins starts no persistence.
 Manager stop/force-stop persists before querying/controlling
 the owner, including absent owners and uncertain replies. A pipe stop also verifies

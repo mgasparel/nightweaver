@@ -20,10 +20,17 @@ internal static class BackgroundCommandParser
             return new(BackgroundAction.Status, null);
         }
 
+        var supervision = args[1] == "supervision";
         var maintenance = args[1] == "maintenance";
         if (maintenance && args.Count < 3) throw new UsageException("maintenance requires enter, status, or leave");
-        var action = (maintenance ? "maintenance-" + args[2] : args[1]) switch
+        if (supervision && args.Count < 3) throw new UsageException("supervision requires status, install, enable, disable, or uninstall");
+        var action = (supervision ? "supervision-" + args[2] : maintenance ? "maintenance-" + args[2] : args[1]) switch
         {
+            "supervision-status" => BackgroundAction.SupervisionStatus,
+            "supervision-install" => BackgroundAction.SupervisionInstall,
+            "supervision-enable" => BackgroundAction.SupervisionEnable,
+            "supervision-disable" => BackgroundAction.SupervisionDisable,
+            "supervision-uninstall" => BackgroundAction.SupervisionUninstall,
             "start" => BackgroundAction.Start,
             "status" => BackgroundAction.Status,
             "stop" => BackgroundAction.Stop,
@@ -44,7 +51,7 @@ internal static class BackgroundCommandParser
         string? maintenanceToken = null;
         long? revision = null;
 
-        for (var index = maintenance ? 3 : 2; index < args.Count; index++)
+        for (var index = maintenance || supervision ? 3 : 2; index < args.Count; index++)
         {
             var token = args[index];
             if (token is "--help" or "-h")
@@ -134,16 +141,21 @@ internal static class BackgroundCommandParser
     private static BackgroundCommandOptions ParseOwner(IReadOnlyList<string> args)
     {
         string? root = null, config = null, project = null, runId = null, urls = null;
+        long? generation = null;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var index = 2; index < args.Count; index++)
         {
             var option = args[index];
-            if (option is not ("--root" or "--config" or "--project" or "--run-id" or "--urls"))
+            if (option is not ("--root" or "--config" or "--project" or "--run-id" or "--urls" or "--scheduled-generation"))
                 throw new UsageException($"unknown internal background owner option '{option}'");
             if (!seen.Add(option)) throw Repeated(option);
             var value = ReadValue(args, ref index, option);
             switch (option)
             {
+                case "--scheduled-generation":
+                    if (!long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+                        throw new UsageException("invalid scheduled generation");
+                    generation = parsed; break;
                 case "--root": root = value; break;
                 case "--config": config = value; break;
                 case "--project": project = value; break;
@@ -161,7 +173,7 @@ internal static class BackgroundCommandParser
         if (runId.Length is < 16 or > 64 || runId.Any(character => !Uri.IsHexDigit(character)))
             throw new UsageException("internal background run identity is invalid");
         if (!IsLoopbackUrl(urls)) throw new UsageException("'--urls' must be one HTTP loopback URL with an explicit port");
-        return new BackgroundCommandOptions(BackgroundAction.Owner, null, urls, Owner: new(root, config, project, runId, urls));
+        return new BackgroundCommandOptions(BackgroundAction.Owner, null, urls, Owner: new(root, config, project, runId, urls, generation));
     }
 
     internal static bool IsLoopbackUrl(string value)

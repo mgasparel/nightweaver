@@ -9,7 +9,10 @@ internal enum SupervisionHealth { Unknown, Healthy, Failed, Draining, Gap }
 internal sealed record SupervisionObservation(string Epoch, long MonotonicTicks, DateTimeOffset Utc,
     SupervisionHealth Health, SupervisionOwner? Owner);
 internal sealed record SupervisionAttempt(string Id, long Generation, int Number, DateTimeOffset ReservedUtc,
-    string Epoch, SupervisionOwner? PreviousOwner);
+    string Epoch, SupervisionOwner? PreviousOwner)
+{
+    public bool LaunchConsumed { get; init; }
+}
 internal sealed record SupervisionIncident(string Id, DateTimeOffset Utc, string Reason, string? EvidenceId);
 
 internal sealed record SupervisionState(
