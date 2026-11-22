@@ -46,7 +46,10 @@ reservation consumer, locks, repository mutex and named owner Job. It checks two
 overlapping requests, exact PID/creation identity after tick exit, stop suppression,
 child settlement and removal of both exact fixture tasks. Failure qualification
 and resource capture use controlled inputs; this is topology proof. The independent
-installed CLI/runtime/Web recovery proof and operator runbook belong to ns-8s1h.
+installed CLI/runtime/Web recovery proof is recorded in
+[isolated Scheduler recovery](../acceptance/scheduled-recovery.md). The
+[operator runbook](../agents/scheduled-supervision.md) covers setup, removal,
+maintenance, session limits and diagnostics.
 
 The adapter uses two Windows Task Scheduler tasks for the selected
 current user: **InteractiveToken**, least privilege, logon trigger and recurring
@@ -230,7 +233,7 @@ and real disposable store/command locks, concurrent tick/manual stop rejection,
 capture/confirm/reserve/launch boundaries, pending crash reconciliation, transient
 readiness, exhaustion, and failure-only owner control. These add no native process,
 scheduler, Agent or fixture-publish journey. The final combined native recovery proof
-belongs to the separately authorized isolated-recovery-proof task.
+is recorded in [isolated Scheduler recovery](../acceptance/scheduled-recovery.md).
 
 `SupervisionPolicyTests` use deterministic UTC/monotonic observations for
 qualification, suppression, gaps, clock rollback, bounded backoff/exhaustion,
