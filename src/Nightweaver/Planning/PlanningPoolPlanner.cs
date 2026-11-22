@@ -62,7 +62,7 @@ internal static class PlanningPoolPlanner
     }
 
     internal static int CountActiveTasks(BeadsInventory inventory) => inventory.ById.Values.Count(bead =>
-        bead.IssueType == "task" && bead.Status is not ("closed" or "tombstone")
+        bead.IssueType == "task" && bead.Status is not ("closed" or "tombstone" or "deferred")
         && !bead.Labels.Contains("plan-unpublished", StringComparer.Ordinal) && !HasPauseLabel(bead));
 
     private static bool IsProductBead(BeadSnapshot bead) => bead.IssueType is "feature" or "bug";

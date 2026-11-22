@@ -37,8 +37,8 @@ public sealed class PlanningPoolPlannerTests
     }
 
     [Theory]
-    [InlineData(6, false)]
-    [InlineData(5, true)]
+    [InlineData(5, false)]
+    [InlineData(3, true)]
     [InlineData(4, true)]
     public void ActivePlanCountIncludesActiveTasksAndAppliesInclusiveBackpressure(int threshold, bool expectedBackpressure)
     {
@@ -46,6 +46,8 @@ public sealed class PlanningPoolPlannerTests
             Row("open-unlabeled", "open", "task", 2, "2026-01-01T00:00:00Z", null, Array.Empty<string>()),
             Row("assigned-merge", "in_progress", "task", 2, "2026-01-01T00:00:00Z", "human", ["stage:merge"]),
             Row("dependency-blocked", "open", "task", 2, "2026-01-01T00:00:00Z", null, Array.Empty<string>(), new { depends_on_id = "blocker", type = "blocks" }),
+            Row("tombstone", "tombstone", "task", 2, "2026-01-01T00:00:00Z", null, []),
+            Row("unpublished", "open", "task", 2, "2026-01-01T00:00:00Z", null, ["plan-unpublished"]),
             Row("closed", "closed", "task", 2, "2026-01-01T00:00:00Z", null, Array.Empty<string>()),
             Row("deferred", "deferred", "task", 2, "2026-01-01T00:00:00Z", null, Array.Empty<string>()),
             Row("status-blocked", "blocked", "task", 2, "2026-01-01T00:00:00Z", null, Array.Empty<string>()),
@@ -55,8 +57,25 @@ public sealed class PlanningPoolPlannerTests
 
         var plan = PlanningPoolPlanner.Plan(StartupPlanner.Plan(Actor, inventory), BeadsReadiness.Create(Array.Empty<string>(), Array.Empty<string>()), 2, threshold);
 
-        Assert.Equal(5, plan.ActivePlanBeadCount);
+        Assert.Equal(4, plan.ActivePlanBeadCount);
         Assert.Equal(expectedBackpressure, plan.BackpressureActive);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("2099-01-01T00:00:00Z")]
+    [InlineData("2000-01-01T00:00:00Z")]
+    public void PersistedDeferredStatusExcludesTaskUntilStatusChanges(string? deferUntil)
+    {
+        string TaskRow(string status) => JsonSerializer.Serialize(new
+        {
+            id = "task", status, issue_type = "task", priority = 2,
+            created_at = "2026-01-01T00:00:00Z", labels = Array.Empty<string>(), defer_until = deferUntil
+        });
+
+        Assert.Equal(0, PlanningPoolPlanner.CountActiveTasks(Inventory(TaskRow("deferred"))));
+        Assert.Equal(1, PlanningPoolPlanner.CountActiveTasks(Inventory(TaskRow("open"))));
+        Assert.Equal(1, PlanningPoolPlanner.CountActiveTasks(Inventory(TaskRow("in_progress"))));
     }
 
     [Fact]
