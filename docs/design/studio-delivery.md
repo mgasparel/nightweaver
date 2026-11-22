@@ -40,11 +40,15 @@ Equivalent explicit text accompanies the decorative, aria-hidden track.
 
 Tracks appear only in the Delivery pool, in both Overview and the full floor;
 Planning and singleton Merger retain their separate inventories and semantics.
-The current factory schema supplies neither native type nor task title. Cards
-therefore show explicit “Title unavailable” and secondary “Type unavailable”
-fallbacks beside exact Project/Bead identity, role, start time and invocation
-status. They do not infer failure from native type or fetch per-card Workspace
-data. Bead links and immutable invocation inspection remain separate controls.
+The factory snapshot carries optional `bead_title` admission metadata. All three
+pools use the exact admitted Bead ID and its single nonblank Payload title string.
+The publisher bounds titles to 512 Unicode scalar values and clears them on
+identity change or idle. Same-Bead stage updates retain the title; the next
+admission refreshes it. Older supported snapshots and unavailable titles show
+“Title unavailable”. React renders plain text beside the same Project/Bead
+Workspace link. Native type remains “Type unavailable”. Cards do not fetch
+per-card Workspace data. Bead links and immutable invocation inspection remain
+separate controls. See [admission title acceptance](../acceptance/admission-titles.md).
 Timing, repairs, diffs and technical metadata remain in floor diagnostics.
 No observation, subscription, polling or log ownership changes are introduced.
 

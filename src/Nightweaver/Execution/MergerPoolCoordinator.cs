@@ -187,7 +187,7 @@ internal sealed class MergerPoolCoordinator
         {
             cancellationToken.ThrowIfCancellationRequested();
             var bead = eligible[index];
-            var reservation = TryReserve(bead.Id, out var reservationDiagnostic);
+            var reservation = TryReserve(bead, out var reservationDiagnostic);
             if (reservation is null)
             {
                 if (reservationDiagnostic!.Code == MergerPoolDiagnosticCode.AlreadyReserved)
@@ -316,10 +316,11 @@ internal sealed class MergerPoolCoordinator
         }
     }
 
-    private ReservationState? TryReserve(string beadId, out MergerPoolDiagnostic? diagnostic)
+    private ReservationState? TryReserve(BeadSnapshot bead, out MergerPoolDiagnostic? diagnostic)
     {
         ReservationState? reservation = null;
         MergerPoolDiagnostic? refusal = null;
+        var beadId = bead.Id;
         bool TryReserveLocal()
         {
             lock (stateGate)
@@ -348,7 +349,7 @@ internal sealed class MergerPoolCoordinator
                 reservation = new ReservationState(beadId, slotId) { EnvironmentLease = environmentLease, Timing = WorkflowTiming.Reserve("merger", beadId) };
                 reservations.Add(beadId, reservation);
                 observation?.Reserve(beadId, reservation.Timing);
-                telemetry?.Reserve("merger", slotId, beadId);
+                telemetry?.Reserve("merger", slotId, beadId, bead.AdmissionTitle());
                 return true;
             }
         }

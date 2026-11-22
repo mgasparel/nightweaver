@@ -25,10 +25,11 @@ Data and geometry differences are deliberate and visible:
 - Current-project navigation and synchronization/search remain the shipped shell;
   the prototype's project switcher, sample counts and pretend projects are absent.
   This adds mobile shell height compared with the prototype.
-- The factory wire has no title/type or activity-summary fields. Both production
+- At the captured revision, the factory wire had no title/type or activity-summary fields. Both production
   captures retain explicit Title unavailable / Type unavailable, observed role and
   actual invocation start time. No sample title, elapsed stage duration or activity
   is inferred. The bays retain separate exact Bead and invocation controls.
+  Later [admission title acceptance](admission-titles.md) adds observed titles.
 - The controlled decision uses the target question and a shorter supported Planner
   recommendation. Full-context/source and observation disclosures, exact identity
   and access to all paused Beads add secondary footer height. No waiting duration

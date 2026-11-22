@@ -7,8 +7,11 @@ navigation and immutable invocation inspection at 1440x900, 375x900 and 720x900.
 It retains the existing pool/capacity, diagnostics, focus, refresh and bounded log
 checks without another native journey. Run `studio-cutover.ps1 -Group Invocation
 -Only factory-qa -OutputDirectory <fresh-path>`; inspect captures and retain the
-probe's measured wall time. Title/type fallbacks are explicit because the factory
-wire schema does not currently include those tracker fields.
+probe's measured wall time. The native fixture supplies distinct admission titles.
+The probe checks title/ID/Workspace pairs in Activity and Floor, Planning titles,
+plain text safety, fallback, reuse and retained stale titles. Type metadata still
+uses its explicit fallback. Substituted responses test presentation; the initial
+HTTP snapshot separately proves native publisher/reader title transport.
 
 The existing `studio-qa.mjs` shell journey includes the attention-first Overview
 matrix in `overview-checks.mjs`: one decision and visible Review action, bounded

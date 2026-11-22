@@ -32,7 +32,8 @@ internal sealed record FactorySlotObservation(
     int? RepairCycles,
     int? MaxRepairCycles,
     FactoryInvocationObservation? Invocation,
-    FactoryDiffObservation? Diff);
+    FactoryDiffObservation? Diff,
+    string? BeadTitle = null);
 
 internal sealed record FactoryInvocationObservation(
     string BeadId,
@@ -145,11 +146,12 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
         }
     }
 
-    internal void Reserve(string pool, string slotId, string beadId)
+    internal void Reserve(string pool, string slotId, string beadId, string? beadTitle = null)
     {
         Update(pool, slotId, slot => slot with
         {
-            Status = "reserved", BeadId = beadId, Stage = null, Role = null,
+            Status = "reserved", BeadId = beadId,
+            BeadTitle = BeadSnapshot.BoundDisplayTitle(beadTitle), Stage = null, Role = null,
             WorktreePath = null, Branch = null, RepairCycles = null, MaxRepairCycles = null,
             Invocation = null, Diff = null
         });
@@ -163,6 +165,7 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
         {
             Status = status,
             BeadId = beadId ?? slot.BeadId,
+            BeadTitle = status == "idle" || (beadId is not null && beadId != slot.BeadId) ? null : slot.BeadTitle,
             Stage = stage ?? slot.Stage,
             Role = role ?? slot.Role,
             WorktreePath = worktreePath ?? slot.WorktreePath,
@@ -173,7 +176,7 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
 
     internal void SetInvocation(string pool, string slotId, FactoryInvocationObservation invocation)
     {
-        Update(pool, slotId, slot => slot with
+        Update(pool, slotId, slot => slot.BeadId != invocation.BeadId ? slot : slot with
         {
             Status = invocation.Status == "running" ? "running" : "settling",
             Invocation = invocation
@@ -187,6 +190,7 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
         {
             Status = "preparing",
             BeadId = beadId,
+            BeadTitle = beadId == slot.BeadId ? slot.BeadTitle : null,
             Stage = invocation.Stage,
             Role = invocation.Purpose,
             WorktreePath = invocation.WorkingDirectory,
@@ -216,9 +220,9 @@ internal sealed class FactoryTelemetryPublisher : IAsyncDisposable
 
     internal void Release(string pool, string slotId, string beadId)
     {
-        Update(pool, slotId, slot => slot with
+        Update(pool, slotId, slot => slot.BeadId != beadId ? slot : slot with
         {
-            Status = "idle", BeadId = null, Stage = null, Role = null, WorktreePath = null,
+            Status = "idle", BeadId = null, BeadTitle = null, Stage = null, Role = null, WorktreePath = null,
             Branch = null, RepairCycles = null, MaxRepairCycles = null, Diff = null
         });
     }
@@ -522,6 +526,9 @@ internal sealed class FactoryTelemetryReader(HostPaths paths, ProjectConfig proj
         return pool.Slots.All(slot => slot.SlotId is not null && expected.Remove(slot.SlotId)
             && slot.Status is "idle" or "reserved" or "preparing" or "running" or "settling"
             && (slot.BeadId is null || SafeSegment(slot.BeadId))
+            && (slot.BeadTitle is null || (slot.Status != "idle" && slot.BeadId is not null
+                && !string.IsNullOrWhiteSpace(slot.BeadTitle)
+                && slot.BeadTitle.EnumerateRunes().Count() <= BeadSnapshot.MaximumDisplayTitleScalars))
             && (slot.Invocation is null || SafeInvocation(slot.Invocation)));
     }
 

@@ -149,7 +149,7 @@ try
             readinessFiles[index] = Path.Combine(fixture, item.Bead + ".ready");
             telemetryReleaseFiles[index] = Path.Combine(fixture, item.Bead + ".release");
             var pool = item.Slot.StartsWith("planning-", StringComparison.Ordinal) ? "planning" : "delivery";
-            telemetry.Reserve(pool, item.Slot, item.Bead);
+            telemetry.Reserve(pool, item.Slot, item.Bead, $"Admitted {item.Label} title");
             telemetry.UpdateSlot(pool, item.Slot, "preparing", item.Bead, "stage:qa",
                 "implementer", worktree, 0, project.Limits.MaxRepairCycles);
             telemetryRuns[index] = RunTelemetryFixtureAsync(paths, project,
