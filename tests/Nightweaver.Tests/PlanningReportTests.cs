@@ -27,7 +27,7 @@ public sealed class PlanningReportTests
         Assert.Contains("reason=backpressure (active_plan_beads=1 >= max_active_plan_beads=1)", waitingReport, StringComparison.Ordinal);
     }
 
-    private static DryRunReport CreateReport(StartupPlan startup, PlanningPoolPlan planning)
+    internal static DryRunReport CreateReport(StartupPlan startup, PlanningPoolPlan planning)
     {
         var settings = new AgentSettings(AgentCli.Claude, null, "high", 30);
         var roles = new RoleSettings(AgentRoles.All.ToDictionary(role => role, _ => settings));

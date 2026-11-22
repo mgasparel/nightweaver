@@ -3,6 +3,8 @@ using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
+using Nightweaver.Planning;
+using Nightweaver.Reporting;
 using Nightweaver.Telemetry;
 
 namespace Nightweaver.Tests;
@@ -307,8 +309,7 @@ public sealed class PlanningPoolCoordinatorTests
     [InlineData("open", null)]
     [InlineData("in_progress", "operator")]
     [InlineData("blocked", null)]
-    [InlineData("deferred", null)]
-    public async Task BackpressureCountsEveryNonclosedNonpausedTaskAndLetsAdmittedWorkSettle(string status, string? owner)
+    public async Task BackpressureCountsActiveTasksAndLetsAdmittedWorkSettle(string status, string? owner)
     {
         var current = Snapshot([Row("product")], ["product"]);
         var observation = new PoolObservation("planning", 2, new WorkflowTimingTests.Clock(), _ => { }, (_, _) => { });
@@ -327,6 +328,39 @@ public sealed class PlanningPoolCoordinatorTests
         }
         finally { release.TrySetResult(true); await first.Completion; }
         Assert.Empty(pool.ActiveReservations);
+    }
+
+    [Theory]
+    [InlineData(2, 1)]
+    [InlineData(5, 0)]
+    public async Task LiveAdmissionAndDryRunAgreeWithFiveDeferredTasks(int activeCount, int expectedAdmissions)
+    {
+        var rows = Enumerable.Range(0, 5).Select(index => Row($"deferred-{index}", status: "deferred", issueType: "task"))
+            .Concat(Enumerable.Range(0, activeCount).Select(index => Row($"active-{index}", issueType: "task")))
+            .Append(Row("product")).ToArray();
+        var snapshot = Snapshot(rows, ["product"]);
+        var startup = StartupPlanner.Plan("nightweaver:pool-tests", snapshot.Inventory);
+        var plan = PlanningPoolPlanner.Plan(startup, snapshot.Readiness, 1, 5);
+        var report = DryRunReportWriter.Render(PlanningReportTests.CreateReport(startup, plan));
+        var release = NewSignal();
+        var pool = CreatePool(1, () => Task.FromResult(snapshot), async (_, _, _, _, _) =>
+        { await release.Task; return SlotOutcome(PlanningSlotDisposition.Published, true); }, maxActive: 5);
+
+        var live = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            Assert.Equal(activeCount, plan.ActivePlanBeadCount);
+            Assert.Equal(expectedAdmissions, live.Admitted.Count);
+            Assert.Equal(plan.Selected.Select(item => item.Bead.Id), live.Admitted.Select(item => item.BeadId));
+            Assert.Equal(activeCount >= 5, plan.BackpressureActive);
+            Assert.Contains($"Active Plan Beads\n  count: {activeCount}\n  threshold: 5\n  backpressure: {(activeCount >= 5 ? "active" : "inactive")}", report, StringComparison.Ordinal);
+            Assert.Equal(activeCount >= 5, live.Diagnostics.Any(item => item.Code == PlanningPoolDiagnosticCode.Backpressure));
+        }
+        finally
+        {
+            release.TrySetResult(true);
+            await Task.WhenAll(live.Admitted.Select(item => item.Completion));
+        }
     }
 
     [Fact]
