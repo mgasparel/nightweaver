@@ -99,6 +99,16 @@ internal static class UpgradeInterlock
         await PublishActivationAsync(paths, reservation, activation, token).ConfigureAwait(false);
     }
 
+    internal static UpgradeActivation ReadActivation(HostPaths paths, UpgradeReservation reservation)
+    {
+        RequireCurrent(paths, reservation);
+        return ReadActivation(InvocationRuntimeFiles.ReadRuntimeFileBounded(
+            Path.Combine(Root(paths), reservation.OperationId, "activation.json"), 65536), reservation);
+    }
+
+    internal static bool IsReleased(HostPaths paths, UpgradeReservation reservation) =>
+        ReadAll(paths).SingleOrDefault(r => r.Reservation == reservation).Released;
+
     private static async Task PublishActivationAsync(HostPaths paths, UpgradeReservation reservation, UpgradeActivation activation, CancellationToken token)
     {
         ReadActivation(JsonSerializer.SerializeToUtf8Bytes(activation, PreparedRelease.JsonOptions), reservation);

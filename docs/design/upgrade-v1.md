@@ -3,10 +3,45 @@
 This is the contract for the ns-qa2 implementation graph, not an upgrade command.
 `UpgradePolicy` is a pure decision worksheet; it neither establishes facts nor
 persists progress, releases maintenance, launches processes or authorizes IO.
-Public mutation remains withheld until resume and rollback are implemented.
+Public mutation remains withheld until rollback is implemented and composed.
 Production release selection and each production operation require explicit
 operator authorization. This contract installs no supervisor and starts no
 collector, unattended run or automatic self-update.
+
+## Internal explicit resume
+
+`UpgradeCoordinator.ResumeAsync` accepts the exact observed operation revision.
+It uses the existing operation, scope, manager digest, maintenance and native
+boundaries. Public mutation remains unavailable until rollback is delivered.
+Resume creates no Bead, cleanup record, supervision attempt or launch identity.
+
+Prepared operations run preflight. Draining operations must prove original native
+settlement; resume does not repeat an uncertain drain request. Settled operations
+use the replacement primitive. Replacing operations verify candidate and retained
+inventories, then reconcile each journaled file against actual length and hash.
+Exact new bytes or confirmed removal advance evidence without another write.
+Exact old bytes permit continuation of the same intent under the mutation locks.
+Partial or unexpected bytes require inspection and stay intact. Before the first
+file intent, the complete live old package supplies the backup inventory. Resume
+checks existing backup files and copies only missing files. It never overwrites
+an uncertain backup. Inaccessible files do not count as absent files.
+
+Installed operations use activation checks. Verifying operations read the exact
+durable activation grant and observe its reserved owners. They never replay a
+launch, including when an owner is absent or native settlement is unknown. A
+healthy matching replacement passes the same two fresh observations and final
+native/health checks. Missing activation evidence, a partial maintenance release,
+foreign owner, pending supervision reservation or changed intent retains the
+interlock and reports the unresolved prerequisite. Resume does not infer that a
+maintenance release belongs to this operation from a null token alone.
+
+Accepted operations check live package, backup and fresh owner evidence. If the
+matching release publication is missing, resume completes it under the existing
+locks and exact intent checks. Repeated completion does not add journal revisions
+or start owners. Historical acceptance never restores later running intent.
+Interrupted journal/interlock siblings remain unavailable. Inspected and rollback
+phases require their separate preparation or rollback path. No timer, startup
+recovery or supervision tick invokes resume automatically.
 
 ## Internal progress storage
 
@@ -492,6 +527,18 @@ fresh Healthy observations at least ten seconds apart within sixty seconds.
 The journal retains actual PID/creation/run/runtime/Job identities and each
 pair's first and final observation times. Stopped acceptance verifies payload
 and settlement without launching or inventing supervision state.
+
+Accepted resume also releases command and admission locks during health probes.
+It reacquires both locks before release, then checks the journal revision,
+current intent, native identity and installed hashes. It checks observation,
+control and runtime timestamps again after those reads. Verifying resume retains
+each final full observation and checks all three timestamps after final inventory,
+package and intent reads, before acceptance. A proof that expires
+during another Project's probe cannot release suppression.
+For each stopped Project with an original journaled owner, both verification
+resume and accepted resume require a fresh exact owner record and confirmed
+process and Job settlement. A missing owner record and an absent owner lock
+cannot prove settlement. Missing or uncertain evidence retains suppression.
 
 Manager stop and force stop record `stopped-<Project>.json` in each active root
 interlock under the Project command lock and shared admission lock, before querying

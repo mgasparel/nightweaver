@@ -10,6 +10,235 @@ namespace Nightweaver.Tests;
 
 public sealed class UpgradeActivationTests
 {
+    [Fact]
+    public async Task AcceptedResumeReleasesLocksForStopDuringBlockedProbe()
+    {
+        using var f = new Fixture(true, "lost-acceptance-reply");
+        await f.Prepare();
+        var pending = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        Assert.Equal(UpgradePhase.Accepted, pending.Progress!.Phase);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = f.Coordinator(async (project, token) =>
+        {
+            var observation = await f.Observe(project, token);
+            entered.SetResult();
+            await finish.Task.WaitAsync(token);
+            return observation;
+        }).ResumeAsync(pending.Progress.Revision, f.Candidate, f.Token);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), f.Token);
+            // Both locks must be available before the probe returns.
+            using var command = BackgroundFileLock.AcquireStart(f.Paths, ProjectSlug.Parse("demo"));
+            using var admission = UpgradeInterlock.AcquireAdmission(f.Paths);
+            await f.ChangeIntentUnderLock("stop");
+        }
+        finally { finish.TrySetResult(); }
+        var result = await resume;
+        Assert.Equal(UpgradeActivationOutcome.Pending, result.Outcome);
+        Assert.Equal("Activation intent changed; retain the upgrade interlock.", result.Code);
+        Assert.False(f.Store("demo").Read().State!.DesiredRunning);
+        Assert.Equal(pending.Progress.Revision, result.Progress!.Revision);
+        Assert.Equal(1, f.Starts);
+        Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+    }
+
+    [Theory]
+    [InlineData("lost-acceptance-reply")]
+    [InlineData("lost-launch-reply")]
+    public async Task ResumeRejectsEvidenceThatExpiresDuringAnotherProbe(string fault)
+    {
+        using var f = new Fixture(true, fault, twoProjects: true);
+        await f.Prepare();
+        var pending = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        Assert.Equal(fault == "lost-launch-reply" ? UpgradeActivationOutcome.Pending : UpgradeActivationOutcome.Failed, pending.Outcome);
+        Assert.Equal(fault == "lost-launch-reply" ? UpgradePhase.Verifying : UpgradePhase.Accepted, pending.Progress!.Phase);
+        if (fault == "lost-launch-reply")
+        {
+            Assert.NotNull(pending.Progress.PendingOperation);
+            Assert.Null(pending.Progress.AcceptedPairs);
+        }
+        else Assert.Equal(2, pending.Progress.AcceptedPairs!.Length);
+        var evidence = f.RecoveryEvidence();
+        foreach (var timestamp in fault == "lost-launch-reply" ? new[] { "control", "runtime" }
+            : new[] { "observation", "control", "runtime" })
+        {
+            var probes = 0;
+            var result = await f.Coordinator(async (project, token) =>
+            {
+                var finalRound = fault == "lost-acceptance-reply" || ++probes > 2;
+                if (finalRound && project.Name == "other") f.Advance(TimeSpan.FromSeconds(2));
+                var observation = await f.Observe(project, token);
+                if (!finalRound || project.Name != "demo") return observation;
+                return timestamp switch
+                {
+                    "observation" => observation with { Utc = observation.Utc.AddSeconds(-9) },
+                    "control" => observation with { ControlObservedUtc = observation.Utc.AddSeconds(-9) },
+                    _ => observation with { RuntimeObservedUtc = observation.Utc.AddSeconds(-9) }
+                };
+            }).ResumeAsync(pending.Progress.Revision, f.Candidate, f.Token);
+            Assert.Equal(UpgradeActivationOutcome.Pending, result.Outcome);
+            Assert.Equal("Fresh live CLI and Web replacement acceptance is unconfirmed.", result.Code);
+            Assert.Equal(pending.Progress.Revision, result.Progress!.Revision);
+            Assert.Equal(pending.Progress.PendingOperation, result.Progress.PendingOperation);
+            Assert.Equal(evidence, f.RecoveryEvidence());
+            Assert.Equal(2, f.Starts);
+            Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+        }
+        var accepted = await f.Coordinator().ResumeAsync(pending.Progress.Revision, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.LiveAccepted, accepted.Outcome);
+        Assert.Equal(2, f.Starts);
+        UpgradeInterlock.RequireStartupAllowed(f.Paths);
+    }
+
+    [Theory]
+    [InlineData("stopped-verifying")]
+    [InlineData("lost-acceptance-reply")]
+    public async Task StoppedResumeRequiresFreshOriginalNativeSettlement(string fault)
+    {
+        using var f = new Fixture(false, fault, supervised: false);
+        await f.Prepare();
+        var pending = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        Assert.Contains(UpgradeLifecycle.OwnerEvidence(f.Owner), pending.Progress!.Owners);
+        Assert.Equal(fault == "stopped-verifying" ? UpgradePhase.Verifying : UpgradePhase.Accepted, pending.Progress.Phase);
+        var evidence = f.RecoveryEvidence();
+        foreach (var state in new[] { "missing", "unavailable", "reused", "unsettled" })
+        {
+            f.HideOwners = state == "missing";
+            f.NativeObservation = new(state == "reused" ? OwnerProcessState.Reused
+                : state == "unsettled" ? OwnerProcessState.Exited : OwnerProcessState.Unavailable, false);
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var result = await f.Coordinator().ResumeAsync(pending.Progress.Revision, f.Candidate, f.Token);
+                Assert.Equal(UpgradeActivationOutcome.Pending, result.Outcome);
+                Assert.Equal(state == "missing" ? "Original owner evidence is inaccessible or missing."
+                    : "Original owner and descendant settlement is pending or unavailable.", result.Code);
+                Assert.Equal(evidence, f.RecoveryEvidence());
+                Assert.Equal(pending.Progress.Revision, result.Progress!.Revision);
+                Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+            }
+        }
+        f.HideOwners = false;
+        f.NativeObservation = new(OwnerProcessState.Exited, true);
+        var accepted = await f.Coordinator().ResumeAsync(pending.Progress.Revision, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.PayloadVerifiedStopped, accepted.Outcome);
+        Assert.Equal(0, f.Starts);
+        Assert.Equal(0, f.Observations);
+        Assert.False(Directory.Exists(f.Paths.SupervisionRoot(ProjectSlug.Parse("demo"))));
+    }
+
+    [Theory]
+    [InlineData("missing-activation")]
+    [InlineData("interrupted-activation")]
+    [InlineData("partial-maintenance-release")]
+    public async Task ResumeRetainsUncertainActivationPublicationAndMaintenanceRelease(string fault)
+    {
+        using var f = new Fixture(true, fault, twoProjects: fault == "partial-maintenance-release");
+        await f.Prepare();
+        var pending = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.Pending, pending.Outcome);
+        var retained = f.Journal.Read().Progress!;
+        Assert.Equal(UpgradePhase.Verifying, retained.Phase);
+        Assert.NotNull(retained.PendingOperation);
+        Assert.Null(retained.AcceptedPairs);
+        Assert.Equal(0, f.Starts);
+        var activation = Path.Combine(UpgradeInterlock.Root(f.Paths), retained.OperationId, "activation.json");
+        if (fault == "partial-maintenance-release")
+        {
+            Assert.Equal(2, retained.Maintenance.Length);
+            Assert.All(retained.Maintenance, item => Assert.NotNull(item.Token));
+            Assert.Null(f.Store("demo").Read().State!.MaintenanceToken);
+            Assert.Equal(retained.Maintenance.Single(m => m.Project == "other").Token,
+                f.Store("other").Read().State!.MaintenanceToken);
+            Assert.True(File.Exists(activation));
+        }
+        else
+        {
+            Assert.False(File.Exists(activation));
+            Assert.Equal(fault == "interrupted-activation", File.Exists(activation + ".partial.tmp"));
+        }
+        // Reuse the retained operation through later stop and foreign maintenance.
+        // Each intent gets a fresh evidence snapshot and two explicit resume calls.
+        foreach (var intent in new[] { "unchanged", "stop", "maintenance" })
+        {
+            await f.ChangeIntent(intent);
+            var evidence = f.RecoveryEvidence();
+            var resumed = await f.Coordinator().ResumeAsync(retained.Revision, f.Candidate, f.Token);
+            Assert.Equal(UpgradeActivationOutcome.Pending, resumed.Outcome);
+            Assert.Equal(retained.Revision, resumed.Progress!.Revision);
+            Assert.Null(resumed.Progress.AcceptedPairs);
+            if (fault == "interrupted-activation") Assert.Contains("Interrupted upgrade interlock", resumed.Code);
+            else if (fault == "partial-maintenance-release" || intent != "unchanged")
+                Assert.Equal("Activation intent changed; retain the upgrade interlock.", resumed.Code);
+            else Assert.Contains("activation.json", resumed.Code);
+            Assert.Equal(evidence, f.RecoveryEvidence());
+            if (fault == "interrupted-activation")
+                Assert.Throws<InvalidDataException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+            else Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+            var repeated = await f.Coordinator().ResumeAsync(resumed.Progress.Revision, f.Candidate, f.Token);
+            Assert.Equal(resumed.Code, repeated.Code);
+            Assert.Equal(UpgradeActivationOutcome.Pending, repeated.Outcome);
+            Assert.Equal(retained.Revision, repeated.Progress!.Revision);
+            Assert.Equal(evidence, f.RecoveryEvidence());
+            Assert.Equal(0, f.Starts);
+            Assert.Equal(0, f.Observations);
+        }
+        Assert.Equal(f.OldDigest, PreparedRelease.Inspect(f.Journal.RetainedPackageRoot, false).Digest);
+        Assert.Equal(PreparedRelease.Inspect(f.Candidate, false).Digest, PreparedRelease.Inspect(f.Paths.Root, true).Digest);
+        Assert.Equal("preserve", File.ReadAllText(Path.Combine(f.Paths.Root, "worktrees", "sentinel")));
+    }
+
+    [Theory]
+    [InlineData(false, "lost-launch-reply")]
+    [InlineData(true, "lost-launch-reply")]
+    [InlineData(false, "lost-acceptance-reply")]
+    [InlineData(true, "lost-acceptance-reply")]
+    public async Task ResumeAcknowledgesLostLaunchReplyWithoutAnotherLaunch(bool supervised, string fault)
+    {
+        using var f = new Fixture(true, fault, supervised);
+        await f.Prepare();
+        var pending = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        Assert.Equal(fault == "lost-launch-reply" ? UpgradeActivationOutcome.Pending : UpgradeActivationOutcome.Failed, pending.Outcome);
+        Assert.Equal(1, f.Starts);
+        var resumed = await f.Coordinator().ResumeAsync(pending.Progress!.Revision, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.LiveAccepted, resumed.Outcome);
+        Assert.Equal(1, f.Starts);
+        var repeated = await f.Coordinator().ResumeAsync(resumed.Progress!.Revision, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.LiveAccepted, repeated.Outcome);
+        Assert.Equal(resumed.Progress.Revision, repeated.Progress!.Revision);
+        Assert.Equal(1, f.Starts);
+    }
+
+    [Theory]
+    [InlineData(false, "Installed")]
+    [InlineData(true, "Installed")]
+    [InlineData(false, "Draining")]
+    [InlineData(false, "Settled")]
+    public async Task ResumeContinuesInstalledPayloadAndIsIdempotent(bool running, string phase)
+    {
+        using var f = new Fixture(running);
+        await f.Prepare();
+        var installed = await f.Install(Enum.Parse<UpgradePhase>(phase));
+        var result = await f.Coordinator().ResumeAsync(installed.Revision, f.Candidate, f.Token);
+        Assert.Equal(running ? UpgradeActivationOutcome.LiveAccepted : UpgradeActivationOutcome.PayloadVerifiedStopped, result.Outcome);
+        var again = await f.Coordinator().ResumeAsync(result.Progress!.Revision, f.Candidate, f.Token);
+        Assert.Equal(result.Outcome, again.Outcome);
+        Assert.Equal(running ? 1 : 0, f.Starts);
+        Assert.Equal(result.Progress.Revision, again.Progress!.Revision);
+    }
+
+    [Fact]
+    public async Task ResumeRequiresTheExactObservedRevision()
+    {
+        using var f = new Fixture(true);
+        await f.Prepare();
+        var result = await f.Coordinator().ResumeAsync(2, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.Refused, result.Outcome);
+        Assert.Equal(0, f.Starts);
+        Assert.Equal(1, f.Journal.Read().Progress!.Revision);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -87,6 +316,11 @@ public sealed class UpgradeActivationTests
         Assert.Equal(f.OldDigest, PreparedRelease.Inspect(f.Paths.Root, true).Digest);
         Assert.Contains(UpgradeLifecycle.OwnerEvidence(f.Owner), f.Journal.Read().Progress!.Owners);
         Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+        var pending = f.Journal.Read().Progress!;
+        var resumed = await f.Coordinator().ResumeAsync(pending.Revision, f.Candidate, f.Token);
+        Assert.Equal(UpgradeActivationOutcome.Pending, resumed.Outcome);
+        Assert.Equal(0, f.Starts);
+        Assert.Equal(pending.Revision, resumed.Progress!.Revision);
     }
 
     [Theory]
@@ -97,7 +331,7 @@ public sealed class UpgradeActivationTests
         using var f = new Fixture(true, fault, supervised: false);
         await f.Prepare();
         if (fault == "console-before-capture") await f.ConsoleStop();
-        var result = await f.Coordinator().ApplyAsync(1, f.Candidate, f.Token);
+        var result = await f.Coordinator().ResumeAsync(1, f.Candidate, f.Token);
         Assert.Equal(0, f.Starts);
         if (fault == "console-before-capture")
         {
@@ -249,6 +483,15 @@ public sealed class UpgradeActivationTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => f.Coordinator().ApplyAsync(result.Progress.Revision, f.Candidate, f.Token));
         Assert.Equal(1, f.Starts);
         Assert.Equal(f.OldDigest, PreparedRelease.Inspect(f.Journal.RetainedPackageRoot, false).Digest);
+        var resumed = await f.Coordinator().ResumeAsync(result.Progress.Revision, f.Candidate, f.Token);
+        Assert.Equal(1, f.Starts);
+        if (fault is "second-owner" or "too-close") Assert.Equal(UpgradeActivationOutcome.LiveAccepted, resumed.Outcome);
+        else
+        {
+            Assert.Equal(UpgradeActivationOutcome.Pending, resumed.Outcome);
+            Assert.Equal(result.Progress.Revision, resumed.Progress!.Revision);
+            Assert.Throws<InvalidOperationException>(() => UpgradeInterlock.RequireStartupAllowed(f.Paths));
+        }
     }
 
     [Fact]
@@ -350,11 +593,15 @@ public sealed class UpgradeActivationTests
         private readonly UpgradeScope scope;
         private readonly UpgradeLifecycle lifecycle;
         private readonly SupervisionStore store;
+        private readonly Dictionary<string, SupervisionStore> stores = [];
+        private readonly Dictionary<string, BackgroundOwnerRecord> replacements = [];
         private readonly string nextDigest;
         private readonly string build;
         private bool active;
         private bool unavailable;
         private int observations;
+        private bool acceptanceInterrupted;
+        private bool publicationInterrupted;
         internal int Observations => observations;
         internal bool Active => active;
         private readonly Clock clock = new();
@@ -365,8 +612,11 @@ public sealed class UpgradeActivationTests
         internal BackgroundOwnerRecord Owner { get; private set; }
         internal int Starts { get; private set; }
         internal int Drains { get; private set; }
+        internal bool HideOwners { get; set; }
+        internal OwnerProcessObservation? NativeObservation { get; set; }
+        internal void Advance(TimeSpan elapsed) => clock.Advance(elapsed);
         internal CancellationToken Token { get; } = TestContext.Current.CancellationToken;
-        internal Fixture(bool running, string? fault = null, bool supervised = true)
+        internal Fixture(bool running, string? fault = null, bool supervised = true, bool twoProjects = false)
         {
             this.running = running;
             this.fault = fault;
@@ -385,14 +635,54 @@ public sealed class UpgradeActivationTests
                 name = "demo", target_repository = new { path = repo }
             }));
             scope = new(Paths.Root, "S-1-5-21-1001", [new("demo", config, Hash(File.ReadAllBytes(config)), repo, repo, "physical")]);
-            Journal = new(scope, new('a', 32));
+            if (twoProjects)
+            {
+                var otherRepo = temp.CreateDirectory("other-repository");
+                var otherConfig = temp.WriteFile("other.json", System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    name = "other", target_repository = new { path = otherRepo }
+                }));
+                scope = scope with { Projects = [.. scope.Projects,
+                    new("other", otherConfig, Hash(File.ReadAllBytes(otherConfig)), otherRepo, otherRepo, "other-physical")] };
+            }
+            Journal = new(scope, new('a', 32), boundary =>
+            {
+                if (fault is "missing-activation" or "interrupted-activation" && !publicationInterrupted
+                    && boundary == UpgradePublicationBoundary.Renamed
+                    && new UpgradeJournal(scope, new('a', 32)).Read().Progress?.Phase == UpgradePhase.Verifying)
+                {
+                    publicationInterrupted = true;
+                    if (fault == "interrupted-activation")
+                        File.WriteAllText(Path.Combine(UpgradeInterlock.Root(Paths), new string('a', 32), "activation.json.partial.tmp"), "{");
+                    throw new IOException("activation publication interrupted");
+                }
+                if (fault == "lost-acceptance-reply" && !acceptanceInterrupted && boundary == UpgradePublicationBoundary.Renamed
+                    && new UpgradeJournal(scope, new('a', 32)).Read().Progress?.Phase == UpgradePhase.Accepted)
+                {
+                    acceptanceInterrupted = true;
+                    throw new IOException("acceptance reply lost");
+                }
+            });
             store = new(Paths, ProjectSlug.Parse("demo"), new(Paths.Root, config, repo, scope.UserSid));
+            foreach (var project in scope.Projects)
+                stores.Add(project.Name, project.Name == "demo" ? store : new(Paths, ProjectSlug.Parse(project.Name),
+                    new(Paths.Root, project.Configuration, project.GitCommonDirectory, scope.UserSid)));
             Owner = new(1, running ? "running" : "stopped", new('b', 32), 1234, DateTimeOffset.UtcNow.AddMinutes(-1), Paths.Root,
                 config, "demo", repo, new('c', 32), "http://127.0.0.1:5000", "healthy", "live", "", "", null)
                 { ContainmentVersion = 1, GitCommonDirectory = repo };
             active = running;
             lifecycle = new(Paths, Journal, new(_ => Task.FromResult(Inventory()),
-                (_, _) => unavailable ? throw new InvalidDataException("unavailable") : Task.FromResult<SupervisionLifecycle?>(supervised ? new(store) : null),
+                (project, _) =>
+                {
+                    if (fault == "partial-maintenance-release" && !publicationInterrupted && project == "other"
+                        && Journal.Read().Progress?.Phase == UpgradePhase.Verifying && store.Read().State!.MaintenanceToken is null)
+                    {
+                        publicationInterrupted = true;
+                        throw new IOException("maintenance release interrupted");
+                    }
+                    return unavailable ? throw new InvalidDataException("unavailable")
+                        : Task.FromResult<SupervisionLifecycle?>(supervised ? new(stores[project]) : null);
+                },
                 async (_, operation, maintenance, token) =>
                 {
                     Drains++;
@@ -413,7 +703,7 @@ public sealed class UpgradeActivationTests
                     active = false;
                     return true;
                 },
-                _ => new(!running && fault == "reused" ? OwnerProcessState.Reused : fault == "unknown" ? OwnerProcessState.Unavailable
+                _ => NativeObservation ?? new(!running && fault == "reused" ? OwnerProcessState.Reused : fault == "unknown" ? OwnerProcessState.Unavailable
                     : active ? OwnerProcessState.Alive : OwnerProcessState.Exited, !active && fault != "unsettled"),
                 _ => fault == "lock-unknown" ? null : active), clock,
                 async (elapsed, token) =>
@@ -430,6 +720,11 @@ public sealed class UpgradeActivationTests
         }
         private UpgradeLifecycleInventory Inventory()
         {
+            if (fault == "stopped-verifying" && !publicationInterrupted && Journal.Read().Progress?.Phase == UpgradePhase.Verifying)
+            {
+                publicationInterrupted = true;
+                throw new IOException("stopped verification interrupted");
+            }
             // Both live probes have succeeded. Only the final inventory records
             // failure; the original native identity and held owner lock remain.
             if (observations == 2)
@@ -450,25 +745,59 @@ public sealed class UpgradeActivationTests
                     _ => Owner
                 };
             }
-            return new(scope, running || fault is not null ? [Owner] : [], true);
+            return new(scope, HideOwners ? [] : replacements.Count > 1 ? replacements.Values.ToArray()
+                : running || fault is not null ? [Owner] : [], true);
         }
         internal async Task Prepare()
         {
-            var project = scope.Projects[0];
-            var initial = SupervisionState.Manual(new(Paths.Root, project.Configuration, project.GitCommonDirectory, scope.UserSid))
-                with { Enabled = true, DesiredRunning = running };
-            if (supervised) await store.SaveAsync(null, initial, Token);
+            foreach (var project in scope.Projects)
+            {
+                var initial = SupervisionState.Manual(new(Paths.Root, project.Configuration, project.GitCommonDirectory, scope.UserSid))
+                    with { Enabled = true, DesiredRunning = running };
+                if (supervised) await stores[project.Name].SaveAsync(null, initial, Token);
+            }
             await Journal.SaveAsync(null, new(1, new('a', 32), 0, scope, OldDigest, nextDigest,
                 Hash(File.ReadAllBytes(typeof(UpgradeCoordinator).Assembly.Location)), UpgradePhase.Prepared, null, null,
                 new('d', 32), [], [], [], []), Token);
         }
-        internal UpgradeCoordinator Coordinator() => new(Journal, lifecycle, new(Journal, lifecycle),
+        internal SupervisionStore Store(string project) => stores[project];
+        internal async Task ChangeIntent(string intent)
+        {
+            if (intent == "unchanged") return;
+            using var command = BackgroundFileLock.AcquireStart(Paths, ProjectSlug.Parse("demo"));
+            await ChangeIntentUnderLock(intent);
+        }
+        internal async Task ChangeIntentUnderLock(string intent)
+        {
+            var lifecycle = new SupervisionLifecycle(store);
+            if (intent == "stop")
+            {
+                await lifecycle.ApplyAsync(SupervisionLifecycleAction.Stop, null, null, Token);
+                Assert.False(store.Read().State!.DesiredRunning);
+            }
+            else
+            {
+                var current = store.Read().State!;
+                if (current.MaintenanceToken is not null)
+                    await lifecycle.ApplyAsync(SupervisionLifecycleAction.LeaveMaintenance, current.MaintenanceToken, current.Revision, Token);
+                var foreign = await lifecycle.ApplyAsync(SupervisionLifecycleAction.EnterMaintenance, null, null, Token);
+                Assert.DoesNotContain(Journal.Read().Progress!.Maintenance, m => m.Token == foreign.State!.MaintenanceToken);
+                Assert.False(foreign.State!.DesiredRunning);
+            }
+        }
+        internal string[] RecoveryEvidence() => new[] { Journal.DirectoryPath, UpgradeInterlock.Root(Paths) }
+            .SelectMany(directory => Directory.GetFiles(directory, "*", SearchOption.AllDirectories))
+            .Concat(stores.Values.Select(s => s.Path)).Order(StringComparer.Ordinal)
+            .Select(path => path + ":" + (File.Exists(path) ? Hash(File.ReadAllBytes(path)) : "absent")).ToArray();
+        internal UpgradeCoordinator Coordinator(Func<AffectedUpgradeProject, CancellationToken, Task<DeploymentObservation>>? observe = null) => new(Journal, lifecycle, new(Journal, lifecycle),
             _ => Task.FromResult(new UpgradePreflightReport("test", Paths.Root, Candidate, OldDigest, nextDigest, scope.Projects,
-                fault != "preflight", true, [])), Start, Observe);
-        internal async Task<UpgradeProgress> Install()
+                fault != "preflight", true, [])), Start, observe ?? Observe);
+        internal async Task<UpgradeProgress> Install(UpgradePhase phase = UpgradePhase.Installed)
         {
             var progress = await lifecycle.BeginDrainAsync(1, Token);
+            if (phase == UpgradePhase.Draining) return progress;
             progress = await lifecycle.ConfirmSettlementAsync(progress.Revision, Token);
+            if (phase == UpgradePhase.Settled) return progress;
             return await new UpgradeReplacement(Journal, lifecycle).ReplaceAsync(progress.Revision, Candidate, Token);
         }
         internal Task<UpgradeProgress> Activate(long revision) => lifecycle.ActivateAsync(revision, Start, Observe, Token);
@@ -495,10 +824,15 @@ public sealed class UpgradeActivationTests
             if (fault == "cancel") throw new OperationCanceledException(token);
             active = true;
             var created = DateTimeOffset.UtcNow;
-            var cli = new LiveRelease(1, nextDigest, build, 5678, created, Paths.Root, project.Configuration, project.Name);
-            var web = cli with { ProcessId = 5679 };
+            var cli = new LiveRelease(1, nextDigest, build, 5678 + replacements.Count * 2, created, Paths.Root, project.Configuration, project.Name);
+            var web = cli with { ProcessId = cli.ProcessId + 1 };
             Owner = Owner with { RunId = runId, RuntimeId = new('e', 32), ProcessId = cli.ProcessId,
-                ProcessStartedAtUtc = created, CliRelease = cli, WebRelease = web, ObservedAtUtc = created };
+                ProcessStartedAtUtc = created, CliRelease = cli, WebRelease = web, ObservedAtUtc = created,
+                Project = project.Name, ConfigPath = project.Configuration, TargetRepository = project.Repository,
+                GitCommonDirectory = project.GitCommonDirectory };
+            replacements[project.Name] = Owner;
+            if (fault == "lost-launch-reply" && project.Name == scope.Projects[^1].Name)
+                throw new IOException("launch reply lost");
             if (fault is "stop" or "disable" or "maintenance")
             {
                 var state = store.Read().State!;
@@ -513,9 +847,9 @@ public sealed class UpgradeActivationTests
             if (fault == "unavailable") unavailable = true;
             if (fault == "payload") File.WriteAllText(Path.Combine(Paths.Root, "added.txt"), "changed");
         }
-        private Task<DeploymentObservation> Observe(AffectedUpgradeProject project, CancellationToken token)
+        internal Task<DeploymentObservation> Observe(AffectedUpgradeProject project, CancellationToken token)
         {
-            var owner = Owner;
+            var owner = replacements.Count > 1 ? replacements[project.Name] : Owner;
             var now = clock.GetUtcNow();
             observations++;
             if (fault == "second-owner" && observations == 2) owner = owner with { RuntimeId = new('f', 32) };

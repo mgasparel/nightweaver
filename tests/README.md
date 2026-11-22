@@ -1,5 +1,28 @@
 # Test suite
 
+Upgrade resume extends the existing replacement interruption and activation fault
+cases with reconciliation checks. It reuses each disposable package setup.
+Small additional cases cover exact byte decisions, partial backup/live bytes,
+lost retirement/inventory confirmations, lost launch replies, phase continuation,
+stale revisions and repeated completion. Controlled time retains the activation
+health interval. These checks add no native owner, Agent, Scheduler, browser or
+fixture publish journey. The normal application paths do not invoke resume.
+Three publication interruption cases reuse one retained operation per boundary.
+They check missing activation evidence, an interrupted activation file, and a
+two-Project maintenance release interrupted after the first release. Each case
+checks unchanged intent, a later stop, and then foreign maintenance. Two resume
+calls per intent must retain the exact journal, interlock and store bytes, root
+suppression, and zero launches. These cases add no native journey or publish.
+Five resume safety cases cover Stop during a blocked accepted probe, expiry of
+observation/control/runtime evidence across two Projects, and missing or uncertain
+original process/Job evidence at Verifying and Accepted. The expiry case shares
+one package setup per phase across timestamp checks. The Verifying case loses
+the second Project's launch reply, then expires control and runtime evidence
+during the second round of probes. It checks retained journal and suppression,
+zero repeat launches, and completion with fresh evidence. Each stopped case shares setup
+across four native evidence states and repeated resume calls. Injected probes,
+native observations and controlled time add no native journey or fixture publish.
+
 Upgrade activation adds a pure live-identity matrix and disposable component
 checks for composed replacement, stopped intent, launch failure, cancellation,
 stop/disable/maintenance changes, unavailable stores, changed payload, changed
