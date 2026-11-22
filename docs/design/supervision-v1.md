@@ -270,7 +270,10 @@ it persists stopped intent before cancellation and records OperatorDrain. It als
 retains intent if the first signal precedes lifecycle callback registration: owner
 identity initialization settles independently of first-stop cancellation, and
 registration reconciles the retained intentional stop exactly once before startup
-continues. Initialization failure retains supervision-unavailable owner evidence.
+continues. During scheduled startup, the console callback uses the held start.lock
+for stop persistence. Callback execution and startup lock release are serialized.
+After release, the callback acquires start.lock in the normal command order.
+Initialization failure retains supervision-unavailable owner evidence.
 Deferred registration after force begins starts no persistence.
 Manager stop/force-stop persists before querying/controlling
 the owner, including absent owners and uncertain replies. A pipe stop also verifies

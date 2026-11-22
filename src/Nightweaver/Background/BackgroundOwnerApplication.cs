@@ -38,8 +38,8 @@ internal static class BackgroundOwnerApplication
             return ExitCodes.UsageOrConfiguration;
         }
 
-        using var scheduledCommand = options.ScheduledGeneration is null ? null
-            : await AcquireScheduledCommandAsync(paths, projectSlug, cancellationToken).ConfigureAwait(false);
+        using var scheduledCommand = new ConsoleStopCommand(options.ScheduledGeneration is null ? null
+            : await AcquireScheduledCommandAsync(paths, projectSlug, cancellationToken).ConfigureAwait(false));
         SupervisionLifecycle? scheduledLifecycle = null;
         if (options.ScheduledGeneration is not null)
         {
@@ -128,7 +128,7 @@ internal static class BackgroundOwnerApplication
                 {
                     try
                     {
-                        PersistConsoleStopAsync(paths, projectSlug, lifecycle, state, recordPath).GetAwaiter().GetResult();
+                        scheduledCommand.Persist(paths, projectSlug, lifecycle, state, recordPath);
                     }
                     catch (Exception)
                     {
@@ -151,7 +151,7 @@ internal static class BackgroundOwnerApplication
                     serverLifetime.Token,
                     request => ApplyControlAction(request, options.RunId, shutdownSignals));
                 _ = WatchControlServerAsync(controlServer, state, recordPath, shutdownSignals, serverLifetime.Token);
-                scheduledCommand?.Dispose();
+                scheduledCommand.Dispose();
                 Func<FactoryTelemetryPublisher, ProjectConfig, HostPaths, ValidatedTargetRepository,
                     CancellationToken, Task> onReady = async (telemetry, readyProject, readyPaths, repository, token) =>
                 {
@@ -271,12 +271,42 @@ internal static class BackgroundOwnerApplication
         }
     }
 
-    internal static async Task PersistConsoleStopAsync(HostPaths paths, ProjectSlug project, SupervisionLifecycle? lifecycle,
-        BackgroundOwnerState state, string recordPath)
+    // Serialize startup lock release with the console callback. A callback that
+    // starts before release borrows that lock; later callbacks acquire their own.
+    internal sealed class ConsoleStopCommand(IDisposable? startupCommand) : IDisposable
+    {
+        private readonly object gate = new();
+        private IDisposable? command = startupCommand;
+
+        internal void Persist(HostPaths paths, ProjectSlug project, SupervisionLifecycle? lifecycle,
+            BackgroundOwnerState state, string recordPath)
+        {
+            lock (gate)
+                PersistConsoleStopAsync(paths, project, lifecycle, state, recordPath, command is not null)
+                    .GetAwaiter().GetResult();
+        }
+
+        public void Dispose()
+        {
+            lock (gate)
+            {
+                command?.Dispose();
+                command = null;
+            }
+        }
+    }
+
+    internal static Task PersistConsoleStopAsync(HostPaths paths, ProjectSlug project, SupervisionLifecycle? lifecycle,
+        BackgroundOwnerState state, string recordPath) =>
+        PersistConsoleStopAsync(paths, project, lifecycle, state, recordPath, commandAlreadyHeld: false);
+
+    private static async Task PersistConsoleStopAsync(HostPaths paths, ProjectSlug project, SupervisionLifecycle? lifecycle,
+        BackgroundOwnerState state, string recordPath, bool commandAlreadyHeld)
     {
         // A direct console stop uses the same order as manager commands. Wait only
         // for sharing contention. The independent second signal still exits at once.
-        using var command = await AcquireConsoleStopCommandAsync(paths, project).ConfigureAwait(false);
+        using var command = commandAlreadyHeld ? null
+            : await AcquireConsoleStopCommandAsync(paths, project).ConfigureAwait(false);
         while (true)
         {
             try
