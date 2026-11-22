@@ -1,5 +1,20 @@
 # Test suite
 
+The resume cost repair gives `UpgradeActivationTests` and
+`UpgradeReplacementTests` measured collection weights of 150.465 and 38.491
+seconds. The retained `cost-before.xml` focused run passed all 110 cases.
+The previously unweighted activation collection starts with the longest
+collections so its serial work overlaps native tests. All cases, separate
+mutable roots, assertions, deadlines and six workers remain unchanged.
+Temporary probes measured 152 package constructions at 21.926 summed seconds,
+including 20.923 seconds for inventory generation and 0.404 seconds for assembly
+copies. They measured 719 package inspections at 15.163 seconds and 5,393 journal
+reads at 123.396 seconds. These inclusive times overlap other probes and tests;
+they are not outer elapsed deltas. Shared immutable package metadata could reduce
+setup hashing, but cannot replace inspection of each mutable root or fresh journal
+reads. This repair changes scheduling alone. Only a complete candidate measurement
+and fresh latest-main acceptance establish the resulting suite cost.
+
 Upgrade resume extends the existing replacement interruption and activation fault
 cases with reconciliation checks. It reuses each disposable package setup.
 Small additional cases cover exact byte decisions, partial backup/live bytes,
