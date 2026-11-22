@@ -139,8 +139,9 @@ Use the Unix apphost name `nightweaver` in place of `nightweaver.exe` on Unix sy
 
 The supported v1 deployment starts one runtime and its matching Web Console. Closing the starting terminal or browser does not stop the runtime. Manual deployments recover through `background start` or `background restart`. Operators can register two current-user Scheduler tasks with `background supervision install --project demo`, then opt in with `background supervision enable --project demo`. Fresh installations stay disabled. A finite logon/periodic tick reserves recovery and asks Scheduler to start a separate demand-only owner action. The owner consumes the exact reservation once. `background supervision status|disable|uninstall --project demo` inspects or suppresses recovery. Disable and uninstall leave an existing owner available for `background stop`. Missing supervision storage remains manual opt-out; a tick never enables it. Supervision uses installed binaries and the existing user session. Deployment remains an operator action. See [the supervision contract](docs/design/supervision-v1.md).
 
-The [supervision v1 contract](docs/design/supervision-v1.md) defines dormant policy
-and operational storage for future opt-in recovery. No supervisor is installed or enabled. With no store, manual commands retain their existing behavior.
+The [operator runbook](docs/agents/scheduled-supervision.md) describes opt-in setup,
+the two task definitions, removal, maintenance and failure diagnosis. Deployment
+and manual startup do not install or enable supervision. With no store, manual commands retain their existing behavior.
 An installed store makes stop/force-stop persist stopped intent before contacting the owner,
 even when the owner is absent or its reply is lost. Explicit start/restart advances running
 intent without enabling supervision or refunding exhausted attempts.
@@ -185,7 +186,7 @@ Status also includes a version 1 `observation` object with identity-bound health
 
 For an explicit upgrade, stop the old owner, publish into another fresh destination, then restore the operator-owned `projects`, `worktrees`, `tmp`, `logs`, and `telemetry` directories. Do not copy `run\<slug>\background\owner.lock` or `owner.json`; those identify only the old local process and are regenerated. Keep the old installation until the new pair passes `background status` and browser checks. The script never overwrites an installation or deletes runtime data.
 
-The console can be opened or closed independently; its HTTP/SSE requests never own or cancel the runtime. A Web Console exit marks the owner degraded and requests a graceful runtime stop. A runtime or owner crash leaves a stale/unavailable observation and requires manual recovery. An explicit force stop can interrupt a tracker operation; refresh the tracker before resubmitting an operation whose result was uncertain.
+The console can be opened or closed independently; its HTTP/SSE requests never own or cancel the runtime. A Web Console exit marks the owner degraded and requests a graceful runtime stop. A runtime or owner crash leaves a stale/unavailable observation. Manual installations require manual recovery. Explicitly enabled supervision can recover after matching failure qualification, backoff and confirmed native settlement, within its retained attempt budget. Deliberate stop, disable and maintenance suppress recovery. An explicit force stop can interrupt a tracker operation; refresh the tracker before resubmitting an operation whose result was uncertain.
 
 ## Web host scaffold
 
