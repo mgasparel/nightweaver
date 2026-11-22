@@ -2,7 +2,10 @@ using Nightweaver.Background;
 
 namespace Nightweaver.Supervision;
 
-internal sealed record SupervisionTickResult(string Outcome, SupervisionState? State);
+internal sealed record SupervisionTickResult(string Outcome, SupervisionState? State)
+{
+    public string? Startup { get; init; }
+}
 
 // The caller holds background start.lock for this entire finite operation, including
 // final intent checks and native launch. The owner still acquires repository exclusion.
@@ -37,7 +40,8 @@ internal sealed class SupervisionTick(SupervisionTickOperations operations)
                 running ? "recovered" : absent ? "start-failed" : "settlement-unknown", null);
             state = await Save(state, SupervisionPolicy.Settle(state, pending.Id, observation.Utc,
                 running || absent, incident), token).ConfigureAwait(false);
-            return new(running ? "recovered" : absent ? "attempt-settled-absent" : "needs-attention", state);
+            return new(running ? "recovered" : absent ? "attempt-settled-absent" : "needs-attention", state)
+                { Startup = running ? "observed-running" : absent ? "observed-absent" : "uncertain" };
         }
         if (state.Suppressed) return new("suppressed", state);
         if (state.Exhausted || state.Attention is not null) return new("needs-attention", state);
@@ -77,7 +81,7 @@ internal sealed class SupervisionTick(SupervisionTickOperations operations)
         }, token).ConfigureAwait(false);
         // Leave the durable reservation for a fresh tick to reconcile actual native
         // identity and both readiness sources; a launch return/exit code is no proof.
-        return new("attempt-pending", operations.Read().State);
+        return new("attempt-pending", operations.Read().State) { Startup = "requested" };
     }
 
     private bool Current(SupervisionState expected)

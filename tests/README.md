@@ -1,5 +1,23 @@
 # Test suite
 
+Scheduler registration and owner admission use deterministic store/adapter tests
+in `ScheduledSupervisionTests`. These cover partial registration, lost responses,
+foreign definitions, suppression, stale and duplicate requests, lock contention
+and preserved recovery budgets. They add no native process or fixture publication
+to the complete suite. Production Scheduler work runs only for explicit commands
+or opted-in ticks; manual startup keeps its existing behavior.
+
+The explicit native topology proof is outside the solution and normal suite:
+build `tests/Nightweaver.QA.SchedulerProbe`, copy its complete output to `<unique-root>/bin`,
+then run `<unique-root>/bin/Nightweaver.QA.SchedulerProbe.exe proof <unique-root> <nonce-N-guid>`.
+Use an existing current-user interactive session. The proof creates only two
+nonce-named limited InteractiveToken tasks. It retains requested/registered XML,
+tick/request/owner/child identities, post-tick observation, settlement and cleanup.
+It disables and removes only definitions it created and verified. Preserve failed
+evidence before a changed diagnostic run. This proof covers Scheduler and Job
+boundaries that recording adapters cannot establish. It shares one isolated root
+and tests no live Project. Independent full recovery verification belongs to ns-8s1h.
+
 The resume cost repair gives `UpgradeActivationTests` and
 `UpgradeReplacementTests` measured collection weights of 150.465 and 38.491
 seconds. The retained `cost-before.xml` focused run passed all 110 cases.

@@ -36,6 +36,7 @@ internal sealed class SupervisionStore
     }
 
     internal string Path { get; }
+    internal SupervisionIdentity Identity => identity;
 
     internal SupervisionRead Read()
     {

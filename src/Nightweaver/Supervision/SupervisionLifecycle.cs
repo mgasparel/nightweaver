@@ -23,6 +23,14 @@ internal sealed class SupervisionLifecycle(SupervisionStore store)
         catch (IOException exception) when (exception is DirectoryNotFoundException or FileNotFoundException
             || exception.InnerException is Win32Exception { NativeErrorCode: 2 or 3 }) { return null; }
 
+        return await ForInstallationAsync(paths, project, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task<SupervisionLifecycle> ForInstallationAsync(HostPaths paths, ProjectConfig project,
+        CancellationToken cancellationToken)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+
         var repository = await new TargetRepositoryValidator(new SystemProcessRunner())
             .ValidateAsync(project.TargetRepository, project.ConfigFilePath, cancellationToken).ConfigureAwait(false);
         // Reject filesystem aliases rather than trusting a serialized/common-directory spelling.

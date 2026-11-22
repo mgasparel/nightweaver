@@ -38,6 +38,32 @@ internal static class BackgroundOwnerApplication
             return ExitCodes.UsageOrConfiguration;
         }
 
+        using var scheduledCommand = options.ScheduledGeneration is null ? null
+            : await AcquireScheduledCommandAsync(paths, projectSlug, cancellationToken).ConfigureAwait(false);
+        SupervisionLifecycle? scheduledLifecycle = null;
+        if (options.ScheduledGeneration is not null)
+        {
+            try
+            {
+                UpgradeInterlock.RequireStartupAllowed(paths);
+                var project = ProjectConfigLoader.Load(options.ConfigPath, projectSlug, paths);
+                scheduledLifecycle = await SupervisionLifecycle.ForInstallationAsync(paths, project, cancellationToken).ConfigureAwait(false);
+                var executable = BackgroundDeploymentManifest.Load(paths.Root).ResolveCliExecutable(paths.Root);
+                if (!PathEquals(Environment.ProcessPath!, executable))
+                    throw new InvalidDataException("Scheduled owner must use the installed executable.");
+                using var scheduler = new WindowsSupervisionScheduler();
+                var definition = ScheduledTaskDefinition.Owner(scheduledLifecycle.Store.Identity, executable, projectSlug.Value);
+                var registration = scheduler.Read(definition.Name) ?? throw new InvalidDataException("Scheduled owner task is absent.");
+                definition.RequireOwned(scheduler, registration);
+                if (!registration.Enabled) throw new InvalidDataException("Scheduled owner task is disabled.");
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException
+                or ProjectConfigurationException or TargetRepositoryException or ToolExecutionException or System.Runtime.InteropServices.COMException)
+            {
+                environment.Err.WriteLine($"nightweaver: scheduled owner request rejected: {exception.Message}");
+                return ExitCodes.InspectionFailure;
+            }
+        }
         InvocationRuntimeFiles.PinnedRuntimeFile ownerLock;
         try { ownerLock = BackgroundFileLock.AcquireOwner(paths, projectSlug); }
         catch (IOException)
@@ -48,6 +74,29 @@ internal static class BackgroundOwnerApplication
 
         using (ownerLock)
         {
+            if (scheduledLifecycle is not null)
+            {
+                try
+                {
+                    var previous = scheduledLifecycle.Read().State?.PendingAttempt?.PreviousOwner;
+                    var retained = BackgroundOwnerRecord.TryRead(BackgroundOwnerRecord.PathFor(paths, projectSlug));
+                    if (options.Urls != (retained?.WebUrl ?? "http://127.0.0.1:5000"))
+                        throw new InvalidDataException("Scheduled owner URL does not match the retained owner.");
+                    if (previous is null ? retained is not null
+                        : retained is null || previous.ProcessId != retained.ProcessId
+                            || previous.StartedUtc != retained.ProcessStartedAtUtc || previous.OwnerId != retained.RunId
+                            || previous.RuntimeId != retained.RuntimeId
+                            || BackgroundContainment.Read(retained) is not { State: OwnerProcessState.Exited, DescendantsSettled: true })
+                        throw new InvalidDataException("Previous owner identity or Job settlement changed before scheduled launch.");
+                    await ScheduledOwnerLaunch.ConsumeAsync(scheduledLifecycle.Store, options.RunId,
+                        options.ScheduledGeneration!.Value, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+                {
+                    environment.Err.WriteLine($"nightweaver: scheduled owner request rejected: {exception.Message}");
+                    return ExitCodes.InspectionFailure;
+                }
+            }
             var backgroundRoot = paths.BackgroundRoot(projectSlug);
             var hostLogPath = Path.Combine(paths.LogsRoot(projectSlug), "background-host.log");
             var webLogPath = Path.Combine(paths.LogsRoot(projectSlug), "background-web.log");
@@ -102,6 +151,7 @@ internal static class BackgroundOwnerApplication
                     serverLifetime.Token,
                     request => ApplyControlAction(request, options.RunId, shutdownSignals));
                 _ = WatchControlServerAsync(controlServer, state, recordPath, shutdownSignals, serverLifetime.Token);
+                scheduledCommand?.Dispose();
                 Func<FactoryTelemetryPublisher, ProjectConfig, HostPaths, ValidatedTargetRepository,
                     CancellationToken, Task> onReady = async (telemetry, readyProject, readyPaths, repository, token) =>
                 {
@@ -187,6 +237,19 @@ internal static class BackgroundOwnerApplication
                 await PersistAsync(recordPath, state).ConfigureAwait(false);
                 return ExitCodes.InspectionFailure;
             }
+        }
+    }
+
+    internal static async Task<IDisposable> AcquireScheduledCommandAsync(HostPaths paths, ProjectSlug project, CancellationToken token)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(SupervisionPolicy.ReconciliationBudget);
+        while (true)
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            try { return BackgroundFileLock.AcquireStart(paths, project); }
+            catch (IOException exception) when (SharingViolation(exception))
+            { await Task.Delay(25, deadline.Token).ConfigureAwait(false); }
         }
     }
 
