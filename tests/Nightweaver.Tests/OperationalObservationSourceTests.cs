@@ -15,6 +15,510 @@ namespace Nightweaver.Tests;
 public sealed class OperationalObservationSourceTests
 {
     [Theory]
+    [InlineData("dep_add")]
+    [InlineData("comment")]
+    public async Task PartialSectionRelationsWaitForCurrentConfirmationAndSuccessfulDirection(string operation)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { TargetPath = target.Path, Rows = 2, OutgoingDependency = true };
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holdConfirmation = false;
+        var lists = 0;
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            if (request.FileName == "bd" && request.Arguments.Contains("dep") && request.Arguments.Contains("up"))
+                throw new ToolExecutionException("Incoming relations unavailable");
+            if (request.FileName == "bd" && request.Arguments[2] == "list" && holdConfirmation && ++lists == 2)
+            { entered.TrySetResult(); await release.Task.WaitAsync(token); }
+            return await native.RunAsync(request, token);
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        const string key = "section:task-1:relations";
+        using var pin = service.Pin([key]);
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        var accepted = service.Read(key);
+        Assert.Equal("unavailable", accepted.Data!.Value.GetProperty("value").GetProperty("relationObservation").GetProperty("incoming").GetString());
+        clock.Advance(TimeSpan.FromSeconds(6));
+        native.OutgoingDependency = false;
+        holdConfirmation = true;
+        source.Invalidate();
+        var collection = service.CollectOnceAsync(false, token);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+            source.Invalidate([new(1, operation, "task-1", null)]);
+        }
+        finally { release.TrySetResult(); await collection; }
+        var pending = service.Read(key);
+        Assert.Equal(accepted.Data.Value.GetProperty("value").GetRawText(), pending.Data!.Value.GetProperty("value").GetRawText());
+        Assert.Equal(accepted.Sources["relations-down:task-1"].ValidatedTimestamp, pending.Sources["relations-down:task-1"].ValidatedTimestamp);
+        Assert.NotNull(pending.PendingAgeMs);
+        await service.CollectOnceAsync(false, token);
+        var current = service.Read(key);
+        Assert.Empty(current.Data!.Value.GetProperty("value").GetProperty("relations").EnumerateArray());
+        Assert.Equal("complete", current.Data.Value.GetProperty("value").GetProperty("relationObservation").GetProperty("outgoing").GetString());
+    }
+
+    [Fact]
+    public async Task WarmPartialSectionRelationsStayPendingWhenCoreSpendsTheTurn()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var cost = TimeSpan.Zero;
+        var native = new Runner { TargetPath = target.Path, Advance = () => clock.Advance(cost) };
+        var runner = new RecordingProcessRunner((request, token) =>
+            request.FileName == "bd" && request.Arguments.Contains("dep") && request.Arguments.Contains("up")
+                ? throw new ToolExecutionException("Incoming relations unavailable") : native.RunAsync(request, token));
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        const string key = "section:task-1:relations";
+        var token = TestContext.Current.CancellationToken;
+        Assert.NotNull((await source.ReadScheduledAsync(Keys(key), (_, _) => { }, token))[key].Data);
+        source.Invalidate([new(1, "dep_add", "task-1", null)]);
+        cost = TimeSpan.FromSeconds(2);
+        var spent = await source.ReadScheduledAsync(Keys("base:explorer:ready::1", key), (_, _) => { }, token);
+        Assert.True(spent[key].Pending);
+        Assert.Null(spent[key].Data);
+        cost = TimeSpan.Zero;
+        var current = await source.ReadScheduledAsync(Keys("base:explorer:ready::1", key), (_, _) => { }, token);
+        Assert.NotNull(current[key].Data);
+        Assert.True(current[key].Partial);
+    }
+
+    [Fact]
+    public async Task TextOnlyInterestRetiresHistoryAuditsAndIdleReservations()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner, clock);
+        var memory = new ObservationMemoryBudget();
+        var source = Adapter(factory, memory);
+        var token = TestContext.Current.CancellationToken;
+        await source.ReadScheduledAsync(Keys("section:task-1:history", "section:task-1:text"), (_, _) => { }, token);
+        var withHistory = memory.Used;
+        var text = Keys("section:task-1:text");
+        await source.ReadScheduledAsync(text, (_, _) => { }, token);
+        clock.Advance(TimeSpan.FromSeconds(61));
+        await source.ReadScheduledAsync(text, (_, _) => { }, token);
+        Assert.True(memory.Used < withHistory);
+        var validations = runner.RepositoryValidations;
+        var commands = runner.Commands.Count;
+        for (var turn = 0; turn < 3; turn++)
+            Assert.Empty(await source.ReadScheduledAsync(text, (_, _) => { }, token));
+        Assert.Equal(validations, runner.RepositoryValidations);
+        Assert.Equal(commands, runner.Commands.Count);
+        var histories = runner.CommentIds.Count;
+        await source.ReadScheduledAsync(Keys("section:task-1:history", "section:task-1:text"), (_, _) => { }, token);
+        Assert.Equal(histories + 1, runner.CommentIds.Count);
+    }
+
+    [Fact]
+    public async Task WarmAttentionHistoryCannotCertifyStrictSectionHistory()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner();
+        runner.HistoryOverrides["task-1"] = [new("foreign", "other", "human", "Foreign history", clock.GetUtcNow())];
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var token = TestContext.Current.CancellationToken;
+        var attention = await source.ReadScheduledAsync(Keys("attention"), (_, _) => { }, token);
+        Assert.NotNull(attention["attention"].Data);
+        Assert.Single(runner.CommentIds);
+        var section = await source.ReadScheduledAsync(Keys("attention", "section:task-1:history"), (_, _) => { }, token);
+        Assert.Equal(2, runner.CommentIds.Count);
+        Assert.Null(section["section:task-1:history"].Data);
+        Assert.Equal("source-failed", section["section:task-1:history"].Error?.Code);
+    }
+
+    [Fact]
+    public async Task SpentCoreTurnCannotPublishHistoryWithoutStrictValidation()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var cost = TimeSpan.Zero;
+        var runner = new Runner { Rows = 2, Advance = () => clock.Advance(cost) };
+        runner.HistoryOverrides["task-1"] = [new("foreign", "other", "human", "Foreign history", clock.GetUtcNow())];
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var token = TestContext.Current.CancellationToken;
+        await source.ReadScheduledAsync(Keys("attention"), (_, _) => { }, token);
+        cost = TimeSpan.FromSeconds(2);
+        source.Invalidate([new(1, "update", "task-2", null)]);
+        var keys = Keys("base:explorer:ready::1", "base:explorer:blocked::1", "section:task-1:history", "attention");
+        var spent = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Null(spent["section:task-1:history"].Data);
+        Assert.True(spent["section:task-1:history"].Pending);
+        var next = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Null(next["section:task-1:history"].Data);
+        Assert.Equal("source-failed", next["section:task-1:history"].Error?.Code);
+    }
+
+    [Fact]
+    public async Task FailedSectionReplacementKeepsHistoricalBaseProvenance()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        const string key = "section:task-1:history";
+        service.Read(key);
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        var previous = service.Read(key);
+        clock.Advance(TimeSpan.FromSeconds(10));
+        runner.Priority = 2; runner.FailCommentOnce = "task-1"; source.Invalidate();
+        await service.CollectOnceAsync(false, token);
+        var failed = service.Read(key);
+        Assert.Equal("stale", failed.Health);
+        Assert.Equal("source-timeout", failed.Error?.Code);
+        Assert.Equal(previous.Data!.Value.GetProperty("baseIdentity").GetRawText(), failed.Data!.Value.GetProperty("baseIdentity").GetRawText());
+        Assert.Equal(previous.Sources["inventory"].ObservedAt, failed.Sources["inventory"].ObservedAt);
+        Assert.Equal(previous.Sources["inventory"].ContentIdentity, failed.Sources["inventory"].ContentIdentity);
+        Assert.Equal(previous.Sources["inventory"].ValidatedTimestamp, failed.Sources["inventory"].ValidatedTimestamp);
+    }
+
+    [Fact]
+    public async Task IndependentSectionsShareHistoryWithAttentionAndDigest()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("base:workspace:task-1", "section:task-1:history", "section:task-1:text", "attention");
+        var samples = await source.ReadScheduledAsync(keys, (_, _) => { }, TestContext.Current.CancellationToken);
+        Assert.Single(runner.CommentIds);
+        Assert.NotNull(samples["section:task-1:history"].Data);
+        Assert.NotNull(samples["section:task-1:text"].Data);
+        Assert.NotNull(samples["attention"].Data);
+        var section = JsonSerializer.SerializeToElement(samples["section:task-1:history"].Data, ObservationJson.Options);
+        Assert.Equal("available", section.GetProperty("state").GetString());
+        Assert.Equal("Initial comment", section.GetProperty("value").GetProperty("comments")[0].GetProperty("body").GetString());
+        Assert.Equal("1", section.GetProperty("baseIdentity").GetProperty("inventoryRevision").GetString());
+        var commands = runner.Commands.Count;
+        await source.ReadScheduledAsync(keys, (_, _) => { }, TestContext.Current.CancellationToken);
+        Assert.Equal(commands, runner.Commands.Count);
+
+        runner.Closed = true; runner.HistoryOverrides["task-1"] = DigestMergeEvidenceTests.Comments("task-1");
+        source.Invalidate();
+        var closed = await source.ReadScheduledAsync(Keys("section:task-1:merge", "digest:all"), (_, _) => { }, TestContext.Current.CancellationToken);
+        Assert.Equal(2, runner.CommentIds.Count);
+        Assert.Equal("merged", Assert.Single(Assert.IsType<CatchUpDigestResponse>(closed["digest:all"].Data).StandaloneCompleted).Outcome);
+        Assert.Contains("verified", JsonSerializer.Serialize(closed["section:task-1:merge"].Data));
+    }
+
+    [Fact]
+    public async Task SelectedSectionPublishesBeforeUnrelatedHistoryCohortCompletes()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 9, FailCommentOnce = "task-2", CommentTimeoutsRemaining = 10,
+            Advance = () => clock.Advance(TimeSpan.FromMilliseconds(500)) };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var samples = await source.ReadScheduledAsync(Keys("section:task-1:history", "attention"), (_, _) => { }, TestContext.Current.CancellationToken);
+        Assert.NotNull(samples["section:task-1:history"].Data);
+        Assert.False(samples["section:task-1:history"].Pending);
+        Assert.Null(samples.GetValueOrDefault("attention")?.Data);
+        Assert.DoesNotContain("task-9", runner.CommentIds);
+    }
+
+    [Fact]
+    public async Task ConcurrentSectionReadersShareWorkAndCallerCancellationDoesNotCancelCollection()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { TargetPath = target.Path };
+        var held = new HoldingRunner(runner, "comments");
+        using var factory = Factory(target.Path, held, clock);
+        using var service = new OperationalObservationService("web-test", Adapter(factory), clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        using var first = service.Subscribe(["section:task-1:history"], (_, _) => { });
+        using var second = service.Subscribe(["section:task-1:history"], (_, _) => { });
+        var token = TestContext.Current.CancellationToken;
+        var collection = service.CollectOnceAsync(false, token);
+        try
+        {
+            await held.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+            first.Dispose();
+            using var caller = new CancellationTokenSource(); caller.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.CollectOnceAsync(false, caller.Token));
+            Assert.Null(service.Read("section:task-1:history").Data);
+        }
+        finally { held.Release.TrySetResult(); await collection; }
+        Assert.Single(runner.CommentIds);
+        Assert.Equal("fresh", service.Read("section:task-1:history").Health);
+    }
+
+    [Fact]
+    public async Task FailedSectionRefreshRetainsValueIdentityAndSourceClocks()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        const string key = "section:task-1:history";
+        service.Read(key);
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        var accepted = service.Read(key);
+        clock.Advance(TimeSpan.FromSeconds(10));
+        runner.FailCommentOnce = "task-1"; source.Invalidate([new(1, "comment", "task-1", null)]);
+        await service.CollectOnceAsync(false, token);
+        var failed = service.Read(key);
+        Assert.Equal("stale", failed.Health);
+        Assert.Equal("stale", failed.Data!.Value.GetProperty("state").GetString());
+        Assert.Equal(accepted.Data!.Value.GetProperty("value").GetRawText(), failed.Data.Value.GetProperty("value").GetRawText());
+        Assert.Equal(accepted.Data.Value.GetProperty("baseIdentity").GetRawText(), failed.Data.Value.GetProperty("baseIdentity").GetRawText());
+        Assert.Equal(accepted.Sources["comments:task-1"].ObservedAt, failed.Sources["comments:task-1"].ObservedAt);
+        Assert.Equal(accepted.Sources["comments:task-1"].ValidatedTimestamp, failed.Sources["comments:task-1"].ValidatedTimestamp);
+        Assert.Equal("source-timeout", failed.Error?.Code);
+    }
+
+    [Fact]
+    public async Task SectionConfirmationRejectsAChangedIdentityAndNeverRestoresDeletedMembership()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { TargetPath = target.Path };
+        var held = new HoldingRunner(runner, "comments");
+        using var factory = Factory(target.Path, held, clock);
+        var source = Adapter(factory);
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        using var pin = service.Pin(["base:workspace:task-1", "section:task-1:history"]);
+        var token = TestContext.Current.CancellationToken;
+        var collection = service.CollectOnceAsync(false, token);
+        try
+        {
+            await held.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+            runner.UpdatedAt = "2026-01-02T00:00:00Z";
+        }
+        finally { held.Release.TrySetResult(); await collection; }
+        Assert.Equal("source-conflict", service.Read("section:task-1:history").Error?.Code);
+        Assert.Equal("failed", service.Read("section:task-1:history").Data!.Value.GetProperty("state").GetString());
+        await service.CollectOnceAsync(false, token);
+        Assert.Equal("available", service.Read("section:task-1:history").Data!.Value.GetProperty("state").GetString());
+        runner.Rows = 0; source.Invalidate();
+        await service.CollectOnceAsync(false, token);
+        Assert.Equal("resource-missing", service.Read("base:workspace:task-1").Error?.Code);
+        Assert.Null(service.Read("section:task-1:history").Data);
+    }
+
+    [Fact]
+    public async Task SectionSourcesAndReservationsRetireAfterInterestEnds()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 2 };
+        using var factory = Factory(target.Path, runner, clock);
+        var memory = new ObservationMemoryBudget();
+        var source = Adapter(factory, memory);
+        var token = TestContext.Current.CancellationToken;
+        var selected = Keys("section:task-1:text", "section:task-1:history");
+        await source.ReadScheduledAsync(selected, (_, _) => { }, token);
+        Assert.True(memory.Used > 0);
+        await source.ReadScheduledAsync(Keys("base:workspace:task-2"), (_, _) => { }, token);
+        var commands = runner.Commands.Count;
+        clock.Advance(TimeSpan.FromSeconds(61));
+        await source.ReadScheduledAsync(Keys("base:workspace:task-2"), (_, _) => { }, token);
+        Assert.DoesNotContain("comments", runner.Commands.Skip(commands));
+        Assert.DoesNotContain("show", runner.Commands.Skip(commands));
+        await source.ReadScheduledAsync([], (_, _) => { }, token);
+        Assert.Equal(0, memory.Used);
+    }
+
+    [Fact]
+    public async Task RepeatedSectionSelectionAllowsBaseBackgroundAndGuardedOperationsToProgress()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { TargetPath = target.Path, Rows = 9, Advance = () => clock.Advance(TimeSpan.FromMilliseconds(700)) };
+        TrackerAccessGate? gate = null;
+        Task? mutation = null;
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            if (request.FileName == "bd" && request.Arguments[2] == "comments" && mutation is null)
+                mutation = gate!.WaitAsync(token);
+            return native.RunAsync(request, token);
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        gate = factory.Services.GetRequiredService<TrackerBridge>().ObservationGate;
+        var source = Adapter(factory);
+        var keys = Keys("base:workspace:task-1", "section:task-1:history", "attention");
+        var token = TestContext.Current.CancellationToken;
+        var first = source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.NotNull(mutation);
+        await mutation.WaitAsync(TimeSpan.FromSeconds(10), token);
+        gate.Release();
+        await first;
+        var selected = false;
+        for (var turn = 0; turn < 12; turn++)
+        {
+            source.Invalidate([new(turn + 1, "comment", "task-1", null)]);
+            var samples = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+            selected |= samples.GetValueOrDefault("section:task-1:history")?.Data is not null;
+        }
+        Assert.True(selected);
+        Assert.True(native.Commands.Count(command => command == "list") >= 6);
+        Assert.Equal(9, native.CommentIds.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public async Task RecentSectionHistoryEvictsWithinEntryAndByteBudgets()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 70, Comment = new string('x', 270000) };
+        using var factory = Factory(target.Path, runner, clock);
+        var memory = new ObservationMemoryBudget();
+        var source = Adapter(factory, memory);
+        var token = TestContext.Current.CancellationToken;
+        for (var index = 1; index <= 70; index++)
+        {
+            var samples = await source.ReadScheduledAsync(Keys($"section:task-{index}:history"), (_, _) => { }, token);
+            Assert.NotNull(samples[$"section:task-{index}:history"].Data);
+            Assert.InRange(memory.Used, 1, ObservationMemoryBudget.MaximumBytes);
+        }
+        var before = runner.CommentIds.Count;
+        await source.ReadScheduledAsync(Keys("section:task-1:history"), (_, _) => { }, token);
+        Assert.Equal(before + 1, runner.CommentIds.Count);
+        await source.ReadScheduledAsync([], (_, _) => { }, token);
+        Assert.Equal(0, memory.Used);
+    }
+
+    [Fact]
+    public async Task SectionByteLimitRetainsAcceptedHistoryAndReportsFailure()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner, clock);
+        var memory = new ObservationMemoryBudget();
+        var source = Adapter(factory, memory);
+        var keys = Keys("section:task-1:history");
+        var token = TestContext.Current.CancellationToken;
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        var reserve = new object();
+        Assert.True(memory.TryReplace([], [(reserve, ObservationMemoryBudget.MaximumBytes - memory.Used - 1000)]));
+        runner.Comment = new string('x', 20000); source.Invalidate([new(1, "comment", "task-1", null)]);
+        var samples = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Equal("source-limit", samples[keys[0].Value].Error?.Code);
+        Assert.InRange(memory.Used, 1, ObservationMemoryBudget.MaximumBytes);
+        memory.Release(reserve);
+        await source.ReadScheduledAsync([], (_, _) => { }, token);
+        Assert.Equal(0, memory.Used);
+    }
+
+    [Fact]
+    public async Task LateSectionCallbackCannotPopulateAReadmittedEntry()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { TargetPath = target.Path };
+        var held = new HoldingRunner(runner, "comments");
+        using var factory = Factory(target.Path, held, clock);
+        using var service = new OperationalObservationService("web-test", Adapter(factory), clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        const string key = "section:task-1:history";
+        var original = service.Read(key);
+        var token = TestContext.Current.CancellationToken;
+        var collection = service.CollectOnceAsync(false, token);
+        string? replacement = null;
+        try
+        {
+            await held.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+            clock.Advance(TimeSpan.FromSeconds(61));
+            replacement = service.Read(key).Revision;
+            Assert.NotEqual(original.Revision, replacement);
+        }
+        finally { held.Release.TrySetResult(); await collection; }
+        Assert.Null(service.Read(key).Data);
+        Assert.Equal(replacement, service.Read(key).Revision);
+        await service.CollectOnceAsync(false, token);
+        Assert.Equal("available", service.Read(key).Data!.Value.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task HostShutdownSettlesSectionWorkBeforeReleasingReservations()
+    {
+        using var target = new ObservationTargetFixture();
+        var runner = new Runner { TargetPath = target.Path };
+        var held = new HoldingRunner(runner, "comments");
+        using var factory = Factory(target.Path, held, new CostClock());
+        var memory = new ObservationMemoryBudget();
+        var source = Adapter(factory, memory);
+        using var service = new OperationalObservationService("web-test", source, TimeProvider.System,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>(), memory);
+        service.Read("section:task-1:history");
+        var token = TestContext.Current.CancellationToken;
+        await service.StartAsync(token);
+        await held.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+        await service.StopAsync(token);
+        Assert.Empty(runner.CommentIds);
+        Assert.Equal(503, Assert.Throws<ObservationRequestException>(() => service.Read("section:task-1:history")).StatusCode);
+        service.Dispose();
+        Assert.Equal(0, memory.Used);
+        var gate = factory.Services.GetRequiredService<TrackerBridge>().ObservationGate;
+        await gate.WaitAsync(token); gate.Release();
+    }
+
+    [Fact]
+    public async Task SlowCoreReservesASelectedSectionTurnBeforeUnrelatedHistories()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 9, Advance = () => clock.Advance(TimeSpan.FromSeconds(1.4)) };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("base:explorer:ready::1", "base:explorer:blocked::1", "section:task-1:history", "attention");
+        var token = TestContext.Current.CancellationToken;
+        var first = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.True(first["section:task-1:history"].Pending);
+        source.Invalidate([new(1, "update", "task-1", null)]);
+        var reserved = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.NotNull(reserved["section:task-1:history"].Data);
+        Assert.False(reserved["section:task-1:history"].Pending);
+        Assert.Null(reserved.GetValueOrDefault("attention")?.Data);
+        Assert.Contains("task-1", runner.CommentIds);
+    }
+
+    [Fact]
+    public async Task TwoSelectedSectionsSettleAndUnselectedOldIdentityBecomesStale()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 2 };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("section:task-1:history", "section:task-2:history");
+        var token = TestContext.Current.CancellationToken;
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        var second = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.All(second.Values, sample => Assert.False(sample.Pending));
+        Assert.Empty(await source.ReadScheduledAsync(keys, (_, _) => { }, token));
+        Assert.Equal(2, runner.CommentIds.Count);
+        runner.Priority = 2; source.Invalidate();
+        var changed = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Equal("source-conflict", changed["section:task-2:history"].Error?.Code);
+        Assert.NotNull(changed["section:task-1:history"].Data);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ColdDirectLinkWaitsForSharedValidationAndNeverUsesShow(bool fail)

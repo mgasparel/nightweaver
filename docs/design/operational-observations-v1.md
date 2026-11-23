@@ -6,7 +6,8 @@ additive read contract. It does not claim that these resources are implemented.
 Implementation slice ns-gjwx-paea384f7cce36dfdace5 enables only
 `base:explorer:{view}:{query}:{page}` and `base:workspace:{id}`. Studio Explorer
 uses the new paged base key. Workspace keeps its full-response consumer until
-its section migration. The other reserved base and section keys remain
+its section migration. Slice ns-gjwx-p52d0161f682b3122f1e2 enables all five
+`section:{id}:{name}` resources. The other reserved base keys remain
 unsupported. One compact inventory projection supplies exact-ID, ordered
 search, status, type, stage, pause, assignee and priority indexes. It shares the
 host memory budget with raw sources and resource envelopes. Base callbacks
@@ -194,6 +195,11 @@ stale, exposes `source-conflict`, and schedules bounded reconciliation. Comments
 and dependency changes also require their independent source generations: equal
 `updatedAt` or aggregate counts cannot prove those sources unchanged.
 
+A partial relation section requires a current confirming inventory generation
+and a current source generation for each successful direction. A failed direction
+remains unavailable. A raced generation keeps the replacement pending and retains
+the accepted body and its provenance, including when core work spends the turn.
+
 Complete-source parsing, producer-qualified combined `show` handling and native
 outgoing relation reads remain as specified in the observer scheduling amendment.
 Combined reads may fill multiple due sections, but do not publish them before
@@ -222,6 +228,9 @@ within these limits. Pinned entries cannot be silently evicted. Growth/admission
 failure is explicit `source-limit`/429 and preserves accepted data. Browser cache
 and stream limits remain unchanged. v1.2 immediate source retirement is relaxed
 only for these bounded recent section values; audits stop when interest ends.
+Source interest follows the admitted section names. Text interest alone cannot
+keep history audits active or extend the history value's idle retention time.
+Workspace, Attention and Digest retain the source interest each still requires.
 Eviction removes provenance and admission identity with the value. Old callbacks
 cannot populate readmitted entries or a replacement epoch.
 

@@ -79,6 +79,42 @@ unchanged sequence-only projection and thirty-second cadence.
 
 # Shared operational observations
 
+## Independent section collection (ns-gjwx-p52d0161f682b3122f1e2)
+
+The additive v1.3 section keys reuse this Project collector and its source
+generations. Section reads do not build a full Workspace or wait for an Attention
+cohort. One selected Bead advances per turn. Selected sections and background
+work alternate priority. Background Attention and Digest also rotate priority
+when both have interest. Core validation still runs between at most one reserved
+detail continuation. The native command, history and turn limits remain unchanged.
+
+Compatible sections share one complete inventory confirmation after their native
+reads. Source order prevents an earlier inventory from confirming later detail.
+Bounded identity fingerprints bind source values and pending sections to the
+exact Bead, workflow and update time. Changed identity requires new source work.
+Raced generations remain pending. Section publication uses the same captured
+resource-entry identity as base publication. Old callbacks cannot fill a
+readmitted resource. Current base membership and actions remain authoritative.
+
+History, Attention and merge parsing share complete comments. Cached histories
+retain their parser qualification. A prior Attention-only read cannot certify
+a strict section or Workspace history. The first strict consumer upgrades that
+source with the existing strict parser. Concurrent selected consumers share it.
+Recent source
+values retain at most 64 idle source entries for 60 seconds from last interest.
+Idle sources have no audit slot. Histories retain the 64-entry/16-MiB limit and
+evict the oldest unselected history under entry or byte pressure. Selected and
+Attention histories cannot be silently evicted. Raw values, histories, base
+indexes and resource bodies share the 32-MiB budget. Failed growth retains the
+accepted value and source clocks. Section failure and age mark that value stale.
+Host shutdown waits for collection settlement before releasing source reservations.
+
+The two-Workspace identity limit includes section keys for the same Bead.
+Text, history, relations, environment and merge descriptors keep independent
+source health. Merge evidence remains unavailable without the exact matching
+host records. Digest retains its 128-task acquisition cap. Legacy full-response
+consumers remain supported while the later surface slices adopt section keys.
+
 Optional sanitized collector latency, accepted-body age and health export is
 specified in [Web observation telemetry](web-observation-telemetry.md). It runs
 at shared collector/aging boundaries and never establishes workflow authority.
