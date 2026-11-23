@@ -1,5 +1,19 @@
 # QA AppHost
 
+`studio-cutover.ps1 -Only workspace-base-qa -OutputDirectory <fresh-path>` checks
+Workspace base rendering while all section receipts are held. It then checks
+independent recovery, failed base refresh, native pause removal and deletion,
+keyboard tab navigation and retained guidance. It captures 1440, 720 and 375
+CSS-pixel views and separate Summary, History and Output panel timings. These
+timings describe this controlled fixture; Output does not select a byte range.
+The exact isolated stack stops in `finally`. The shared-read probe also records
+the Output panel boundary separately from section completion.
+
+For focused long-history repair checks, set `NIGHTWEAVER_QA_PROJECTION_ONLY=1`
+and run `studio-cutover.ps1 -Only studio-attention-qa` with a fresh output path.
+The result marks this subset explicitly. It reuses retained successful native
+action evidence; it does not establish those action checks itself.
+
 `studio-cutover.ps1 -Only operations-qa -OutputDirectory <fresh-path>` also
 checks section text/history over the real operations API in its existing
 Playwright journey. It verifies complete empty history, a native comments-only

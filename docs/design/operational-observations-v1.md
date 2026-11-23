@@ -5,8 +5,9 @@ additive read contract. It does not claim that these resources are implemented.
 
 Implementation slice ns-gjwx-paea384f7cce36dfdace5 enables only
 `base:explorer:{view}:{query}:{page}` and `base:workspace:{id}`. Studio Explorer
-uses the new paged base key. Workspace keeps its full-response consumer until
-its section migration. Slice ns-gjwx-p52d0161f682b3122f1e2 enables all five
+uses the new paged base key. Workspace uses the shared base key and independent
+text, history, relations and environment section keys.
+Slice ns-gjwx-p52d0161f682b3122f1e2 enables all five
 `section:{id}:{name}` resources. Slice ns-gjwx-p92fb31bbae007f103e1a enables
 `base:attention` with the Attention base shape below. Studio Attention and the
 Overview paused count use this inventory-only resource. Explanations use the
@@ -39,6 +40,16 @@ capacity rules remain in force. The [measurement and acceptance contract](../acc
 defines the comparison required before numerical latency targets are proposed.
 
 ### Shared base and source map
+
+Workspace consumer amendment v1.3.1 (ns-gjwx-p2c7fdd08ead7204a94ff):
+base rows add nullable `planning` with the existing `PlanningReadiness` shape.
+The server projects its guarded identity from the shared inventory. Legacy
+full-response keys and payloads remain valid. Studio mounts section interest
+only after base content exists. Each section displays its own source state and
+Refresh action. Retained section text cannot replace current base facts.
+History supplies pause context only when its timestamp and full workflow match
+the base row. Base eligibility controls actions. Confirmed deletion removes all
+current actions. Output keeps its separate runtime and invocation identity.
 
 One host-owned Project cache holds the complete compact inventory and indexes.
 Every Bead surface uses it, including cold direct links. No cache miss, HTTP

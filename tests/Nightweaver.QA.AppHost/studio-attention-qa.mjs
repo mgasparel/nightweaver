@@ -104,6 +104,8 @@ try {
     }
     await capture(name);
   };
+  let created;
+  if (process.env.NIGHTWEAVER_QA_PROJECTION_ONLY !== '1') {
   bd(['comments', 'add', decision.beadId, 'Which implementation direction should we take?']);
   await page.goto(base + '/projects/qa/attention');
   await page.getByRole('button', { name: `Review ${decision.beadId}`, exact: true }).click();
@@ -139,7 +141,7 @@ try {
   await capture('attention-busy');
   await input.focus();
   bd(['comments', 'add', decision.beadId, 'External live comment while a human types.']);
-  const created = JSON.parse(bd(['create', '--id', 'qa-studio-decision-' + 'identity-'.repeat(10), '--title', 'External Studio escalation', '--type', 'task', '--labels', 'needs-human', '--json']));
+  created = JSON.parse(bd(['create', '--id', 'qa-studio-decision-' + 'identity-'.repeat(10), '--title', 'External Studio escalation', '--type', 'task', '--labels', 'needs-human', '--json']));
   await page.locator(`a[href="${workspace(created.id)}"]`).waitFor();
   assert.equal(await input.inputValue(), 'Keep this exact Bead draft while live observations change.');
   assert(await input.evaluate(node => document.activeElement === node));
@@ -243,6 +245,8 @@ try {
   await page.goForward(); assert.equal(new URL(page.url()).searchParams.get('tab'), 'history');
   await page.reload(); await page.getByRole('heading', { name: 'History and evidence' }).waitFor();
   mark('direct reload and Back/Forward preserve Workspace tab; external comment readable');
+  }
+  created ??= JSON.parse(bd(['create', '--id', 'qa-studio-decision-' + 'identity-'.repeat(10), '--title', 'Projected Studio escalation', '--type', 'task', '--labels', 'needs-human', '--json']));
   // Deterministic long read projection; real shell, coordinator and React components.
   const detail = await (await page.request.get(base + `/api/beads/${created.id}`)).json();
   detail.bead.title = 'A long human decision title with attributable context and preserved editable guidance '.repeat(3);
@@ -257,19 +261,35 @@ try {
   detail.relations = Array.from({ length: 40 }, (_, index) => ({ id: `qa-related-${index}`, title: `Related Bead ${index}`,
     type: 'parent-child', direction: 'incoming', role: 'child' }));
   let mode = 'busy'; let removeFocused = false;
+  const baseRow = { ...detail.bead, presentation: detail.presentation, planning: detail.planning,
+    actions: { canDecide: true, canRetry: false, canAbort: false, unavailableReason: null,
+      expectedWorkflow: { stage: detail.bead.stage, pauseLabels: detail.bead.labels.filter(label => ['needs-human', 'product-decision-required'].includes(label)), repairCycles: detail.bead.repairCycles } } };
+  const baseDetail = { data: { schema: 'nightweaver-base-v1', inventoryRevision: '1', completeness: 'complete', absence: null, bead: baseRow } };
   await page.route('**/api/operations/v1/projects/qa/resources?**', async route => {
     const key = new URL(route.request().url()).searchParams.get('key');
-    if (key !== `workspace:${created.id}` && key !== 'attention') return route.continue();
-    const actual = await route.fetch(); const value = await actual.json();
-    if (key === `workspace:${created.id}`) {
-      value.data = structuredClone(detail);
+    const isBase = key === `base:workspace:${created.id}`;
+    const isSection = key?.startsWith(`section:${created.id}:`);
+    if (!isBase && !isSection && key !== 'attention') return route.continue();
+    const actual = await route.fetch();
+    if (!actual.ok()) return route.fulfill({ response: actual });
+    const value = await actual.json();
+    if (isBase || isSection) {
+      const name = key.split(':').at(-1);
+      const comments = removeFocused ? detail.comments.filter(row => row.id !== '79') : detail.comments;
+      value.data = isBase ? { ...baseDetail.data, bead: baseRow } : {
+        schema: 'nightweaver-section-v1', beadId: created.id, name, state: 'available',
+        baseIdentity: { inventoryRevision: baseDetail.data.inventoryRevision, updatedAt: baseRow.updatedAt, expectedWorkflow: baseRow.actions.expectedWorkflow },
+        value: name === 'history' ? { comments, history: detail.history, attention: detail.attention }
+          : name === 'relations' ? { relations: detail.relations, relationObservation: detail.relationObservation }
+          : name === 'environment' ? detail.environment : { ...detail.bead, sourceMetadata: detail.sourceMetadata }
+      };
       value.health = 'fresh'; value.error = null; value.observedAt = new Date().toISOString();
       for (const source of Object.values(value.sources)) {
         source.health = 'fresh'; source.error = null; source.observedAt = value.observedAt;
       }
-      if (removeFocused) value.data.comments = value.data.comments.filter(row => row.id !== '79');
       if (mode === 'stale') { value.health = 'stale'; value.sources.inventory.health = 'stale'; value.error = value.sources.inventory.error = { code: 'fixture-stale', message: 'Retained tracker fixture', retryable: true }; }
-      if (mode === 'unavailable') { value.data = null; value.observedAt = null; value.health = 'unavailable'; value.error = { code: 'resource-missing', message: 'The Bead no longer exists.', retryable: false }; }
+      if (mode === 'unavailable') { value.data = isBase ? { ...baseDetail.data, bead: null, absence: { id: created.id, inventoryRevision: baseDetail.data.inventoryRevision } } : null;
+        value.synchronization.pending = false; value.health = 'unavailable'; value.error = { code: 'resource-missing', message: 'The Bead no longer exists.', retryable: false }; }
     } else if (mode === 'empty') { value.data = []; value.health = 'fresh'; value.error = null; value.observedAt = new Date().toISOString(); }
     await route.fulfill({ response: actual, json: value });
   });
@@ -319,7 +339,7 @@ try {
     mode = state;
     if (state === 'empty') { await page.goto(base + '/projects/qa/attention'); await page.getByText('No paused Beads in this observation. Runtime activity is reported separately.', { exact: true }).waitFor(); }
     else {
-      if (state === 'stale') await page.getByText('Retained tracker fixture', { exact: true }).waitFor();
+      if (state === 'stale') await page.getByText('Retained tracker fixture', { exact: true }).first().waitFor();
       if (state === 'unavailable') await page.getByRole('heading', { name: 'Bead unavailable', exact: true }).waitFor();
     }
     for (const width of [1440, 375, 720]) {
@@ -329,6 +349,6 @@ try {
     }
   }
   assert.deepEqual(errors, []);
-  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ checks, posts, errors }, null, 2));
+  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ projectionOnly: process.env.NIGHTWEAVER_QA_PROJECTION_ONLY === '1', checks, posts, errors }, null, 2));
   console.log(JSON.stringify({ checks, posts: posts.length, errors }));
 } catch (error) { if (page) { await page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }); fs.writeFileSync(path.join(output, 'failure.txt'), await page.locator('body').innerText()); } throw error; } finally { await browser.close(); }

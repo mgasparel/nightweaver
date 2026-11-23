@@ -133,7 +133,7 @@ export class QueryCoordinator {
   }
 
   invalidateAfterCommand(kind: "tracker" | "checkpoint" | "cleanup"): Promise<void> {
-    const keys = this.active().filter(({ identity }) => kind === "tracker" ? /^(attention|explorer:|digest:|workspace:|cleanup:)/.test(identity.key)
+    const keys = this.active().filter(({ identity }) => kind === "tracker" ? /^(attention|explorer:|digest:|workspace:|base:|section:|cleanup:)/.test(identity.key)
       : kind === "checkpoint" ? identity.key.startsWith("digest:") : /^(cleanup:|factory$)/.test(identity.key));
     return this.refresh(keys.map(entry => entry.identity));
   }

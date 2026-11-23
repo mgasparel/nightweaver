@@ -13,6 +13,16 @@ Attention Desk selection uses the same question-first presentation: pause kind,
 stage and repair count, the attributable question and server-presented summary,
 validated Question/Recommended answer/Tradeoffs sections when present, then
 editable guidance with adjacent Send & Resume and Save Note controls.
+
+Workspace first reads `base:workspace:{id}`. A cold direct link waits for shared
+inventory validation. The title and current workflow become readable before
+text, history, relations or environment complete. Each section has independent
+loading, failure, stale and empty states with its own Refresh and source facts.
+History supplies current pause context only when its Bead ID, update time and
+full workflow match the current base row. Retained historical details cannot
+restore actions after pause removal or confirmed deletion. Output remains a
+separate runtime and invocation observation.
+
 Original evidence and additional context are a stable disclosure below the editor;
 source-comment links still open the native History route. Freshness and material
 context warnings remain visible. Supported Environment retention and Historical

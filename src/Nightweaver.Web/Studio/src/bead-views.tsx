@@ -8,6 +8,7 @@ import { observationStatus, type Snapshot } from "./operations";
 import { attentionFromBase, type AttentionBase, type PauseExplanation, attentionWarningSections, decisionSections, attentionPreview, beadPath, safeBeadId, survivingAttentionDisclosures, visibleAttention, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
 import { AttentionCommands } from "./attention-commands";
 import { PlanningAuthorization } from "./product-views";
+import { baseIsCurrent, baseIsMissing, sectionView, currentAttention, type WorkspaceBase, type BaseRow, type Section, type TextSection, type HistorySection, type RelationSection } from "./workspace-model";
 import { Relations } from "./workspace-relations";
 
 const commands = new AttentionCommands(window.fetch.bind(window), () => {
@@ -101,12 +102,13 @@ function DecisionEvidence({ item }: { item: AttentionItem }) {
 }
 
 /** A removed focused disclosure/control returns to this surviving heading, never another Bead. */
-export function FocusBoundary({ children }: { children: ReactNode }) {
+export function FocusBoundary({ children, fallbackToWorkspaceHeading = false }: { children: ReactNode; fallbackToWorkspaceHeading?: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const focused = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     if (focused.current && !focused.current.isConnected && document.activeElement === document.body) {
-      const target = host.current?.querySelector<HTMLElement>("h1, h2[tabindex], [data-focus-fallback]")
+      const target = (fallbackToWorkspaceHeading ? document.querySelector<HTMLElement>("main h1") : null)
+        ?? host.current?.querySelector<HTMLElement>("h1, h2[tabindex], [data-focus-fallback]")
         ?? document.querySelector<HTMLElement>("main h1");
       target?.focus();
     }
@@ -130,7 +132,7 @@ export function Freshness({ snapshot, project, resource }: { snapshot: Snapshot;
   </div>;
 }
 
-function Guidance({ project, id, item, current }: { project: string; id: string; item?: AttentionItem | null; current: boolean }) {
+function Guidance({ project, id, item, current, pauseKind }: { project: string; id: string; item?: AttentionItem | null; current: boolean; pauseKind?: string }) {
   const [draft, setDraft] = useState(() => interactions.get(project, id));
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState(false);
@@ -138,15 +140,18 @@ function Guidance({ project, id, item, current }: { project: string; id: string;
   const abort = useRef<HTMLButtonElement>(null);
   const state = useSyncExternalStore(commands.subscribe, useCallback(() => commands.get(project, id), [project, id]));
   const blocked = !current || !item || state.pending || state.uncertain;
+  const kind = item?.kind ?? pauseKind;
   const invalidDraft = draft.includes("\0") || new TextEncoder().encode(draft.trim()).length > 16 * 1024;
   useEffect(() => { if (confirm) cancel.current?.focus(); }, [confirm]);
   // A transport replacement temporarily blocks submission; it does not revoke
   // this exact Bead's confirmation or its focused Cancel control.
   useEffect(() => { if (!item?.canAbort) setConfirm(false); }, [item?.canAbort]);
   return <FocusBoundary><section className="guidance" aria-label={`Actions for ${id}`}>
-    {item?.kind !== "product-decision-required" && <h2 tabIndex={-1}>Human guidance</h2>}
-    <p>{item?.kind === "product-decision-required" ? "Resume permits ordinary scheduling for this Bead. It does not directly launch an Agent or override a paused Project. Save Note keeps the pause." : "Retry permits ordinary scheduling for this Bead; it does not launch an Agent directly or override a paused Project. The host checks fresh tracker state before every action."}</p>
-    {(!current || !item) && <p className="bead-notice" role="status">The previous action is unavailable: this Bead resolved, was removed, or its current pause cannot be verified. Your draft stays with {id}.</p>}
+    {kind !== "product-decision-required" && <h2 tabIndex={-1}>Human guidance</h2>}
+    <p>{kind === "product-decision-required" ? "Resume permits ordinary scheduling for this Bead. It does not directly launch an Agent or override a paused Project. Save Note keeps the pause." : "Retry permits ordinary scheduling for this Bead; it does not launch an Agent directly or override a paused Project. The host checks fresh tracker state before every action."}</p>
+    {(!current || !item) && <p className="bead-notice" role="status">{pauseKind && !item
+      ? "Pause context is loading or unavailable. Actions require current context."
+      : "The previous action is unavailable: this Bead resolved, was removed, or its current pause cannot be verified."} Your draft stays with {id}.</p>}
     {item?.unavailableReason && <p className="bead-notice">{item.unavailableReason}</p>}
     {(item?.kind === "product-decision-required" || draft || !item) && <label>Guidance for {id}
       <textarea data-focus-fallback value={draft} rows={4} onChange={event => {
@@ -274,7 +279,7 @@ function HistoricalExplanation({ item }: { item: AttentionItem }) {
   </details>;
 }
 
-function History({ data }: { data: WorkspaceData }) {
+function History({ data }: { data: Pick<WorkspaceData, "comments" | "history"> }) {
   const [count, setCount] = useState(8);
   const [params] = useSearchParams();
   const selected = params.get("comment");
@@ -311,7 +316,7 @@ export function BeadWorkspace({ project }: { project: string }) {
     <WorkspaceTabs />
     <Panel title="Bead unavailable"><p>This Bead identifier cannot be queried. No observations or actions are available.</p></Panel>
   </FocusBoundary>;
-  return <WorkspaceIdentity key={beadId} project={project} id={beadId} />;
+  return <WorkspaceIdentity key={JSON.stringify([project, beadId])} project={project} id={beadId} />;
 }
 function WorkspaceTabs() {
   const [params] = useSearchParams();
@@ -322,26 +327,53 @@ function WorkspaceTabs() {
   })}</nav>;
 }
 function WorkspaceIdentity({ project, id }: { project: string; id: string }) {
-  const resource = `workspace:${id}`;
-  const snapshot = useObservation<WorkspaceData>(project, resource);
+  const resource = `base:workspace:${id}`;
+  const snapshot = useObservation<WorkspaceBase>(project, resource);
+  const base = snapshot.observation?.data;
+  const row = base?.schema === "nightweaver-base-v1" && base.bead?.id === id ? base.bead : null;
+  const missing = baseIsMissing(snapshot, id);
+  return <FocusBoundary>
+    <Heading title={row?.title ?? `Bead ${id}`}>{id} · Full Bead Workspace</Heading>
+    <Freshness snapshot={snapshot} project={project} resource={resource} />
+    {!row && <><WorkspaceTabs /><Panel title={missing ? "Bead unavailable" : "Waiting for shared Bead data"}>
+      <p>{missing ? "This Bead no longer exists. Actions are unavailable." : "Shared data has not confirmed this Bead. Use Refresh to try again."}</p>
+    </Panel>{interactions.get(project, id) && <Guidance project={project} id={id} current={false} />}</>}
+    {row && <WorkspaceSections project={project} id={id} row={row} current={baseIsCurrent(snapshot)} />}
+  </FocusBoundary>;
+}
+function SectionStatus({ project, id, name, snapshot, state }: { project: string; id: string; name: string; snapshot: Snapshot<Section<unknown>>; state: string }) {
+  return <section aria-label={`${name} source`}>
+    <p role="status">{name}: {state}{state === "stale" ? " · Retained historical details" : ""}</p>
+    {state === "stale" && snapshot.observation?.data?.baseIdentity && <p className="eyebrow">Detail identity: {id} · {snapshot.observation.data.baseIdentity.updatedAt} · {snapshot.observation.data.baseIdentity.expectedWorkflow.stage ?? "No stage"}</p>}
+    <Freshness snapshot={snapshot} project={project} resource={`section:${id}:${name}`} />
+  </section>;
+}
+function WorkspaceSections({ project, id, row, current }: { project: string; id: string; row: BaseRow; current: boolean }) {
+  const textSnapshot = useObservation<Section<TextSection>>(project, `section:${id}:text`);
+  const historySnapshot = useObservation<Section<HistorySection>>(project, `section:${id}:history`);
+  const relationSnapshot = useObservation<Section<RelationSection>>(project, `section:${id}:relations`);
+  const environmentSnapshot = useObservation<Section<WorkspaceData["environment"]>>(project, `section:${id}:environment`);
+  const text = sectionView(textSnapshot, row, "text");
+  const history = sectionView(historySnapshot, row, "history");
+  const relations = sectionView(relationSnapshot, row, "relations");
+  const environment = sectionView(environmentSnapshot, row, "environment");
+  const attention = current ? currentAttention(row, history) : null;
   const [params] = useSearchParams();
   const tab = ["summary", "history", "output"].includes(params.get("tab") ?? "") ? params.get("tab")! : "summary";
-  const data = snapshot.observation?.data;
-  const valid = data?.bead.id === id ? data : null;
-  const missing = snapshot.observation?.error?.code === "resource-missing";
+  const valid = { bead: { ...row, description: text.value?.description ?? "", design: text.value?.design ?? "",
+    acceptanceCriteria: text.value?.acceptanceCriteria ?? "", notes: text.value?.notes ?? "" },
+    presentation: row.presentation, planning: row.planning, sourceMetadata: text.value?.sourceMetadata,
+    attention };
   const [hadAttention, setHadAttention] = useState(false);
   useEffect(() => { if (valid?.attention) setHadAttention(true); }, [valid?.attention]);
-  return <EvidenceHistory value={{ path: beadPath(project, id), comments: valid?.comments }}><FocusBoundary>
-    <Heading title={valid?.bead.title ?? `Bead ${id}`}>{id} · Full Bead Workspace</Heading>
+  return <EvidenceHistory value={{ path: beadPath(project, id), comments: history.value?.comments }}><FocusBoundary fallbackToWorkspaceHeading>
     <Link className="text-link" to={`/projects/${encodeURIComponent(project)}/beads?${params}`}>Back to Explorer</Link>
-    <Freshness snapshot={snapshot} project={project} resource={resource} />
     <WorkspaceTabs />
-    {missing && <p className="bead-notice" role="status">This Bead no longer exists. Retained details are historical; actions are unavailable.</p>}
-    {!valid && <Panel title={missing ? "Bead unavailable" : "Waiting for Bead details"}><p>Current details cannot be read. Use Refresh to try again.</p></Panel>}
     {valid && <>
-      {(valid.attention || hadAttention || interactions.get(project, id)) && <Panel title="Attention and guidance" className="workspace-guidance">
+      {(valid.attention || hadAttention || row.actions.expectedWorkflow.pauseLabels.length > 0 || interactions.get(project, id)) && <Panel title="Attention and guidance" className="workspace-guidance">
+        <SectionStatus project={project} id={id} name="history" snapshot={historySnapshot} state={history.state} />
         {valid.attention && <DecisionContext item={valid.attention} />}
-        <Guidance project={project} id={id} item={valid.attention} current={snapshot.synchronized === true && !missing && !snapshot.stale && snapshot.observation?.health !== "unavailable"} />
+        <Guidance project={project} id={id} item={valid.attention} pauseKind={row.actions.expectedWorkflow.pauseLabels.includes("product-decision-required") ? "product-decision-required" : undefined} current={current && history.current} />
         {valid.attention && <DecisionEvidence item={valid.attention} />}
         <Link className="text-link" to={`?${new URLSearchParams({ ...Object.fromEntries(params), tab: "history" })}`}>Read active evidence and full history</Link>
       </Panel>}
@@ -361,23 +393,26 @@ function WorkspaceIdentity({ project, id }: { project: string; id: string }) {
             ] as const).map(([name, value]) =>
               <div key={name}><dt>{name}</dt><dd>{value ?? "Unavailable"}</dd></div>)}</dl>
             <p>These are tracker observations; ownership and stage do not establish running execution.</p>
-            <pre className="bead-original" tabIndex={0} aria-label="Original tracker metadata">{valid.sourceMetadata ?? "No source metadata recorded."}</pre>
+            {text.value && <pre className="bead-original" tabIndex={0} aria-label="Original tracker metadata">{valid.sourceMetadata ?? "No source metadata recorded."}</pre>}
           </details>
         </>}
-        <PlanningAuthorization project={project} data={valid} current={snapshot.synchronized === true && !missing && !snapshot.stale && snapshot.observation?.health !== "unavailable"} />
-        {[["Description", valid.bead.description], ["Acceptance criteria", valid.bead.acceptanceCriteria]].map(([label, text]) => <section key={label}><h3>{label}</h3><Markdown text={text || "Not provided."} /></section>)}
+        <PlanningAuthorization project={project} data={valid} current={current} />
+        <SectionStatus project={project} id={id} name="text" snapshot={textSnapshot} state={text.state} />
+        {text.value && <>{[["Description", valid.bead.description], ["Acceptance criteria", valid.bead.acceptanceCriteria]].map(([label, text]) => <section key={label}><h3>{label}</h3><Markdown text={text || "Not provided."} /></section>)}
         <details><summary>Design and notes</summary><Markdown text={valid.bead.design || "No design recorded."} /><Markdown text={valid.bead.notes || "No notes recorded."} /></details>
-        <Relations data={valid} project={project} />
-        <details><summary>Retained environment · {valid.environment.state}</summary><dl className="bead-environment">
-          {([["Worktree", valid.environment.worktreePath], ["Branch", valid.environment.branch], ["HEAD", valid.environment.head],
-            ["Git status", valid.environment.gitStatus], ["Environment observed", valid.environment.observedAt], ["Environment source", valid.environment.source],
-            ["Process", valid.environment.processId], ["Process state", valid.environment.processState], ["Runtime observed", valid.environment.runtimeObservedAt],
-            ["Runtime source", valid.environment.runtimeSource], ["Warning", valid.environment.warning]] as const)
-            .map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{String(value ?? "Unavailable")}</dd></div>)}</dl></details>
+        </>}
+        <SectionStatus project={project} id={id} name="relations" snapshot={relationSnapshot} state={relations.state} />
+        {relations.value && <Relations data={relations.value} project={project} />}
+        <SectionStatus project={project} id={id} name="environment" snapshot={environmentSnapshot} state={environment.state} />
+        {environment.value && <details><summary>Retained environment · {environment.value.state}</summary><dl className="bead-environment">
+          {([["Worktree", environment.value.worktreePath], ["Branch", environment.value.branch], ["HEAD", environment.value.head],
+            ["Git status", environment.value.gitStatus], ["Environment observed", environment.value.observedAt], ["Environment source", environment.value.source],
+            ["Process", environment.value.processId], ["Process state", environment.value.processState], ["Runtime observed", environment.value.runtimeObservedAt],
+            ["Runtime source", environment.value.runtimeSource], ["Warning", environment.value.warning]] as const)
+            .map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{String(value ?? "Unavailable")}</dd></div>)}</dl></details>}
       </Panel></div>
-      <div hidden={tab !== "history"}><History data={valid} /></div>
+      <div hidden={tab !== "history"}><SectionStatus project={project} id={id} name="history" snapshot={historySnapshot} state={history.state} />{history.value && <History data={history.value} />}</div>
       <div hidden={tab !== "output"}><Panel title="Invocation output">{tab === "output" && <DeliveryView project={project} compact bead={id} />}</Panel></div>
     </>}
-    {!valid && interactions.get(project, id) && <Guidance project={project} id={id} current={false} />}
   </FocusBoundary></EvidenceHistory>;
 }

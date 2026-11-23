@@ -13,7 +13,7 @@ $previousUrl = $env:NIGHTWEAVER_QA_URL
 $previousConfig = $env:NIGHTWEAVER_QA_CONFIG
 $previousOutput = $env:NIGHTWEAVER_QA_OUTPUT
 $probes = switch ($Group) {
-    Default { @('studio-qa', 'smoke', 'studio-attention-qa', 'operations-qa', 'studio-explorer-qa', 'digest-qa', 'digest-merge-qa', 'read-timeout-qa', 'refresh-timeout-qa', 'runtime-refresh-qa') }
+    Default { @('studio-qa', 'smoke', 'studio-attention-qa', 'workspace-base-qa', 'operations-qa', 'studio-explorer-qa', 'digest-qa', 'digest-merge-qa', 'read-timeout-qa', 'refresh-timeout-qa', 'runtime-refresh-qa') }
     Commands { @('planning-readiness-qa', 'cleanup-qa') }
     Invocation { @('factory-qa', 'planning-telemetry-qa', 'telemetry') }
     Presentation { @('studio-presentation-qa', 'studio-evidence-qa') }

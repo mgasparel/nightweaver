@@ -9,7 +9,7 @@ const names: Record<string, Record<string, string>> = {
   "discovered-from": { outgoing: "Discovered from", incoming: "Discovered work" }
 };
 
-export function Relations({ data, project }: { data: WorkspaceData; project: string }) {
+export function Relations({ data, project }: { data: Pick<WorkspaceData, "relations" | "relationObservation">; project: string }) {
   const [pages, setPages] = useState<Record<string, number>>({});
   const host = useRef<HTMLDetailsElement>(null);
   const focused = useRef<{ node: HTMLElement; group?: string } | null>(null);

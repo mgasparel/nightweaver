@@ -1,5 +1,17 @@
 # Test suite
 
+Workspace base rendering adds five injected source cases and five Studio model
+cases. They check publication before held text, history and relations, shared
+Planning identity, section failure, delayed identity and confirmed absence.
+The coordinator fixture also checks guarded-command refresh of base and section
+keys. These cases add no normal-suite native journey or fixture publication.
+The optional `workspace-base-qa` browser probe checks held section receipts,
+direct links, failed refresh, pause removal, deletion, keyboard tabs and draft
+retention. It shares the existing QA AppHost group. The native browser boundary
+proves that React renders base content before section responses arrive; injected
+source tests alone cannot prove that display behavior. Production uses existing
+bounded section reads and adds Planning identity projection to shared base rows.
+
 Section repair adds four deterministic cases. They hold partial-relation
 confirmation across inventory or dependency invalidation, spend a core turn
 after a warm partial result, and keep only text interest after reading history.

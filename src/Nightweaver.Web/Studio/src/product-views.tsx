@@ -45,7 +45,7 @@ export function ProductIntake({ project }: { project: string }) {
   </Panel>;
 }
 
-export function PlanningAuthorization({ project, data, current }: { project: string; data: WorkspaceData; current: boolean }) {
+export function PlanningAuthorization({ project, data, current }: { project: string; data: Pick<WorkspaceData, "bead" | "planning">; current: boolean }) {
   const key = commandKey(project, "ready", data.bead.id);
   const state = useCommand(key);
   const planning = data.planning;
@@ -60,7 +60,7 @@ export function PlanningAuthorization({ project, data, current }: { project: str
     {!planning.ready && !state.confirmed && <><p>Only an open, unassigned, unpaused Product can be authorized. This does not launch an Agent directly.</p>
       <button className="button primary" disabled={!current || !planning.canAuthorize || state.pending || state.review} onClick={() => void commands.ready(key, data.bead.id, planning.expected)}>Ready for Planning</button></>}
     {state.message && <p role="status" className="bead-notice">{state.message}</p>}
-    {(state.review || state.confirmed && !planning.ready) && <button className="button" disabled={!current} onClick={() => { void operations.refresh([{ projectId: project, key: `workspace:${data.bead.id}` }]).then(() => commands.acknowledge(key)).catch(() => {}); }}>Refresh and review readiness</button>}
+    {(state.review || state.confirmed && !planning.ready) && <button className="button" disabled={!current} onClick={() => { void operations.refresh([{ projectId: project, key: `base:workspace:${data.bead.id}` }]).then(() => commands.acknowledge(key)).catch(() => {}); }}>Refresh and review readiness</button>}
   </section>;
 }
 

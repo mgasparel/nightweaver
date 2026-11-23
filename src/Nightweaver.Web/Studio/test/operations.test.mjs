@@ -46,10 +46,10 @@ test('retained runtime observations expire on their own allowance while tracker 
 });
 test('Product and readiness commands reconcile cleanup along with active tracker resources', async () => {
   const f = fixture();
-  for (const key of ['attention', 'workspace:qa.1', 'cleanup:1:all:', 'factory']) f.coordinator.subscribe(identity(key), () => {});
+  for (const key of ['attention', 'workspace:qa.1', 'base:workspace:qa.1', 'section:qa.1:history', 'cleanup:1:all:', 'factory']) f.coordinator.subscribe(identity(key), () => {});
   await f.advance(); f.hello(); await f.advance();
   await f.coordinator.invalidateAfterCommand('tracker');
-  assert.deepEqual(f.posts[0].keys.sort(), ['attention', 'workspace:qa.1', 'cleanup:1:all:'].sort());
+  assert.deepEqual(f.posts[0].keys.sort(), ['attention', 'workspace:qa.1', 'base:workspace:qa.1', 'section:qa.1:history', 'cleanup:1:all:'].sort());
   await f.coordinator.invalidateAfterCommand('cleanup');
   assert.deepEqual(f.posts[1].keys.sort(), ['cleanup:1:all:', 'factory'].sort());
   f.coordinator.dispose();
