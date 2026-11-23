@@ -1,5 +1,13 @@
 # Catch-Up Digest verified merges
 
+[Shared base amendment v1.3](../design/operational-observations-v1.md#amendment-v13--shared-base-and-independent-sections-ns-gjwx)
+adds a future base/section path. It permits closure, window membership and counts
+before merge evidence loads. It does not permit an early Merged claim. The
+matching-record rules below and the 128-task acquisition cap remain in force.
+Unacquired evidence is unavailable; it never removes a task from base counts.
+Existing full-response keys keep their present behavior during migration. See
+[shared base acceptance](shared-base-read.md) for comparison scenarios.
+
 The digest consumes the existing host finalizer protocol, including its referenced
 agent report, for the exact closed task. It shows Merged with the full PR URL and
 merge commit; only validated safe HTTPS evidence becomes a link. Source-only

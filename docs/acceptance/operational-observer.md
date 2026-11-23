@@ -1,5 +1,11 @@
 # Shared operational observer acceptance
 
+This retained evidence describes full-response collection. The future
+[v1.3 base/section contract](../design/operational-observations-v1.md#amendment-v13--shared-base-and-independent-sections-ns-gjwx)
+uses the separate [shared base measurement contract](shared-base-read.md).
+Its useful-content and detail-completion milestones must be measured separately.
+The historical whole-cohort cold times below do not establish those new results.
+
 Measured locally on Windows with bd 1.3.1, 2026-11-14. The backend implements
 [v1.1](../design/operational-observations-v1.md); the SSE endpoint and browser
 coordinator remain ns-mbd.3 work. No frontend or production deployment changed.

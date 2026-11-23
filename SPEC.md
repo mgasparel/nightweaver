@@ -537,6 +537,19 @@ The Web host offers a Project-bound, versioned read model beside the legacy cons
 
 The wire schema and finite budgets are specified in [operational observations v1.2](docs/design/operational-observations-v1.md), with implementation ownership, scheduling and lifecycle documented in [shared operational observations](docs/design/operational-observer.md). Standalone and background-launched Web instances use the same registration and shutdown path. SSE transport and browser synchronization are separate consumers of the shared cache.
 
+The additive [v1.3 shared base contract](docs/design/operational-observations-v1.md#amendment-v13--shared-base-and-independent-sections-ns-gjwx)
+defines the next read architecture for Overview, Explorer, Attention, Workspace
+and Catch Up. Subsequent ns-gjwx slices implement it; existing full responses
+remain valid during migration. One complete shared compact inventory and its
+indexes supply base facts, including cold direct links. A miss never causes a
+targeted base lookup. Only successful shared validation proves absence. Base
+publication precedes optional sections, which carry independent loading, empty,
+freshness and failure evidence. Current base membership and action eligibility
+override retained historical details. Native Ready/Blocked semantics, guarded
+write authority, journal/audits, source identity and finite budgets remain.
+[Shared base acceptance](docs/acceptance/shared-base-read.md) defines source maps,
+bounded detail reuse/progress and comparable measurement before latency targets.
+
 Opt-in exported [execution overhead telemetry](docs/design/execution-overhead-telemetry.md)
 allocates each occupied pool reservation once across preparation, Agent execution,
 classification, verification, publication, finalization and other coordination.
