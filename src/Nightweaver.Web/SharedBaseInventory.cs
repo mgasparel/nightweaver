@@ -54,6 +54,21 @@ internal sealed class SharedBaseInventory
             .Select(row => row.ForDisplay()).ToArray(),
         maxRepairCycles
     };
+    internal object Digest(CatchUpDigestResponse digest)
+    {
+        object Item(CatchUpDigestItem item) => new
+        {
+            bead = ById[item.Id].ForDisplay(), item.ActivityKind, item.ActivityAt, item.FromId, item.FromRelation
+        };
+        return new
+        {
+            schema = "nightweaver-base-v1", inventoryRevision = Revision, completeness = "complete", absence = (object?)null,
+            digest.GeneratedAt, digest.Window, digest.WindowStart, digest.LastCaughtUpAt, digest.IsCaughtUp, digest.Metrics,
+            threads = digest.Threads.Select(thread => new { root = Item(thread.Root), thread.CompletedCount, thread.OpenCount,
+                items = thread.Items.Select(Item).ToArray() }).ToArray(),
+            standaloneCompleted = digest.StandaloneCompleted.Select(Item).ToArray(), standaloneOpen = digest.StandaloneOpen.Select(Item).ToArray()
+        };
+    }
 
     internal object Explorer(OperationKey key, ISet<string>? ready, ISet<string>? blocked)
     {

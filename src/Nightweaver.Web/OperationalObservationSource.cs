@@ -42,7 +42,7 @@ internal sealed partial class OperationalObservationSource(
     {
         var selected = keys.Where(key => key.Kind is "base-explorer" or "base-workspace" or "base-attention")
             .Where(key => !inventoryOnly || key.Kind == "base-workspace" || key.Argument is not ("ready" or "blocked")).ToArray();
-        if (selected.Length == 0 && !keys.Any(key => key.Kind == "section")) return;
+        if (selected.Length == 0 && !keys.Any(key => key.Kind is "section" or "base-digest" or "digest-merges")) return;
         ObservationError? projectionError = null;
         if (inventory is not null && !ReferenceEquals(baseContentIdentity, states["inventory"].ContentIdentity))
         {
@@ -88,6 +88,7 @@ internal sealed partial class OperationalObservationSource(
     internal event Action<string, string>? ReadStarted;
     private bool scheduled;
     private bool continuation;
+    private bool digestSectionsPending;
     private int reconciliationRequested;
     private readonly HashSet<string> outstandingKeys = new(StringComparer.Ordinal);
     private string interest = "";
@@ -129,7 +130,7 @@ internal sealed partial class OperationalObservationSource(
             foreach (var (key, sample) in published)
                 if (sample.Pending) outstandingKeys.Add(key);
                 else outstandingKeys.Remove(key);
-            continuation = outstandingKeys.Count > 0;
+            continuation = outstandingKeys.Count > 0 || digestSectionsPending;
             return published;
         }
         finally { scheduled = false; }
@@ -320,6 +321,7 @@ internal sealed partial class OperationalObservationSource(
         commentsReadThisSweep.Clear();
         commentsThisSweep = 0;
         digestEvidenceIds.Clear();
+        digestSectionsPending = false;
         var started = clock.GetUtcNow();
         var generatedAt = DateTimeOffset.FromUnixTimeSeconds(started.ToUnixTimeSeconds());
         var result = new Dictionary<string, ObservationSample>(StringComparer.Ordinal);
@@ -407,8 +409,7 @@ internal sealed partial class OperationalObservationSource(
         // Sections consume the same sources and native turn as legacy readers.
         // Alternate a reserved background turn under continuous selection.
         var sectionsFirst = HasBudget && preferSections;
-        if (HasBudget && keys.Any(key => key.Kind == "section")) preferSections = !preferSections;
-        if (sectionsFirst) await ReadSectionsAsync(keys, repository, reader, inventory, result, token);
+        if (HasBudget && keys.Any(key => key.Kind is "section" or "digest-merges")) preferSections = !preferSections;
         if (scheduled && attentionBeads is not null && !ReferenceEquals(attentionInventoryState?.ContentIdentity, inventoryState.ContentIdentity))
         {
             // Carry successful histories, but rebuild membership/presentation from
@@ -435,6 +436,11 @@ internal sealed partial class OperationalObservationSource(
         }
         catch (Exception exception) when (IsSourceFailure(exception))
         { states["checkpoint"] = new("unavailable", null, checkpointAttempt, Error(exception)); }
+
+        // Publish window membership before any merge history command starts.
+        ProjectDigestBases(keys, inventory, caughtUp, generatedAt, started, result);
+        if (sectionsFirst) await ReadSectionsAsync(keys, repository, reader, inventory, result, token);
+        if (sectionsFirst) await ReadDigestSectionsAsync(keys, repository, reader, inventory, caughtUp, generatedAt, result, token);
 
         BeadExplorerItem[]? explorerItems = null;
         foreach (var key in keys.Where(key => key.Kind == "explorer"))
@@ -586,17 +592,17 @@ internal sealed partial class OperationalObservationSource(
         }
         // Due merge evidence gets a background turn as well, even when every
         // selected history and Attention cohort is repeatedly invalidated.
-        var digestFirst = HasBudget && keys.Any(key => key.Kind == "digest") && (preferDigest = !preferDigest);
-        if (digestFirst) await ReadDigestsAsync();
+        var digestFirst = HasBudget && keys.Any(key => key.Kind is "digest" or "digest-merges") && (preferDigest = !preferDigest);
+        if (digestFirst) { if (!sectionsFirst) await ReadDigestSectionsAsync(keys, repository, reader, inventory, caughtUp, generatedAt, result, token); await ReadDigestsAsync(); }
         await ReadAttentionProjectionAsync();
         if (attentionFirst) await ReadSelectedAsync();
         if (!sectionsFirst) await ReadSectionsAsync(keys, repository, reader, inventory, result, token);
-        if (!digestFirst) await ReadDigestsAsync();
+        if (!digestFirst) { if (!sectionsFirst) await ReadDigestSectionsAsync(keys, repository, reader, inventory, caughtUp, generatedAt, result, token); await ReadDigestsAsync(); }
         // Bound reuse to one continuation turn even if another selected Workspace
         // never recovers. New interest and external creation must reach a fresh core.
         resumeDetails = !resumedDetails && ((workspaces.Count > 0 && keys.All(key => key.Kind == "workspace"))
             || (!HasBudget && CommandCount == detailCommandsBefore
-                && (selected.Length > 0 || keys.Any(key => key.Kind is "attention" or "section"))));
+                && (selected.Length > 0 || keys.Any(key => key.Kind is "attention" or "section" or "digest-merges"))));
         // A new cycle must not repeatedly compare an external edit against the
         // old core while a different Workspace remains pending indefinitely.
         if (result.Values.Any(sample => sample.Error?.Code == "source-conflict")) resumeDetails = false;
@@ -908,7 +914,7 @@ internal sealed partial class OperationalObservationSource(
 
     private void TrimSources(HashSet<string> selected, IReadOnlyList<OperationKey> keys)
     {
-        if (!keys.Any(key => key.Kind is "base-explorer" or "base-workspace" or "base-attention" or "section"))
+        if (!keys.Any(key => key.Kind is "base-explorer" or "base-workspace" or "base-attention" or "section" or "base-digest" or "digest-merges"))
         { baseInventory = null; baseContentIdentity = null; memory.Release(baseReservation); }
         var retainedHistories = selected.Union(keys.Any(key => key.Kind == "attention")
             ? attentionBeads?.Select(bead => bead.Id)

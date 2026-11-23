@@ -18,14 +18,15 @@ export async function overviewVisualChecks(page, url, base, projectId, output) {
   let mode = 'controlled';
   const handler = async route => {
     const key = new URL(route.request().url()).searchParams.get('key');
-    if (!['base:attention', 'factory', 'digest:auto'].includes(key) && !key?.startsWith('section:')) return route.continue();
+    if (!['base:attention', 'factory', 'base:digest:auto'].includes(key) && !key?.startsWith('section:')) return route.continue();
     const actual = key.startsWith('section:') ? null : await route.fetch(); const value = actual ? await actual.json() : { ...attention, key, revision: "18446744073709551614" };
     value.health = 'fresh'; value.error = null; value.observedAt = new Date().toISOString();
     for (const source of Object.values(value.sources)) { source.health = 'fresh'; source.error = null; source.observedAt = value.observedAt; }
     value.data = key === 'base:attention' ? attentionBase([decision]) : key.startsWith('section:') ? attentionHistory(key, [decision]) : key === 'factory' ? data : {generatedAt: value.observedAt, window: '24h', lastCaughtUpAt: null, isCaughtUp: false, metrics: {completedTotal: 2, activeThreads: 0, openOrUpdatedTotal: 0, waitingForGuidance: 1}, threads: [], standaloneCompleted: completed, standaloneOpen: []};
-    if (key === 'digest:auto') {
+    if (key === 'base:digest:auto') {
       if (mode === 'empty') { value.data.standaloneCompleted = []; value.data.metrics.completedTotal = 0; }
       if (mode === 'long') value.data.standaloneCompleted = completed.map(item => ({...item, title: item.title.repeat(15)}));
+      value.data.standaloneCompleted = value.data.standaloneCompleted.map(item => ({bead: {...item, updatedAt: item.activityAt}, activityKind: item.activityKind, activityAt: item.activityAt}));
       if (mode === 'stale') { value.health = 'stale'; value.error = {code: 'fixture', message: 'Retained outcomes need verification', retryable: true}; }
       if (mode === 'unavailable') { value.health = 'unavailable'; value.data = null; }
     }

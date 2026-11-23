@@ -51,7 +51,7 @@ try {
   assert.equal(await page.locator('#digest-body').isVisible(), false);
   const snapshot = await page.evaluate(async () => (await (await fetch('/api/digest')).json()));
   // Refresh obtains the exact snapshot used by the actual UI, observed from its response.
-  const response = page.waitForResponse(r => new URL(r.url()).searchParams.get('key') === 'digest:auto');
+  const response = page.waitForResponse(r => new URL(r.url()).searchParams.get('key') === 'base:digest:auto');
   await page.locator('#digest-refresh').click();
   await response;
   await page.waitForTimeout(200);

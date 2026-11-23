@@ -12,6 +12,16 @@ internal sealed record OperationKey(string Value, string Kind, string? Argument 
         if (Encoding.UTF8.GetByteCount(value) > 1024) throw new ObservationRequestException(400);
         var parts = value.Split(':');
         if (value == "base:attention") return new(value, "base-attention");
+        if (parts is ["base", "digest", var baseWindow])
+        {
+            var digest = Parse("digest:" + baseWindow);
+            return digest with { Value = value, Kind = "base-digest" };
+        }
+        if (parts is ["digest-merges", var mergeWindow])
+        {
+            var digest = Parse("digest:" + mergeWindow);
+            return digest with { Value = value, Kind = "digest-merges" };
+        }
         if (parts is ["section", var sectionId, var section] && BeadIdSafety.IsSafe(sectionId)
             && section is "text" or "history" or "relations" or "environment" or "merge")
             return new(value, "section", sectionId, section);
@@ -90,7 +100,11 @@ internal sealed record ObservationSynchronization(string Journal, bool Pending)
 }
 internal sealed record ObservationSample(object? Data, DateTimeOffset AttemptedAt, DateTimeOffset? ObservedAt,
     IReadOnlyDictionary<string, ObservationSourceState> Sources, ObservationError? Error = null, bool Partial = false, bool Pending = false,
-    bool ConfirmedAbsence = false);
+    bool ConfirmedAbsence = false)
+{
+    // Monotonic anchor for embedded section ages. Retained bodies keep this anchor.
+    internal long? SectionAgeTimestamp { get; init; }
+}
 
 internal interface IOperationalObservationSource
 {

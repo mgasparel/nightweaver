@@ -50,6 +50,7 @@ internal sealed class OperationalObservationService(
         internal long AdmittedTimestamp { get; set; }
         internal long? AcceptedTimestamp { get; set; }
         internal double AcceptedAgeMs { get; set; }
+        internal long? SectionAgeTimestamp { get; set; }
         internal long DirtyGeneration { get; set; } = 1;
         internal long? PendingTimestamp { get; set; }
         internal string Semantic { get; set; } = "";
@@ -186,7 +187,7 @@ internal sealed class OperationalObservationService(
         string[] names = key.Kind switch
         {
             "section" => InventorySource.Concat(OperationalObservationSource.SectionSources(key)).ToArray(),
-            "factory" => ["runtime"], "cleanup" => ["cleanup"], "digest" => ["inventory", "checkpoint"],
+            "factory" => ["runtime"], "cleanup" => ["cleanup"], "digest" or "base-digest" or "digest-merges" => ["inventory", "checkpoint"],
             "workspace" => ["inventory", "detail:" + key.Argument, "relations-up:" + key.Argument,
                 "relations-down:" + key.Argument, "comments:" + key.Argument, "environment:" + key.Argument],
             "explorer" or "base-explorer" when key.Argument is "ready" or "blocked" => ["inventory", key.Argument],
@@ -232,9 +233,26 @@ internal sealed class OperationalObservationService(
     }
     private ObservationEnvelope Response(Entry entry) => entry.Envelope with
     {
+        Data = ResponseData(entry),
         ValidatedAgeMs = ValidatedAge(entry),
         PendingAgeMs = PendingAge(entry)
     };
+
+    private JsonElement? ResponseData(Entry entry)
+    {
+        var data = entry.Envelope.Data;
+        if (entry.Key.Kind != "digest-merges" || data is not { ValueKind: JsonValueKind.Object }) return data;
+        // Age the accepted body only in the response. Repeated reads, failed or
+        // pending replacements and base revalidation cannot reset section age.
+        var node = JsonNode.Parse(data.Value.GetRawText())!;
+        foreach (var section in node["sections"]!.AsObject().Select(pair => pair.Value!))
+        {
+            section["validatedAgeMs"] = entry.SectionAgeTimestamp is { } timestamp
+                && section["validatedAgeMs"]?.GetValue<double>() is { } age
+                    ? JsonValue.Create(age + clock.GetElapsedTime(timestamp).TotalMilliseconds) : null;
+        }
+        return JsonSerializer.SerializeToElement(node, Json);
+    }
 
     internal async Task PollJournalOnceAsync(CancellationToken token)
     {
@@ -506,7 +524,8 @@ internal sealed class OperationalObservationService(
                     if (generations[entry] == entry.DirtyGeneration) entry.PendingTimestamp = null;
                     else reconcileAgain = true;
                 }
-                var accepted = Publish(entry, updated, projection: sample.Error is null || sample.Partial || missing);
+                var accepted = Publish(entry, updated, projection: sample.Error is null || sample.Partial || missing,
+                    sectionAgeTimestamp: sample.SectionAgeTimestamp);
                 if (!accepted) entry.PendingTimestamp = previousPending;
             }
             // A wake can precede the source read but follow our generation capture.
@@ -637,7 +656,7 @@ internal sealed class OperationalObservationService(
         return envelope with { Health = envelope.Data is null ? "unavailable" : "stale", Error = error, Sources = sources };
     }
 
-    private bool Publish(Entry entry, ObservationEnvelope envelope, bool projection = false)
+    private bool Publish(Entry entry, ObservationEnvelope envelope, bool projection = false, long? sectionAgeTimestamp = null)
     {
         var previousAccepted = entry.AcceptedTimestamp;
         var previousAge = entry.AcceptedAgeMs;
@@ -673,6 +692,7 @@ internal sealed class OperationalObservationService(
         if (changed) envelope = envelope with { Revision = NextRevision() };
         entry.Semantic = semantic;
         entry.Envelope = envelope with { Sources = envelope.Sources.ToFrozenDictionary(StringComparer.Ordinal) };
+        if (projection) entry.SectionAgeTimestamp = sectionAgeTimestamp;
         if (projection) entry.ContentIdentities = envelope.Sources.ToDictionary(pair => pair.Key, pair => pair.Value.ContentIdentity, StringComparer.Ordinal);
         entry.Bytes = bytes;
         if (changed) Changed?.Invoke(entry.Key.Value, envelope.Revision);

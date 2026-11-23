@@ -7,6 +7,39 @@ export type Digest = { generatedAt: string; window: string; windowStart?: string
   isCaughtUp: boolean; metrics: { completedTotal: number; activeThreads: number; openOrUpdatedTotal: number; waitingForGuidance: number };
   threads: { root: DigestItem; completedCount: number; openCount: number; items: DigestItem[] }[];
   standaloneCompleted: DigestItem[]; standaloneOpen: DigestItem[] };
+type BaseItem = { bead: Omit<DigestItem, "activityKind" | "activityAt" | "summary" | "outcomeLabel" | "commits" | "pullRequests"> & { updatedAt: string };
+  activityKind: string; activityAt: string; fromId?: string | null; fromRelation?: string | null };
+export type BaseDigest = Omit<Digest, "threads" | "standaloneCompleted" | "standaloneOpen"> & {
+  threads: { root: BaseItem; completedCount: number; openCount: number; items: BaseItem[] }[];
+  standaloneCompleted: BaseItem[]; standaloneOpen: BaseItem[] };
+export type DigestMerges = { unavailableState?: string; sections: Record<string, { beadId: string; updatedAt: string; state: string; pending: boolean;
+  validatedAgeMs?: number | null;
+  outcomeLabel?: string; summary?: string; commits?: string[]; pullRequests?: string[];
+  value?: DigestItem["mergeEvidence"]; source?: { observedAt: string | null; health: string; error?: unknown } }> };
+
+/** Detail replaces only the matching row. Membership and clocks belong to base. */
+export function digestWithSections(base: BaseDigest, merges?: DigestMerges, elapsedMs = 0): Digest {
+  const item = (entry: BaseItem): DigestItem => {
+    const row = entry.bead, section = merges?.sections[row.id];
+    const matches = section?.beadId === row.id && Date.parse(section.updatedAt) === Date.parse(row.updatedAt);
+    const fresh = matches && (section.state === "available" || section.state === "unavailable") && !section.pending && section.source?.health === "fresh"
+      && !section.source.error && section.source.observedAt && section.validatedAgeMs != null
+      && section.validatedAgeMs + elapsedMs < 120000;
+    const evidence = row.status === "closed" && row.type === "task"
+      ? fresh && section.state === "available" && section.value?.state === "verified" ? section.value
+        : matches && section.value && (section.state === "stale" || !fresh && section.state === "available")
+          ? { ...section.value, state: "stale" }
+          : { state: matches ? section.state === "unavailable" ? section.value?.state ?? "unavailable" : section.state
+            : section ? "stale" : merges ? merges.unavailableState ?? "unavailable" : "loading" }
+      : undefined;
+    return { ...row, ...entry, outcomeLabel: evidence?.state === "verified" ? "Merged" : fresh && section.outcomeLabel && section.outcomeLabel !== "Merged"
+      ? section.outcomeLabel : row.status === "closed" ? "Closed" : row.presentation?.summary ?? row.status,
+      summary: evidence?.state === "verified" ? "Host verified the merged pull request and passing required checks." : fresh ? section.summary ?? "" : "",
+      commits: fresh ? section.commits ?? [] : [], pullRequests: fresh ? section.pullRequests ?? [] : [], mergeEvidence: evidence };
+  };
+  return { ...base, threads: base.threads.map(thread => ({ ...thread, root: item(thread.root), items: thread.items.map(item) })),
+    standaloneCompleted: base.standaloneCompleted.map(item), standaloneOpen: base.standaloneOpen.map(item) };
+}
 export const windows = ["auto", "since_caught_up", "24h", "7d", "30d", "all"] as const;
 export type DigestWindow = typeof windows[number];
 export const digestWindow = (value: string | null): DigestWindow => windows.includes(value as DigestWindow) ? value as DigestWindow : "auto";
