@@ -3,8 +3,9 @@
 [Wire amendment v1.3](operational-observations-v1.md#amendment-v13--shared-base-and-independent-sections-ns-gjwx)
 defines additive base and section resources for all five Studio surfaces. It is
 the implementation contract for subsequent ns-gjwx slices, not a claim of shipped
-support. The retained implementation described below still assembles full
-responses. Those existing keys and legacy routes keep their complete-response
+support for every surface. Explorer and Workspace now consume shared base keys;
+Workspace consumes independent text, history, relations and environment sections.
+The retained implementation also assembles full responses. Existing keys and legacy routes keep their complete-response
 rules throughout migration.
 
 For new keys, a complete shared inventory supplies compact base facts and indexes

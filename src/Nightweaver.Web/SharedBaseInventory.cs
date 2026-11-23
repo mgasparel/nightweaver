@@ -85,6 +85,7 @@ internal sealed record BaseBeadRow(string Id, string Title, string Type, int Pri
     DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, DateTimeOffset? ClosedAt, string? CreatedBy,
     BeadPresentation Presentation, BaseActions Actions)
 {
+    public PlanningReadiness? Planning { get; init; }
     internal static BaseBeadRow Project(BeadSnapshot bead, BeadsInventory inventory, int maxRepairs)
     {
         var item = BeadExplorerItem.FromSnapshot(bead);
@@ -102,7 +103,8 @@ internal sealed record BaseBeadRow(string Id, string Title, string Type, int Pri
             bead.Payload.TryGetProperty("created_by", out var creator) && creator.ValueKind != JsonValueKind.Null
                 ? creator.ValueKind == JsonValueKind.String ? creator.GetString() : throw new JsonException("Invalid created_by.") : null,
             BeadPresenter.Project(bead, maxRepairs, inventory), new(paused && attention.CanDecide,
-                paused && attention.CanRetry, paused && attention.CanAbort, attention.UnavailableReason, workflow));
+                paused && attention.CanRetry, paused && attention.CanAbort, attention.UnavailableReason, workflow))
+            { Planning = PlanningReadiness.Project(bead) };
     }
 
     private static DateTimeOffset Timestamp(JsonElement value) => value.ValueKind == JsonValueKind.String && value.TryGetDateTimeOffset(out var time)

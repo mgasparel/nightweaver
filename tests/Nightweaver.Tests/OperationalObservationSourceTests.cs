@@ -685,6 +685,56 @@ public sealed class OperationalObservationSourceTests
         Assert.Null(service.Read("base:explorer:all::1").PendingAgeMs);
     }
 
+    [Theory]
+    [InlineData("show", "text")]
+    [InlineData("comments", "history")]
+    [InlineData("dep", "relations")]
+    public async Task WorkspaceBasePublishesBeforeHeldSection(string command, string section)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { TargetPath = target.Path };
+        var held = new HoldingRunner(runner, command);
+        using var factory = Factory(target.Path, held, clock);
+        using var service = new OperationalObservationService("web-test", Adapter(factory), clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        var key = $"section:task-1:{section}";
+        using var pin = service.Pin(["base:workspace:task-1", key]);
+        var token = TestContext.Current.CancellationToken;
+        var collection = service.CollectOnceAsync(false, token);
+        try
+        {
+            await held.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+            Assert.False(collection.IsCompleted);
+            Assert.Equal("fresh", service.Read("base:workspace:task-1").Health);
+            Assert.Equal("task-1", service.Read("base:workspace:task-1").Data!.Value.GetProperty("bead").GetProperty("id").GetString());
+            Assert.Null(service.Read(key).Data);
+        }
+        finally { held.Release.TrySetResult(); await collection; }
+        Assert.NotNull(service.Read(key).Data);
+    }
+
+    [Theory]
+    [InlineData("feature")]
+    [InlineData("task")]
+    public async Task WorkspaceBasePlanningUsesTheSharedSnapshot(string type)
+    {
+        using var target = new ObservationTargetFixture();
+        var runner = new Runner { IssueType = type };
+        using var factory = Factory(target.Path, runner, new CostClock());
+        var source = Adapter(factory);
+        var result = await source.ReadScheduledAsync(Keys("base:workspace:task-1"), (_, _) => { }, TestContext.Current.CancellationToken);
+        var bead = JsonSerializer.SerializeToElement(result["base:workspace:task-1"].Data, ObservationJson.Options).GetProperty("bead");
+        if (type == "task") Assert.Equal(JsonValueKind.Null, bead.GetProperty("planning").ValueKind);
+        else
+        {
+            Assert.False(bead.GetProperty("planning").GetProperty("canAuthorize").GetBoolean());
+            Assert.Equal(64, bead.GetProperty("planning").GetProperty("expected").GetString()!.Length);
+        }
+        Assert.DoesNotContain("show", runner.Commands);
+        Assert.DoesNotContain("comments", runner.Commands);
+    }
+
     [Fact]
     public async Task BaseKeysShareInventoryAndNativeMembershipWithoutTargetedBaseReads()
     {
@@ -2626,6 +2676,7 @@ public sealed class OperationalObservationSourceTests
         internal bool Ready { get; set; } = true;
         internal bool Blocked { get; set; }
         internal string Title { get; set; } = "Original title";
+        internal string IssueType { get; init; } = "task";
         internal int Priority { get; set; } = 1;
         internal bool FailReady { get; set; }
         internal bool Conflict { get; init; }
@@ -2679,7 +2730,7 @@ public sealed class OperationalObservationSourceTests
             var title = Conflict && inventories > 0 ? "Concurrent edit" : Title;
             var rows = Enumerable.Range(1, Rows).Select(index => new
             {
-                id = $"task-{index}", title, issue_type = "task", priority = Conflict && inventories > 0 ? 2 : Priority, status = Closed ? "closed" : "open", assignee = (string?)null,
+                id = $"task-{index}", title, issue_type = IssueType, priority = Conflict && inventories > 0 ? 2 : Priority, status = Closed ? "closed" : "open", assignee = (string?)null,
                 labels = Closed ? [] : (string[])["product-decision-required"], created_at = "2026-01-01T00:00:00Z", updated_at = UpdatedAt,
                 description = "Description"
             }).ToArray();

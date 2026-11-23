@@ -182,6 +182,7 @@ async function trial(surface, mode, cycle) {
       await page.locator('summary').filter({ hasText: 'Retained environment' }).click();
       await page.getByRole('link', { name: 'History', exact: true }).click();
       await until(() => page.locator('main').innerText().then(text => text.includes('Shared read history 000/7')), 'history');
+      sample.history = { requestedMs: sample.sectionRequestedMs, completedMs: performance.now() - sample.startMs };
       sample.sections = { history: { state: 'available', requestedMs: sample.sectionRequestedMs,
         completedMs: performance.now() - sample.startMs },
         fullResponse: { state: 'available', completedMs: sample.fullResponseMs },
@@ -197,8 +198,15 @@ async function trial(surface, mode, cycle) {
         sample.detailSources = sectionKeys.map(key => latest(key));
         sample.sections = Object.fromEntries(sectionKeys.map(key => [key, latest(key)]));
       }
+      sample.detailMs = performance.now() - sample.startMs;
+      const outputRequestedMs = performance.now() - sample.startMs;
+      await page.getByRole('link', { name: 'Output', exact: true }).click();
+      await page.getByRole('heading', { name: 'Invocation output', exact: true }).waitFor();
+      sample.output = { requestedMs: outputRequestedMs, panelRenderedMs: performance.now() - sample.startMs,
+        range: null, reason: 'Panel render only. This manifest does not select an invocation output range.' };
+      await page.getByRole('link', { name: 'Summary', exact: true }).click();
     }
-    sample.detailMs = performance.now() - sample.startMs;
+    sample.detailMs ??= performance.now() - sample.startMs;
     sample.requestedSections = surface === 'workspace' ? manifest.requested : ['visible panels'];
     sample.sectionTimingReason = keysFor(surface)[0].startsWith('base:')
       ? 'Independent section receipts and validated states are retained. Admission time remains unavailable.'
@@ -247,7 +255,7 @@ try {
   await until(() => page.locator('main').innerText().then(text => text.includes(marker)), marker);
   changes.push({ kind: 'comment', startedUtc, startMs, settledMs, renderedMs: performance.now(),
     startToRenderMs: performance.now() - startMs, settledToRenderMs: performance.now() - settledMs,
-    source: latest(`workspace:${id}`) });
+    source: latest(`section:${id}:history`) ?? latest(`workspace:${id}`) });
   const editor = page.getByRole('textbox', { name: `Guidance for ${id}` });
   await editor.fill('Shared read guarded note');
   const response = page.waitForResponse(response => response.request().method() === 'POST'
@@ -272,7 +280,7 @@ try {
   changes.push({ kind: 'dependency', startedUtc: dependencyStartedUtc, startMs: dependencyStart,
     settledMs: dependencySettled, relationRenderedMs: relationRendered,
     startToRenderMs: relationRendered - dependencyStart, settledToRenderMs: relationRendered - dependencySettled,
-    nativeBlocked: blocked.map(row => row.id), source: latest(`workspace:${id}`) });
+    nativeBlocked: blocked.map(row => row.id), source: latest(`section:${id}:relations`) ?? latest(`workspace:${id}`) });
   const closeStart = performance.now();
   bd(['close', 'qa-read-010']);
   const closeSettled = performance.now();
