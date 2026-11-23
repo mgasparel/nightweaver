@@ -96,7 +96,11 @@ Raced generations remain pending. Section publication uses the same captured
 resource-entry identity as base publication. Old callbacks cannot fill a
 readmitted resource. Current base membership and actions remain authoritative.
 
-History, Attention and merge parsing share complete comments. Recent source
+History, Attention and merge parsing share complete comments. Cached histories
+retain their parser qualification. A prior Attention-only read cannot certify
+a strict section or Workspace history. The first strict consumer upgrades that
+source with the existing strict parser. Concurrent selected consumers share it.
+Recent source
 values retain at most 64 idle source entries for 60 seconds from last interest.
 Idle sources have no audit slot. Histories retain the 64-entry/16-MiB limit and
 evict the oldest unselected history under entry or byte pressure. Selected and

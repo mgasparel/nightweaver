@@ -170,7 +170,7 @@ internal sealed partial class OperationalObservationSource(
     internal double NativeMilliseconds => nativeMilliseconds;
 
     private sealed record History(IReadOnlyList<BeadsCommentSnapshot> Comments, DateTimeOffset ReadAt, int Bytes,
-        ObservationSourceState Source);
+        ObservationSourceState Source, bool Strict);
     private sealed class WorkspaceCycle(BeadSnapshot initial, DateTimeOffset started)
     {
         internal IReadOnlyList<BeadWorkspaceRelation> Relations { get; set; } = [];
@@ -492,6 +492,8 @@ internal sealed partial class OperationalObservationSource(
                 var cycle = new WorkspaceCycle(initial, clock.GetUtcNow());
                 workspaces[id] = cycle;
                 var prefetchCommandsBefore = CommandCount;
+                if (histories.TryGetValue(id, out var retainedHistory) && !retainedHistory.Strict)
+                    schedule.InvalidateNames(["comments:" + id]);
                 var combined = await TryReadColdWorkspaceAsync(repository, reader, id, token);
                 commentsThisSweep++;
                 var combinedComments = combined && commentsReadThisSweep.Contains(id);
@@ -530,7 +532,7 @@ internal sealed partial class OperationalObservationSource(
         {
             if (keys.Any(key => key.Kind == "attention") && inventory is not null)
                 try { await ReadAttentionAsync(repository, reader, inventory, inventoryState, result,
-                    selected.Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal), token); }
+                    selectedIds, token); }
                 catch (Exception exception) when (IsSourceFailure(exception))
                 {
                     result["attention"] = Sample(null, started, "inventory") with { Error = Error(exception) };
@@ -841,7 +843,7 @@ internal sealed partial class OperationalObservationSource(
                 // every transient timeout can prevent a large cohort ever completing.
                 return;
             }
-            try { StoreHistory(bead.Id, comments); }
+            try { StoreHistory(bead.Id, comments, selected.Contains(bead.Id)); }
             catch (ToolExecutionException exception)
             {
                 result["attention"] = Sample(null, attentionStarted, "inventory") with { Error = Error(exception) };
@@ -863,7 +865,7 @@ internal sealed partial class OperationalObservationSource(
         attentionPresentations.Clear();
     }
 
-    private void StoreHistory(string id, IReadOnlyList<BeadsCommentSnapshot> comments)
+    private void StoreHistory(string id, IReadOnlyList<BeadsCommentSnapshot> comments, bool strict = true)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(comments).Length;
         var previous = histories.GetValueOrDefault(id);
@@ -881,7 +883,8 @@ internal sealed partial class OperationalObservationSource(
         if (!histories.ContainsKey(id) && histories.Count >= 64
             || histories.Where(pair => pair.Key != id).Sum(pair => pair.Value.Bytes) + bytes > 16 * 1024 * 1024)
             RefuseHistory();
-        var history = new History(comments, clock.GetUtcNow(), bytes, states["comments:" + id]);
+        var history = new History(comments, clock.GetUtcNow(), bytes, states["comments:" + id],
+            strict || previous?.Strict == true && ReferenceEquals(previous.Comments, comments));
         if (!memory.TryReplace(previous is null ? [] : [previous], [(history, bytes)]))
             RefuseHistory();
         histories[id] = history;

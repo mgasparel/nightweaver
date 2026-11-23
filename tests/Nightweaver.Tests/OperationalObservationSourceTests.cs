@@ -15,6 +15,25 @@ namespace Nightweaver.Tests;
 public sealed class OperationalObservationSourceTests
 {
     [Fact]
+    public async Task WarmAttentionHistoryCannotCertifyStrictSectionHistory()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner();
+        runner.HistoryOverrides["task-1"] = [new("foreign", "other", "human", "Foreign history", clock.GetUtcNow())];
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var token = TestContext.Current.CancellationToken;
+        var attention = await source.ReadScheduledAsync(Keys("attention"), (_, _) => { }, token);
+        Assert.NotNull(attention["attention"].Data);
+        Assert.Single(runner.CommentIds);
+        var section = await source.ReadScheduledAsync(Keys("attention", "section:task-1:history"), (_, _) => { }, token);
+        Assert.Equal(2, runner.CommentIds.Count);
+        Assert.Null(section["section:task-1:history"].Data);
+        Assert.Equal("source-failed", section["section:task-1:history"].Error?.Code);
+    }
+
+    [Fact]
     public async Task IndependentSectionsShareHistoryWithAttentionAndDigest()
     {
         using var target = new ObservationTargetFixture();

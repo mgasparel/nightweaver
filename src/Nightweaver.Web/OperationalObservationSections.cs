@@ -30,8 +30,12 @@ internal sealed partial class OperationalObservationSource
         ValidatedTargetRepository repository, BeadsReader reader, string id, CancellationToken token)
     {
         var name = "comments:" + id;
-        if (scheduled && !schedule.Due(name)) return states.GetValueOrDefault(name)?.Error is null
-            ? histories.GetValueOrDefault(id)?.Comments : null;
+        if (scheduled && !schedule.Due(name))
+        {
+            if (states.GetValueOrDefault(name)?.Error is null && histories.TryGetValue(id, out var history) && !history.Strict)
+                schedule.InvalidateNames([name]);
+            else return states.GetValueOrDefault(name)?.Error is null ? histories.GetValueOrDefault(id)?.Comments : null;
+        }
         if (!HasBudget || commentsThisSweep >= 4) return null;
         commentsThisSweep++;
         var comments = await ReadAsync(name, () => reader.ReadDetailCommentsAsync(repository, id, token), token);
