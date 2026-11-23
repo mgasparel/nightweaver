@@ -1,3 +1,29 @@
+## Shared base contract amendment (ns-gjwx)
+
+[Wire amendment v1.3](operational-observations-v1.md#amendment-v13--shared-base-and-independent-sections-ns-gjwx)
+defines additive base and section resources for all five Studio surfaces. It is
+the implementation contract for subsequent ns-gjwx slices, not a claim of shipped
+support. The retained implementation described below still assembles full
+responses. Those existing keys and legacy routes keep their complete-response
+rules throughout migration.
+
+For new keys, a complete shared inventory supplies compact base facts and indexes
+without waiting for optional history, relations, prose, environment or merge
+evidence. Cold direct links join shared bootstrap; no targeted base lookup is
+allowed. Only a complete successful current shared validation proves absence.
+Independent sections retain their own source health, dirty generations, complete
+validation and confirming inventory identity. Current membership and action
+eligibility override retained historical detail. Cached values never authorize
+guarded writes.
+
+Bounded recent sections reuse the existing total byte/key/history capacity and
+interest grace/TTL. This is the explicit exception to v1.2 deselection retirement;
+it adds no allowance or inactive audit. Shared reads and fair continuation keep
+selected detail, inventory refresh and guarded writes moving within the unchanged
+native bounds. See the amendment for normative states, keys and scheduling, and
+[shared base acceptance](../acceptance/shared-base-read.md) for source/record
+traceability and equivalent cold, warm and active-factory measurements.
+
 ## Event-driven scheduling amendment (ns-sib.1)
 
 Cold selected Workspaces coalesce already-due detail, comments and incoming

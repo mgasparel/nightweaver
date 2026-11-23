@@ -1,3 +1,216 @@
+## Amendment v1.3 — shared base and independent sections (ns-gjwx)
+
+Contract owner: ns-gjwx-p88cf0dfa3650cc8fbb7a. This amendment defines the next
+additive read contract. It does not claim that these resources are implemented.
+The existing full-response resources and legacy HTTP routes keep their payloads,
+validation and publication rules during migration. Consumers must opt into the
+new keys together with their backend support. Existing keys never return a base
+payload in place of a full response. Unsupported new keys still return 400.
+
+For the new resources only, this amendment supersedes whole-turn publication,
+whole-Attention-history completion and full-Workspace completion as prerequisites
+for **base** publication. A completed base projection publishes immediately,
+before unrelated native work or optional sections finish. It cannot lend its
+freshness, completeness or validation time to a section. All other v1.1/v1.2
+identity, ordering, source, journal, audit, age, cancellation, settlement and
+capacity rules remain in force. The [measurement and acceptance contract](../acceptance/shared-base-read.md)
+defines the comparison required before numerical latency targets are proposed.
+
+### Shared base and source map
+
+One host-owned Project cache holds the complete compact inventory and indexes.
+Every Bead surface uses it, including cold direct links. No cache miss, HTTP
+request, view filter or section request may start a targeted base `show` read.
+The existing CLI adapter remains the source boundary. A successful shared read
+must validate repository/Project identity, complete output, unique safe IDs,
+required fields, payload bounds and the 10,001-row overflow sentinel before it
+can replace the inventory. A limited, failed or partial read proves no absence.
+
+The minimum base row contains `id`, `title`, `type`, `priority`, `status`,
+`assignee`, `labels`, `stage`, `repairCycles`, `createdAt`, `updatedAt`,
+`closedAt` and `createdBy`. Nullable fields retain their existing meaning.
+Malformed workflow metadata is explicit; it must not become an empty pause set
+or a zero repair count. Base presentation derives role, workflow badge, pause
+kind and action eligibility from these facts and configured limits. It includes
+the expected workflow identity (stage, full pause-label set and repair count).
+Action eligibility is display evidence only. Guarded commands still read fresh
+authoritative state and apply their existing guards.
+
+Required bounded indexes are exact ID; status/type/stage/pause/assignee/priority;
+complete ID/title search values and existing sort order; activity/window times;
+and inventory-provided lineage edges used by Digest and presentation. Build them
+from the same accepted inventory identity. Lineage indexes carry only the edges
+the inventory actually supplies. They never certify complete incoming/outgoing
+relations. Native Ready and Blocked are separate shared sources, not deductions
+from labels, dependency counts or inventory edges. A failure in either source
+does not withhold unrelated base projections. The existing display truncation
+and 40-row Explorer page apply after search and ordering.
+
+| Surface | Useful base content | Required sources | Deferred content and source |
+| --- | --- | --- | --- |
+| Overview | Counts, compact Attention and Catch Up rows, Bead links | `inventory`; `checkpoint` for Digest window/counts | Pause explanation: `comments:{id}`; merge result: `merge:{id}`. Activity cards use independent `runtime` through existing `factory`, including admitted title metadata; cleanup uses `cleanup`. Neither source gates tracker base. |
+| Explorer | Existing filtered/searchable page, count and ordering; ID, title, type, priority, status, stage, assignee and badges | `inventory`; `ready` only for Ready, `blocked` only for Blocked | No history requirement. Selected Bead sections use the same section keys as Workspace. |
+| Attention | Current nonterminal paused rows, workflow validity, pause kind, repair count/limit, links and action eligibility | `inventory`, configured limits | Explanation, attributed role/author, question/diagnostic, pause time, active report and other reports: complete `comments:{id}` plus current base workflow identity. Inventory update time is not an attributable pause time. |
+| Workspace | Header, summary facts, badges, links and action eligibility for exact ID | `inventory`, configured limits | Full prose/metadata: `detail:{id}`; History and pause explanation: `comments:{id}`; relations: independent `relations-up:{id}` and `relations-down:{id}`; environment: `environment:{id}` with independent runtime provenance. Output retains the existing invocation identity and telemetry stream protocol. |
+| Catch Up | Window/checkpoint, counts, thread/standalone membership, lineage, activity time, current pause/closure and links | `inventory`, strict `checkpoint` | Verified merge/PR/commit and evidence-derived outcome/summary: `merge:{id}` from complete `comments:{id}`. Cleanup warnings remain separate. Closure alone means closed, never Merged. |
+
+Full prose means `description`, `design`, `acceptanceCriteria`, `notes` and raw
+`sourceMetadata`. History includes full comments, classified messages, active
+selection and older/recent IDs. These fields retain the existing projector
+semantics; base data must not invent substitutes. A missing/corrupt checkpoint
+keeps its existing absent-versus-failed distinction. Inventory-based counts may
+remain visible with explicit checkpoint unavailability; a window that needs the
+checkpoint cannot claim complete membership until that source succeeds.
+
+### Additive resource and section contract
+
+Use the existing `/api/operations/v1/projects/{projectId}` GET, refresh and SSE
+transport, envelope schema `nightweaver-observation-v1` and host revision counter.
+The following key families are reserved by v1.3. Existing key canonicalization,
+query encoding, Project matching and safe Bead ID rules apply unchanged.
+
+| New key | `data` schema and meaning |
+| --- | --- |
+| `base:overview` | `nightweaver-base-v1`: inventory counts and compact Attention/Digest summaries with independent source states |
+| `base:explorer:{view}:{query}:{page}` | `nightweaver-base-v1`: existing page metadata and base rows; same view/query/page rules as paged Explorer |
+| `base:attention` | `nightweaver-base-v1`: complete paused membership and base rows; no explanation fields |
+| `base:workspace:{id}` | `nightweaver-base-v1`: one base row, or a confirmed absence |
+| `base:digest:{window}` | `nightweaver-base-v1`: existing window, metrics, threads and standalone grouping, with base facts only |
+| `section:{id}:{name}` | `nightweaver-section-v1`, where `name` is `text`, `history`, `relations`, `environment` or `merge` |
+
+Every base `data` object has `schema`, `inventoryRevision` (the accepted shared
+inventory's host-allocated positive decimal revision), `completeness`
+(`complete` or `pending`), and `absence` (`null` or `{id, inventoryRevision}`).
+It also has the surface fields named in the table. Base rows use the minimum
+fields above; existing full-response presentation field names remain reserved
+for their complete meanings. `inventoryRevision` identifies one shared value,
+not an atomic transaction with readiness, checkpoint or runtime. Consumers must
+not compare it with unrelated resource revisions to infer freshness.
+
+Surface payload fields are fixed as follows. `row` means the minimum base row
+above plus `presentation` restricted to inventory-derived badges/role and
+`actions: {canDecide, canRetry, canAbort, unavailableReason, expectedWorkflow}`.
+The three flags are booleans, `unavailableReason` is nullable safe text, and
+`expectedWorkflow` has `stage`, `pauseLabels` and `repairCycles` with existing
+workflow parser semantics. Non-Attention actions keep their existing separate
+contracts. Do not copy history-derived `AttentionDeskItem` fields into a row.
+
+| Key kind | Additional fields |
+| --- | --- |
+| Workspace base | `bead: row | null`; confirmed absence has null bead and nonnull absence; pending bootstrap has null envelope data |
+| Explorer base | `items: row[]`, `total`, `page`, `pages`, `pageSize`; same existing Explorer page ordering, bounds and clamping |
+| Attention base | `items: row[]`, `maxRepairCycles`; exact existing nonterminal paused membership, ordered by priority then ordinal ID so history cannot gate base ordering |
+| Digest base | `generatedAt`, `window`, `windowStart`, `lastCaughtUpAt`, `isCaughtUp`, `metrics`, `threads`, `standaloneCompleted`, `standaloneOpen`; existing Digest types/ordering, except each item contains only a base row plus `activityKind`, `activityAt`, `fromId`, `fromRelation`. Thread `root`/`items` use these items; `completedCount`/`openCount` remain unchanged. No evidence-derived outcome/summary/PR/commit fields. |
+| Overview base | `counts: {total, active, paused, closed}` from inventory, where active is the existing Explorer active predicate and paused is the Attention predicate; `attention` contains the first eight Attention base rows plus `total`; `digest` contains the first eight Digest base threads/standalone items in existing order plus complete `metrics` and window/checkpoint fields. A compact list is not the complete list. Runtime cards remain a separate `factory` resource. |
+
+Missing required membership sources leave that projection pending/unavailable
+with retained data as applicable; they cannot create an empty complete page.
+Overview panels carry their contributing `sources` independently and may show
+unavailable Digest beside available Attention. `completeness: complete` describes
+the key's required sources, never completion of optional sections or an atomic
+multi-source snapshot. Sections do not change base ordering or counts.
+
+A section `data` object has `schema`, `beadId`, `name`, `baseIdentity`, `state`
+and `value`. `baseIdentity` contains `inventoryRevision`, `updatedAt`, and the
+expected workflow identity from the confirming shared inventory. `value` uses
+the corresponding existing Workspace section or `DigestMergeEvidence` shape;
+`history` groups `comments`, `history` and the history-derived Attention fields.
+`text` groups the four prose fields and `sourceMetadata`. `relations` groups
+the rows and `relationObservation`. Directional source health stays independent.
+An available result for one direction cannot certify the other direction empty.
+For `merge`, absence of matching verified records is an explicit unavailable
+evidence result, not an empty successful merge. Safe URL validation is unchanged.
+
+| Section state | Required evidence and display |
+| --- | --- |
+| `loading` | Admitted work has no accepted value. `value` is null. Show a section loading indicator, never an empty history. |
+| `available` | All required sources completed and identity confirmation succeeded. Show the accepted nonempty value with its own provenance. |
+| `empty` | The same complete validation succeeded and the section has no entries/text. Render confirmed empty. Inventory counts are insufficient. |
+| `stale` | Retain the last accepted value after invalidation, age expiry, source failure or identity change. Show age, pending/error and historical identity. Do not use it for current actions or current explanations. |
+| `unavailable` | No accepted value exists and work is not currently able to supply one, including unacquired/capped merge evidence. State the reason. `value` is null. |
+| `failed` | An attempted read failed with no accepted value. `value` is null; expose the safe error and retry metadata. A failed refresh with a retained value uses `stale`. |
+
+These states refine section presentation, not envelope `health`. Loading and
+unavailable have unavailable health; failed has unavailable health plus an error;
+available/empty require fresh contributing sources; stale has stale health.
+Pending refresh can keep available/empty data readable until the existing
+pending/age rules make it stale. Expose `synchronization.pending` immediately.
+Initial loading uses a section descriptor with null value; it never changes the
+existing rule that an unobserved envelope has null `data`. Once observed, the
+descriptor carries the states above. Source errors and pending generations remain
+visible even when base data is fresh. Aggregate health covers only the sources
+required by that resource; it does not claim page-wide detail completion.
+
+### Absence, identity and independent publication
+
+Cold entry shows shared-base loading until a complete shared inventory succeeds.
+A direct link joins that same work. An unknown ID during bootstrap or failed
+refresh remains loading/unavailable, not missing. Confirm absence only from a
+successful complete shared validation with no unincorporated inventory generation.
+Publish its `absence` proof and the existing `resource-missing` error. A previously
+confirmed absence is historical while a new generation is pending or failed;
+do not present it as a new current absence proof. A confirmed deletion clears
+the current Workspace base and disables its actions. Retained detail is optional
+historical display with explicit stale identity; it cannot restore membership.
+
+Each source captures its dirty generation and cache-entry identity before work.
+Publication requires that identity to remain admitted. A raced hint keeps the
+pending obligation and schedules continuation. Successful reads refresh clocks
+only for the exact content they validate. New inventory content cannot refresh
+old detail clocks. Before accepting a detail section, compare exact Bead ID,
+workflow identity and `updatedAt` against a successful shared inventory validation
+after its native reads. Reuse one confirming shared read across compatible
+sections; never use a targeted base fallback. Conflict retains old detail as
+stale, exposes `source-conflict`, and schedules bounded reconciliation. Comments
+and dependency changes also require their independent source generations: equal
+`updatedAt` or aggregate counts cannot prove those sources unchanged.
+
+Complete-source parsing, producer-qualified combined `show` handling and native
+outgoing relation reads remain as specified in the observer scheduling amendment.
+Combined reads may fill multiple due sections, but do not publish them before
+their own validation. Merge requires matching `nightweaver-verified-merge-v1`
+and referenced `nightweaver-merge-v1` records for the exact closed task, PR, checked
+head and merge commit. Keep the 128 most-recent-closed-task acquisition cap per
+requested window; older/unacquired tasks stay in base counts with unavailable
+evidence. A reopened, resolved, unpaused, deleted or differently claimed base row
+controls current membership and action eligibility immediately. Old explanation,
+environment or merge data cannot reverse that observation.
+
+### Bounded reuse and progress
+
+Deduplicate native work by Project, epoch, Bead ID, source and dirty generation,
+not by browser or surface. Share Attention/Workspace history and merge parsing.
+Canceling one caller releases its interest only. Host cancellation owns native
+termination and settlement. Do not release admission before process settlement.
+
+Base, section descriptors, retained section values, source values and indexes
+share the existing 32-MiB host budget. Keep the 8-MiB/10,000-row inventory bound,
+64 resource keys, two selected Workspaces, 64 histories/16 MiB, 2-MiB detail
+outputs and 2,048-comment limits. A section key consumes a resource slot; it does
+not create another allowance. Retain recent unpinned sections through the existing
+30-second interest grace and subsequent 30-second idle TTL, then evict by LRU
+within these limits. Pinned entries cannot be silently evicted. Growth/admission
+failure is explicit `source-limit`/429 and preserves accepted data. Browser cache
+and stream limits remain unchanged. v1.2 immediate source retirement is relaxed
+only for these bounded recent section values; audits stop when interest ends.
+Eviction removes provenance and admission identity with the value. Old callbacks
+cannot populate readmitted entries or a replacement epoch.
+
+Schedule selected missing sections before unrelated background enrichment. Keep
+the four-second native-work turn, two-second command bound, four history commands
+per turn and release the gate between commands. Continue unfinished work without
+waiting for another hint. When core work consumes a turn, reserve the next turn
+for selected/due details against the captured inventory; reuse that baseline for
+at most one consecutive turn before core validation. Rotate between two selected
+Workspaces, then due Attention/merge work; age pending obligations from their
+first hint. Continuous selection or invalidation must not reset older obligations.
+Waiting guarded operations keep priority with one due observer after eight guarded
+operations. Confirmation reads count as core work. If confirmation is pending,
+publish completed base work and keep the section pending. No optional section or
+legacy full-response cohort can block base publication. Tests must show selected
+detail, inventory refresh and guarded writes each advance under finite competing
+load; none may require all unrelated histories to complete first.
+
 ## Amendment v1.2 — event-driven tracker observations (ns-sib.1)
 
 This amendment supersedes the one-second tracker command schedule and its
