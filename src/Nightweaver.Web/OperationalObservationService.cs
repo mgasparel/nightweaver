@@ -443,7 +443,7 @@ internal sealed class OperationalObservationService(
                     entry.Envelope = entry.Envelope with { NextAttemptAt = clock.GetUtcNow().AddMilliseconds(entry.Envelope.TargetIntervalMs) };
                     Age(entry); continue;
                 }
-                var sources = sample.Pending || sample.Error is not null && !sample.Partial
+                var sources = sample.Pending || sample.Error is not null && !sample.Partial && !sample.ConfirmedAbsence
                     ? entry.Envelope.Sources.ToDictionary() : new Dictionary<string, ObservationSourceState>(StringComparer.Ordinal);
                 foreach (var (id, observed) in sample.Sources)
                 {
@@ -474,17 +474,18 @@ internal sealed class OperationalObservationService(
                     continue;
                 }
                 var missing = sample.Error?.Code == "resource-missing";
-                var data = sample.Error is null || sample.Partial ? JsonSerializer.SerializeToElement(sample.Data, Json) : missing ? null : entry.Envelope.Data;
-                var health = sample.Error is null ? "fresh" : data is null ? "unavailable" : "stale";
+                var data = sample.Error is null || sample.Partial || sample.ConfirmedAbsence
+                    ? JsonSerializer.SerializeToElement(sample.Data, Json) : missing ? null : entry.Envelope.Data;
+                var health = sample.Error is null ? "fresh" : missing || data is null ? "unavailable" : "stale";
                 var updated = entry.Envelope with
                 {
                     Data = data, Health = health, Error = sample.Error, Sources = sources,
-                    ObservedAt = sample.Error is null ? sample.ObservedAt : missing ? null : entry.Envelope.ObservedAt,
+                    ObservedAt = sample.Error is null || sample.ConfirmedAbsence ? sample.ObservedAt : missing ? null : entry.Envelope.ObservedAt,
                     LastAttemptAt = sample.AttemptedAt,
                     NextAttemptAt = clock.GetUtcNow().AddMilliseconds(entry.Envelope.TargetIntervalMs)
                 };
                 var previousPending = entry.PendingTimestamp;
-                if (sample.Error is null)
+                if (sample.Error is null || sample.ConfirmedAbsence)
                 {
                     if (generations[entry] == entry.DirtyGeneration) entry.PendingTimestamp = null;
                     else reconcileAgain = true;

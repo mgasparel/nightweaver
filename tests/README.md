@@ -7,6 +7,10 @@ late callbacks after eviction and the shared two-Workspace identity limit.
 These cases add no native journey or fixture publication. The existing isolated
 Explorer browser journey checks the new schema and inventory revision, native
 membership changes, warm navigation and retained stale rows at three sizes.
+Repair cases check the missing-resource error with its absence proof, deletion
+after accepted membership, a raced inventory hint, held Ready and Blocked reads,
+actual source failure, age expiry and real turn exhaustion. These cases use
+injected commands, barriers and controlled time. They add no native journey.
 Production projects one compact indexed cache per accepted inventory content
 identity when base keys have interest. Base callbacks add no native command.
 Legacy full-response collection and its native budgets remain unchanged.

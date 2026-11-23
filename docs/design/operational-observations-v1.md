@@ -170,6 +170,18 @@ do not present it as a new current absence proof. A confirmed deletion clears
 the current Workspace base and disables its actions. Retained detail is optional
 historical display with explicit stale identity; it cannot restore membership.
 
+The collector accepts the absence proof and error as one validated projection.
+It retains the inventory validation time and clears the completed pending
+obligation. The resource is unavailable, with a null `bead` and the absence
+proof in `data`. A raced inventory generation keeps the projection pending and
+does not publish a new proof or a missing-resource error. Legacy Workspace
+missing-resource responses still clear `data`.
+
+Each native Ready or Blocked read publishes only its completed membership.
+The other membership retains accepted data and pending refresh. An unfinished
+read is not a budget failure. Report actual source failures and work skipped
+by the completed bounded turn. Independent age rules still apply during a hold.
+
 Each source captures its dirty generation and cache-entry identity before work.
 Publication requires that identity to remain admitted. A raced hint keeps the
 pending obligation and schedules continuation. Successful reads refresh clocks

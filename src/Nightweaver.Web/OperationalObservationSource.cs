@@ -30,9 +30,9 @@ internal sealed class OperationalObservationSource(
         finally { publishBase = null; }
     }
 
-    private ObservationSample CurrentSample(ObservationSample sample) => scheduled && sample.Error is null
+    private ObservationSample CurrentSample(ObservationSample sample) => scheduled && (sample.Error is null || sample.ConfirmedAbsence)
         && sample.Sources.Any(pair => !schedule.IsCurrent(pair.Key, pair.Value.SourceGeneration))
-            ? sample with { Pending = true } : sample;
+            ? sample with { Pending = true, ConfirmedAbsence = false, Error = null } : sample;
 
     private void ProjectBases(IReadOnlyList<OperationKey> keys, BeadsInventory? inventory,
         FrozenSet<string>? ready, FrozenSet<string>? blocked, DateTimeOffset started,
@@ -69,6 +69,9 @@ internal sealed class OperationalObservationSource(
             object? data = !usable ? null : key.Kind == "base-workspace" ? baseInventory!.Workspace(key.Argument!)
                 : baseInventory!.Explorer(key, ready, blocked);
             var sample = Sample(data, started, ids);
+            if (usable && key.Kind == "base-workspace" && !baseInventory!.ById.ContainsKey(key.Argument!))
+                sample = sample with { ConfirmedAbsence = true,
+                    Error = new("resource-missing", "The Bead no longer exists.", false) };
             if (projectionError is not null) sample = sample with { Error = projectionError };
             else if (!usable && inventory is not null && (sample.Error is null || ids.Any(id => !states.ContainsKey(id))))
                 sample = sample with { Pending = true, Error = new("budget-exceeded", "Source is awaiting its bounded observation turn.") };
@@ -362,6 +365,7 @@ internal sealed class OperationalObservationSource(
             ProjectBases(keys, inventory, ready, blocked, started, result, inventoryOnly: true);
             for (var index = 0; index < 2 && HasBudget; index++)
             {
+                var membership = (index == 0) == readyFirst ? "ready" : "blocked";
                 if ((index == 0) == readyFirst)
                 {
                     if (keys.Any(key => key.Kind is "explorer" or "base-explorer" && key.Argument == "ready"))
@@ -369,7 +373,8 @@ internal sealed class OperationalObservationSource(
                 }
                 else if (keys.Any(key => key.Kind is "explorer" or "base-explorer" && key.Argument == "blocked"))
                     blocked = await ReadAsync("blocked", () => reader.ReadExplorerBlockedAsync(repository, token), token);
-                ProjectBases(keys, inventory, ready, blocked, started, result);
+                ProjectBases(keys.Where(key => key.Kind == "base-explorer" && key.Argument == membership).ToArray(),
+                    inventory, ready, blocked, started, result);
             }
             readyFirst = !readyFirst;
             // A failed core cannot erase the baseline of pending Workspace steps.

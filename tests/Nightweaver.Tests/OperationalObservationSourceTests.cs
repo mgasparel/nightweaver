@@ -35,8 +35,19 @@ public sealed class OperationalObservationSourceTests
         }
         finally { held.Release.TrySetResult(); await collection; }
         var result = service.Read("base:workspace:absent");
-        if (fail) Assert.Null(result.Data);
-        else Assert.Equal("absent", result.Data!.Value.GetProperty("absence").GetProperty("id").GetString());
+        if (fail)
+        {
+            Assert.Null(result.Data);
+            Assert.Equal("source-timeout", result.Error?.Code);
+        }
+        else
+        {
+            Assert.Equal("resource-missing", result.Error?.Code);
+            Assert.Equal("unavailable", result.Health);
+            Assert.NotNull(result.ObservedAt);
+            Assert.Equal("absent", result.Data!.Value.GetProperty("absence").GetProperty("id").GetString());
+            Assert.Null(result.PendingAgeMs);
+        }
         Assert.DoesNotContain("show", runner.Commands);
         Assert.Single(runner.Commands);
     }
@@ -53,6 +64,7 @@ public sealed class OperationalObservationSourceTests
         var first = await source.ReadScheduledAsync(keys, (_, _) => { }, TestContext.Current.CancellationToken);
         Assert.NotNull(first["base:explorer:all::1"].Data);
         Assert.True(first["base:explorer:ready::1"].Pending);
+        Assert.Equal("budget-exceeded", first["base:explorer:ready::1"].Error?.Code);
         Assert.Null(first["base:explorer:ready::1"].Data);
         var next = await source.ReadScheduledAsync(keys, (_, _) => { }, TestContext.Current.CancellationToken);
         Assert.False(next["base:explorer:ready::1"].Pending);
@@ -176,16 +188,128 @@ public sealed class OperationalObservationSourceTests
         clock.Advance(TimeSpan.FromSeconds(5));
         await service.CollectOnceAsync(false, token);
         var absent = service.Read("base:workspace:task-1");
-        Assert.Equal("fresh", absent.Health);
+        Assert.Equal("resource-missing", absent.Error?.Code);
+        Assert.Null(absent.PendingAgeMs);
         Assert.Equal("task-1", absent.Data!.Value.GetProperty("absence").GetProperty("id").GetString());
         Assert.Equal(JsonValueKind.Null, absent.Data.Value.GetProperty("bead").ValueKind);
         Assert.DoesNotContain("show", runner.Commands);
     }
 
+    [Theory]
+    [InlineData("ready")]
+    [InlineData("blocked")]
+    public async Task PendingMembershipDoesNotReportFailureBeforeItsRead(string membership)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { TargetPath = target.Path, Blocked = true };
+        var held = new HoldingRunner(runner, membership);
+        held.Release.TrySetResult();
+        using var factory = Factory(target.Path, held, clock);
+        using var service = new OperationalObservationService("web-test", Adapter(factory), clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        using var pin = service.Pin(["base:explorer:ready::1", "base:explorer:blocked::1"]);
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        var key = $"base:explorer:{membership}::1";
+        var accepted = service.Read(key).Data;
+        Assert.NotNull(accepted);
+        held.Reset();
+        service.RequestReconciliation();
+        var collection = service.CollectOnceAsync(false, token);
+        try
+        {
+            await held.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+            var pending = service.Read(key);
+            Assert.Equal(accepted, pending.Data);
+            Assert.NotNull(pending.PendingAgeMs);
+            Assert.Null(pending.Error);
+            Assert.Equal("fresh", pending.Health);
+            clock.Advance(TimeSpan.FromSeconds(121));
+            Assert.Equal("budget-exceeded", service.Read(key).Error?.Code);
+        }
+        finally { held.Release.TrySetResult(); await collection; }
+        // The held read crossed the inventory age and native turn bounds.
+        // A new turn must validate the complete required source set.
+        await service.CollectOnceAsync(false, token);
+        Assert.Null(service.Read(key).Error);
+        Assert.Null(service.Read(key).PendingAgeMs);
+        runner.FailReady = true;
+        service.RequestReconciliation();
+        await service.CollectOnceAsync(false, token);
+        Assert.Equal("source-timeout", service.Read("base:explorer:ready::1").Error?.Code);
+        Assert.NotNull(service.Read("base:explorer:ready::1").Data);
+        Assert.Null(service.Read("base:explorer:blocked::1").Error);
+    }
+
+    [Fact]
+    public async Task RacedInventoryHintCannotPublishCurrentAbsence()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        OperationalObservationSource? source = null;
+        var raced = false;
+        var runner = new Runner { Rows = 0, Advance = () =>
+        {
+            if (!raced)
+            { raced = true; source!.Invalidate([new BeadsInvalidation(1, "delete", "absent", null)]); }
+        } };
+        using var factory = Factory(target.Path, runner, clock);
+        source = Adapter(factory);
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        const string key = "base:workspace:absent";
+        service.Read(key);
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        Assert.True(raced);
+        Assert.Null(service.Read(key).Data);
+        Assert.Null(service.Read(key).Error);
+        Assert.NotNull(service.Read(key).PendingAgeMs);
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        Assert.Equal("resource-missing", service.Read(key).Error?.Code);
+        Assert.NotNull(service.Read(key).Data);
+        Assert.Null(service.Read(key).PendingAgeMs);
+        Assert.DoesNotContain("show", runner.Commands);
+    }
+
+    [Fact]
+    public async Task ExhaustedMembershipTurnRetainsAcceptedPageWithBudgetError()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var expensive = false;
+        var runner = new Runner { Blocked = true, Advance = () =>
+        { if (expensive) clock.Advance(TimeSpan.FromSeconds(2)); } };
+        using var factory = Factory(target.Path, runner, clock);
+        using var service = new OperationalObservationService("web-test", Adapter(factory), clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        using var pin = service.Pin(["base:explorer:ready::1", "base:explorer:blocked::1"]);
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        var accepted = service.Read("base:explorer:blocked::1").Data;
+        Assert.NotNull(accepted);
+        expensive = true;
+        service.RequestReconciliation();
+        await service.CollectOnceAsync(false, token);
+        var skipped = service.Read("base:explorer:blocked::1");
+        Assert.Equal(accepted, skipped.Data);
+        Assert.Equal("budget-exceeded", skipped.Error?.Code);
+        Assert.Equal("stale", skipped.Health);
+        Assert.NotNull(skipped.PendingAgeMs);
+        await service.CollectOnceAsync(false, token);
+        Assert.Null(service.Read("base:explorer:blocked::1").Error);
+        Assert.Null(service.Read("base:explorer:blocked::1").PendingAgeMs);
+    }
+
     private sealed class HoldingRunner(Runner inner, string command) : IProcessRunner
     {
-        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Entered { get; private set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; private set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal void Reset()
+        {
+            Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
         public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken token)
         {
             if (request.FileName == "bd" && request.Arguments.Contains(command))
@@ -1951,7 +2075,7 @@ public sealed class OperationalObservationSourceTests
         internal bool Blocked { get; set; }
         internal string Title { get; set; } = "Original title";
         internal int Priority { get; set; } = 1;
-        internal bool FailReady { get; init; }
+        internal bool FailReady { get; set; }
         internal bool Conflict { get; init; }
         internal int Rows { get; set; } = 1;
         internal bool Closed { get; set; }

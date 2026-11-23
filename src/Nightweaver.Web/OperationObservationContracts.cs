@@ -85,7 +85,8 @@ internal sealed record ObservationSynchronization(string Journal, bool Pending)
     public ObservationError? Error { get; init; }
 }
 internal sealed record ObservationSample(object? Data, DateTimeOffset AttemptedAt, DateTimeOffset? ObservedAt,
-    IReadOnlyDictionary<string, ObservationSourceState> Sources, ObservationError? Error = null, bool Partial = false, bool Pending = false);
+    IReadOnlyDictionary<string, ObservationSourceState> Sources, ObservationError? Error = null, bool Partial = false, bool Pending = false,
+    bool ConfirmedAbsence = false);
 
 internal interface IOperationalObservationSource
 {
