@@ -450,6 +450,15 @@ internal sealed class OperationalObservationService(
                 foreach (var (id, observed) in sample.Sources)
                 {
                     var previous = entry.Envelope.Sources.GetValueOrDefault(id);
+                    if (entry.Key.Kind == "section" && sample.Error is not null && !sample.Partial
+                        && entry.Envelope.Data is not null && previous is not null
+                        && !ReferenceEquals(previous.ContentIdentity, observed.ContentIdentity))
+                    {
+                        // A failed replacement cannot lend new base provenance
+                        // to the retained historical section body.
+                        sources[id] = previous with { Health = "stale", LastAttemptAt = observed.LastAttemptAt, Error = observed.Error };
+                        continue;
+                    }
                     if (sample.Pending)
                     {
                         // Pending successes belong to a replacement body. Only

@@ -34,6 +34,56 @@ public sealed class OperationalObservationSourceTests
     }
 
     [Fact]
+    public async Task SpentCoreTurnCannotPublishHistoryWithoutStrictValidation()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var cost = TimeSpan.Zero;
+        var runner = new Runner { Rows = 2, Advance = () => clock.Advance(cost) };
+        runner.HistoryOverrides["task-1"] = [new("foreign", "other", "human", "Foreign history", clock.GetUtcNow())];
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var token = TestContext.Current.CancellationToken;
+        await source.ReadScheduledAsync(Keys("attention"), (_, _) => { }, token);
+        cost = TimeSpan.FromSeconds(2);
+        source.Invalidate([new(1, "update", "task-2", null)]);
+        var keys = Keys("base:explorer:ready::1", "base:explorer:blocked::1", "section:task-1:history", "attention");
+        var spent = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Null(spent["section:task-1:history"].Data);
+        Assert.True(spent["section:task-1:history"].Pending);
+        var next = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Null(next["section:task-1:history"].Data);
+        Assert.Equal("source-failed", next["section:task-1:history"].Error?.Code);
+    }
+
+    [Fact]
+    public async Task FailedSectionReplacementKeepsHistoricalBaseProvenance()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        const string key = "section:task-1:history";
+        service.Read(key);
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        var previous = service.Read(key);
+        clock.Advance(TimeSpan.FromSeconds(10));
+        runner.Priority = 2; runner.FailCommentOnce = "task-1"; source.Invalidate();
+        await service.CollectOnceAsync(false, token);
+        var failed = service.Read(key);
+        Assert.Equal("stale", failed.Health);
+        Assert.Equal("source-timeout", failed.Error?.Code);
+        Assert.Equal(previous.Data!.Value.GetProperty("baseIdentity").GetRawText(), failed.Data!.Value.GetProperty("baseIdentity").GetRawText());
+        Assert.Equal(previous.Sources["inventory"].ObservedAt, failed.Sources["inventory"].ObservedAt);
+        Assert.Equal(previous.Sources["inventory"].ContentIdentity, failed.Sources["inventory"].ContentIdentity);
+        Assert.Equal(previous.Sources["inventory"].ValidatedTimestamp, failed.Sources["inventory"].ValidatedTimestamp);
+    }
+
+    [Fact]
     public async Task IndependentSectionsShareHistoryWithAttentionAndDigest()
     {
         using var target = new ObservationTargetFixture();

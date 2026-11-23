@@ -113,7 +113,8 @@ internal sealed partial class OperationalObservationSource
                 else if (sample.Error is not null && sample.Error.Code != "budget-exceeded")
                     result[key.Value] = sample;
                 else if (SectionSources(key).All(name => states.TryGetValue(name, out var state) && state.Error is null
-                    && (!scheduled || schedule.IsCurrent(name, state.SourceGeneration)))) completed.Add(key);
+                    && (!scheduled || schedule.IsCurrent(name, state.SourceGeneration)))
+                    && (key.Query is not ("history" or "merge") || histories.GetValueOrDefault(key.Argument!)?.Strict == true)) completed.Add(key);
             }
             catch (Exception exception) when (IsSourceFailure(exception))
             { result[key.Value] = Sample(null, now, sources) with { Error = Error(exception) }; }
