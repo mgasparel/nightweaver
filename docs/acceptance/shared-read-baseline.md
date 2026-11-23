@@ -56,9 +56,15 @@ diagnostic run.
 The browser controller uses one Node monotonic clock. Navigation and same-tab
 route actions start each interval. Polling samples actual rendered fixture facts
 at 100 ms intervals. The measured render time is an upper bound that includes
-Playwright transport. It is separate from the first HTTP receipt, which may carry
-an empty pending envelope. A warm retained read without a new HTTP response has
+Playwright transport. It is separate from the first HTTP receipt for a validated
+surface resource key. Both request start and receipt must fall within the sample
+interval. An unrelated resource or an earlier in-flight request cannot supply
+this time. The probe uses exact Playwright request identity to record the request
+timestamp before it reads the response body. A receipt may carry an empty pending
+envelope. A warm retained read without a new relevant HTTP response has
 `httpMs: null` and `retainedReceipt: true`; it is not a zero-duration receipt.
+This flag also requires all validated resource receipts to precede the sample.
+An unmatched receipt has null time and an explicit unavailable reason.
 The legacy full-response contract exposes no earlier independent section event.
 The report records the full-response boundary and the later visible History
 boundary. It does not claim that hidden content was visibly rendered.
@@ -102,7 +108,7 @@ those tests or claim coverage for an unmeasured case.
 Run the cheap failure assertions separately:
 
 ```powershell
-node --test tests/Nightweaver.QA.AppHost/shared-read-assertions.test.mjs tests/Nightweaver.QA.AppHost/shared-read-report.test.mjs
+node --test tests/Nightweaver.QA.AppHost/shared-read-assertions.test.mjs tests/Nightweaver.QA.AppHost/shared-read-report.test.mjs tests/Nightweaver.QA.AppHost/shared-read-receipts.test.mjs
 ```
 
 The long probe and tool shim remain outside normal test discovery. No native
@@ -175,6 +181,59 @@ native run. The checked-in evidence archive retains raw results, seed bytes,
 tool start/final records, screenshots, lifecycle logs and both reports. It omits
 the generated shim binaries. Use the exact measured probe revision when repeating
 the native workload. The later change only corrects report attribution.
+
+### HTTP receipt repair
+
+Use `receipt-analysis.zip` for HTTP comparisons. The original `report.json` and
+`analysis-report.json` can assign an unrelated resource response to a surface.
+Their HTTP values and retained-read flags are superseded. Raw files and the two
+original archives remain unchanged. Useful-content times, detail times, external
+changes and tool-load gaps remain unchanged.
+
+The corrected report matches resource keys from each sample's validated source
+proof. It matches request start and receipt to that sample's interval. The old
+trace has no request identity. A historical match therefore requires exactly one
+unanswered request for the same key. Ambiguous order makes later matches for that
+key unavailable. The analysis does not assume response order. An unknown time
+stays null and has a reason. It does not enter the HTTP statistics.
+
+The repair changes 59 HTTP values across all 110 samples. The corrected report
+retains 76 matched receipts and 34 retained reads. No sample needs an unavailable
+HTTP reason in this archive. All 110 rendered samples remain valid. The eight
+unsettled tool commands still prevent complete matrix attribution.
+
+Corrected median HTTP times, in milliseconds:
+
+| Surface | Settled cold | Settled warm | Active cold | Active warm |
+| --- | ---: | ---: | ---: | ---: |
+| Overview | 244.5 | 10.8 | 211.9 | 11.6 |
+| Explorer All page 1 | 191.7 | 67.5 | 275.9 | 67.3 |
+| Attention | 193.4 | retained | 212.8 | retained |
+| Direct Workspace | 222.3 | 15.9 | 221.4 | 15.0 |
+| Catch Up 24h | 205.2 | retained | 232.1 | retained |
+
+Each cold cell has one receipt. Each numeric warm cell has five receipts.
+Each retained warm cell has five null times. These HTTP times can describe empty
+envelopes. They do not establish useful content or a latency target.
+
+To reproduce the analysis, extract the unchanged `evidence.zip` into a new
+directory. Use a separate output path to preserve its reports:
+
+```powershell
+node tests/Nightweaver.QA.AppHost/shared-read-report.mjs <extracted-directory> <new-analysis-report.json>
+```
+
+Exit 1 remains expected because the raw tool traces have settlement gaps. The
+checked-in `receipt-analysis.zip` contains `receipt-analysis-report.json`. Its
+SHA256 is `8EFC261F085561FBADA7AC25E8AA23471871E19D9D8B1B7556001CA4F4AB7776`.
+The source archive SHA256 remains
+`4FB78E1D047208ED0A2B2AD489486105AAE36A5F0D9F2ABA2C71C5973D6380DB`.
+The repair adds ten cheap Node checks, including unrelated early responses,
+retained warm reads, interval boundaries, ambiguous historical matches, and
+report aggregation. All 36 checks pass. Probe syntax and `git diff --check` pass.
+No product code, normal-suite test, native workload or scheduling policy changes.
+The Reviewer permits reuse of the complete candidate measurement below for this
+repair. No unchanged native matrix or complete suite was repeated.
 
 ## Local test cost
 

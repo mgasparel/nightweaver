@@ -59,3 +59,24 @@ test('rejects unsettled native commands', t => {
   const f = fixture(t); fs.writeFileSync(path.join(f.trial, 'tools', 'one.pending'), '{}');
   assert.equal(buildReport(f.root).completed, false);
 });
+test('report replaces unrelated raw HTTP times and groups only matched receipts', t => {
+  const f = fixture(t);
+  const row = f.browser.samples[0];
+  row.startMs = 100; row.detailMs = 50; row.httpMs = 5;
+  row.proof.resources[0].key = 'workspace:fixture';
+  f.browser.requests = [{ method: 'GET', atMs: 101,
+    url: 'http://localhost/api/operations/v1/projects/qa/resources?key=attention' },
+    { method: 'GET', atMs: 110,
+      url: 'http://localhost/api/operations/v1/projects/qa/resources?key=workspace%3Afixture' }];
+  f.browser.resources = [{ key: 'attention', atMs: 105 }, { key: 'workspace:fixture', atMs: 120 }];
+  f.save();
+  const report = buildReport(f.root);
+  assert.equal(report.samples[0].httpMs, 20);
+  assert.equal(report.groups.find(group => group.mode === 'cold').httpMs.median, 20);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.trial, 'browser.json'))).samples[0].httpMs, 5);
+  f.browser.requests = []; f.save();
+  const unavailable = buildReport(f.root);
+  assert.equal(unavailable.samples[0].httpMs, null);
+  assert.equal(unavailable.groups.find(group => group.mode === 'cold').httpMs, null);
+  assert(unavailable.missing.some(reason => reason.startsWith('HTTP receipt unavailable:')));
+});

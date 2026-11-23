@@ -7,6 +7,7 @@ export function assertSample(sample) {
     assert(Number.isFinite(sample[key]) && sample[key] >= 0, `Missing ${key}`);
   }
   assert(sample.httpMs === null && sample.retainedReceipt === true
+    || sample.httpMs === null && typeof sample.httpUnavailableReason === 'string' && sample.httpUnavailableReason.length > 0
     || Number.isFinite(sample.httpMs) && sample.httpMs >= 0, 'Missing httpMs');
   assert(sample.detailMs >= sample.usefulMs);
   assert(sample.proof?.rendered?.length > 0, 'No rendered facts');

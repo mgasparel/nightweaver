@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { assertSample, summarizeTools } from './shared-read-assertions.mjs';
+import { analyzeReceipt } from './shared-read-receipts.mjs';
 
 export function buildReport(root) {
 const result = JSON.parse(fs.readFileSync(path.join(root, 'result.json'), 'utf8'));
@@ -46,7 +47,9 @@ for (const run of result.runs) {
   trials.push({ directory: path.basename(trial), manifest: value.manifest, changes: value.changes,
     activity: value.activity, lifecycle: run, errorCount: value.errors.length, unsettled, externalCommands: value.external,
     fullToolLoad: summarizeTools(records, run.startedUtc ?? result.measuredUtc, run.finishedUtc ?? result.finishedUtc, pending) });
-  for (const sample of value.samples) {
+  for (const rawSample of value.samples) {
+    const sample = analyzeReceipt(rawSample, value);
+    if (sample.httpUnavailableReason) missing.add(`HTTP receipt unavailable: ${path.basename(trial)}/${sample.mode}/${sample.surface}/${sample.cycle}: ${sample.httpUnavailableReason}`);
     let valid = true, reason = null;
     try { assertSample(sample); } catch (error) { valid = false; reason = String(error); failures.push(`Invalid sample: ${path.basename(trial)}/${sample.mode}/${sample.surface}: ${reason}`); }
     samples.push({ trial: path.basename(trial), ...sample, valid, reason,
@@ -69,6 +72,10 @@ for (const activity of result.activity) for (const mode of ['cold','warm']) for 
     httpMs: stats('httpMs'), usefulMs: stats('usefulMs'), detailMs: stats('detailMs') });
 }
 return { schema: 'nightweaver-shared-read-report-v1',
+  receiptAnalysis: { schema: 'nightweaver-shared-read-receipt-analysis-v1',
+    matched: samples.filter(row => row.httpMs !== null).length,
+    retained: samples.filter(row => row.retainedReceipt).length,
+    unavailable: samples.filter(row => row.httpUnavailableReason).length },
   revision: result.revision, tree: result.tree, dirty: result.dirty, latencyTarget: null,
   completed: result.failure === null && result.runs.length > 0 && failures.length === 0,
   clock: 'Node monotonic measurement; UTC correlates native shim intervals, not cross-process phase subtraction.',
@@ -78,7 +85,8 @@ return { schema: 'nightweaver-shared-read-report-v1',
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const root = path.resolve(process.argv[2]);
   const report = buildReport(root);
-  fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify(report, null, 2));
+  const destination = process.argv[3] ? path.resolve(process.argv[3]) : path.join(root, 'report.json');
+  fs.writeFileSync(destination, JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ completed: report.completed, groups: report.groups, missing: report.missing }, null, 2));
   if (!report.completed) process.exitCode = 1;
 }

@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import { createHash } from 'node:crypto';
 import { assertSample } from './shared-read-assertions.mjs';
+import { resourceKey, sampleReceipt } from './shared-read-receipts.mjs';
 
 const base = process.env.NIGHTWEAVER_QA_URL;
 const configPath = process.env.NIGHTWEAVER_QA_CONFIG;
@@ -67,17 +68,20 @@ const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 page.setDefaultTimeout(90000);
 const errors = [], resources = [], requests = [], samples = [], changes = [];
+const requestTimes = new WeakMap(), receipts = [];
 page.on('pageerror', error => errors.push(String(error)));
 page.on('request', request => {
-  if (request.url().includes('/api/')) requests.push({ atMs: performance.now(), url: request.url(), method: request.method() });
+  const atMs = performance.now();
+  requestTimes.set(request, atMs);
+  if (request.url().includes('/api/')) requests.push({ atMs, url: request.url(), method: request.method() });
 });
 page.on('response', async response => {
   const atMs = performance.now();
-  if (current && current.httpMs === null && response.url().includes('/resources')) current.httpMs = atMs - current.startMs;
-  if (!response.url().includes('/resources')) return;
+  const key = resourceKey(response.url());
+  if (!key) return;
+  receipts.push({ key, atMs, requestAtMs: requestTimes.get(response.request()) ?? null, status: response.status() });
   try {
     const value = await response.json();
-    const key = new URL(response.url()).searchParams.get('key');
     resources.push({ key, atMs, status: response.status(), epoch: value.epoch, revision: value.revision,
       health: value.health, sources: value.sources, synchronization: value.synchronization,
       dataPresent: value.data !== null && value.data !== undefined, data: value.data });
@@ -200,7 +204,8 @@ async function trial(surface, mode, cycle) {
       ? 'Independent section receipts and validated states are retained. Admission time remains unavailable.'
       : 'Legacy responses publish the full resource. Independent section admission and completion are not exposed.';
     // A warm tab can render validated retained facts without another receipt.
-    if (sample.httpMs === null && mode !== 'cold') sample.retainedReceipt = true;
+    sample.endMs = performance.now();
+    Object.assign(sample, sampleReceipt(sample, receipts, sample.endMs));
     sample.completedUtc = new Date().toISOString();
     sample.cutoffUtc = sample.completedUtc;
     current = null;
@@ -292,7 +297,7 @@ try {
     clock: 'Node performance.now; launch-to-render includes Playwright transport and 100ms sampling.',
     clockIdentity: `${process.pid}/${performance.timeOrigin}`, clockOriginUtc: new Date(performance.timeOrigin).toISOString(),
     fixtureConfigSha256: createHash('sha256').update(fs.readFileSync(configPath)).digest('hex'),
-    processId: process.pid, nativeReady, nativeBlocked, samples, resources, requests, changes, external, errors,
+    processId: process.pid, nativeReady, nativeBlocked, samples, resources, requests, receipts, changes, external, errors,
     missing: [...manifest.missing, 'Per-section publication and admission timestamps on the legacy full-response contract',
       'Separate gate, queue, projection and browser receive-to-render attribution',
       'Backup-audit render visibility', 'Fixed Output range', 'Cold/warm Ready and Blocked Explorer views and All page 3',
