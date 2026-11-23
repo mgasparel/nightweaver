@@ -21,7 +21,7 @@ behavior. New keys add partial-page publication; existing full responses stay va
 | Complete history, selected explanation and confirmed empty history | `BeadWorkspaceComment`, `BeadWorkspaceHistory`, `AttentionDeskItem`; `BeadWorkspaceProjector.ProjectHistory` | Workspace History and Attention reports; never select a report from an incomplete history |
 | Relations and directional health | `BeadWorkspaceRelation`, `BeadWorkspaceRelationObservation`; qualified combined incoming read and native outgoing read | Workspace relation section; one failed direction cannot make the other complete or empty |
 | Environment and Output | `BeadWorkspaceEnvironment`; existing `/api/telemetry/stream` | Workspace environment and invocation-bound Output remain separate from base freshness |
-| Verified merge, unavailable evidence and separate cleanup warning | `DigestMergeEvidence`, `DigestMergeEvidenceParser`; matching host/agent records | Catch Up enrichment; see [merge acceptance](digest-merge.md) |
+| Verified merge, unavailable evidence and separate cleanup warning | `DigestMergeEvidence.Read` / `Parse`; matching host/agent records | Catch Up enrichment; see [merge acceptance](digest-merge.md) |
 | Loading, pending, stale, failed and unavailable | `ObservationEnvelope`, `ObservationSourceState`, `ObservationSample`; `TrackerSourceSchedule` | New section descriptor states refine existing envelope health; initial null never means empty |
 | Epoch/revision, admission and pending generation | `OperationalObservationService`, `ObservationMemoryBudget`; Studio observation coordinator | Reject obsolete responses, retain readable data truthfully, preserve drafts and focus |
 
