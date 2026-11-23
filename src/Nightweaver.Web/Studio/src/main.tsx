@@ -234,8 +234,8 @@ function AppShell({ context }: { context: StudioContext }) {
 }
 
 function AttentionCount({ projectId }: { projectId: string }) {
-  const snapshot = useObservation(projectId, "attention");
-  const data = snapshot.observation?.data;
+  const snapshot = useObservation<{ items: unknown[] }>(projectId, "base:attention");
+  const data = snapshot.observation?.data?.items;
   const stale = snapshot.stale || snapshot.observation?.health !== "fresh";
   return <small id="attention-navigation-count" aria-label={Array.isArray(data) ? `${data.length} paused Beads${stale ? ", retained observation" : ""}` : "Attention count unavailable"}>
     {Array.isArray(data) ? `${data.length}${stale ? " · stale" : ""}` : "—"}
@@ -243,14 +243,14 @@ function AttentionCount({ projectId }: { projectId: string }) {
 }
 
 function SynchronizationStatus({ projectId }: { projectId: string }) {
-  const snapshot = useObservation(projectId, "attention");
+  const snapshot = useObservation<{ items: unknown[] }>(projectId, "base:attention");
   const [error, setError] = useState<string>();
   const health = observationStatus(snapshot);
   return <div className="synchronization">
     <span role="status">{snapshot.connectionState === "connected" ? "Live connection" : snapshot.connectionState === "connecting" ? "Connecting" : snapshot.connectionState === "recovering" ? "Recovering updates channel" : "Disconnected"} · {health}</span>
     <button className="text-link" onClick={() => {
       setError(undefined);
-      operations.refresh([{ projectId, key: "attention" }]).catch(reason => setError(
+      operations.refresh([{ projectId, key: "base:attention" }]).catch(reason => setError(
         String(reason).includes("outcome unknown") ? "Refresh outcome unknown. Try Refresh again." : "Refresh failed. Try Refresh again."));
     }}>{snapshot.refreshing ? "Refresh again" : "Refresh"}</button>
     {(error || snapshot.error) && <span role="alert">{error ?? (snapshot.error?.includes("outcome unknown")
@@ -259,8 +259,8 @@ function SynchronizationStatus({ projectId }: { projectId: string }) {
 }
 
 function AttentionMetric({ projectId }: { projectId: string }) {
-  const snapshot = useObservation(projectId, "attention");
-  const data = snapshot.observation?.data;
+  const snapshot = useObservation<{ items: unknown[] }>(projectId, "base:attention");
+  const data = snapshot.observation?.data?.items;
   const health = observationStatus(snapshot);
   return <Link className="summary-attention" to={`${projectPath(projectId)}/attention`}>
     {Array.isArray(data) ? `${data.length} paused Beads` : "Attention unavailable"} · {health}

@@ -191,3 +191,19 @@ The internal SSE seam is `Subscribe(keys, listener)`: it atomically admits/pins 
 Fast service/source tests cover shared readers, external and comments-only changes, membership changes, failure retention, partial relations, identity conflict/deletion, unchanged observations, checkpoint/domain-clock equality, age during a blocked read, eviction/readmission ordering, shared byte capacity, atomic admission, subscription lifetime, mutation fairness, slow-source substep progress and shutdown. One real-bd smoke observes comments and dependencies through HTTP; a process-runner boundary verifies output-limit termination. Existing Workspace boundary and Factory telemetry integration cases remain intact.
 
 Actual timings and live isolated-stack evidence are recorded in [operational observer acceptance](../acceptance/operational-observer.md). The one-second and two-second schedules are targets, not transactional or maximum-latency guarantees. Large Attention cohorts, slow commands and mutation storms can exceed them and must expose stale/budget metadata.
+
+## Attention base publication (ns-gjwx-p92fb31bbae007f103e1a)
+
+`base:attention` publishes all current nonterminal pauses from the compact shared
+inventory. It issues no history command and has no history-count limit. Rows use
+priority then ordinal ID ordering. The legacy `attention` key retains its complete
+cohort contract. Studio uses only the new key for membership and counts.
+
+The Attention Desk requests the selected history section. Overview requests one
+preview history at a time; the other rows keep useful base facts and an explicit
+unloaded explanation state. The user can load another preview. An open context
+keeps its selected identity across reorder. Base removal retires membership and
+its disclosure. Explanation update time and complete workflow identity must match
+the row before context or actions can use it. Pending, failed and stale sections
+remain explicit. The existing section cache, admission limits, source audits and
+fresh native mutation validation stay in force.

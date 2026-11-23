@@ -22,7 +22,7 @@ Routine observation timestamps, source details and Refresh live in an Overview d
 recovering-updates header is displayed; warnings and type sizes remain intact.
 Project navigation remains in the sidebar, including its existing mobile controls.
 
-The summary's paused count comes from the shared `attention` observation and
+The summary's paused count comes from the shared `base:attention` observation and
 links to Attention. Runtime availability comes independently from `factory`
 through the existing runtime-state projection. Missing attention is unavailable,
 not zero; an empty inventory says nothing about runtime health. Source freshness,

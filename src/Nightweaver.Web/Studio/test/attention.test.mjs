@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AttentionCommands } from '../src/attention-commands.ts';
-import { actionRequest, attentionWarningSections, decisionSections, safeBeadId, safeEvidenceUrl } from '../src/bead-model.ts';
+import { attentionFromBase, actionRequest, attentionWarningSections, decisionSections, safeBeadId, safeEvidenceUrl } from '../src/bead-model.ts';
 const item = { beadId: 'qa.1', stage: 'stage:review', labels: ['other', 'needs-human', 'product-decision-required'], repairCycles: 3 };
 const receipt = action => new Response(JSON.stringify({ beadId: item.beadId, action, resolved: action !== 'note_only', commentRecorded: true, stateChanged: action !== 'note_only' }));
 
@@ -94,4 +94,36 @@ test('receipt decoding also has a deadline; a stalled response body is uncertain
 test('evidence accepts explicit HTTP(S) and rejects credentials, whitespace and unsafe references', () => {
   for (const value of ['https://example.com/pull/53', 'HTTP://example.com/evidence?q=1#checks']) assert(safeEvidenceUrl(value), value);
   for (const value of ['javascript:alert(1)', 'file:///H:/private', '//example.com/pr', '/api/private', 'https://user:secret@example.com/pr', 'https://user@example.com', ' https://example.com', 'https://example.com/a b', 'https://example.com/\nsecret', 'https://']) assert(!safeEvidenceUrl(value), value);
+});
+
+test('base membership has no invented explanation and only matching current history enables actions', () => {
+  const workflow = { stage: 'stage:review', pauseLabels: ['needs-human'], repairCycles: 2 };
+  const row = { id: 'qa.1', title: 'Current title', type: 'task', status: 'open', priority: 1,
+    stage: workflow.stage, labels: workflow.pauseLabels, repairCycles: 2, updatedAt: '2026-01-01T00:00:00Z',
+    actions: { canRetry: true, canAbort: true, canDecide: false, unavailableReason: null, expectedWorkflow: workflow } };
+  const evidence = { ...item, beadId: row.id, title: 'Old title', kind: 'needs-human', diagnostic: 'Attributable diagnostic',
+    question: null, sourceCommentId: 'comment-1', canRetry: true, canAbort: true };
+  const section = { beadId: row.id, state: 'available', baseIdentity: { updatedAt: row.updatedAt, expectedWorkflow: workflow }, value: { attention: evidence } };
+  const pending = attentionFromBase(row, 3);
+  assert.equal(pending.diagnostic, null);
+  assert.equal(pending.question, null);
+  assert.equal(pending.message, undefined);
+  assert.equal(pending.canRetry, false);
+  const current = attentionFromBase(row, 3, section, true);
+  assert.equal(current.diagnostic, evidence.diagnostic);
+  assert.equal(current.title, row.title);
+  assert.equal(current.canRetry, true);
+  for (const changed of [
+    { ...section, beadId: 'foreign' },
+    { ...section, state: 'stale' },
+    { ...section, baseIdentity: { ...section.baseIdentity, updatedAt: '2026-01-02T00:00:00Z' } },
+    { ...section, baseIdentity: { ...section.baseIdentity, expectedWorkflow: { ...workflow, repairCycles: 3 } } },
+    { ...section, baseIdentity: { ...section.baseIdentity, expectedWorkflow: { ...workflow, stage: 'stage:merge' } } },
+    { ...section, baseIdentity: { ...section.baseIdentity, expectedWorkflow: { ...workflow, pauseLabels: ['product-decision-required'] } } },
+  ]) {
+    assert.equal(attentionFromBase(row, 3, changed, true).diagnostic, null);
+    assert.equal(attentionFromBase(row, 3, changed, true).canRetry, false);
+  }
+  assert.equal(attentionFromBase(row, 3, section, false).canRetry, false);
+  assert.equal(attentionFromBase({ ...row, actions: { ...row.actions, canRetry: false } }, 3, section, true).canRetry, false);
 });
