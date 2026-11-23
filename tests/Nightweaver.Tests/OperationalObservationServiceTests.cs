@@ -9,6 +9,37 @@ namespace Nightweaver.Tests;
 public sealed class OperationalObservationServiceTests
 {
     [Fact]
+    public void BaseAndLegacyWorkspaceKeysShareTheTwoIdentityLimit()
+    {
+        var clock = new Clock();
+        using var service = Service(new Source(clock), clock);
+        using var pin = service.Pin(["base:workspace:task-1", "workspace:task-1", "base:workspace:task-2"]);
+        Assert.Equal(429, Assert.Throws<ObservationRequestException>(() => service.Read("base:workspace:task-3")).StatusCode);
+        Assert.Null(service.Read("workspace:task-2").Data);
+    }
+
+    [Fact]
+    public async Task LateBaseCallbackCannotPopulateAnEvictedAndReadmittedEntry()
+    {
+        var clock = new Clock();
+        var source = new Source(clock) { ProgressiveHold = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        using var service = Service(source, clock);
+        var original = service.Read("base:workspace:task-1");
+        var collecting = service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        await source.Entered.Task;
+        clock.Advance(TimeSpan.FromSeconds(61));
+        var replacement = service.Read("base:workspace:task-1");
+        Assert.NotEqual(original.Revision, replacement.Revision);
+        source.ProgressiveHold.SetResult();
+        await collecting;
+        Assert.Null(service.Read("base:workspace:task-1").Data);
+        Assert.Equal(replacement.Revision, service.Read("base:workspace:task-1").Revision);
+        source.ProgressiveHold = null;
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        Assert.NotNull(service.Read("base:workspace:task-1").Data);
+    }
+
+    [Fact]
     public async Task SharedCollectorExportsSafeHealthAgeAndOneAttemptAcrossManySubscribers()
     {
         const string canary = "secret-workspace-comment-transcript";
@@ -656,8 +687,21 @@ public sealed class OperationalObservationServiceTests
         public override long GetTimestamp() => now.UtcTicks;
         internal void Advance(TimeSpan delta) => now += delta;
     }
-    private sealed class Source(Clock clock) : IOperationalObservationSource
+    private sealed class Source(Clock clock) : IOperationalObservationSource, IProgressiveTrackerObservationSource
     {
+        internal TaskCompletionSource? ProgressiveHold { get; set; }
+        public async Task<IReadOnlyDictionary<string, ObservationSample>> ReadProgressiveAsync(IReadOnlyList<OperationKey> keys,
+            Action<string, ObservationSourceState> revalidated,
+            Action<IReadOnlyDictionary<string, ObservationSample>> publish, CancellationToken token)
+        {
+            var samples = await ReadTrackerAsync(keys, token, revalidated);
+            if (ProgressiveHold is not null)
+            {
+                await ProgressiveHold.Task.WaitAsync(token);
+                publish(samples);
+            }
+            return samples;
+        }
         internal int TrackerReads { get; private set; }
         internal string Content { get; set; } = "same";
         internal ObservationError? Error { get; set; }

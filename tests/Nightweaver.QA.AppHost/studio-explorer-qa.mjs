@@ -56,7 +56,8 @@ try {
   await search.fill('Studio Explorer'); await view.selectOption('all'); await submit.click();
   await waitText('81 matching Beads · Page 1 of 3');
   assert.equal(await list.count(), 40);
-  const bounded = await page.evaluate(async () => (await (await fetch('/api/operations/v1/projects/qa/resources?key=explorer:all:U3R1ZGlvIEV4cGxvcmVy:1')).json()).data);
+  const bounded = await page.evaluate(async () => (await (await fetch('/api/operations/v1/projects/qa/resources?key=base:explorer:all:U3R1ZGlvIEV4cGxvcmVy:1')).json()).data);
+  assert.equal(bounded.schema, "nightweaver-base-v1"); assert.match(bounded.inventoryRevision, /^[1-9][0-9]*$/);
   assert.equal(bounded.items.length, 40); assert.equal(bounded.total, 81);
   await capture('inventory');
   // Keep page 1 valid: no URL clamp or parent navigation may mask focus loss.
@@ -132,7 +133,7 @@ try {
   // Source health fixture keeps the real envelope identity, coordinator and live stream.
   await page.route('**/resources?*', async route => {
     const response = await route.fetch(); const json = await response.json();
-    if (json.key?.startsWith('explorer:') && json.data) {
+    if (json.key?.startsWith('base:explorer:') && json.data) {
       json.health = 'stale'; json.error = { code: 'source-timeout', message: 'Tracker timed out; retained results.', retryable: true };
     }
     await route.fulfill({ response, json });

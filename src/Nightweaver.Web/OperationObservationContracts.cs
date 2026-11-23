@@ -11,6 +11,13 @@ internal sealed record OperationKey(string Value, string Kind, string? Argument 
     {
         if (Encoding.UTF8.GetByteCount(value) > 1024) throw new ObservationRequestException(400);
         var parts = value.Split(':');
+        if (parts is ["base", "workspace", var baseId] && BeadIdSafety.IsSafe(baseId))
+            return new(value, "base-workspace", baseId);
+        if (parts is ["base", "explorer", _, _, _])
+        {
+            var explorer = Parse(value[5..]);
+            return explorer with { Value = value, Kind = "base-explorer" };
+        }
         if (value is "factory" or "attention") return new(value, value);
         if (parts is ["workspace", var id] && BeadIdSafety.IsSafe(id)) return new(value, "workspace", id);
         if (parts is ["digest", var window] && window is "auto" or "since_caught_up" or "24h" or "7d" or "30d" or "all")
@@ -78,7 +85,8 @@ internal sealed record ObservationSynchronization(string Journal, bool Pending)
     public ObservationError? Error { get; init; }
 }
 internal sealed record ObservationSample(object? Data, DateTimeOffset AttemptedAt, DateTimeOffset? ObservedAt,
-    IReadOnlyDictionary<string, ObservationSourceState> Sources, ObservationError? Error = null, bool Partial = false, bool Pending = false);
+    IReadOnlyDictionary<string, ObservationSourceState> Sources, ObservationError? Error = null, bool Partial = false, bool Pending = false,
+    bool ConfirmedAbsence = false);
 
 internal interface IOperationalObservationSource
 {
@@ -114,4 +122,13 @@ internal interface IScheduledTrackerObservationSource
     void Invalidate(IReadOnlyList<BeadsInvalidation>? hints = null);
     void Reconcile();
     double? PendingAge(IEnumerable<string> sources);
+}
+
+// Publication remains on the serialized collector turn. A callback can publish
+// completed base projections before the turn starts optional native work.
+internal interface IProgressiveTrackerObservationSource
+{
+    Task<IReadOnlyDictionary<string, ObservationSample>> ReadProgressiveAsync(IReadOnlyList<OperationKey> keys,
+        Action<string, ObservationSourceState> revalidated,
+        Action<IReadOnlyDictionary<string, ObservationSample>> publish, CancellationToken token);
 }

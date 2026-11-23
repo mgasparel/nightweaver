@@ -136,8 +136,9 @@ internal sealed class OperationalObservationService(
         EvictExpired(now);
         var additions = keys.Where(key => !entries.ContainsKey(key.Value)).ToArray();
         var requested = keys.Select(key => key.Value).ToHashSet(StringComparer.Ordinal);
-        var workspaces = entries.Values.Count(entry => entry.Key.Kind == "workspace" && IsPinned(entry, now))
-            + keys.Count(key => key.Kind == "workspace" && (!entries.TryGetValue(key.Value, out var entry) || !IsPinned(entry, now)));
+        var workspaces = entries.Values.Where(entry => entry.Key.Kind is "workspace" or "base-workspace" && IsPinned(entry, now))
+            .Select(entry => entry.Key.Argument).Concat(keys.Where(key => key.Kind is "workspace" or "base-workspace")
+                .Select(key => key.Argument)).Distinct(StringComparer.Ordinal).Count();
         if (workspaces > 2) throw new ObservationRequestException(429);
         var created = new List<Entry>();
         foreach (var key in additions)
@@ -186,7 +187,7 @@ internal sealed class OperationalObservationService(
             "factory" => ["runtime"], "cleanup" => ["cleanup"], "digest" => ["inventory", "checkpoint"],
             "workspace" => ["inventory", "detail:" + key.Argument, "relations-up:" + key.Argument,
                 "relations-down:" + key.Argument, "comments:" + key.Argument, "environment:" + key.Argument],
-            "explorer" when key.Argument is "ready" or "blocked" => ["inventory", key.Argument],
+            "explorer" or "base-explorer" when key.Argument is "ready" or "blocked" => ["inventory", key.Argument],
             _ => ["inventory"]
         };
         return names.ToDictionary(name => name, _ => new ObservationSourceState("unavailable", null, null, null), StringComparer.Ordinal);
@@ -405,6 +406,9 @@ internal sealed class OperationalObservationService(
         try
         {
             samples = runtime ? await source.ReadRuntimeAsync(keys, token)
+                : source is IProgressiveTrackerObservationSource progressive
+                    ? await progressive.ReadProgressiveAsync(keys, (id, state) => Revalidate(captured, id, state),
+                        completed => ApplySamples(captured, generations, completed, partialTurn: true), token)
                 : source is IScheduledTrackerObservationSource scheduledSource
                     ? await scheduledSource.ReadScheduledAsync(keys, (id, state) => Revalidate(captured, id, state), token)
                     : await source.ReadTrackerAsync(keys, token, (id, state) => Revalidate(captured, id, state));
@@ -421,6 +425,12 @@ internal sealed class OperationalObservationService(
                 || sample.Sources.Values.Any(state => state.Error?.Code == "source-timeout")) ? "timed_out"
                 : samples.Values.Any(sample => sample.Error is not null || sample.Sources.Values.Any(state => state.Error is not null))
                     ? "failure" : "success", clock.GetElapsedTime(started).TotalSeconds);
+        ApplySamples(captured, generations, samples);
+    }
+
+    private void ApplySamples(Entry[] captured, Dictionary<Entry, long> generations,
+        IReadOnlyDictionary<string, ObservationSample> samples, bool partialTurn = false)
+    {
         lock (sync)
         {
             var reconcileAgain = false;
@@ -429,10 +439,11 @@ internal sealed class OperationalObservationService(
                 if (stopping || !entries.TryGetValue(entry.Key.Value, out var current) || !ReferenceEquals(current, entry)) continue;
                 if (!samples.TryGetValue(entry.Key.Value, out var sample))
                 {
+                    if (partialTurn) continue;
                     entry.Envelope = entry.Envelope with { NextAttemptAt = clock.GetUtcNow().AddMilliseconds(entry.Envelope.TargetIntervalMs) };
                     Age(entry); continue;
                 }
-                var sources = sample.Pending || sample.Error is not null && !sample.Partial
+                var sources = sample.Pending || sample.Error is not null && !sample.Partial && !sample.ConfirmedAbsence
                     ? entry.Envelope.Sources.ToDictionary() : new Dictionary<string, ObservationSourceState>(StringComparer.Ordinal);
                 foreach (var (id, observed) in sample.Sources)
                 {
@@ -463,17 +474,18 @@ internal sealed class OperationalObservationService(
                     continue;
                 }
                 var missing = sample.Error?.Code == "resource-missing";
-                var data = sample.Error is null || sample.Partial ? JsonSerializer.SerializeToElement(sample.Data, Json) : missing ? null : entry.Envelope.Data;
-                var health = sample.Error is null ? "fresh" : data is null ? "unavailable" : "stale";
+                var data = sample.Error is null || sample.Partial || sample.ConfirmedAbsence
+                    ? JsonSerializer.SerializeToElement(sample.Data, Json) : missing ? null : entry.Envelope.Data;
+                var health = sample.Error is null ? "fresh" : missing || data is null ? "unavailable" : "stale";
                 var updated = entry.Envelope with
                 {
                     Data = data, Health = health, Error = sample.Error, Sources = sources,
-                    ObservedAt = sample.Error is null ? sample.ObservedAt : missing ? null : entry.Envelope.ObservedAt,
+                    ObservedAt = sample.Error is null || sample.ConfirmedAbsence ? sample.ObservedAt : missing ? null : entry.Envelope.ObservedAt,
                     LastAttemptAt = sample.AttemptedAt,
                     NextAttemptAt = clock.GetUtcNow().AddMilliseconds(entry.Envelope.TargetIntervalMs)
                 };
                 var previousPending = entry.PendingTimestamp;
-                if (sample.Error is null)
+                if (sample.Error is null || sample.ConfirmedAbsence)
                 {
                     if (generations[entry] == entry.DirtyGeneration) entry.PendingTimestamp = null;
                     else reconcileAgain = true;

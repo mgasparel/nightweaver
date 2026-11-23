@@ -13,8 +13,72 @@ internal sealed class OperationalObservationSource(
     ProjectConfig project, HostPaths paths,
     IProcessRunner runner, TrackerBridge tracker, TimeProvider clock,
     CatchUpCheckpointStore checkpoint, FactoryTelemetryReader runtime,
-    IBeadWorkspaceRuntimeObserver runtimeObserver, ObservationMemoryBudget memory) : IOperationalObservationSource, IScheduledTrackerObservationSource
+    IBeadWorkspaceRuntimeObserver runtimeObserver, ObservationMemoryBudget memory) : IOperationalObservationSource, IScheduledTrackerObservationSource, IProgressiveTrackerObservationSource
 {
+    private Action<IReadOnlyDictionary<string, ObservationSample>>? publishBase;
+    private SharedBaseInventory? baseInventory;
+    private object? baseContentIdentity;
+    private readonly object baseReservation = new();
+    private ulong baseRevision;
+
+    public async Task<IReadOnlyDictionary<string, ObservationSample>> ReadProgressiveAsync(IReadOnlyList<OperationKey> keys,
+        Action<string, ObservationSourceState> revalidated,
+        Action<IReadOnlyDictionary<string, ObservationSample>> publish, CancellationToken token)
+    {
+        publishBase = publish;
+        try { return await ReadScheduledAsync(keys, revalidated, token); }
+        finally { publishBase = null; }
+    }
+
+    private ObservationSample CurrentSample(ObservationSample sample) => scheduled && (sample.Error is null || sample.ConfirmedAbsence)
+        && sample.Sources.Any(pair => !schedule.IsCurrent(pair.Key, pair.Value.SourceGeneration))
+            ? sample with { Pending = true, ConfirmedAbsence = false, Error = null } : sample;
+
+    private void ProjectBases(IReadOnlyList<OperationKey> keys, BeadsInventory? inventory,
+        FrozenSet<string>? ready, FrozenSet<string>? blocked, DateTimeOffset started,
+        Dictionary<string, ObservationSample> result, bool inventoryOnly = false)
+    {
+        var selected = keys.Where(key => key.Kind is "base-explorer" or "base-workspace")
+            .Where(key => !inventoryOnly || key.Kind == "base-workspace" || key.Argument is not ("ready" or "blocked")).ToArray();
+        if (selected.Length == 0) return;
+        ObservationError? projectionError = null;
+        if (inventory is not null && !ReferenceEquals(baseContentIdentity, states["inventory"].ContentIdentity))
+        {
+            try
+            {
+                var next = new SharedBaseInventory(inventory, project.Limits.MaxRepairCycles,
+                    checked(baseRevision + 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                // Account for rows, exact-ID index and ordered references in the
+                // same host budget as raw sources and resource envelopes.
+                var bytes = JsonSerializer.SerializeToUtf8Bytes(next.Ordered, ObservationJson.Options).Length
+                    + next.Ordered.Sum(row => row.Id.Length * 2 + 256);
+                if (!memory.TryReplace([], [(baseReservation, bytes)]))
+                    throw new ToolExecutionException("base cache exceeded shared memory limit");
+                baseRevision++; baseInventory = next; baseContentIdentity = states["inventory"].ContentIdentity;
+            }
+            catch (Exception exception) when (IsSourceFailure(exception)) { projectionError = Error(exception); }
+        }
+        var completed = new Dictionary<string, ObservationSample>(StringComparer.Ordinal);
+        foreach (var key in selected)
+        {
+            var ids = key.Kind == "base-explorer" && key.Argument is "ready" or "blocked"
+                ? new[] { "inventory", key.Argument } : InventorySource;
+            var usable = inventory is not null && projectionError is null && baseInventory is not null
+                && (key.Kind != "base-explorer" || key.Argument != "ready" || ready is not null)
+                && (key.Kind != "base-explorer" || key.Argument != "blocked" || blocked is not null);
+            object? data = !usable ? null : key.Kind == "base-workspace" ? baseInventory!.Workspace(key.Argument!)
+                : baseInventory!.Explorer(key, ready, blocked);
+            var sample = Sample(data, started, ids);
+            if (usable && key.Kind == "base-workspace" && !baseInventory!.ById.ContainsKey(key.Argument!))
+                sample = sample with { ConfirmedAbsence = true,
+                    Error = new("resource-missing", "The Bead no longer exists.", false) };
+            if (projectionError is not null) sample = sample with { Error = projectionError };
+            else if (!usable && inventory is not null && (sample.Error is null || ids.Any(id => !states.ContainsKey(id))))
+                sample = sample with { Pending = true, Error = new("budget-exceeded", "Source is awaiting its bounded observation turn.") };
+            completed[key.Value] = result[key.Value] = CurrentSample(sample);
+        }
+        publishBase?.Invoke(completed);
+    }
     private readonly TrackerSourceSchedule schedule = new(clock);
     private readonly Dictionary<string, (long Source, long Broad)> historyGenerations = new(StringComparer.Ordinal);
     private readonly Dictionary<string, object> cacheReservations = new(StringComparer.Ordinal);
@@ -59,9 +123,7 @@ internal sealed class OperationalObservationSource(
         try
         {
             var samples = await ReadTrackerAsync(keys, token, revalidated);
-            var published = samples.ToDictionary(pair => pair.Key, pair => pair.Value.Error is null
-                && pair.Value.Sources.Any(source => !schedule.IsCurrent(source.Key, source.Value.SourceGeneration))
-                    ? pair.Value with { Pending = true } : pair.Value, StringComparer.Ordinal);
+            var published = samples.ToDictionary(pair => pair.Key, pair => CurrentSample(pair.Value), StringComparer.Ordinal);
             foreach (var (key, sample) in published)
                 if (sample.Pending) outstandingKeys.Add(key);
                 else outstandingKeys.Remove(key);
@@ -257,6 +319,7 @@ internal sealed class OperationalObservationSource(
             foreach (var owner in cacheReservations.Values) memory.Release(owner);
             cacheReservations.Clear(); schedule.Reset(); workspaces.Clear(); attentionBeads = null;
             attentionPresentations.Clear(); retainedInventory = null; resumeDetails = false;
+            baseInventory = null; baseContentIdentity = null; memory.Release(baseReservation);
             return result;
         }
         if (!keys.Any(key => key.Kind == "attention"))
@@ -299,15 +362,19 @@ internal sealed class OperationalObservationSource(
         {
             inventory = await ReadAsync("inventory", () => reader.ReadSnapshotAsync(repository, token), token);
             ready = null; blocked = null;
+            ProjectBases(keys, inventory, ready, blocked, started, result, inventoryOnly: true);
             for (var index = 0; index < 2 && HasBudget; index++)
             {
+                var membership = (index == 0) == readyFirst ? "ready" : "blocked";
                 if ((index == 0) == readyFirst)
                 {
-                    if (keys.Any(key => key.Kind == "explorer" && key.Argument == "ready"))
+                    if (keys.Any(key => key.Kind is "explorer" or "base-explorer" && key.Argument == "ready"))
                         ready = await ReadAsync("ready", () => reader.ReadExplorerReadinessAsync(repository, token), token);
                 }
-                else if (keys.Any(key => key.Kind == "explorer" && key.Argument == "blocked"))
+                else if (keys.Any(key => key.Kind is "explorer" or "base-explorer" && key.Argument == "blocked"))
                     blocked = await ReadAsync("blocked", () => reader.ReadExplorerBlockedAsync(repository, token), token);
+                ProjectBases(keys.Where(key => key.Kind == "base-explorer" && key.Argument == membership).ToArray(),
+                    inventory, ready, blocked, started, result);
             }
             readyFirst = !readyFirst;
             // A failed core cannot erase the baseline of pending Workspace steps.
@@ -320,6 +387,7 @@ internal sealed class OperationalObservationSource(
             retainedInventoryState = states["inventory"];
         }
         var inventoryState = states["inventory"];
+        ProjectBases(keys, inventory, ready, blocked, started, result);
         if (scheduled && attentionBeads is not null && !ReferenceEquals(attentionInventoryState?.ContentIdentity, inventoryState.ContentIdentity))
         {
             // Carry successful histories, but rebuild membership/presentation from
@@ -784,6 +852,8 @@ internal sealed class OperationalObservationSource(
 
     private void TrimSources(HashSet<string> selected, IReadOnlyList<OperationKey> keys)
     {
+        if (!keys.Any(key => key.Kind is "base-explorer" or "base-workspace"))
+        { baseInventory = null; baseContentIdentity = null; memory.Release(baseReservation); }
         var retainedHistories = selected.Union(keys.Any(key => key.Kind == "attention")
             ? attentionBeads?.Select(bead => bead.Id)
                 ?? retainedInventory?.ById.Values.Where(AttentionDeskProjector.IsPaused).Where(bead => !AttentionDeskProjector.IsTerminal(bead)).Select(bead => bead.Id) ?? []
@@ -795,7 +865,7 @@ internal sealed class OperationalObservationSource(
         // consuming Explorer view so an unreadable due slot cannot wake every turn.
         foreach (var id in states.Keys.Where(id => id.Contains(':') && !(id.StartsWith("comments:", StringComparison.Ordinal)
                 ? retainedHistories : id.StartsWith("merge:", StringComparison.Ordinal) ? digestEvidenceIds : selected).Contains(id[(id.IndexOf(':') + 1)..])
-            || id is "ready" or "blocked" && !keys.Any(key => key.Kind == "explorer" && key.Argument == id)).ToArray())
+            || id is "ready" or "blocked" && !keys.Any(key => key.Kind is "explorer" or "base-explorer" && key.Argument == id)).ToArray())
         {
             states.Remove(id); sourceContent.Remove(id); cached.Remove(id); historyGenerations.Remove(id);
             if (cacheReservations.Remove(id, out var owner)) memory.Release(owner);
