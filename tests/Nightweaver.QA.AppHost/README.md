@@ -1,5 +1,14 @@
 # QA AppHost
 
+For repeatable cold, warm and active-factory shared reads, use
+`shared-read-baseline.ps1 -OutputDirectory <new-absolute-path>` from this directory,
+or its repository-relative path from the root. The runner discovers each exact
+isolated direct endpoint and stops that stack in `finally`. It retains actual
+rendered facts, source validation, native tool traces and guarded-write receipts.
+See [baseline boundaries and missing measurements](../../docs/acceptance/shared-read-baseline.md).
+Run `node --test shared-read-assertions.test.mjs shared-read-report.test.mjs shared-read-receipts.test.mjs`
+for the cheap evidence checks.
+
 The existing `factory-qa` probe also checks compact/full Delivery stage geometry
 (four equal 5px rounded segments, 6px gaps), exact stage captions and repair return,
 paused/unknown/stale positions, long Bead identities, separate keyboard Bead
