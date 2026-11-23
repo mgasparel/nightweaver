@@ -7,6 +7,7 @@ using Nightweaver.Inspection;
 using Nightweaver.Telemetry;
 using Nightweaver.Tests.AgentInvocationFixture;
 using Nightweaver.Tests.ManualDeliveryPilotFixture;
+using Nightweaver.QA;
 
 var fixture = Path.Combine(Path.GetTempPath(), "nightweaver-qa-" + Guid.NewGuid().ToString("N"));
 var repository = Path.Combine(fixture, "repo");
@@ -15,6 +16,7 @@ var config = Path.Combine(fixture, "project.json");
 var nightweaverRoot = fixture;
 var manualScenario = string.Equals(Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO"), "manual-delivery", StringComparison.Ordinal);
 var cleanupScenario = string.Equals(Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO"), "cleanup", StringComparison.Ordinal);
+var sharedReadScenario = Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "shared-read";
 var manualManifestPointer = Path.Combine(Environment.CurrentDirectory, ".manual-delivery-manifest.json");
 ManualDeliveryPilotFixture? manualPilot = null;
 CancellationTokenSource? manualRuntimeControlStop = null;
@@ -63,50 +65,59 @@ try
         File.WriteAllText(config, JsonSerializer.Serialize(new { name = "qa", target_repository = new { path = repository } }));
         await RunAsync("git", repository, userHome, cancellationToken, "init", "-b", "main");
         await RunAsync("bd", repository, userHome, cancellationToken, "init", "--prefix", "qa", "--non-interactive", "--skip-agents", "--skip-hooks");
-        await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "QA fixture control", "--type", "task");
-        await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "Active QA task", "--type", "task", "--status", "in_progress");
-        var decisionId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA product decision", "feature", "product-decision-required");
-        await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", decisionId, "Prior cycle: the implementation can keep the current route.");
-        await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", decisionId, "Which option should we choose now? Keep the existing API contract.");
-        var secondDecisionId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA second decision", "feature", "product-decision-required");
-        await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", secondDecisionId, "Which option should this second fixture choose?");
+        string needsHumanId = "";
+        if (sharedReadScenario)
+        {
+            await SharedReadQaFixture.SeedAsync(fixture,
+                arguments => RunAsync("bd", repository, userHome, cancellationToken, arguments));
+        }
+        else
+        {
+            await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "QA fixture control", "--type", "task");
+            await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "Active QA task", "--type", "task", "--status", "in_progress");
+            var decisionId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA product decision", "feature", "product-decision-required");
+            await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", decisionId, "Prior cycle: the implementation can keep the current route.");
+            await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", decisionId, "Which option should we choose now? Keep the existing API contract.");
+            var secondDecisionId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA second decision", "feature", "product-decision-required");
+            await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", secondDecisionId, "Which option should this second fixture choose?");
 
-        var needsHumanId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA needs human", "task", "needs-human", "stage:qa");
-        await RunAsync("bd", repository, userHome, cancellationToken, "update", needsHumanId, "--set-metadata", "repair_cycles=2");
-        await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", needsHumanId,
-            NeedsHumanDiagnostic(needsHumanId, "task", "qa", "stage:qa", "Verification needs a human choice."));
+            needsHumanId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA needs human", "task", "needs-human", "stage:qa");
+            await RunAsync("bd", repository, userHome, cancellationToken, "update", needsHumanId, "--set-metadata", "repair_cycles=2");
+            await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", needsHumanId,
+                NeedsHumanDiagnostic(needsHumanId, "task", "qa", "stage:qa", "Verification needs a human choice."));
 
-        var abortId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA needs human abort", "task", "needs-human", "stage:review");
-        await RunAsync("bd", repository, userHome, cancellationToken, "update", abortId, "--set-metadata", "repair_cycles=1");
-        await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", abortId,
-            NeedsHumanDiagnostic(abortId, "task", "reviewer", "stage:review", "Review cannot continue without an explicit decision."));
+            var abortId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA needs human abort", "task", "needs-human", "stage:review");
+            await RunAsync("bd", repository, userHome, cancellationToken, "update", abortId, "--set-metadata", "repair_cycles=1");
+            await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", abortId,
+                NeedsHumanDiagnostic(abortId, "task", "reviewer", "stage:review", "Review cannot continue without an explicit decision."));
 
-        if (Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "schema-messages")
-            await SchemaMessageQaFixture.SeedAsync(arguments => RunAsync("bd", repository, userHome, cancellationToken, arguments));
+            if (Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "schema-messages")
+                await SchemaMessageQaFixture.SeedAsync(arguments => RunAsync("bd", repository, userHome, cancellationToken, arguments));
 
-        if (Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "workflow")
-            await BeadPresentationQaFixture.SeedAsync(arguments => RunAsync("bd", repository, userHome, cancellationToken, arguments));
+            if (Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "workflow")
+                await BeadPresentationQaFixture.SeedAsync(arguments => RunAsync("bd", repository, userHome, cancellationToken, arguments));
 
-        if (Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "relations")
-            await RelationsQaFixture.SeedAsync(arguments => RunAsync("bd", repository, userHome, cancellationToken, arguments));
+            if (Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "relations")
+                await RelationsQaFixture.SeedAsync(arguments => RunAsync("bd", repository, userHome, cancellationToken, arguments));
 
-        var markdownId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA workspace markdown", "feature");
-        var longCode = new string('x', 600);
-        var markdown = string.Join("\n\n", "# Long workspace fixture",
-            "This specification checks **Markdown** rendering, tables, code and links.",
-            $"```text\n{longCode}\n```",
-            "| Column | Value |\n| --- | --- |\n| Safe | wrapped |",
-            "[Relative file](notes.txt) [Root file](/notes.txt) [Protocol-relative](//example.invalid/file) [Unsafe](javascript:alert(1)) [Data](data:text/html,hello) [Allowed](https://example.com/reference) [Current comment](#workspace-comment-0)",
-            "<script>window.__workspaceInjected = true</script><img src=\"https://example.invalid/remote.png\" onerror=\"window.__workspaceInjected = true\">",
-            "![remote image](https://example.invalid/markdown-image.png)");
-        await RunAsync("bd", repository, userHome, cancellationToken, "update", markdownId,
-            "--description", markdown,
-            "--design", "## Design source\n\nKeep this text exact.",
-            "--acceptance", "- [ ] Acceptance remains readable as text.",
-            "--notes", "Workspace fixture note.");
-        await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", markdownId,
-            "Comment anchor for the sanitizer fixture. <script>window.__workspaceInjected = true</script><img src=\"https://example.invalid/comment.png\" onerror=\"window.__workspaceInjected = true\">");
-        await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "Blocked QA task", "--type", "task", "--status", "blocked");
+            var markdownId = await CreateBeadAsync(repository, userHome, cancellationToken, "QA workspace markdown", "feature");
+            var longCode = new string('x', 600);
+            var markdown = string.Join("\n\n", "# Long workspace fixture",
+                "This specification checks **Markdown** rendering, tables, code and links.",
+                $"```text\n{longCode}\n```",
+                "| Column | Value |\n| --- | --- |\n| Safe | wrapped |",
+                "[Relative file](notes.txt) [Root file](/notes.txt) [Protocol-relative](//example.invalid/file) [Unsafe](javascript:alert(1)) [Data](data:text/html,hello) [Allowed](https://example.com/reference) [Current comment](#workspace-comment-0)",
+                "<script>window.__workspaceInjected = true</script><img src=\"https://example.invalid/remote.png\" onerror=\"window.__workspaceInjected = true\">",
+                "![remote image](https://example.invalid/markdown-image.png)");
+            await RunAsync("bd", repository, userHome, cancellationToken, "update", markdownId,
+                "--description", markdown,
+                "--design", "## Design source\n\nKeep this text exact.",
+                "--acceptance", "- [ ] Acceptance remains readable as text.",
+                "--notes", "Workspace fixture note.");
+            await RunAsync("bd", repository, userHome, cancellationToken, "comments", "add", markdownId,
+                "Comment anchor for the sanitizer fixture. <script>window.__workspaceInjected = true</script><img src=\"https://example.invalid/comment.png\" onerror=\"window.__workspaceInjected = true\">");
+            await RunAsync("bd", repository, userHome, cancellationToken, "create", "--title", "Blocked QA task", "--type", "task", "--status", "blocked");
+        }
 
         Directory.CreateDirectory(Path.Combine(fixture, "prompts"));
         await File.WriteAllTextAsync(Path.Combine(fixture, "prompts", "implementer.md"),
@@ -160,7 +171,7 @@ try
 
         await WaitForFilesAsync(readinessFiles, TimeSpan.FromSeconds(30), cancellationToken);
     });
-    builder.AddProject<Projects.Nightweaver_Web>("web")
+    var web = builder.AddProject<Projects.Nightweaver_Web>("web")
         // Publish the direct local binding checked by the mutation-origin policy.
         .WithHttpEndpoint(name: "http", isProxied: false)
         .WithEnvironment("Nightweaver__Root", nightweaverRoot)
@@ -183,6 +194,15 @@ try
         .WithEnvironment("BD_DOLT_AUTO_PUSH", "false")
         .WithEnvironment("BD_EVENTS_EXPORT", "false")
         .WithBrowserLogs();
+    if (sharedReadScenario)
+    {
+        var shim = Environment.GetEnvironmentVariable("NIGHTWEAVER_PROBE_SHIM")
+            ?? throw new InvalidOperationException("Supply the built tool probe directory.");
+        web.WithEnvironment("PATH", shim + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"))
+            .WithEnvironment("NIGHTWEAVER_PROBE_BD", Environment.GetEnvironmentVariable("NIGHTWEAVER_PROBE_BD"))
+            .WithEnvironment("NIGHTWEAVER_PROBE_GIT", Environment.GetEnvironmentVariable("NIGHTWEAVER_PROBE_GIT"))
+            .WithEnvironment("NIGHTWEAVER_PROBE_TRACE", Environment.GetEnvironmentVariable("NIGHTWEAVER_PROBE_TRACE"));
+    }
     using var app = builder.Build();
     await app.RunAsync();
 }
