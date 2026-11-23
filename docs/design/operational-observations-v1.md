@@ -12,7 +12,8 @@ Slice ns-gjwx-p52d0161f682b3122f1e2 enables all five
 `base:attention` with the Attention base shape below. Studio Attention and the
 Overview paused count use this inventory-only resource. Explanations use the
 shared history section and require matching update time and workflow identity.
-The other reserved base keys remain
+Slice ns-gjwx-p87f214cb64261593223d enables
+`base:digest:{window}` and the aggregate section resource below. Other reserved base keys remain
 unsupported. One compact inventory projection supplies exact-ID, ordered
 search, status, type, stage, pause, assignee and priority indexes. It shares the
 host memory budget with raw sources and resource envelopes. Base callbacks
@@ -96,6 +97,44 @@ remain visible with explicit checkpoint unavailability; a window that needs the
 checkpoint cannot claim complete membership until that source succeeds.
 
 ### Additive resource and section contract
+
+#### Amendment v1.3.1 — Digest section aggregation
+
+Catch Up and its Overview preview use `base:digest:{window}`. Each activity item
+contains `bead: row`, `activityKind`, `activityAt`, `fromId` and `fromRelation`.
+The nested row uses the same shared cache as Explorer and Workspace. A closed
+row displays Closed before its merge section completes. It contains no prose,
+commit, pull request or verified merge claim. The full-response Digest resource
+and legacy route retain their existing contract.
+
+`digest-merges:{window}` returns `nightweaver-digest-merges-v1` with a `sections`
+map. The map admits at most the 128 most recent closed tasks in the current
+window. An absent entry means unacquired evidence, not a verified merge. One
+aggregate resource uses one existing resource slot. It grants no new memory,
+history-command or native-work allowance. It shares histories with Workspace
+and Attention and uses the existing alternating background detail turn.
+
+Each entry has `beadId`, `updatedAt`, `state`, `value`, `source`, `pending`,
+`reason`, `pendingAgeMs`, `validatedAgeMs`, `outcomeLabel`, `summary`, `commits` and `pullRequests`. The last four
+fields retain the existing inventory closure presentation after confirmation;
+they cannot establish a verified merge. `value` is the existing `DigestMergeEvidence`, including explicit
+missing/invalid evidence. `source` holds that result's own observation and
+attempt times, health and error. The states are loading, available, unavailable,
+failed and stale. Only available, current, matching closed-task evidence can
+display Merged. Both merge records must validate. Cleanup warnings remain
+separate. A refresh failure retains accepted matching evidence as stale.
+Identity changes withhold that evidence. Complete shared inventory validation
+after native history work confirms identity. A spent turn waits for the next
+shared validation. Comments hints and independent audits refresh the same map.
+
+The aggregate envelope sources describe window membership only. They cannot
+validate any entry. Each entry must pass its own identity and source-age checks.
+Consumers add monotonic receipt elapsed time to `validatedAgeMs` and reject
+evidence after its 120-second source-age bound. Base health,
+counts, order, checkpoint and window membership do not depend on entry progress.
+Base publication occurs before any optional section command. Checkpoint changes
+reproject the window while other entries remain loading. The current base row
+always controls membership and closure. No new targeted base read is allowed.
 
 Use the existing `/api/operations/v1/projects/{projectId}` GET, refresh and SSE
 transport, envelope schema `nightweaver-observation-v1` and host revision counter.

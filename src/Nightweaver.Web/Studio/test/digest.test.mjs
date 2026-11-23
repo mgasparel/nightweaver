@@ -1,6 +1,34 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { completedOutcomes, DigestCheckpoints, digestWindow, visibleThreads } from '../src/digest-model.ts';
+import { completedOutcomes, digestWithSections, DigestCheckpoints, digestWindow, visibleThreads } from '../src/digest-model.ts';
+
+test('base activity remains readable while matching merge sections complete independently', () => {
+  const now = Date.parse('2026-11-23T18:00:00Z');
+  const updatedAt = new Date(now - 1000).toISOString();
+  const entry = id => ({bead: {id, title: id, status: 'closed', type: 'task', updatedAt}, activityKind: 'closed', activityAt: updatedAt});
+  const base = {generatedAt: updatedAt, metrics: {completedTotal: 2}, threads: [], standaloneCompleted: [entry('one'), entry('two')], standaloneOpen: []};
+  const section = {beadId: 'one', updatedAt, state: 'available', pending: false, validatedAgeMs: 1000,
+    source: {health: 'fresh', observedAt: updatedAt}, value: {state: 'verified', pullRequest: 'https://github.com/a/b/pull/1', cleanupWarning: 'locked report'}};
+  const pending = digestWithSections(base, undefined, 0);
+  assert.equal(pending.standaloneCompleted[0].outcomeLabel, 'Closed');
+  assert.equal(pending.standaloneCompleted[0].mergeEvidence.state, 'loading');
+  const progress = digestWithSections(base, {sections: {one: section}}, 0);
+  assert.equal(progress.standaloneCompleted[0].outcomeLabel, 'Merged');
+  assert.equal(progress.standaloneCompleted[0].mergeEvidence.cleanupWarning, 'locked report');
+  assert.equal(progress.standaloneCompleted[1].mergeEvidence.state, 'unavailable');
+  assert.equal(digestWithSections(base, {sections: {one: section}}, 120000).standaloneCompleted[0].mergeEvidence.state, 'stale');
+  assert.strictEqual(progress.metrics, base.metrics); assert.equal(progress.generatedAt, base.generatedAt);
+  for (const patch of [{beadId: 'foreign'}, {updatedAt: '2026-11-23T17:00:00Z'}, {state: 'failed'}, {state: 'stale'}, {pending: true},
+    {validatedAgeMs: 120001}, {value: {state: 'invalid'}}]) {
+    assert.equal(digestWithSections(base, {sections: {one: {...section, ...patch}}}, 0).standaloneCompleted[0].outcomeLabel, 'Closed');
+  }
+  for (const state of ['missing', 'invalid', 'unavailable']) {
+    const result = digestWithSections(base, {sections: {one: {...section, state: 'unavailable', value: {state}}}}, 0);
+    assert.equal(result.standaloneCompleted[0].mergeEvidence.state, state);
+  }
+  const removed = {...base, standaloneCompleted: [entry('two')]};
+  assert.deepEqual(digestWithSections(removed, {sections: {one: section}}, 0).standaloneCompleted.map(item => item.id), ['two']);
+});
 
 test('Overview outcomes include closed lineage roots and children once, newest first, without open work', () => {
   const item = (id, status, day) => ({id, status, activityAt: `2026-11-${day}T01:00:00Z`});

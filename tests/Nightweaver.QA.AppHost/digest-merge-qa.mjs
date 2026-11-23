@@ -51,20 +51,48 @@ const browser = await chromium.launch({ headless: true });
 const errors = [], external = [], posts = [];
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  let held = true;
+  await page.route('**/api/operations/v1/projects/qa/resources?**', async route => {
+    if (!new URL(route.request().url()).searchParams.get('key')?.startsWith('digest-merges:') || !held) return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    body.data = null;
+    await route.fulfill({response, json: body});
+  });
   page.setDefaultTimeout(90000);
   page.on('pageerror', e => errors.push(e.message));
   page.on('request', r => {
     if (new URL(r.url()).origin !== new URL(base).origin) external.push(r.url());
     if (r.method() === 'POST') posts.push(r.url());
   });
+  const baseStarted = performance.now();
   await page.goto(`${base}/projects/qa/catch-up?window=all`);
   if (await page.locator('#digest-toggle').getAttribute('aria-expanded') === 'false') await page.locator('#digest-toggle').click();
   const row = id => page.locator(`.digest-item-row[data-bead-id="${id}"]`);
+  await row(merged).getByText('Merge verification loading.', {exact: true}).waitFor();
+  assert.match(await row(merged).innerText(), /Closed/);
+  const baseReadyMs = performance.now() - baseStarted;
+  const countBefore = await page.locator('#digest-metric-completed').innerText();
+  await page.screenshot({path: path.join(output, 'digest-base-before-evidence.png'), fullPage: true});
+  const competing = await (await page.request.get(`${base}/api/operations/v1/projects/qa/resources?key=${encodeURIComponent(`section:${late}:history`)}`)).json();
+  assert.equal(competing.projectId, 'qa');
+  await page.goto(`${base}/projects/qa/overview`);
+  await page.locator('.digest-outcomes li').first().waitFor();
+  assert.match(await page.locator('.digest-outcomes').innerText(), /Closed/);
+  assert.doesNotMatch(await page.locator('.digest-outcomes').innerText(), /Merged/);
+  await page.screenshot({path: path.join(output, 'overview-base-before-evidence.png'), fullPage: true});
+  held = false;
+  const evidenceStarted = performance.now();
+  await page.goto(`${base}/projects/qa/catch-up?window=all`);
+  if (await page.locator('#digest-toggle').getAttribute('aria-expanded') === 'false') await page.locator('#digest-toggle').click();
+  await page.locator('#digest-refresh').click();
   await row(merged).getByRole('link', { name: 'Merged pull request', exact: true }).waitFor();
+  const evidenceReadyMs = performance.now() - evidenceStarted;
+  assert.equal(await page.locator('#digest-metric-completed').innerText(), countBefore);
   assert.equal(await row(merged).getByRole('link', { name: 'Merged pull request' }).getAttribute('href'), pr);
   assert.equal(await row(merged).getByRole('link', { name: commit.slice(0, 7) }).getAttribute('href'), `https://github.com/owner/repo/commit/${commit}`);
   assert.match(await row(merged).innerText(), /Cleanup needs attention: locked report/);
-  assert.match(await row(ordinary).innerText(), /Resolved/);
+  await row(ordinary).getByText('Resolved', {exact: true}).waitFor();
   assert.equal(await row(ordinary).getByRole('link', { name: 'Merged pull request', exact: true }).count(), 0);
   await row(malformed).getByText('Merge verification invalid.', { exact: true }).waitFor();
   assert.match(await row(malformed).innerText(), /Resolved/);
@@ -73,8 +101,19 @@ try {
   await row(late).getByText('No host merge verification recorded.', { exact: true }).waitFor();
   add(late, verified(lateSource)); // Journal invalidation, no refresh command or reload.
   await row(late).getByRole('link', { name: 'Merged pull request', exact: true }).waitFor();
+  // The full-response consumer has independent admission. It reuses the same
+  // compact evidence once its own complete resource has been observed.
+  const legacyDeadline = performance.now() + 30000;
+  let legacyObservation;
+  do {
+    legacyObservation = await (await page.request.get(`${base}/api/operations/v1/projects/qa/resources?key=digest:all`)).json();
+    if (legacyObservation.health === 'fresh' && !legacyObservation.synchronization?.pending) break;
+    await page.waitForTimeout(100);
+  } while (performance.now() < legacyDeadline);
+  assert.equal(legacyObservation.health, 'fresh');
   const legacy = await (await page.request.get(`${base}/api/digest?window=all`)).json();
   assert.equal(legacy.standaloneCompleted.find(item => item.id === merged).outcome, 'merged');
+  assert.equal(legacy.standaloneCompleted.find(item => item.id === noop).outcome, 'no_op');
   for (const width of [1440, 375, 720]) {
     await page.setViewportSize({ width, height: 1100 });
     await page.locator('#digest-toggle').focus();
@@ -82,7 +121,8 @@ try {
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `overflow at ${width}`);
     await page.screenshot({ path: path.join(output, `digest-merge-${width}.png`), fullPage: true });
   }
-  assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.deepEqual(posts, []);
-  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, merged, ordinary, late, noop, malformed,
+  assert.deepEqual(errors, []); assert.deepEqual(external, []);
+  assert(posts.every(url => url.endsWith('/refresh')), 'Only explicit read refresh requests are allowed');
+  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, merged, ordinary, late, noop, malformed, baseReadyMs, evidenceReadyMs,
     checks: ['native empty closure and producer protocol', 'exact safe PR/commit links', 'matching non-PR URLs stay invalid/resolved', 'separate cleanup warning', 'ordinary SHA/agent-only stays resolved', 'non-code duplicate', 'automatic comments-only refresh', 'legacy shared evidence reuse', '1440/375/720 reflow', 'no browser mutations or external requests'], errors }, null, 2));
 } finally { await browser.close(); }

@@ -19,6 +19,19 @@ public sealed class DigestMergeEvidenceTests
     ];
 
     [Fact]
+    public void BaseActivityDoesNotRequireValidOptionalProse()
+    {
+        var bead = Bead() with { Payload = JsonSerializer.SerializeToElement(new
+            { title = "Closed task", notes = 17, updated_at = Now, closed_at = Now }) };
+        var inventory = new BeadsInventory([bead]);
+        Assert.Throws<JsonException>(() => CatchUpDigestProjector.Project(inventory, "all", null, Now));
+        var item = Assert.Single(CatchUpDigestProjector.Project(inventory, "all", null, Now, baseOnly: true).StandaloneCompleted);
+        Assert.Equal(bead.Id, item.Id);
+        Assert.Equal("closed", item.Status);
+        Assert.NotEqual("Merged", item.OutcomeLabel);
+    }
+
+    [Fact]
     public void ProducerRecordWithEmptyCloseReasonProjectsMergedAndExactReferencesDespiteCleanupFailure()
     {
         var bead = Bead();

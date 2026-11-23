@@ -12,6 +12,17 @@ proves that React renders base content before section responses arrive; injected
 source tests alone cannot prove that display behavior. Production uses existing
 bounded section reads and adds Planning identity projection to shared base rows.
 
+Digest base publication adds six injected observer cases, one projector case and one Studio model
+case. They hold history across base publication, check partial progress, comment
+and audit refresh, failed/capped evidence, checkpoint changes and identity races.
+They add no normal-suite native journey or fixture publication. The existing
+digest merge browser journey checks Catch Up and Overview before withheld merge
+sections arrive, with a competing Workspace history request. It reuses its
+disposable tracker, AppHost and browser. Existing detailed producer checks remain.
+Production adds bounded base projection and independent compact evidence states.
+Native history work shares the existing schedule and one confirming inventory
+read per detail turn. All command limits and six test threads remain unchanged.
+
 Section repair adds four deterministic cases. They hold partial-relation
 confirmation across inventory or dependency invalidation, spend a core turn
 after a warm partial result, and keep only text interest after reading history.

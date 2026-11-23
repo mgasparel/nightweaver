@@ -59,6 +59,181 @@ public sealed class OperationalObservationSourceTests
         Assert.Equal("task-1", Assert.Single(runner.CommentIds));
     }
 
+    [Fact]
+    public async Task DigestBasePublishesBeforeHeldHistoryAndEachEvidenceTurnMakesProgress()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { TargetPath = target.Path, Rows = 9, Closed = true };
+        for (var index = 1; index <= 9; index++) native.HistoryOverrides[$"task-{index}"] = DigestMergeEvidenceTests.Comments($"task-{index}");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            if (request.FileName == "bd" && request.Arguments.Contains("comments"))
+            { entered.TrySetResult(); await release.Task.WaitAsync(token); }
+            return await native.RunAsync(request, token);
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        using var pin = service.Pin(["base:digest:all", "digest-merges:all"]);
+        var token = TestContext.Current.CancellationToken;
+        var collection = service.CollectOnceAsync(false, token);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+            var body = service.Read("base:digest:all");
+            Assert.Equal("fresh", body.Health);
+            Assert.Equal(9, body.Data!.Value.GetProperty("metrics").GetProperty("completedTotal").GetInt32());
+            Assert.DoesNotContain("mergeEvidence", body.Data.Value.GetRawText(), StringComparison.Ordinal);
+            Assert.Equal(2, body.Sources.Count);
+        }
+        finally { release.TrySetResult(); await collection; }
+        var first = service.Read("digest-merges:all").Data!.Value.GetProperty("sections");
+        Assert.Equal(4, first.EnumerateObject().Count(pair => pair.Value.GetProperty("state").GetString() == "available"));
+        Assert.Equal(5, first.EnumerateObject().Count(pair => pair.Value.GetProperty("state").GetString() == "loading"));
+        var baseData = service.Read("base:digest:all");
+        for (var turn = 0; turn < 2; turn++) await service.CollectOnceAsync(false, token);
+        Assert.All(service.Read("digest-merges:all").Data!.Value.GetProperty("sections").EnumerateObject(),
+            pair => Assert.Equal("available", pair.Value.GetProperty("state").GetString()));
+        Assert.Equal(baseData.Data!.Value.GetProperty("metrics").GetRawText(), service.Read("base:digest:all").Data!.Value.GetProperty("metrics").GetRawText());
+        Assert.Equal(9, native.CommentIds.Count);
+    }
+
+    [Fact]
+    public async Task DigestSectionsRefreshCommentsAndAuditsWithoutChangingBaseMembership()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 2, Closed = true };
+        runner.HistoryOverrides["task-1"] = DigestMergeEvidenceTests.Comments("task-1");
+        runner.HistoryOverrides["task-2"] = [];
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("base:digest:all", "digest-merges:all");
+        var token = TestContext.Current.CancellationToken;
+        JsonElement Sections(IReadOnlyDictionary<string, ObservationSample> values) => JsonSerializer.SerializeToElement(values["digest-merges:all"].Data, ObservationJson.Options).GetProperty("sections");
+        var first = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Equal("available", Sections(first).GetProperty("task-1").GetProperty("state").GetString());
+        clock.Advance(TimeSpan.FromSeconds(6));
+        runner.FailCommentOnce = "task-1";
+        source.Invalidate([new(1, "comment", "task-1", null)]);
+        var failed = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        var retained = Sections(failed).GetProperty("task-1");
+        Assert.Equal("stale", retained.GetProperty("state").GetString());
+        Assert.Equal("verified", retained.GetProperty("value").GetProperty("state").GetString());
+        Assert.Equal(Sections(first).GetProperty("task-1").GetProperty("source").GetProperty("observedAt").GetString(),
+            retained.GetProperty("source").GetProperty("observedAt").GetString());
+        Assert.Null(failed["base:digest:all"].Error);
+        clock.Advance(TimeSpan.FromSeconds(6));
+        runner.HistoryOverrides["task-1"] = [];
+        source.Invalidate([new(1, "comment", "task-1", null)]);
+        var changed = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Equal("missing", Sections(changed).GetProperty("task-1").GetProperty("value").GetProperty("state").GetString());
+        Assert.Equal("missing", Sections(changed).GetProperty("task-2").GetProperty("value").GetProperty("state").GetString());
+        Assert.Equal(4, runner.CommentIds.Count);
+        runner.HistoryOverrides["task-2"] = DigestMergeEvidenceTests.Comments("task-2");
+        clock.Advance(TimeSpan.FromSeconds(61));
+        var audited = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Equal("available", Sections(audited).GetProperty("task-2").GetProperty("state").GetString());
+        Assert.Equal(JsonSerializer.SerializeToElement(first["base:digest:all"].Data, ObservationJson.Options).GetProperty("metrics").GetRawText(),
+            JsonSerializer.SerializeToElement(audited["base:digest:all"].Data, ObservationJson.Options).GetProperty("metrics").GetRawText());
+    }
+
+    [Fact]
+    public async Task DigestSectionsAndSelectedWorkspaceShareBoundedDetailTurns()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 3, Closed = true, Advance = () => clock.Advance(TimeSpan.FromSeconds(1)) };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("workspace:task-1", "base:digest:all", "digest-merges:all");
+        var workspace = false;
+        var evidence = false;
+        for (var turn = 0; turn < 12 && (!workspace || !evidence); turn++)
+        {
+            var comments = runner.CommentIds.Count;
+            var samples = await source.ReadScheduledAsync(keys, (_, _) => { }, TestContext.Current.CancellationToken);
+            Assert.InRange(runner.CommentIds.Count - comments, 0, 4);
+            workspace |= samples.TryGetValue("workspace:task-1", out var selected) && selected.Data is not null;
+            if (samples.TryGetValue("digest-merges:all", out var digest) && digest.Data is not null && !digest.Pending)
+                evidence |= JsonSerializer.SerializeToElement(digest.Data, ObservationJson.Options).GetProperty("sections")
+                    .EnumerateObject().All(pair => pair.Value.GetProperty("state").GetString() == "unavailable");
+        }
+        Assert.True(workspace);
+        Assert.True(evidence);
+    }
+
+    [Fact]
+    public async Task DigestEvidenceWaitsForCurrentIdentityAfterHistoryChangesTheBase()
+    {
+        using var target = new ObservationTargetFixture();
+        var native = new Runner { TargetPath = target.Path, Closed = true };
+        native.HistoryOverrides["task-1"] = DigestMergeEvidenceTests.Comments("task-1");
+        var changed = false;
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            var response = await native.RunAsync(request, token);
+            if (!changed && request.FileName == "bd" && request.Arguments.Contains("comments"))
+            { changed = true; native.UpdatedAt = "2026-01-02T00:00:00Z"; }
+            return response;
+        });
+        using var factory = Factory(target.Path, runner, new CostClock());
+        var source = Adapter(factory);
+        var keys = Keys("base:digest:all", "digest-merges:all");
+        var token = TestContext.Current.CancellationToken;
+        var first = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        var section = JsonSerializer.SerializeToElement(first["digest-merges:all"].Data, ObservationJson.Options).GetProperty("sections").GetProperty("task-1");
+        Assert.Equal("loading", section.GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, section.GetProperty("value").ValueKind);
+        var current = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        section = JsonSerializer.SerializeToElement(current["digest-merges:all"].Data, ObservationJson.Options).GetProperty("sections").GetProperty("task-1");
+        Assert.Equal("available", section.GetProperty("state").GetString());
+        Assert.Equal(native.UpdatedAt, section.GetProperty("updatedAt").GetString());
+    }
+
+    [Fact]
+    public async Task DigestCheckpointReprojectsBaseWhileUnrelatedEvidenceRemainsPending()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Rows = 9, Closed = true, UpdatedAt = clock.GetUtcNow().AddMinutes(-1).ToString("O", CultureInfo.InvariantCulture) };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("base:digest:auto", "digest-merges:auto");
+        var token = TestContext.Current.CancellationToken;
+        await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await factory.Services.GetRequiredService<CatchUpCheckpointStore>().WriteLastCaughtUpAtAsync(clock.GetUtcNow(), token);
+        source.Invalidate();
+        var changed = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        var body = JsonSerializer.SerializeToElement(changed["base:digest:auto"].Data, ObservationJson.Options);
+        Assert.Equal("since_caught_up", body.GetProperty("window").GetString());
+        Assert.Equal(0, body.GetProperty("metrics").GetProperty("completedTotal").GetInt32());
+        Assert.Empty(body.GetProperty("standaloneCompleted").EnumerateArray());
+        Assert.False(changed["base:digest:auto"].Pending);
+    }
+
+    [Fact]
+    public async Task DigestSectionsKeepFailuresAndAcquisitionCapSeparateFromBase()
+    {
+        using var target = new ObservationTargetFixture();
+        var runner = new Runner { Rows = 129, Closed = true, FailCommentOnce = "task-1" };
+        using var factory = Factory(target.Path, runner, new CostClock());
+        var samples = await Adapter(factory).ReadScheduledAsync(Keys("base:digest:all", "digest-merges:all"), (_, _) => { }, TestContext.Current.CancellationToken);
+        var body = JsonSerializer.SerializeToElement(samples["base:digest:all"].Data, ObservationJson.Options);
+        Assert.Equal(129, body.GetProperty("metrics").GetProperty("completedTotal").GetInt32());
+        Assert.Null(samples["base:digest:all"].Error);
+        Assert.False(samples["base:digest:all"].Pending);
+        var sections = JsonSerializer.SerializeToElement(samples["digest-merges:all"].Data, ObservationJson.Options).GetProperty("sections");
+        Assert.Equal(128, sections.EnumerateObject().Count());
+        Assert.Equal("failed", sections.GetProperty("task-1").GetProperty("state").GetString());
+        Assert.Equal(4, runner.CommentIds.Count);
+    }
+
     [Theory]
     [InlineData("dep_add")]
     [InlineData("comment")]
@@ -257,8 +432,10 @@ public sealed class OperationalObservationSourceTests
 
         runner.Closed = true; runner.HistoryOverrides["task-1"] = DigestMergeEvidenceTests.Comments("task-1");
         source.Invalidate();
-        var closed = await source.ReadScheduledAsync(Keys("section:task-1:merge", "digest:all"), (_, _) => { }, TestContext.Current.CancellationToken);
+        var closed = await source.ReadScheduledAsync(Keys("section:task-1:merge", "digest:all", "digest-merges:all"), (_, _) => { }, TestContext.Current.CancellationToken);
         Assert.Equal(2, runner.CommentIds.Count);
+        Assert.Equal("available", JsonSerializer.SerializeToElement(closed["digest-merges:all"].Data, ObservationJson.Options)
+            .GetProperty("sections").GetProperty("task-1").GetProperty("state").GetString());
         Assert.Equal("merged", Assert.Single(Assert.IsType<CatchUpDigestResponse>(closed["digest:all"].Data).StandaloneCompleted).Outcome);
         Assert.Contains("verified", JsonSerializer.Serialize(closed["section:task-1:merge"].Data));
     }

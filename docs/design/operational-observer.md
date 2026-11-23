@@ -183,6 +183,16 @@ sweep or extending the native command, sweep or observation deadlines.
 
 ## Finite interest and cache
 
+Catch Up and Overview read `base:digest:{window}` before optional history work.
+The `digest-merges:{window}` aggregate publishes each closed task's independent
+section state. It retains at most 128 compact results per requested window in
+the existing cache budget. It shares complete histories with the other detail
+readers and confirms identity through shared inventory after native reads.
+Partial publication preserves its continuation obligation. A core turn that
+spends the native budget reserves the next detail turn. Comment hints and backup
+audits remain active. The base envelope never uses section clocks. See the
+[v1.3.1 amendment](operational-observations-v1.md#amendment-v131--digest-section-aggregation).
+
 GET renews interest for 30 seconds. A stream holds pins and receives the same grace after disconnect. Unpinned entries expire after another 30 seconds and are LRU eviction candidates. Admission supports at most 64 keys and two active Workspaces. A single atomic memory budget caps serialized projections plus separate cached histories at 32 MiB; histories also have a 64-entry/16-MiB cap. Inventory collection is separately capped at 8 MiB. Source history reservations and resource admission cannot race past the shared byte ceiling. Failed growth retains prior data with a source-limit error. Idle source caches are released without issuing tracker commands.
 
 The internal SSE seam is `Subscribe(keys, listener)`: it atomically admits/pins keys and registers notifications before sampling its returned `ObservationInterest.Versions`. The listener receives key/revision changes; disposing the interest unregisters it and releases its pins into grace. Consumers read `Epoch` and `ProjectId` from this host owner. `Read(key)` only reads/renews cached interest; `RequestRefresh(keys)` coalesces collection. The transport must implement the separate connection, queue, timeout and resync limits in v1.1; callbacks must enqueue bounded work and return promptly.

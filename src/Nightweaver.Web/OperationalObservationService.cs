@@ -186,7 +186,7 @@ internal sealed class OperationalObservationService(
         string[] names = key.Kind switch
         {
             "section" => InventorySource.Concat(OperationalObservationSource.SectionSources(key)).ToArray(),
-            "factory" => ["runtime"], "cleanup" => ["cleanup"], "digest" => ["inventory", "checkpoint"],
+            "factory" => ["runtime"], "cleanup" => ["cleanup"], "digest" or "base-digest" or "digest-merges" => ["inventory", "checkpoint"],
             "workspace" => ["inventory", "detail:" + key.Argument, "relations-up:" + key.Argument,
                 "relations-down:" + key.Argument, "comments:" + key.Argument, "environment:" + key.Argument],
             "explorer" or "base-explorer" when key.Argument is "ready" or "blocked" => ["inventory", key.Argument],

@@ -2,7 +2,7 @@ import { observationStatus } from "./operations";
 import { Component, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import { beadPath, safeEvidenceUrl } from "./bead-model";
-import { completedOutcomes, DigestCheckpoints, digestWindow, visibleThreads, windows, type Digest, type DigestItem } from "./digest-model";
+import { completedOutcomes, digestWithSections, DigestCheckpoints, digestWindow, visibleThreads, windows, type BaseDigest, type DigestMerges, type Digest, type DigestItem } from "./digest-model";
 import { operations } from "./operations-browser";
 import { Status } from "./primitives";
 import { useObservation } from "./use-observation";
@@ -10,6 +10,16 @@ import { useObservation } from "./use-observation";
 const checkpoints = new DigestCheckpoints(window.fetch.bind(window), () => { void operations.invalidateAfterCommand("checkpoint").catch(() => {}); });
 const labels: Record<string, string> = { auto: "Automatic", since_caught_up: "Since caught up", "24h": "24 hours", "7d": "7 days", "30d": "30 days", all: "All time" };
 const stamp = (value: string) => new Date(value).toLocaleString();
+
+function useDigest(project: string, resource: string) {
+  const base = useObservation<BaseDigest>(project, resource);
+  const merges = useObservation<DigestMerges>(project, resource.replace("base:digest:", "digest-merges:"));
+  const receipt = useRef({ data: merges.observation?.data, at: performance.now() });
+  if (receipt.current.data !== merges.observation?.data) receipt.current = { data: merges.observation?.data, at: performance.now() };
+  return { ...base, observation: base.observation && { ...base.observation,
+    data: base.observation.data ? digestWithSections(base.observation.data, merges.observation?.data
+      ?? (merges.error || merges.observation?.error ? {sections: {}, unavailableState: "failed"} : undefined), performance.now() - receipt.current.at) : null } };
+}
 
 /** Read DOM geometry before React moves keyed threads; restore the same focused anchor. */
 class DigestFocus extends Component<{ children: ReactNode }> {
@@ -28,14 +38,14 @@ class DigestFocus extends Component<{ children: ReactNode }> {
 }
 
 export function DigestMetric({ project }: { project: string }) {
-  const snapshot = useObservation<Digest>(project, "digest:auto");
+  const snapshot = useDigest(project, "base:digest:auto");
   const data = snapshot.observation?.data;
   return <div className="metric"><span className="eyebrow">Completed</span><strong>{data?.metrics.completedTotal ?? "—"}</strong>
     <small>{data ? `${labels[data.window]} · ${observationStatus(snapshot)}` : "Digest unavailable"}</small></div>;
 }
 
 export function CatchUpPreview({ project }: { project: string }) {
-  const snapshot = useObservation<Digest>(project, "digest:auto");
+  const snapshot = useDigest(project, "base:digest:auto");
   const data = snapshot.observation?.data;
   const [focused, setFocused] = useState<string>();
   const preview = useRef<HTMLDivElement>(null);
@@ -67,12 +77,12 @@ export function CatchUpPreview({ project }: { project: string }) {
 export function CatchUpView({ project, compact = false }: { project: string; compact?: boolean }) {
   const [params, setParams] = useSearchParams();
   const window = digestWindow(params.get("window"));
-  const resource = `digest:${window}`;
-  const snapshot = useObservation<Digest>(project, resource);
+  const resource = `base:digest:${window}`;
+  const snapshot = useDigest(project, resource);
   // Keep the last successful resource selected while a different filter loads
   // or fails. Both subscriptions still share the tab's bounded response cache.
   const [displayedResource, setDisplayedResource] = useState(resource);
-  const displayed = useObservation<Digest>(project, displayedResource);
+  const displayed = useDigest(project, displayedResource);
   const data = displayed.observation?.data;
   useEffect(() => {
     if (snapshot.observation?.data && resource !== displayedResource) setDisplayedResource(resource);
@@ -92,7 +102,7 @@ export function CatchUpView({ project, compact = false }: { project: string; com
     }
   }, [command.saved, compact, setParams, window]);
   const stale = snapshot.stale || snapshot.observation?.health !== "fresh";
-  const refresh = () => { setError(""); void operations.refresh([{ projectId: project, key: resource }]).catch(() => setError("Refresh could not be confirmed. Try again.")); };
+  const refresh = () => { setError(""); void operations.refresh([resource, resource.replace("base:digest:", "digest-merges:")].map(key => ({ projectId: project, key }))).catch(() => setError("Refresh could not be confirmed. Try again.")); };
   return <DigestFocus>
     {!compact && <div className="page-heading"><p className="eyebrow">Current project / Studio</p><h1 tabIndex={-1}>Catch up</h1><p>Meaningful changes, connected to the work behind them.</p></div>}
     <section id="catch-up" className="studio-digest" data-generated-at={data?.generatedAt}>
@@ -133,8 +143,8 @@ function Item({ project, item, context = "item", onFocus, onDisclosure }: { proj
   return <div className="digest-item-row" data-bead-id={item.id} onFocusCapture={onFocus}>
     <div className="digest-item-meta"><Status>{item.presentation?.role ?? "Role unavailable"} · Type: {item.type} · P{item.priority}</Status><Status>{item.activityKind === "context" ? `Root context (${item.status})` : (item.activityKind === "closed" ? item.outcomeLabel : item.presentation?.summary ?? item.outcomeLabel)}</Status>
       {item.fromId && <span>↳ {item.fromRelation ?? "Lineage"}: <Link to={beadPath(project, item.fromId)}>{item.fromId}</Link></span>}
-      {item.mergeEvidence?.state === "verified" ? <>
-        {item.mergeEvidence.pullRequest && safeEvidenceUrl(item.mergeEvidence.pullRequest) && <a href={item.mergeEvidence.pullRequest} target="_blank" rel="noreferrer">Merged pull request</a>}
+      {item.mergeEvidence?.state === "verified" || item.mergeEvidence?.state === "stale" ? <>
+        {item.mergeEvidence.pullRequest && safeEvidenceUrl(item.mergeEvidence.pullRequest) && <a href={item.mergeEvidence.pullRequest} target="_blank" rel="noreferrer">{item.mergeEvidence.state === "stale" ? "Previous merge evidence" : "Merged pull request"}</a>}
         {item.mergeEvidence.commitUrl && safeEvidenceUrl(item.mergeEvidence.commitUrl) && <a href={item.mergeEvidence.commitUrl} target="_blank" rel="noreferrer"><code>{item.mergeEvidence.mergeCommit?.slice(0, 7)}</code></a>}
       </> : <>{item.commits?.map(sha => <code key={sha}>{sha.slice(0, 7)}</code>)}{item.pullRequests?.map(pr => <span key={pr}>{pr}</span>)}</>}</div>
     <h4><Link to={beadPath(project, item.id)}>{item.id} · {item.title}</Link></h4>

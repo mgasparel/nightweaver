@@ -204,7 +204,7 @@ internal static partial class CatchUpDigestProjector
         string requestedWindow,
         DateTimeOffset? lastCaughtUpAt,
         DateTimeOffset generatedAt, int? maxRepairCycles = null,
-        IReadOnlyDictionary<string, DigestMergeEvidence>? mergeEvidence = null)
+        IReadOnlyDictionary<string, DigestMergeEvidence>? mergeEvidence = null, bool baseOnly = false)
     {
         CatchUpDigestItem Present(CatchUpDigestItem item)
         {
@@ -225,7 +225,7 @@ internal static partial class CatchUpDigestProjector
 
         var parsedBeads = new Dictionary<string, ParsedBead>(inventory.ById.Count, StringComparer.Ordinal);
         foreach (var bead in inventory.ById.Values)
-            parsedBeads.Add(bead.Id, ParseBead(bead));
+            parsedBeads.Add(bead.Id, ParseBead(bead, baseOnly));
 
         // Resolve primary upward lineage links within the inventory.
         var immediateParents = new Dictionary<string, (string ParentId, string Relation)>(StringComparer.Ordinal);
@@ -625,15 +625,15 @@ internal static partial class CatchUpDigestProjector
         return collapsed[..MaxSummaryLength].TrimEnd() + "…";
     }
 
-    private static ParsedBead ParseBead(BeadSnapshot bead)
+    private static ParsedBead ParseBead(BeadSnapshot bead, bool baseOnly)
     {
         var item = BeadExplorerItem.FromSnapshot(bead);
         var payload = bead.Payload;
         var updatedAt = ReadOptionalTimestamp(payload, "updated_at", bead.Id) ?? bead.CreatedAt.ToUniversalTime();
         var closedAt = ReadOptionalTimestamp(payload, "closed_at", bead.Id);
-        var closeReason = ReadOptionalString(payload, "close_reason", bead.Id);
-        var notes = ReadOptionalString(payload, "notes", bead.Id);
-        var description = ReadOptionalString(payload, "description", bead.Id);
+        var closeReason = baseOnly ? null : ReadOptionalString(payload, "close_reason", bead.Id);
+        var notes = baseOnly ? null : ReadOptionalString(payload, "notes", bead.Id);
+        var description = baseOnly ? null : ReadOptionalString(payload, "description", bead.Id);
         var parentId = ReadOptionalString(payload, "parent", bead.Id);
         var upwardLinks = ReadUpwardLinks(payload, bead.Id);
 
