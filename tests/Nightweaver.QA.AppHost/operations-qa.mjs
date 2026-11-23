@@ -66,7 +66,37 @@ try {
     { cwd: repo, env, encoding: 'utf8', timeout: 30000 }));
   assert(created.id);
   await page.waitForFunction(expected => parseInt(document.querySelector('#attention-navigation-count')?.textContent ?? '', 10) === expected, initial + 1, { timeout: 90000 });
-  await page.locator(`.metric strong[aria-label="${initial + 1} paused Beads"]`).waitFor();
+  await page.locator(`#attention-navigation-count[aria-label="${initial + 1} paused Beads"]`).waitFor();
+  // Reuse this native journey for the additive section transport. No extra
+  // fixture, AppHost or browser is needed.
+  const sectionKeys = [`base:workspace:${created.id}`, `section:${created.id}:text`, `section:${created.id}:history`];
+  async function waitForSections(keys, ready) {
+    const deadline = Date.now() + 90000;
+    while (Date.now() < deadline) {
+      const observations = await page.evaluate(async keys => Promise.all(keys.map(async key => {
+        const response = await fetch(`/api/operations/v1/projects/qa/resources?key=${encodeURIComponent(key)}`);
+        return { status: response.status, ...(await response.json()) };
+      })), keys);
+      fs.writeFileSync(path.join(output, 'section-attempt.json'), JSON.stringify(observations, null, 2));
+      assert.ok(observations.every(item => item.status === 200), 'Section resources are admitted');
+      if (ready(observations)) return observations;
+      await page.waitForTimeout(250);
+    }
+    assert.fail('Section observation did not converge; see section-attempt.json');
+  }
+  const coldSections = await waitForSections(sectionKeys,
+    observations => observations.every(item => item.health === 'fresh' && item.data && !item.synchronization?.pending));
+  assert.equal(coldSections[1].data.schema, 'nightweaver-section-v1');
+  assert.equal(coldSections[2].data.state, 'empty');
+  assert.deepEqual(coldSections[2].data.value.comments, []);
+  execFileSync('bd', ['--sandbox', 'comments', 'add', created.id, 'Shared section history QA'],
+    { cwd: repo, env, encoding: 'utf8', timeout: 30000 });
+  const [changedSection] = await waitForSections([sectionKeys[2]], ([observation]) =>
+    observation.health === 'fresh' && observation.data?.value?.comments.some(item => item.body === 'Shared section history QA'));
+  assert.equal(changedSection.data.state, 'available');
+  assert.equal(changedSection.data.beadId, created.id);
+  assert.equal(changedSection.data.baseIdentity.updatedAt, coldSections[0].data.bead.updatedAt);
+  fs.writeFileSync(path.join(output, 'sections.json'), JSON.stringify({ coldSections, changedSection }, null, 2));
   // Force a real transport replacement; this must hello/resync, not replay commands.
   await page.evaluate(() => {
     window.streamEvidence.drop = false;

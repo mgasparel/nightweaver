@@ -40,6 +40,7 @@ internal sealed class TrackerSourceSchedule(TimeProvider clock)
             { broad = false; broadSince = null; }
         }
     }
+    internal void Retire(string id) { lock (sync) slots.Remove(id); }
     internal void InvalidateAll()
     {
         lock (sync)

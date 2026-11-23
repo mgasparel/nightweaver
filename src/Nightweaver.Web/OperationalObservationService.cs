@@ -16,6 +16,7 @@ internal sealed class OperationalObservationService(
 {
     private TimeProvider Clock => clock;
     private const int MetadataReserve = 16 * 1024;
+    private static readonly string[] InventorySource = ["inventory"];
     private readonly ObservationMemoryBudget budget = memory ?? new();
     private static readonly JsonSerializerOptions Json = ObservationJson.Options;
     private readonly object sync = new();
@@ -136,8 +137,8 @@ internal sealed class OperationalObservationService(
         EvictExpired(now);
         var additions = keys.Where(key => !entries.ContainsKey(key.Value)).ToArray();
         var requested = keys.Select(key => key.Value).ToHashSet(StringComparer.Ordinal);
-        var workspaces = entries.Values.Where(entry => entry.Key.Kind is "workspace" or "base-workspace" && IsPinned(entry, now))
-            .Select(entry => entry.Key.Argument).Concat(keys.Where(key => key.Kind is "workspace" or "base-workspace")
+        var workspaces = entries.Values.Where(entry => entry.Key.Kind is "workspace" or "base-workspace" or "section" && IsPinned(entry, now))
+            .Select(entry => entry.Key.Argument).Concat(keys.Where(key => key.Kind is "workspace" or "base-workspace" or "section")
                 .Select(key => key.Argument)).Distinct(StringComparer.Ordinal).Count();
         if (workspaces > 2) throw new ObservationRequestException(429);
         var created = new List<Entry>();
@@ -184,6 +185,7 @@ internal sealed class OperationalObservationService(
     {
         string[] names = key.Kind switch
         {
+            "section" => InventorySource.Concat(OperationalObservationSource.SectionSources(key)).ToArray(),
             "factory" => ["runtime"], "cleanup" => ["cleanup"], "digest" => ["inventory", "checkpoint"],
             "workspace" => ["inventory", "detail:" + key.Argument, "relations-up:" + key.Argument,
                 "relations-down:" + key.Argument, "comments:" + key.Argument, "environment:" + key.Argument],
@@ -477,6 +479,11 @@ internal sealed class OperationalObservationService(
                 var data = sample.Error is null || sample.Partial || sample.ConfirmedAbsence
                     ? JsonSerializer.SerializeToElement(sample.Data, Json) : missing ? null : entry.Envelope.Data;
                 var health = sample.Error is null ? "fresh" : missing || data is null ? "unavailable" : "stale";
+                if (entry.Key.Kind == "section" && !missing && data is null && sample.Error is not null)
+                    data = JsonSerializer.SerializeToElement(new { schema = "nightweaver-section-v1", beadId = entry.Key.Argument,
+                        name = entry.Key.Query, baseIdentity = (object?)null, state = "failed", value = (object?)null }, Json);
+                if (entry.Key.Kind == "section" && data is { } section && section.GetProperty("value").ValueKind == JsonValueKind.Null)
+                    health = "unavailable";
                 var updated = entry.Envelope with
                 {
                     Data = data, Health = health, Error = sample.Error, Sources = sources,
@@ -586,6 +593,19 @@ internal sealed class OperationalObservationService(
     }
 
     private ObservationEnvelope WithAge(Entry entry, ObservationEnvelope envelope)
+    {
+        envelope = WithSourceAge(entry, envelope);
+        if (entry.Key.Kind != "section" || envelope.Data is not { } data) return envelope;
+        var value = data.GetProperty("value");
+        var state = envelope.Health == "stale" && value.ValueKind != JsonValueKind.Null ? "stale"
+            : envelope.Error is not null && value.ValueKind == JsonValueKind.Null ? "failed" : data.GetProperty("state").GetString();
+        if (state == data.GetProperty("state").GetString()) return envelope;
+        var node = JsonNode.Parse(data.GetRawText())!;
+        node["state"] = state;
+        return envelope with { Data = JsonSerializer.SerializeToElement(node, Json) };
+    }
+
+    private ObservationEnvelope WithSourceAge(Entry entry, ObservationEnvelope envelope)
     {
         var now = clock.GetUtcNow();
         var maximum = TimeSpan.FromMilliseconds(envelope.Policy?.MaxSnapshotAgeMs ?? envelope.TargetIntervalMs + 2000);
@@ -698,5 +718,11 @@ internal sealed class OperationalObservationService(
     {
         lock (sync) { stopping = true; ReportHealth(); }
         await base.StopAsync(cancellationToken);
+        await collection.WaitAsync(cancellationToken);
+        try
+        {
+            if (source is OperationalObservationSource adapter) await adapter.ReadScheduledAsync([], (_, _) => { }, CancellationToken.None);
+        }
+        finally { collection.Release(); }
     }
 }

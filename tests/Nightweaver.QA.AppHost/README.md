@@ -1,5 +1,12 @@
 # QA AppHost
 
+`studio-cutover.ps1 -Only operations-qa -OutputDirectory <fresh-path>` also
+checks section text/history over the real operations API in its existing
+Playwright journey. It verifies complete empty history, a native comments-only
+update, section identity and source envelopes. It saves `sections.json` beside
+the existing stream evidence and responsive screenshots. The exact stack stops
+in `finally`.
+
 For repeatable cold, warm and active-factory shared reads, use
 `shared-read-baseline.ps1 -OutputDirectory <new-absolute-path>` from this directory,
 or its repository-relative path from the root. The runner discovers each exact

@@ -1,5 +1,16 @@
 # Test suite
 
+Independent section reads add deterministic observer cases for shared histories,
+selected progress before cohort completion, caller cancellation, failed-refresh
+provenance, identity conflicts and deletion, entry/byte eviction, reservation
+failure, late callbacks and host shutdown. Controlled native costs also check
+base, background and guarded-operation progress during repeated selection.
+They add no native journey or fixture publication. The existing operations
+Playwright journey checks the additive section API and a comments-only update
+on its existing disposable tracker, AppHost and browser. Production reuses the
+current CLI parsers and shared source values. Compatible sections add one shared
+confirmation only when native detail work follows the latest inventory read.
+
 Shared base publication adds injected observer cases for held legacy detail,
 cold direct-link validation, native membership failure and continuation,
 failed-refresh retention, confirmed absence, audit refresh, raced hints,

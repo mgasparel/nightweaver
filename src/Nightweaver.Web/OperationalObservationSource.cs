@@ -9,7 +9,7 @@ using Nightweaver.Telemetry;
 
 namespace Nightweaver.Web;
 
-internal sealed class OperationalObservationSource(
+internal sealed partial class OperationalObservationSource(
     ProjectConfig project, HostPaths paths,
     IProcessRunner runner, TrackerBridge tracker, TimeProvider clock,
     CatchUpCheckpointStore checkpoint, FactoryTelemetryReader runtime,
@@ -40,7 +40,7 @@ internal sealed class OperationalObservationSource(
     {
         var selected = keys.Where(key => key.Kind is "base-explorer" or "base-workspace")
             .Where(key => !inventoryOnly || key.Kind == "base-workspace" || key.Argument is not ("ready" or "blocked")).ToArray();
-        if (selected.Length == 0) return;
+        if (selected.Length == 0 && !keys.Any(key => key.Kind == "section")) return;
         ObservationError? projectionError = null;
         if (inventory is not null && !ReferenceEquals(baseContentIdentity, states["inventory"].ContentIdentity))
         {
@@ -108,7 +108,7 @@ internal sealed class OperationalObservationSource(
         var signature = string.Join("\n", keys.Select(key => key.Value).Order(StringComparer.Ordinal));
         var changed = signature != interest;
         interest = signature;
-        selectedIds = keys.Where(key => key.Kind == "workspace").Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal);
+        selectedIds = keys.Where(key => key.Kind is "workspace" or "section").Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal);
         var reconcile = Interlocked.Exchange(ref reconciliationRequested, 0) != 0;
         if (!changed && !continuation && !reconcile && !schedule.HasDue) return new Dictionary<string, ObservationSample>();
         // One bounded turn may publish only one selected Workspace. Remember
@@ -136,8 +136,12 @@ internal sealed class OperationalObservationSource(
     private static readonly string[] InventorySource = ["inventory"];
     private readonly Dictionary<string, ObservationSourceState> states = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (byte[] Hash, object Identity)> sourceContent = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> sourceReadOrder = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, SectionIdentity> sourceBeads = new(StringComparer.Ordinal);
+    private long readOrder;
     private Action<string, ObservationSourceState>? revalidate;
     private readonly Dictionary<string, History> histories = new(StringComparer.Ordinal);
+    private HashSet<string> pinnedHistories = new(StringComparer.Ordinal);
     private readonly Dictionary<string, WorkspaceCycle> workspaces = new(StringComparer.Ordinal);
     private readonly HashSet<string> commentsReadThisSweep = new(StringComparer.Ordinal);
     private BeadSnapshot[]? attentionBeads;
@@ -148,6 +152,7 @@ internal sealed class OperationalObservationSource(
     private int commentCursor;
     private double sweepNativeStarted;
     private bool preferAttention = true;
+    private bool preferDigest;
     private int commentsThisSweep;
     private readonly HashSet<string> digestEvidenceIds = new(StringComparer.Ordinal);
     private static readonly string[] DigestCoreSources = ["inventory", "checkpoint"];
@@ -222,6 +227,9 @@ internal sealed class OperationalObservationSource(
 
     private void RecordSuccessfulRead(string id, object? result, DateTimeOffset attemptedAt)
     {
+        sourceReadOrder[id] = ++readOrder;
+        if (id.Contains(':') && cached.GetValueOrDefault("inventory") is BeadsInventory inventoryAtRead
+            && inventoryAtRead.ById.TryGetValue(id[(id.IndexOf(':') + 1)..], out var beadAtRead)) sourceBeads[id] = SectionIdentity.Capture(beadAtRead);
         // BeadsInventory's map is internal; serializing the wrapper would
         // produce {} and falsely treat different inventories as identical.
         object? content = result is BeadsInventory inventory ? inventory.ById : result;
@@ -238,6 +246,7 @@ internal sealed class OperationalObservationSource(
         if (scheduled) ReadStarted?.Invoke(id, reason ?? schedule.Reason(id));
         var generation = scheduled ? schedule.Begin(id) : default;
         var attempt = clock.GetUtcNow();
+        var accepted = states.GetValueOrDefault(id);
         try
         {
             var result = await read();
@@ -258,9 +267,9 @@ internal sealed class OperationalObservationSource(
         catch (Exception exception) when (IsSourceFailure(exception))
         {
             if (scheduled) schedule.Complete(id, generation, false);
-            states.TryGetValue(id, out var previous);
-            states[id] = new(previous?.ObservedAt is null ? "unavailable" : "stale", previous?.ObservedAt, attempt, Error(exception))
-                { ContentIdentity = previous?.ContentIdentity };
+            var previous = accepted;
+            states[id] = (previous ?? new ObservationSourceState("unavailable", null, null, null)) with
+                { Health = previous?.ObservedAt is null ? "unavailable" : "stale", LastAttemptAt = attempt, Error = Error(exception) };
             return null;
         }
     }
@@ -314,8 +323,9 @@ internal sealed class OperationalObservationSource(
         var result = new Dictionary<string, ObservationSample>(StringComparer.Ordinal);
         if (keys.Count == 0)
         {
+            sectionCycles.Clear(); recentDetails.Clear(); pinnedHistories.Clear();
             foreach (var history in histories.Values) memory.Release(history);
-            histories.Clear(); historyGenerations.Clear(); states.Clear(); sourceContent.Clear(); cached.Clear();
+            histories.Clear(); historyGenerations.Clear(); states.Clear(); sourceContent.Clear(); sourceReadOrder.Clear(); sourceBeads.Clear(); cached.Clear();
             foreach (var owner in cacheReservations.Values) memory.Release(owner);
             cacheReservations.Clear(); schedule.Reset(); workspaces.Clear(); attentionBeads = null;
             attentionPresentations.Clear(); retainedInventory = null; resumeDetails = false;
@@ -387,7 +397,16 @@ internal sealed class OperationalObservationSource(
             retainedInventoryState = states["inventory"];
         }
         var inventoryState = states["inventory"];
+        pinnedHistories = keys.Where(key => key.Kind is "workspace" or "section").Select(key => key.Argument!)
+            .Concat(keys.Any(key => key.Kind == "attention") && inventory is not null
+                ? inventory.ById.Values.Where(AttentionDeskProjector.IsPaused).Where(bead => !AttentionDeskProjector.IsTerminal(bead)).Select(bead => bead.Id) : [])
+            .ToHashSet(StringComparer.Ordinal);
         ProjectBases(keys, inventory, ready, blocked, started, result);
+        // Sections consume the same sources and native turn as legacy readers.
+        // Alternate a reserved background turn under continuous selection.
+        var sectionsFirst = HasBudget && preferSections;
+        if (HasBudget && keys.Any(key => key.Kind == "section")) preferSections = !preferSections;
+        if (sectionsFirst) await ReadSectionsAsync(keys, repository, reader, inventory, result, token);
         if (scheduled && attentionBeads is not null && !ReferenceEquals(attentionInventoryState?.ContentIdentity, inventoryState.ContentIdentity))
         {
             // Carry successful histories, but rebuild membership/presentation from
@@ -507,62 +526,78 @@ internal sealed class OperationalObservationSource(
         var attentionFirst = HasBudget && keys.Any(key => key.Kind == "attention") && (preferAttention = !preferAttention);
         if (!attentionFirst) await ReadSelectedAsync();
 
-        if (keys.Any(key => key.Kind == "attention") && inventory is not null)
-            try { await ReadAttentionAsync(repository, reader, inventory, inventoryState, result,
-                selected.Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal), token); }
-            catch (Exception exception) when (IsSourceFailure(exception))
-            {
-                result["attention"] = Sample(null, started, "inventory") with { Error = Error(exception) };
-                attentionBeads = null;
-                attentionPresentations.Clear();
-            }
-        else if (inventory is null && keys.Any(key => key.Kind == "attention")) result["attention"] = Sample(null, started, "inventory");
-        if (attentionFirst) await ReadSelectedAsync();
+        async Task ReadAttentionProjectionAsync()
+        {
+            if (keys.Any(key => key.Kind == "attention") && inventory is not null)
+                try { await ReadAttentionAsync(repository, reader, inventory, inventoryState, result,
+                    selected.Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal), token); }
+                catch (Exception exception) when (IsSourceFailure(exception))
+                {
+                    result["attention"] = Sample(null, started, "inventory") with { Error = Error(exception) };
+                    attentionBeads = null;
+                    attentionPresentations.Clear();
+                }
+            else if (inventory is null && keys.Any(key => key.Kind == "attention")) result["attention"] = Sample(null, started, "inventory");
+        }
         // Digest evidence uses only budget left by the selected Workspace and
         // Attention Desk. Retain compact results, never full digest histories.
-        foreach (var key in keys.Where(key => key.Kind == "digest"))
+        async Task ReadDigestsAsync()
         {
-            try
+            foreach (var key in keys.Where(key => key.Kind == "digest"))
             {
-                var digest = inventory is null ? null : CatchUpDigestProjector.Project(inventory, key.Argument!, caughtUp,
-                    generatedAt, project.Limits.MaxRepairCycles);
-                var candidates = digest is null ? [] : digest.Threads.SelectMany(thread => thread.Items.Prepend(thread.Root))
-                    .Concat(digest.StandaloneCompleted).Where(item => item.Status == "closed" && item.Type == "task")
-                    .DistinctBy(item => item.Id).OrderByDescending(item => item.ActivityAt).ThenBy(item => item.Id, StringComparer.Ordinal)
-                    .Take(128).Select(item => item.Id).ToArray();
-                var evidence = new Dictionary<string, DigestMergeEvidence>(StringComparer.Ordinal);
-                var pending = false;
-                foreach (var id in candidates)
+                try
                 {
-                    digestEvidenceIds.Add(id);
-                    var sourceId = "merge:" + id;
-                    var due = !scheduled || schedule.Due(sourceId);
-                    // A failed bootstrap has no cached value. Respect its retry
-                    // backoff instead of falling through to an uncounted read.
-                    if (!due && !cached.ContainsKey(sourceId)) continue;
-                    if (due && (commentsThisSweep >= 4 || !HasBudget))
-                    { pending = true; continue; }
-                    if (due) commentsThisSweep++;
-                    var observed = await ReadAsync(sourceId, async () => DigestMergeEvidence.Read(inventory!.ById[id],
-                        await reader.ReadDetailCommentsAsync(repository, id, token)), token);
-                    if (observed is not null) evidence[id] = observed;
+                    var digest = inventory is null ? null : CatchUpDigestProjector.Project(inventory, key.Argument!, caughtUp,
+                        generatedAt, project.Limits.MaxRepairCycles);
+                    var candidates = digest is null ? [] : digest.Threads.SelectMany(thread => thread.Items.Prepend(thread.Root))
+                        .Concat(digest.StandaloneCompleted).Where(item => item.Status == "closed" && item.Type == "task")
+                        .DistinctBy(item => item.Id).OrderByDescending(item => item.ActivityAt).ThenBy(item => item.Id, StringComparer.Ordinal)
+                        .Take(128).Select(item => item.Id).ToArray();
+                    var evidence = new Dictionary<string, DigestMergeEvidence>(StringComparer.Ordinal);
+                    var pending = false;
+                    foreach (var id in candidates)
+                    {
+                        digestEvidenceIds.Add(id);
+                        var sourceId = "merge:" + id;
+                        var due = !scheduled || schedule.Due(sourceId);
+                        // A failed bootstrap has no cached value. Respect its retry
+                        // backoff instead of falling through to an uncounted read.
+                        if (!due && !cached.ContainsKey(sourceId)) continue;
+                        var sharedHistory = scheduled && histories.ContainsKey(id) && !schedule.Due("comments:" + id)
+                            && states.GetValueOrDefault("comments:" + id)?.Error is null;
+                        if (due && !sharedHistory && (commentsThisSweep >= 4 || !HasBudget))
+                        { pending = true; continue; }
+                        var observed = await ReadAsync(sourceId, async () => DigestMergeEvidence.Read(inventory!.ById[id],
+                            await ReadSharedHistoryAsync(repository, reader, id, token)
+                                ?? throw new ToolExecutionException("Merge history could not be observed")), token);
+                        if (observed is not null) evidence[id] = observed;
+                    }
+                    result[key.Value] = Sample(inventory is null ? null : CatchUpDigestProjector.Project(inventory, key.Argument!, caughtUp,
+                        generatedAt, project.Limits.MaxRepairCycles, evidence), started,
+                        DigestCoreSources.Concat(candidates.Select(id => "merge:" + id)).ToArray()) with { Pending = pending };
                 }
-                result[key.Value] = Sample(inventory is null ? null : CatchUpDigestProjector.Project(inventory, key.Argument!, caughtUp,
-                    generatedAt, project.Limits.MaxRepairCycles, evidence), started,
-                    DigestCoreSources.Concat(candidates.Select(id => "merge:" + id)).ToArray()) with { Pending = pending };
+                catch (Exception exception) when (IsSourceFailure(exception))
+                { result[key.Value] = Sample(null, started, "inventory") with { Error = Error(exception) }; }
             }
-            catch (Exception exception) when (IsSourceFailure(exception))
-            { result[key.Value] = Sample(null, started, "inventory") with { Error = Error(exception) }; }
         }
+        // Due merge evidence gets a background turn as well, even when every
+        // selected history and Attention cohort is repeatedly invalidated.
+        var digestFirst = HasBudget && keys.Any(key => key.Kind == "digest") && (preferDigest = !preferDigest);
+        if (digestFirst) await ReadDigestsAsync();
+        await ReadAttentionProjectionAsync();
+        if (attentionFirst) await ReadSelectedAsync();
+        if (!sectionsFirst) await ReadSectionsAsync(keys, repository, reader, inventory, result, token);
+        if (!digestFirst) await ReadDigestsAsync();
         // Bound reuse to one continuation turn even if another selected Workspace
         // never recovers. New interest and external creation must reach a fresh core.
         resumeDetails = !resumedDetails && ((workspaces.Count > 0 && keys.All(key => key.Kind == "workspace"))
             || (!HasBudget && CommandCount == detailCommandsBefore
-                && (selected.Length > 0 || keys.Any(key => key.Kind == "attention"))));
+                && (selected.Length > 0 || keys.Any(key => key.Kind is "attention" or "section"))));
         // A new cycle must not repeatedly compare an external edit against the
         // old core while a different Workspace remains pending indefinitely.
         if (result.Values.Any(sample => sample.Error?.Code == "source-conflict")) resumeDetails = false;
-        TrimSources(selected.Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal), keys);
+        TrimSources(selected.Select(key => key.Argument!).Concat(keys.Where(key => key.Kind == "section").Select(key => key.Argument!))
+            .ToHashSet(StringComparer.Ordinal), keys);
         return result;
     }
 
@@ -831,16 +866,24 @@ internal sealed class OperationalObservationSource(
     private void StoreHistory(string id, IReadOnlyList<BeadsCommentSnapshot> comments)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(comments).Length;
+        var previous = histories.GetValueOrDefault(id);
+        foreach (var victim in histories.Where(pair => pair.Key != id && !pinnedHistories.Contains(pair.Key))
+            .OrderBy(pair => pair.Value.ReadAt).ToArray())
+        {
+            if ((histories.ContainsKey(id) || histories.Count < 64)
+                && histories.Where(pair => pair.Key != id).Sum(pair => pair.Value.Bytes) + bytes <= 16 * 1024 * 1024
+                && memory.Used - (histories.GetValueOrDefault(id)?.Bytes ?? 0) + bytes <= ObservationMemoryBudget.MaximumBytes) break;
+            var name = "comments:" + victim.Key;
+            memory.Release(victim.Value); histories.Remove(victim.Key); cached.Remove(name);
+            states.Remove(name); sourceContent.Remove(name); sourceReadOrder.Remove(name); sourceBeads.Remove(name);
+            historyGenerations.Remove(name); recentDetails.Remove(name); schedule.Retire(name);
+        }
         if (!histories.ContainsKey(id) && histories.Count >= 64
             || histories.Where(pair => pair.Key != id).Sum(pair => pair.Value.Bytes) + bytes > 16 * 1024 * 1024)
-            throw new ToolExecutionException("comment cache exceeded read limit");
+            RefuseHistory();
         var history = new History(comments, clock.GetUtcNow(), bytes, states["comments:" + id]);
-        var previous = histories.GetValueOrDefault(id);
         if (!memory.TryReplace(previous is null ? [] : [previous], [(history, bytes)]))
-        {
-            if (historyGenerations.Remove("comments:" + id, out var refused)) schedule.Complete("comments:" + id, refused, false);
-            throw new ToolExecutionException("shared observation cache exceeded read limit");
-        }
+            RefuseHistory();
         histories[id] = history;
         if (scheduled)
         {
@@ -848,29 +891,46 @@ internal sealed class OperationalObservationSource(
             if (historyGenerations.Remove("comments:" + id, out var generation)) schedule.Complete("comments:" + id, generation, true);
         }
         commentsReadThisSweep.Add(id);
+
+        void RefuseHistory()
+        {
+            if (historyGenerations.Remove("comments:" + id, out var refused)) schedule.Complete("comments:" + id, refused, false);
+            states["comments:" + id] = (previous?.Source ?? new ObservationSourceState("unavailable", null, null, null)) with
+                { Health = previous is null ? "unavailable" : "stale", LastAttemptAt = clock.GetUtcNow(),
+                    Error = new("source-limit", "Source exceeded the supported observation limits.") };
+            throw new ToolExecutionException("shared observation cache exceeded read limit");
+        }
     }
 
     private void TrimSources(HashSet<string> selected, IReadOnlyList<OperationKey> keys)
     {
-        if (!keys.Any(key => key.Kind is "base-explorer" or "base-workspace"))
+        if (!keys.Any(key => key.Kind is "base-explorer" or "base-workspace" or "section"))
         { baseInventory = null; baseContentIdentity = null; memory.Release(baseReservation); }
         var retainedHistories = selected.Union(keys.Any(key => key.Kind == "attention")
             ? attentionBeads?.Select(bead => bead.Id)
                 ?? retainedInventory?.ById.Values.Where(AttentionDeskProjector.IsPaused).Where(bead => !AttentionDeskProjector.IsTerminal(bead)).Select(bead => bead.Id) ?? []
             : []
             , StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+        var active = states.Keys.Where(id => id.Contains(':') && selected.Contains(id[(id.IndexOf(':') + 1)..])).ToHashSet(StringComparer.Ordinal);
+        foreach (var id in active) recentDetails[id] = clock.GetUtcNow();
+        foreach (var id in recentDetails.Keys.Where(id => !active.Contains(id) && clock.GetUtcNow() - recentDetails[id] >= TimeSpan.FromSeconds(60)).ToArray())
+            recentDetails.Remove(id);
+        foreach (var id in recentDetails.Where(pair => !active.Contains(pair.Key)).OrderByDescending(pair => pair.Value).Skip(64).Select(pair => pair.Key).ToArray())
+            recentDetails.Remove(id);
+        foreach (var name in recentDetails.Keys.Where(name => name.StartsWith("comments:", StringComparison.Ordinal))) retainedHistories.Add(name[9..]);
         foreach (var id in histories.Keys.Where(id => !retainedHistories.Contains(id)).ToArray())
         { memory.Release(histories[id]); histories.Remove(id); }
         // Readiness sets have no colon-qualified identity. Retire them with the
         // consuming Explorer view so an unreadable due slot cannot wake every turn.
-        foreach (var id in states.Keys.Where(id => id.Contains(':') && !(id.StartsWith("comments:", StringComparison.Ordinal)
+        foreach (var id in states.Keys.Where(id => id.Contains(':') && !recentDetails.ContainsKey(id) && !(id.StartsWith("comments:", StringComparison.Ordinal)
                 ? retainedHistories : id.StartsWith("merge:", StringComparison.Ordinal) ? digestEvidenceIds : selected).Contains(id[(id.IndexOf(':') + 1)..])
             || id is "ready" or "blocked" && !keys.Any(key => key.Kind is "explorer" or "base-explorer" && key.Argument == id)).ToArray())
         {
-            states.Remove(id); sourceContent.Remove(id); cached.Remove(id); historyGenerations.Remove(id);
+            states.Remove(id); sourceContent.Remove(id); sourceReadOrder.Remove(id); sourceBeads.Remove(id); cached.Remove(id); historyGenerations.Remove(id);
             if (cacheReservations.Remove(id, out var owner)) memory.Release(owner);
         }
-        if (scheduled) schedule.Retain(states.Keys.ToHashSet(StringComparer.Ordinal));
+        if (scheduled) schedule.Retain(states.Keys.Where(id => !recentDetails.ContainsKey(id) || active.Contains(id))
+            .ToHashSet(StringComparer.Ordinal));
     }
 
     public async Task<IReadOnlyDictionary<string, ObservationSample>> ReadRuntimeAsync(IReadOnlyList<OperationKey> keys, CancellationToken token)

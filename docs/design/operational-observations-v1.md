@@ -6,7 +6,8 @@ additive read contract. It does not claim that these resources are implemented.
 Implementation slice ns-gjwx-paea384f7cce36dfdace5 enables only
 `base:explorer:{view}:{query}:{page}` and `base:workspace:{id}`. Studio Explorer
 uses the new paged base key. Workspace keeps its full-response consumer until
-its section migration. The other reserved base and section keys remain
+its section migration. Slice ns-gjwx-p52d0161f682b3122f1e2 enables all five
+`section:{id}:{name}` resources. The other reserved base keys remain
 unsupported. One compact inventory projection supplies exact-ID, ordered
 search, status, type, stage, pause, assignee and priority indexes. It shares the
 host memory budget with raw sources and resource envelopes. Base callbacks
