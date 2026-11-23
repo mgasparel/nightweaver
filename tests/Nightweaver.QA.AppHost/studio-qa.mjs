@@ -1,7 +1,7 @@
 import { overviewChecks } from './overview-checks.mjs';
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const url = process.env.NIGHTWEAVER_QA_URL;
@@ -54,6 +54,8 @@ try {
     await page.waitForURL(`**${base}/${route}`);
     assert.equal((await page.reload()).status(), 200);
   }
+  // Retire the Overview preview's section interest before selecting two new Workspaces.
+  await page.waitForTimeout(31000);
   for (const beadId of ['ns-mbd.1', 'ns-mbd.1.2']) {
     await page.goto(`${url}/#bead/${beadId}`);
     await page.waitForURL(`**${base}/beads/${beadId}`);
@@ -65,6 +67,9 @@ try {
     await page.getByRole('heading', { name: `Bead ${beadId}`, exact: true }).waitFor();
     await page.locator('.workspace-tabs a[aria-current="page"]').filter({ hasText: 'History' }).waitFor();
   }
+  // Both direct-link identities keep the documented thirty-second grace.
+  await page.goto(url + base + '/attention');
+  await page.waitForTimeout(31000);
   for (const path of ['/api/missing', '/studio/assets/missing.js', `${base}/beads/ns-mbd.1/missing.js`]) {
     assert.equal((await page.request.get(`${url}${path}`)).status(), 404);
   }
@@ -123,6 +128,14 @@ try {
   assert.deepEqual(errors, [], 'No browser errors');
 
   console.log(JSON.stringify({ projectId, widths: [1440, 375, 720], errors, mutations, output, checks: 'direct reload, history, keyboard, query state, legacy IDs, unknown project/route, dialogs and focus' }));
+} catch (error) {
+  const page = browser.contexts()[0]?.pages()[0];
+  if (page) {
+    await page.screenshot({ path: `${output}/failure.png`, fullPage: true });
+    await writeFile(`${output}/failure.txt`, await page.locator('body').innerText());
+  }
+  await writeFile(`${output}/browser-errors.json`, JSON.stringify(errors, null, 2));
+  throw error;
 } finally {
   await browser.close();
 }

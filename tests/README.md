@@ -684,3 +684,11 @@ interruption. Injected Git output cannot prove preservation of a real registrati
 This adds no owner, Agent, fixture publish or browser journey. Other detailed
 cases stay in file/component fixtures. Unchanged payload files avoid redundant
 writes and journal revisions; normal runtime paths do not call this component.
+
+Attention base publication adds two deterministic observer cases. They check
+history-free membership, closed and deleted members, and selected explanation
+completion with 65 unrelated pauses. Studio model cases check changed update
+time, stage, pause labels, repair count, source health and action eligibility.
+They add no native journey or fixture publication. Browser checks extend the
+existing Studio and Overview journey. Production adds one inventory-only base
+projection and defers selected explanations to the existing shared history cache.

@@ -11,6 +11,7 @@ internal sealed record OperationKey(string Value, string Kind, string? Argument 
     {
         if (Encoding.UTF8.GetByteCount(value) > 1024) throw new ObservationRequestException(400);
         var parts = value.Split(':');
+        if (value == "base:attention") return new(value, "base-attention");
         if (parts is ["section", var sectionId, var section] && BeadIdSafety.IsSafe(sectionId)
             && section is "text" or "history" or "relations" or "environment" or "merge")
             return new(value, "section", sectionId, section);

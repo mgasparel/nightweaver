@@ -5,7 +5,7 @@ import { DeliveryView } from "./delivery-views";
 import { operations, interactions } from "./operations-browser";
 import { useObservation } from "./use-observation";
 import { observationStatus, type Snapshot } from "./operations";
-import { attentionWarningSections, decisionSections, attentionPreview, beadPath, safeBeadId, survivingAttentionDisclosures, visibleAttention, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
+import { attentionFromBase, type AttentionBase, type PauseExplanation, attentionWarningSections, decisionSections, attentionPreview, beadPath, safeBeadId, survivingAttentionDisclosures, visibleAttention, type AttentionItem, type WorkspaceData, type Message, safeEvidenceUrl } from "./bead-model";
 import { AttentionCommands } from "./attention-commands";
 import { PlanningAuthorization } from "./product-views";
 import { Relations } from "./workspace-relations";
@@ -81,7 +81,7 @@ function DecisionContext({ item }: { item: AttentionItem }) {
   const history = useContext(EvidenceHistory);
   return <section className="decision-context" aria-label="Pause question and context">
     <div className="bead-row-meta"><Status tone="warn">{item.kind === "product-decision-required" ? "Decision needed" : "Technical recovery"}</Status>
-      <span>{item.beadId} · {item.stage ?? "Stage unavailable"} · Repairs {item.repairCycles ?? 0}/{item.maxRepairCycles}</span></div>
+      <span>{item.beadId} · {item.stage ?? "Stage unavailable"} · Repairs {item.repairCycles ?? "Unavailable"}/{item.maxRepairCycles}</span></div>
     <h2 tabIndex={-1}>{item.kind === "product-decision-required" ? "Your decision" : "Recovery context"}</h2>
     <Markdown text={item.question || item.diagnostic || "No attributable question is available. Review the source evidence before acting."} />
     {item.message && <><p className="eyebrow">{item.message.role ?? "Role unavailable"}</p>
@@ -177,9 +177,25 @@ function Guidance({ project, id, item, current }: { project: string; id: string;
 }
 
 export function AttentionView({ project, compact = false }: { project: string; compact?: boolean }) {
-  const snapshot = useObservation<AttentionItem[]>(project, "attention");
-  const items = snapshot.observation?.data;
+  const snapshot = useObservation<AttentionBase>(project, "base:attention");
+
   const [selected, setSelected] = useState<string>();
+  const [preview, setPreview] = useState<string>();
+  const base = snapshot.observation?.data;
+  useEffect(() => {
+    if (compact && base && !base.items.some(row => row.id === preview)) setPreview(base.items[0]?.id);
+  }, [compact, base, preview]);
+  const explanationId = selected ?? (compact ? preview ?? base?.items[0]?.id : undefined);
+  const row = base?.items.find(row => row.id === explanationId);
+  const historyKey = row ? `section:${row.id}:history` : undefined;
+  const history = useObservation<PauseExplanation>(project, historyKey);
+  const historyCurrent = !history.stale && history.synchronized === true && history.observation?.health === "fresh";
+  const items = base?.items.map(row => attentionFromBase(row, base.maxRepairCycles, history.observation?.data ?? undefined, historyCurrent));
+  const retained = history.observation?.data?.beadId === explanationId ? history.observation?.data?.value?.attention : null;
+  const explanationState = history.observation?.error || history.error ? "Pause explanation failed. Refresh to try again."
+    : history.observation?.data && !historyCurrent ? "Pause explanation is stale. Current evidence is pending."
+    : historyCurrent ? "No attributable pause explanation is available. Review the history before acting."
+    : "Loading pause explanation. Question, role and pause time are unknown until history is confirmed.";
   const [limit, setLimit] = useState(8);
   const [focused, setFocused] = useState<string>();
   const [disclosed, setDisclosed] = useState(new Set<string>());
@@ -193,7 +209,7 @@ export function AttentionView({ project, compact = false }: { project: string; c
   // Keep the identity selected even after it leaves the live collection.
   return <FocusBoundary>
     {!compact && <Heading title="Attention">Decisions and recovery, with the evidence close at hand.</Heading>}
-    {(!compact || attentionWarning) && <Freshness snapshot={snapshot} project={project} resource="attention" />}
+    {(!compact || attentionWarning) && <Freshness snapshot={snapshot} project={project} resource="base:attention" />}
     <div className={compact ? "" : "attention-board"}><div>
     {!compact && <p className="eyebrow attention-list-title">Paused Beads · {items?.length ?? "Unavailable"}</p>}
     {!items ? <p className="bead-empty">Attention is unavailable. Refresh to try again.</p> : items.length === 0
@@ -206,6 +222,9 @@ export function AttentionView({ project, compact = false }: { project: string; c
             <h2><Link to={beadPath(project, row.beadId)}>{row.title}</Link></h2></>}
             {compact && <>
               <h2 className="attention-question">{attentionPreview(row.question || row.diagnostic || row.title)}</h2>
+              {!row.sourceCommentId && <p role="status">{row.beadId === explanationId ? explanationState : "Pause explanation is not loaded. Open Review to read the evidence."}</p>}
+              {row.beadId === explanationId && !row.sourceCommentId && retained && <HistoricalExplanation item={retained} />}
+              {row.beadId !== explanationId && <p><button className="text-link" onClick={() => setPreview(row.beadId)}>Load pause explanation for {row.beadId}</button></p>}
               {decisionSections(row).filter(section => section.label === "Recommended answer").slice(0, 1).map(section => <p className="attention-recommendation" key={section.label}>{row.message?.role ?? "Source"} recommendation: {attentionPreview(section.text)}</p>)}
               {attentionWarningSections(row).map(section => <p className="bead-notice" key={section.label}>{section.text}</p>)}
               {row.unavailableReason && <p className="bead-notice">{row.unavailableReason}</p>}
@@ -219,12 +238,12 @@ export function AttentionView({ project, compact = false }: { project: string; c
               }}>
                 <summary>Read full context &amp; pause details</summary>
                 <p>{row.question || row.diagnostic}</p>
-                <p>{row.title} · {row.stage ?? "Stage unavailable"} · P{row.priority} · Repairs {row.repairCycles ?? 0}/{row.maxRepairCycles}</p>
+                <p>{row.title} · {row.stage ?? "Stage unavailable"} · P{row.priority} · Repairs {row.repairCycles ?? "Unavailable"}/{row.maxRepairCycles}</p>
                 <p>{row.sourceCommentId ? `Source comment ${row.sourceCommentId}` : "Source comment unavailable"}</p>
                 {row.contextNotice && <p>{row.contextNotice}</p>}
               </details>}
             </>}
-            {compact ? <div className="bead-row-meta"><span>{row.beadId}</span><span>{row.kind === "product-decision-required" ? "Decision waiting" : "Recovery waiting"}</span></div> : <p>{row.stage ?? "Stage unavailable"} · P{row.priority} · Repairs {row.repairCycles ?? 0}/{row.maxRepairCycles}</p>}
+            {compact ? <div className="bead-row-meta"><span>{row.beadId}</span><span>{row.kind === "product-decision-required" ? "Decision waiting" : "Recovery waiting"}</span></div> : <p>{row.stage ?? "Stage unavailable"} · P{row.priority} · Repairs {row.repairCycles ?? "Unavailable"}/{row.maxRepairCycles}</p>}
             {!compact && <button className="text-link" aria-pressed={selected === row.beadId} onClick={() => setSelected(row.beadId)}>Review {row.beadId}</button>}
           </article>)}
           {!compact && items.length > limit && <button className="button" onClick={() => setLimit(value => value + 8)}>Show more paused Beads ({items.length - limit})</button>}
@@ -235,14 +254,24 @@ export function AttentionView({ project, compact = false }: { project: string; c
     {!compact && !selected && <Panel title="Choose a paused Bead"><p>Select Review to read evidence and prepare guidance, or open its Full Bead Workspace.</p></Panel>}
     {!compact && selected && <Panel title={`Review ${selected}`}>
       <h2 ref={reviewHeading} tabIndex={-1}>{item?.title ?? `Retained draft · ${selected}`}</h2>
+      {historyKey && <Freshness snapshot={history} project={project} resource={historyKey} />}
+      {item && !item.sourceCommentId && <p role="status">{explanationState}</p>}
+      {item && !item.sourceCommentId && retained && <HistoricalExplanation item={retained} />}
       {item && <DecisionContext item={item} />}
       <Guidance key={selected} project={project} id={selected} item={item} current={snapshot.synchronized === true && !snapshot.stale && snapshot.observation?.health !== "unavailable" && !!item} />
       {item && <EvidenceHistory value={{ path: beadPath(project, selected) }}><DecisionEvidence item={item} /></EvidenceHistory>}
       <Link className="text-link" to={beadPath(project, selected)}>Open Full Bead Workspace and evidence</Link>
     </Panel>}
     </div>
-    {compact && !attentionWarning && <details className="overview-observation"><summary>Observation details &amp; refresh</summary><Freshness snapshot={snapshot} project={project} resource="attention" /></details>}
+    {compact && !attentionWarning && <details className="overview-observation"><summary>Observation details &amp; refresh</summary><Freshness snapshot={snapshot} project={project} resource="base:attention" /></details>}
   </FocusBoundary>;
+}
+
+function HistoricalExplanation({ item }: { item: AttentionItem }) {
+  return <details className="attention-context"><summary>Retained pause explanation · historical</summary>
+    <p>This evidence does not confirm the current pause or permit an action.</p>
+    <DecisionContext item={item} /><DecisionEvidence item={item} />
+  </details>;
 }
 
 function History({ data }: { data: WorkspaceData }) {

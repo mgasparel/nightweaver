@@ -14,6 +14,51 @@ namespace Nightweaver.Tests;
 
 public sealed class OperationalObservationSourceTests
 {
+    [Fact]
+    public async Task AttentionBasePublishesWithoutHistoriesAndRemovesClosedOrDeletedMembers()
+    {
+        using var target = new ObservationTargetFixture();
+        var runner = new Runner { Rows = 12 };
+        using var factory = Factory(target.Path, runner, new CostClock());
+        var source = Adapter(factory);
+        var keys = Keys("base:attention", "base:workspace:task-1");
+        var token = TestContext.Current.CancellationToken;
+        var samples = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        var data = JsonSerializer.SerializeToElement(samples["base:attention"].Data, ObservationJson.Options);
+        Assert.Equal("nightweaver-base-v1", data.GetProperty("schema").GetString());
+        Assert.Equal(12, data.GetProperty("items").GetArrayLength());
+        var row = data.GetProperty("items")[0];
+        Assert.Equal("task-1", row.GetProperty("id").GetString());
+        Assert.True(row.GetProperty("actions").GetProperty("canDecide").GetBoolean());
+        foreach (var field in new[] { "question", "diagnostic", "fromRole", "pausedAt", "sourceAuthor", "message" })
+            Assert.False(row.TryGetProperty(field, out _));
+        Assert.Empty(runner.CommentIds);
+        Assert.DoesNotContain("show", runner.Commands);
+        runner.Closed = true;
+        source.Invalidate();
+        samples = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Empty(JsonSerializer.SerializeToElement(samples["base:attention"].Data, ObservationJson.Options).GetProperty("items").EnumerateArray());
+        runner.Rows = 0;
+        source.Invalidate();
+        samples = await source.ReadScheduledAsync(keys, (_, _) => { }, token);
+        Assert.Empty(JsonSerializer.SerializeToElement(samples["base:attention"].Data, ObservationJson.Options).GetProperty("items").EnumerateArray());
+        Assert.True(samples["base:workspace:task-1"].ConfirmedAbsence);
+    }
+
+    [Fact]
+    public async Task AttentionBaseAndSelectedExplanationDoNotWaitForUnrelatedHistories()
+    {
+        using var target = new ObservationTargetFixture();
+        var runner = new Runner { Rows = 65, FailCommentOnce = "task-2" };
+        using var factory = Factory(target.Path, runner, new CostClock());
+        var source = Adapter(factory);
+        var keys = Keys("base:attention", "section:task-1:history");
+        var samples = await source.ReadScheduledAsync(keys, (_, _) => { }, TestContext.Current.CancellationToken);
+        Assert.Equal(65, JsonSerializer.SerializeToElement(samples["base:attention"].Data, ObservationJson.Options).GetProperty("items").GetArrayLength());
+        Assert.NotNull(samples["section:task-1:history"].Data);
+        Assert.Equal("task-1", Assert.Single(runner.CommentIds));
+    }
+
     [Theory]
     [InlineData("dep_add")]
     [InlineData("comment")]
@@ -612,7 +657,7 @@ public sealed class OperationalObservationSourceTests
         var source = Adapter(factory);
         using var service = new OperationalObservationService("web-test", source, clock,
             factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
-        using var pin = service.Pin(["base:explorer:all::1", "base:workspace:task-1", "workspace:task-1"]);
+        using var pin = service.Pin(["base:attention", "base:explorer:all::1", "base:workspace:task-1", "workspace:task-1"]);
         var token = TestContext.Current.CancellationToken;
         var collection = service.CollectOnceAsync(false, token);
         try
@@ -622,6 +667,9 @@ public sealed class OperationalObservationSourceTests
             var explorer = service.Read("base:explorer:all::1");
             Assert.Equal("fresh", explorer.Health);
             Assert.Equal("task-1", explorer.Data!.Value.GetProperty("items")[0].GetProperty("id").GetString());
+            var attention = service.Read("base:attention");
+            Assert.Equal("fresh", attention.Health);
+            Assert.Equal("task-1", attention.Data!.Value.GetProperty("items")[0].GetProperty("id").GetString());
             Assert.Equal(explorer.Data.Value.GetProperty("inventoryRevision").GetString(),
                 service.Read("base:workspace:task-1").Data!.Value.GetProperty("inventoryRevision").GetString());
             Assert.Null(service.Read("workspace:task-1").Data);

@@ -1,11 +1,12 @@
+import { readAttentionFixture, attentionBase, attentionHistory } from './attention-read-fixtures.mjs';
 import assert from 'node:assert/strict';
 
 // Same read-only fixture before and after the visual pass, on the existing stack.
 export async function overviewVisualChecks(page, url, base, projectId, output) {
-  const attention = await (await page.request.get(`${url}/api/operations/v1/projects/${projectId}/resources?key=attention`)).json();
+  const attention = await readAttentionFixture(page, url, projectId);
   const factory = await (await page.request.get(`${url}/api/factory/state`)).json();
   assert.ok(attention.data.length && factory.snapshot.delivery.slots[0].invocation);
-  const decision = { ...attention.data[0], beadId: 'ns-238', title: 'Archived project navigation', kind: 'product-decision-required', question: 'Should archived projects stay in the sidebar?',
+  const decision = { ...attention.data[0], beadId: 'qa-context-0', title: 'Archived project navigation', kind: 'product-decision-required', question: 'Should archived projects stay in the sidebar?',
     message: { state: 'supported', role: 'Planner', sections: [{label: 'Recommended answer', text: 'Move them to a separate archive.', commentId: 'visual-source'}] } };
   const data = structuredClone(factory);
   data.availability = 'live';
@@ -17,11 +18,11 @@ export async function overviewVisualChecks(page, url, base, projectId, output) {
   let mode = 'controlled';
   const handler = async route => {
     const key = new URL(route.request().url()).searchParams.get('key');
-    if (!['attention', 'factory', 'digest:auto'].includes(key)) return route.continue();
-    const actual = await route.fetch(); const value = await actual.json();
+    if (!['base:attention', 'factory', 'digest:auto'].includes(key) && !key?.startsWith('section:')) return route.continue();
+    const actual = key.startsWith('section:') ? null : await route.fetch(); const value = actual ? await actual.json() : { ...attention, key, revision: "18446744073709551614" };
     value.health = 'fresh'; value.error = null; value.observedAt = new Date().toISOString();
     for (const source of Object.values(value.sources)) { source.health = 'fresh'; source.error = null; source.observedAt = value.observedAt; }
-    value.data = key === 'attention' ? [decision] : key === 'factory' ? data : {generatedAt: value.observedAt, window: '24h', lastCaughtUpAt: null, isCaughtUp: false, metrics: {completedTotal: 2, activeThreads: 0, openOrUpdatedTotal: 0, waitingForGuidance: 1}, threads: [], standaloneCompleted: completed, standaloneOpen: []};
+    value.data = key === 'base:attention' ? attentionBase([decision]) : key.startsWith('section:') ? attentionHistory(key, [decision]) : key === 'factory' ? data : {generatedAt: value.observedAt, window: '24h', lastCaughtUpAt: null, isCaughtUp: false, metrics: {completedTotal: 2, activeThreads: 0, openOrUpdatedTotal: 0, waitingForGuidance: 1}, threads: [], standaloneCompleted: completed, standaloneOpen: []};
     if (key === 'digest:auto') {
       if (mode === 'empty') { value.data.standaloneCompleted = []; value.data.metrics.completedTotal = 0; }
       if (mode === 'long') value.data.standaloneCompleted = completed.map(item => ({...item, title: item.title.repeat(15)}));

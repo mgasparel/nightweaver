@@ -40,7 +40,7 @@ internal sealed partial class OperationalObservationSource(
         FrozenSet<string>? ready, FrozenSet<string>? blocked, DateTimeOffset started,
         Dictionary<string, ObservationSample> result, bool inventoryOnly = false)
     {
-        var selected = keys.Where(key => key.Kind is "base-explorer" or "base-workspace")
+        var selected = keys.Where(key => key.Kind is "base-explorer" or "base-workspace" or "base-attention")
             .Where(key => !inventoryOnly || key.Kind == "base-workspace" || key.Argument is not ("ready" or "blocked")).ToArray();
         if (selected.Length == 0 && !keys.Any(key => key.Kind == "section")) return;
         ObservationError? projectionError = null;
@@ -69,7 +69,7 @@ internal sealed partial class OperationalObservationSource(
                 && (key.Kind != "base-explorer" || key.Argument != "ready" || ready is not null)
                 && (key.Kind != "base-explorer" || key.Argument != "blocked" || blocked is not null);
             object? data = !usable ? null : key.Kind == "base-workspace" ? baseInventory!.Workspace(key.Argument!)
-                : baseInventory!.Explorer(key, ready, blocked);
+                : key.Kind == "base-attention" ? baseInventory!.Attention() : baseInventory!.Explorer(key, ready, blocked);
             var sample = Sample(data, started, ids);
             if (usable && key.Kind == "base-workspace" && !baseInventory!.ById.ContainsKey(key.Argument!))
                 sample = sample with { ConfirmedAbsence = true,
@@ -908,7 +908,7 @@ internal sealed partial class OperationalObservationSource(
 
     private void TrimSources(HashSet<string> selected, IReadOnlyList<OperationKey> keys)
     {
-        if (!keys.Any(key => key.Kind is "base-explorer" or "base-workspace" or "section"))
+        if (!keys.Any(key => key.Kind is "base-explorer" or "base-workspace" or "base-attention" or "section"))
         { baseInventory = null; baseContentIdentity = null; memory.Release(baseReservation); }
         var retainedHistories = selected.Union(keys.Any(key => key.Kind == "attention")
             ? attentionBeads?.Select(bead => bead.Id)

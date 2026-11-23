@@ -1,12 +1,17 @@
+import { liveAttentionRemoval, readAttentionFixture, attentionBase, attentionHistory } from './attention-read-fixtures.mjs';
 import assert from 'node:assert/strict';
 import { overviewVisualChecks } from './overview-visual-checks.mjs';
 
 // Extend the existing Studio journey; only reads are substituted. No new native setup.
 export async function overviewChecks(page, url, base, projectId, output) {
+  await liveAttentionRemoval(page, url, base, projectId);
+  await page.goto(url + base + '/attention');
+  // The shell journey leaves two Workspace identities in the required disconnect grace.
+  await page.waitForTimeout(31000);
   await overviewVisualChecks(page, url, base, projectId, output);
-  const native = await (await page.request.get(`${url}/api/operations/v1/projects/${projectId}/resources?key=attention`)).json();
+  const native = await readAttentionFixture(page, url, projectId);
   assert.ok(native.data.length, 'Native fixture supplies an attention item');
-  const decision = { ...native.data[0], beadId: 'qa-overview-decision', title: 'Choose the next delivery boundary', kind: 'product-decision-required', question: 'Which boundary should the next delivery verify?' };
+  const decision = { ...native.data[0], beadId: 'qa-context-0', title: 'Choose the next delivery boundary', kind: 'product-decision-required', question: 'Which boundary should the next delivery verify?' };
   const longQuestion = 'Which delivery boundary should we verify?\n\n' + 'Preserve the complete current question and its evidence.\n'.repeat(80) + 'END OF CURRENT CONTEXT';
   let mode = 'decision';
   let releaseFactory;
@@ -14,24 +19,26 @@ export async function overviewChecks(page, url, base, projectId, output) {
   let liveItems;
   await page.route('**/api/operations/v1/projects/*/resources?**', async route => {
     const key = new URL(route.request().url()).searchParams.get('key');
-    if (!['attention', 'factory'].includes(key)) return route.continue();
-    const actual = await route.fetch(); const value = await actual.json();
+    if (!['base:attention', 'factory'].includes(key) && !key?.startsWith('section:')) return route.continue();
+    const actual = key.startsWith('section:') ? null : await route.fetch(); const value = actual ? await actual.json() : { ...native, key, revision: "18446744073709551614" };
     // Keep the real coordinator recovering while Attention is already readable.
     // A pending sibling read must not let the longer header hide its Review link.
-    if (key === 'factory' && mode === 'recovering-long-question') await factoryGate;
+    if (key === 'factory' && mode === 'recovering-long-question' || key.startsWith('section:') && mode === 'loading') await factoryGate;
     value.health = 'fresh'; value.error = null; value.observedAt = new Date().toISOString();
     for (const source of Object.values(value.sources)) { source.health = 'fresh'; source.error = null; source.observedAt = value.observedAt; }
-    if (key === 'attention') {
+    if (key === 'base:attention' || key.startsWith('section:')) {
       value.data = mode === 'empty' ? [] : mode === 'unavailable' ? null : [structuredClone(decision)];
       if (mode === 'disclosure') value.data = liveItems;
       if (mode === 'long-question' || mode === 'recovering-long-question') value.data[0].question = longQuestion;
-      if (mode === 'long') value.data = Array.from({length: 12}, (_, i) => ({ ...decision, beadId: 'qa-long-identity-' + i + '-'.repeat(90), title: 'Long operational title '.repeat(12), kind: i ? 'needs-human' : 'product-decision-required' }));
+      if (mode === 'long') value.data = Array.from({length: 12}, (_, i) => ({ ...decision, beadId: i ? 'qa-long-identity-' + i + '-'.repeat(90) : decision.beadId, title: 'Long operational title '.repeat(12), kind: i ? 'needs-human' : 'product-decision-required' }));
+      const rows = value.data; value.data = key === 'base:attention' ? (rows ? attentionBase(rows) : null) : attentionHistory(key, rows ?? []);
+      if (mode === 'failed' && key.startsWith('section:')) { value.data = null; value.health = 'unavailable'; value.error = { code: 'fixture-history', message: 'History read failed', retryable: true }; }
       if (mode === 'stale') { value.health = 'stale'; value.error = {code: 'fixture-stale', message: 'Retained attention requires current verification', retryable: true}; }
       if (mode === 'unavailable') { value.health = 'unavailable'; value.observedAt = null; }
     } else if (mode === 'unavailable' || mode === 'empty') value.data = { availability: 'unavailable' };
     await route.fulfill({ response: actual, json: value });
   });
-  for (const state of ['decision', 'recovering-long-question', 'long-question', 'long', 'empty', 'stale', 'unavailable']) {
+  for (const state of ['decision', 'recovering-long-question', 'long-question', 'long', 'loading', 'failed', 'empty', 'stale', 'unavailable']) {
     mode = state;
     for (const width of [1440, 375, 720]) {
       factoryGate = new Promise(resolve => { releaseFactory = resolve; });
@@ -49,6 +56,7 @@ export async function overviewChecks(page, url, base, projectId, output) {
         } else {
           const review = page.locator('.attention-panel .attention-row .primary').first();
           await review.waitFor();
+          if (['decision', 'long-question', 'recovering-long-question'].includes(state)) await page.locator('.attention-context').waitFor();
           if (state === 'decision' || state === 'long-question' || state === 'recovering-long-question') {
             if (state === 'recovering-long-question') await page.waitForFunction(() =>
               document.querySelector('.synchronization [role="status"]')?.textContent.includes('Recovering updates channel'));
@@ -69,6 +77,11 @@ export async function overviewChecks(page, url, base, projectId, output) {
               await page.keyboard.press('Enter');
               assert.equal(await page.locator('.attention-context').getAttribute('open'), null);
             }
+          }
+          if (state === 'loading' || state === 'failed') {
+            assert.match(await page.locator('.overview-summary').innerText(), /1 paused Beads/);
+            await page.getByText(state === 'loading' ? /Loading pause explanation/ : /Pause explanation failed/).waitFor();
+            assert.equal(await page.locator('.attention-context').count(), 0);
           }
           if (state === 'long') assert.equal(await page.locator('.attention-row').count(), 3);
           if (state === 'stale') await page.getByRole('alert').filter({hasText: 'Retained attention requires current verification'}).waitFor();
@@ -107,7 +120,7 @@ export async function overviewChecks(page, url, base, projectId, output) {
   await page.locator('h1').focus();
   const replace = async (items, expectedIds) => {
     liveItems = items;
-    const response = page.waitForResponse(r => new URL(r.url()).searchParams.get('key') === 'attention');
+    const response = page.waitForResponse(r => new URL(r.url()).searchParams.get('key') === 'base:attention');
     await page.waitForFunction(() => !!window.overviewHello);
     await page.evaluate(() => window.overviewStream.dispatchEvent(new MessageEvent('resync', {data: JSON.stringify(window.overviewHello)})));
     await response;
@@ -131,6 +144,8 @@ export async function overviewChecks(page, url, base, projectId, output) {
   await page.locator('h1').focus();
   await replace(rows.slice(1), ['qa-context-1', 'qa-context-2', 'qa-context-3']);
   await replace(rows, ['qa-context-0', 'qa-context-1', 'qa-context-2']);
+  await row.getByRole('button', { name: 'Load pause explanation for qa-context-0', exact: true }).click();
+  await context.locator('summary').waitFor();
   assert.equal(await context.getAttribute('open'), null, 'Removed identity returns closed');
   console.log('Overview disclosure survives live reorder without focus; close and actual removal retire retention.');
 }

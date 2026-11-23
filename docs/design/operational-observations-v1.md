@@ -7,7 +7,11 @@ Implementation slice ns-gjwx-paea384f7cce36dfdace5 enables only
 `base:explorer:{view}:{query}:{page}` and `base:workspace:{id}`. Studio Explorer
 uses the new paged base key. Workspace keeps its full-response consumer until
 its section migration. Slice ns-gjwx-p52d0161f682b3122f1e2 enables all five
-`section:{id}:{name}` resources. The other reserved base keys remain
+`section:{id}:{name}` resources. Slice ns-gjwx-p92fb31bbae007f103e1a enables
+`base:attention` with the Attention base shape below. Studio Attention and the
+Overview paused count use this inventory-only resource. Explanations use the
+shared history section and require matching update time and workflow identity.
+The other reserved base keys remain
 unsupported. One compact inventory projection supplies exact-ID, ordered
 search, status, type, stage, pause, assignee and priority indexes. It shares the
 host memory budget with raw sources and resource envelopes. Base callbacks

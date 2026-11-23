@@ -8,6 +8,35 @@ export type AttentionItem = {
   sourceCommentId: string | null; contextNotice: string | null;
   message?: Message | null; otherPauseReports?: Message[];
 };
+export type AttentionBaseRow = {
+  id: string; title: string; type: string; status: string; priority: number; stage: string | null;
+  labels: string[]; repairCycles: number | null; updatedAt: string;
+  actions: { canDecide: boolean; canRetry: boolean; canAbort: boolean; unavailableReason: string | null;
+    expectedWorkflow: { stage: string | null; pauseLabels: string[]; repairCycles: number | null } };
+};
+export type AttentionBase = { schema: "nightweaver-base-v1"; inventoryRevision: string;
+  items: AttentionBaseRow[]; maxRepairCycles: number };
+export type PauseExplanation = { beadId: string; state: string;
+  baseIdentity: { updatedAt: string; expectedWorkflow: AttentionBaseRow["actions"]["expectedWorkflow"] };
+  value: { attention: AttentionItem | null } | null };
+
+/** A retained history cannot supply current context or actions for a different base identity. */
+export function attentionFromBase(row: AttentionBaseRow, maxRepairCycles: number, section?: PauseExplanation, current = false): AttentionItem {
+  const workflow = row.actions.expectedWorkflow;
+  const identity = section?.baseIdentity;
+  const matches = section?.beadId === row.id && identity?.updatedAt === row.updatedAt
+    && identity.expectedWorkflow.stage === workflow.stage && identity.expectedWorkflow.repairCycles === workflow.repairCycles
+    && [...identity.expectedWorkflow.pauseLabels].sort().join("\0") === [...workflow.pauseLabels].sort().join("\0");
+  const evidence = current && matches && ["available", "empty"].includes(section!.state) ? section?.value?.attention : null;
+  const kind = workflow.pauseLabels.length !== 1 || row.repairCycles === null ? "invalid-workflow"
+    : workflow.pauseLabels[0] === "product-decision-required" ? "product-decision-required" : "needs-human";
+  return { ...(evidence ?? {}), beadId: row.id, title: row.title, type: row.type, status: row.status,
+    priority: row.priority, stage: row.stage, labels: row.labels, repairCycles: row.repairCycles, maxRepairCycles,
+    kind, question: evidence?.question ?? null, diagnostic: evidence?.diagnostic ?? null,
+    sourceCommentId: evidence?.sourceCommentId ?? null, contextNotice: evidence?.contextNotice ?? null,
+    canDecide: !!evidence?.canDecide && row.actions.canDecide, canRetry: !!evidence?.canRetry && row.actions.canRetry,
+    canAbort: !!evidence?.canAbort && row.actions.canAbort, unavailableReason: row.actions.unavailableReason };
+}
 /** Labels come from the validated server presenter, never inferred from original prose. */
 export function decisionSections(item: AttentionItem) {
   if (item.kind !== "product-decision-required" || item.message?.state !== "supported") return [];

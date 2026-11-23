@@ -17,10 +17,15 @@ internal sealed class SharedBaseInventory
     internal FrozenDictionary<string, BaseBeadRow[]> Assignee { get; }
     internal FrozenDictionary<int, BaseBeadRow[]> Priority { get; }
     internal string Revision { get; }
+    private readonly int maxRepairCycles;
+    private readonly FrozenSet<string> pausedIds;
 
     internal SharedBaseInventory(BeadsInventory inventory, int maxRepairs, string revision)
     {
         Revision = revision;
+        maxRepairCycles = maxRepairs;
+        pausedIds = inventory.ById.Values.Where(AttentionDeskProjector.IsPaused)
+            .Where(bead => !AttentionDeskProjector.IsTerminal(bead)).Select(bead => bead.Id).ToFrozenSet(StringComparer.Ordinal);
         Ordered = inventory.ById.Values.Select(bead => BaseBeadRow.Project(bead, inventory, maxRepairs))
             .OrderBy(row => row.Priority).ThenBy(row => row.Id, StringComparer.Ordinal).ToArray();
         ById = Ordered.ToFrozenDictionary(row => row.Id, StringComparer.Ordinal);
@@ -40,6 +45,14 @@ internal sealed class SharedBaseInventory
         schema = "nightweaver-base-v1", inventoryRevision = Revision, completeness = "complete",
         absence = ById.ContainsKey(id) ? null : new { id, inventoryRevision = Revision },
         bead = ById.GetValueOrDefault(id)?.ForDisplay()
+    };
+
+    internal object Attention() => new
+    {
+        schema = "nightweaver-base-v1", inventoryRevision = Revision, completeness = "complete", absence = (object?)null,
+        items = Ordered.Where(row => pausedIds.Contains(row.Id))
+            .Select(row => row.ForDisplay()).ToArray(),
+        maxRepairCycles
     };
 
     internal object Explorer(OperationKey key, ISet<string>? ready, ISet<string>? blocked)
