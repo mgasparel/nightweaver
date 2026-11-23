@@ -109,7 +109,13 @@ internal sealed partial class OperationalObservationSource
                 }
                 var sample = Sample(null, now, sources);
                 if (key.Query == "relations" && SectionSources(key).All(states.ContainsKey)
-                    && SectionSources(key).Any(name => states[name].Error is null)) completed.Add(key);
+                    && SectionSources(key).Any(name => states[name].Error is null))
+                {
+                    // Failed directions stay explicit. Every displayed direction
+                    // must still incorporate its own pending generation.
+                    if (SectionSources(key).Where(name => states[name].Error is null)
+                        .All(name => !scheduled || schedule.IsCurrent(name, states[name].SourceGeneration))) completed.Add(key);
+                }
                 else if (sample.Error is not null && sample.Error.Code != "budget-exceeded")
                     result[key.Value] = sample;
                 else if (SectionSources(key).All(name => states.TryGetValue(name, out var state) && state.Error is null
@@ -159,6 +165,8 @@ internal sealed partial class OperationalObservationSource
             }
             var sample = Sample(null, now, names);
             if (sample.Error is not null && key.Query != "relations") { result[key.Value] = sample; continue; }
+            if (scheduled && names.Where(name => name == "inventory" || states[name].Error is null)
+                .Any(name => !schedule.IsCurrent(name, states[name].SourceGeneration))) continue;
             var row = BaseBeadRow.Project(last, inventory, project.Limits.MaxRepairCycles);
             (object? value, bool empty, bool unavailable) projection;
             try { projection = ProjectSection(key, last, inventory); }

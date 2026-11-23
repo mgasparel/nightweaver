@@ -30,8 +30,10 @@ internal sealed partial class OperationalObservationSource(
         finally { publishBase = null; }
     }
 
-    private ObservationSample CurrentSample(ObservationSample sample) => scheduled && (sample.Error is null || sample.ConfirmedAbsence)
-        && sample.Sources.Any(pair => !schedule.IsCurrent(pair.Key, pair.Value.SourceGeneration))
+    private ObservationSample CurrentSample(ObservationSample sample) => scheduled
+        && (sample.Error is null || sample.ConfirmedAbsence || sample.Partial)
+        && sample.Sources.Any(pair => (!sample.Partial || pair.Key == "inventory" || pair.Value.Error is null)
+            && !schedule.IsCurrent(pair.Key, pair.Value.SourceGeneration))
             ? sample with { Pending = true, ConfirmedAbsence = false, Error = null } : sample;
 
     private void ProjectBases(IReadOnlyList<OperationKey> keys, BeadsInventory? inventory,
@@ -598,8 +600,7 @@ internal sealed partial class OperationalObservationSource(
         // A new cycle must not repeatedly compare an external edit against the
         // old core while a different Workspace remains pending indefinitely.
         if (result.Values.Any(sample => sample.Error?.Code == "source-conflict")) resumeDetails = false;
-        TrimSources(selected.Select(key => key.Argument!).Concat(keys.Where(key => key.Kind == "section").Select(key => key.Argument!))
-            .ToHashSet(StringComparer.Ordinal), keys);
+        TrimSources(selected.Select(key => key.Argument!).ToHashSet(StringComparer.Ordinal), keys);
         return result;
     }
 
@@ -914,8 +915,13 @@ internal sealed partial class OperationalObservationSource(
                 ?? retainedInventory?.ById.Values.Where(AttentionDeskProjector.IsPaused).Where(bead => !AttentionDeskProjector.IsTerminal(bead)).Select(bead => bead.Id) ?? []
             : []
             , StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
-        var active = states.Keys.Where(id => id.Contains(':') && selected.Contains(id[(id.IndexOf(':') + 1)..])).ToHashSet(StringComparer.Ordinal);
-        foreach (var id in active) recentDetails[id] = clock.GetUtcNow();
+        var selectedSources = selected.SelectMany(id => new[]
+            { "detail:" + id, "comments:" + id, "relations-up:" + id, "relations-down:" + id, "environment:" + id })
+            .Concat(keys.Where(key => key.Kind == "section").SelectMany(SectionSources))
+            .ToHashSet(StringComparer.Ordinal);
+        var active = selectedSources.Concat(retainedHistories.Select(id => "comments:" + id))
+            .Concat(digestEvidenceIds.Select(id => "merge:" + id)).ToHashSet(StringComparer.Ordinal);
+        foreach (var id in selectedSources) recentDetails[id] = clock.GetUtcNow();
         foreach (var id in recentDetails.Keys.Where(id => !active.Contains(id) && clock.GetUtcNow() - recentDetails[id] >= TimeSpan.FromSeconds(60)).ToArray())
             recentDetails.Remove(id);
         foreach (var id in recentDetails.Where(pair => !active.Contains(pair.Key)).OrderByDescending(pair => pair.Value).Skip(64).Select(pair => pair.Key).ToArray())

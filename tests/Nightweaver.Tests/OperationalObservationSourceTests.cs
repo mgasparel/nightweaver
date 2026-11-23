@@ -14,6 +14,111 @@ namespace Nightweaver.Tests;
 
 public sealed class OperationalObservationSourceTests
 {
+    [Theory]
+    [InlineData("dep_add")]
+    [InlineData("comment")]
+    public async Task PartialSectionRelationsWaitForCurrentConfirmationAndSuccessfulDirection(string operation)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var native = new Runner { TargetPath = target.Path, Rows = 2, OutgoingDependency = true };
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holdConfirmation = false;
+        var lists = 0;
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            if (request.FileName == "bd" && request.Arguments.Contains("dep") && request.Arguments.Contains("up"))
+                throw new ToolExecutionException("Incoming relations unavailable");
+            if (request.FileName == "bd" && request.Arguments[2] == "list" && holdConfirmation && ++lists == 2)
+            { entered.TrySetResult(); await release.Task.WaitAsync(token); }
+            return await native.RunAsync(request, token);
+        });
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        const string key = "section:task-1:relations";
+        using var pin = service.Pin([key]);
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        var accepted = service.Read(key);
+        Assert.Equal("unavailable", accepted.Data!.Value.GetProperty("value").GetProperty("relationObservation").GetProperty("incoming").GetString());
+        clock.Advance(TimeSpan.FromSeconds(6));
+        native.OutgoingDependency = false;
+        holdConfirmation = true;
+        source.Invalidate();
+        var collection = service.CollectOnceAsync(false, token);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+            source.Invalidate([new(1, operation, "task-1", null)]);
+        }
+        finally { release.TrySetResult(); await collection; }
+        var pending = service.Read(key);
+        Assert.Equal(accepted.Data.Value.GetProperty("value").GetRawText(), pending.Data!.Value.GetProperty("value").GetRawText());
+        Assert.Equal(accepted.Sources["relations-down:task-1"].ValidatedTimestamp, pending.Sources["relations-down:task-1"].ValidatedTimestamp);
+        Assert.NotNull(pending.PendingAgeMs);
+        await service.CollectOnceAsync(false, token);
+        var current = service.Read(key);
+        Assert.Empty(current.Data!.Value.GetProperty("value").GetProperty("relations").EnumerateArray());
+        Assert.Equal("complete", current.Data.Value.GetProperty("value").GetProperty("relationObservation").GetProperty("outgoing").GetString());
+    }
+
+    [Fact]
+    public async Task WarmPartialSectionRelationsStayPendingWhenCoreSpendsTheTurn()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var cost = TimeSpan.Zero;
+        var native = new Runner { TargetPath = target.Path, Advance = () => clock.Advance(cost) };
+        var runner = new RecordingProcessRunner((request, token) =>
+            request.FileName == "bd" && request.Arguments.Contains("dep") && request.Arguments.Contains("up")
+                ? throw new ToolExecutionException("Incoming relations unavailable") : native.RunAsync(request, token));
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        const string key = "section:task-1:relations";
+        var token = TestContext.Current.CancellationToken;
+        Assert.NotNull((await source.ReadScheduledAsync(Keys(key), (_, _) => { }, token))[key].Data);
+        source.Invalidate([new(1, "dep_add", "task-1", null)]);
+        cost = TimeSpan.FromSeconds(2);
+        var spent = await source.ReadScheduledAsync(Keys("base:explorer:ready::1", key), (_, _) => { }, token);
+        Assert.True(spent[key].Pending);
+        Assert.Null(spent[key].Data);
+        cost = TimeSpan.Zero;
+        var current = await source.ReadScheduledAsync(Keys("base:explorer:ready::1", key), (_, _) => { }, token);
+        Assert.NotNull(current[key].Data);
+        Assert.True(current[key].Partial);
+    }
+
+    [Fact]
+    public async Task TextOnlyInterestRetiresHistoryAuditsAndIdleReservations()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner, clock);
+        var memory = new ObservationMemoryBudget();
+        var source = Adapter(factory, memory);
+        var token = TestContext.Current.CancellationToken;
+        await source.ReadScheduledAsync(Keys("section:task-1:history", "section:task-1:text"), (_, _) => { }, token);
+        var withHistory = memory.Used;
+        var text = Keys("section:task-1:text");
+        await source.ReadScheduledAsync(text, (_, _) => { }, token);
+        clock.Advance(TimeSpan.FromSeconds(61));
+        await source.ReadScheduledAsync(text, (_, _) => { }, token);
+        Assert.True(memory.Used < withHistory);
+        var validations = runner.RepositoryValidations;
+        var commands = runner.Commands.Count;
+        for (var turn = 0; turn < 3; turn++)
+            Assert.Empty(await source.ReadScheduledAsync(text, (_, _) => { }, token));
+        Assert.Equal(validations, runner.RepositoryValidations);
+        Assert.Equal(commands, runner.Commands.Count);
+        var histories = runner.CommentIds.Count;
+        await source.ReadScheduledAsync(Keys("section:task-1:history", "section:task-1:text"), (_, _) => { }, token);
+        Assert.Equal(histories + 1, runner.CommentIds.Count);
+    }
+
     [Fact]
     public async Task WarmAttentionHistoryCannotCertifyStrictSectionHistory()
     {

@@ -1,5 +1,13 @@
 # Test suite
 
+Section repair adds four deterministic cases. They hold partial-relation
+confirmation across inventory or dependency invalidation, spend a core turn
+after a warm partial result, and keep only text interest after reading history.
+They check accepted provenance, current successful directions, idle history
+reservation release and zero collection work after required audits settle.
+These cases add no native journey or fixture publication. Production adds
+generation checks and retires unused section audit slots.
+
 Independent section reads add deterministic observer cases for shared histories,
 selected progress before cohort completion, caller cancellation, failed-refresh
 provenance, identity conflicts and deletion, entry/byte eviction, reservation
