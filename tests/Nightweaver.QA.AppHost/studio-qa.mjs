@@ -67,6 +67,9 @@ try {
     await page.getByRole('heading', { name: `Bead ${beadId}`, exact: true }).waitFor();
     await page.locator('.workspace-tabs a[aria-current="page"]').filter({ hasText: 'History' }).waitFor();
   }
+  // Both direct-link identities keep the documented thirty-second grace.
+  await page.goto(url + base + '/attention');
+  await page.waitForTimeout(31000);
   for (const path of ['/api/missing', '/studio/assets/missing.js', `${base}/beads/ns-mbd.1/missing.js`]) {
     assert.equal((await page.request.get(`${url}${path}`)).status(), 404);
   }

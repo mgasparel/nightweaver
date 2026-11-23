@@ -81,7 +81,7 @@ function DecisionContext({ item }: { item: AttentionItem }) {
   const history = useContext(EvidenceHistory);
   return <section className="decision-context" aria-label="Pause question and context">
     <div className="bead-row-meta"><Status tone="warn">{item.kind === "product-decision-required" ? "Decision needed" : "Technical recovery"}</Status>
-      <span>{item.beadId} · {item.stage ?? "Stage unavailable"} · Repairs {item.repairCycles ?? 0}/{item.maxRepairCycles}</span></div>
+      <span>{item.beadId} · {item.stage ?? "Stage unavailable"} · Repairs {item.repairCycles ?? "Unavailable"}/{item.maxRepairCycles}</span></div>
     <h2 tabIndex={-1}>{item.kind === "product-decision-required" ? "Your decision" : "Recovery context"}</h2>
     <Markdown text={item.question || item.diagnostic || "No attributable question is available. Review the source evidence before acting."} />
     {item.message && <><p className="eyebrow">{item.message.role ?? "Role unavailable"}</p>
@@ -190,14 +190,8 @@ export function AttentionView({ project, compact = false }: { project: string; c
   const historyKey = row ? `section:${row.id}:history` : undefined;
   const history = useObservation<PauseExplanation>(project, historyKey);
   const historyCurrent = !history.stale && history.synchronized === true && history.observation?.health === "fresh";
-  const items = base?.items.map(row => {
-    // Read only already-admitted recent values. One selected history owns live
-    // interest; retained previews do not admit more Bead identities or commands.
-    const recent = row.id === explanationId ? history
-      : operations.getSnapshot<PauseExplanation>({ projectId: project, key: `section:${row.id}:history` });
-    return attentionFromBase(row, base.maxRepairCycles, recent.observation?.data ?? undefined,
-      !recent.stale && recent.synchronized === true && recent.observation?.health === "fresh");
-  });
+  const items = base?.items.map(row => attentionFromBase(row, base.maxRepairCycles, history.observation?.data ?? undefined, historyCurrent));
+  const retained = history.observation?.data?.beadId === explanationId ? history.observation?.data?.value?.attention : null;
   const explanationState = history.observation?.error || history.error ? "Pause explanation failed. Refresh to try again."
     : history.observation?.data && !historyCurrent ? "Pause explanation is stale. Current evidence is pending."
     : historyCurrent ? "No attributable pause explanation is available. Review the history before acting."
@@ -229,6 +223,7 @@ export function AttentionView({ project, compact = false }: { project: string; c
             {compact && <>
               <h2 className="attention-question">{attentionPreview(row.question || row.diagnostic || row.title)}</h2>
               {!row.sourceCommentId && <p role="status">{row.beadId === explanationId ? explanationState : "Pause explanation is not loaded. Open Review to read the evidence."}</p>}
+              {row.beadId === explanationId && !row.sourceCommentId && retained && <HistoricalExplanation item={retained} />}
               {row.beadId !== explanationId && <button className="text-link" onClick={() => setPreview(row.beadId)}>Load pause explanation for {row.beadId}</button>}
               {decisionSections(row).filter(section => section.label === "Recommended answer").slice(0, 1).map(section => <p className="attention-recommendation" key={section.label}>{row.message?.role ?? "Source"} recommendation: {attentionPreview(section.text)}</p>)}
               {attentionWarningSections(row).map(section => <p className="bead-notice" key={section.label}>{section.text}</p>)}
@@ -243,12 +238,12 @@ export function AttentionView({ project, compact = false }: { project: string; c
               }}>
                 <summary>Read full context &amp; pause details</summary>
                 <p>{row.question || row.diagnostic}</p>
-                <p>{row.title} · {row.stage ?? "Stage unavailable"} · P{row.priority} · Repairs {row.repairCycles ?? 0}/{row.maxRepairCycles}</p>
+                <p>{row.title} · {row.stage ?? "Stage unavailable"} · P{row.priority} · Repairs {row.repairCycles ?? "Unavailable"}/{row.maxRepairCycles}</p>
                 <p>{row.sourceCommentId ? `Source comment ${row.sourceCommentId}` : "Source comment unavailable"}</p>
                 {row.contextNotice && <p>{row.contextNotice}</p>}
               </details>}
             </>}
-            {compact ? <div className="bead-row-meta"><span>{row.beadId}</span><span>{row.kind === "product-decision-required" ? "Decision waiting" : "Recovery waiting"}</span></div> : <p>{row.stage ?? "Stage unavailable"} · P{row.priority} · Repairs {row.repairCycles ?? 0}/{row.maxRepairCycles}</p>}
+            {compact ? <div className="bead-row-meta"><span>{row.beadId}</span><span>{row.kind === "product-decision-required" ? "Decision waiting" : "Recovery waiting"}</span></div> : <p>{row.stage ?? "Stage unavailable"} · P{row.priority} · Repairs {row.repairCycles ?? "Unavailable"}/{row.maxRepairCycles}</p>}
             {!compact && <button className="text-link" aria-pressed={selected === row.beadId} onClick={() => setSelected(row.beadId)}>Review {row.beadId}</button>}
           </article>)}
           {!compact && items.length > limit && <button className="button" onClick={() => setLimit(value => value + 8)}>Show more paused Beads ({items.length - limit})</button>}
@@ -261,6 +256,7 @@ export function AttentionView({ project, compact = false }: { project: string; c
       <h2 ref={reviewHeading} tabIndex={-1}>{item?.title ?? `Retained draft · ${selected}`}</h2>
       {historyKey && <Freshness snapshot={history} project={project} resource={historyKey} />}
       {item && !item.sourceCommentId && <p role="status">{explanationState}</p>}
+      {item && !item.sourceCommentId && retained && <HistoricalExplanation item={retained} />}
       {item && <DecisionContext item={item} />}
       <Guidance key={selected} project={project} id={selected} item={item} current={snapshot.synchronized === true && !snapshot.stale && snapshot.observation?.health !== "unavailable" && !!item} />
       {item && <EvidenceHistory value={{ path: beadPath(project, selected) }}><DecisionEvidence item={item} /></EvidenceHistory>}
@@ -269,6 +265,13 @@ export function AttentionView({ project, compact = false }: { project: string; c
     </div>
     {compact && !attentionWarning && <details className="overview-observation"><summary>Observation details &amp; refresh</summary><Freshness snapshot={snapshot} project={project} resource="base:attention" /></details>}
   </FocusBoundary>;
+}
+
+function HistoricalExplanation({ item }: { item: AttentionItem }) {
+  return <details className="attention-context"><summary>Retained pause explanation · historical</summary>
+    <p>This evidence does not confirm the current pause or permit an action.</p>
+    <DecisionContext item={item} /><DecisionEvidence item={item} />
+  </details>;
 }
 
 function History({ data }: { data: WorkspaceData }) {

@@ -29,6 +29,12 @@ not zero; an empty inventory says nothing about runtime health. Source freshness
 retained observations, refresh, and synchronization warnings remain visible.
 Overview no longer subscribes to a separate readiness query solely for a metric.
 
+Base rows and counts appear before history. One selected preview loads its shared
+history section; other rows offer an explicit load control. Pending and failed
+explanations do not supply questions, roles or pause times. Current context needs
+matching update time and workflow identity. A retained explanation remains
+readable in a separate historical disclosure and cannot enable an action.
+
 Catch up previews up to three actual closed outcomes across standalone and lineage work, deduplicated by Bead identity and sorted by activity time. A surviving focused outcome stays visible across reorder; removal returns focus to the preview heading. The heading identifies the actual reporting window, and the total comes from the existing digest metrics. Only verified host merge evidence permits the Merged label; other closed outcomes say Closed. Checkpoint management, filters and full evidence remain on the dedicated Catch up route. No backend migration or additional observation query is introduced.
 
 Verification extends `studio-qa.mjs` through `overview-checks.mjs` on the existing

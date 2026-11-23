@@ -40,6 +40,14 @@ captures. Run `studio-cutover.ps1 -Only studio-qa -OutputDirectory <fresh-path>`
 the exact isolated stack is always stopped in finally. See
 [Overview semantics](../../docs/design/studio-overview.md).
 
+The same journey checks `base:attention` during delayed and failed history
+responses, at all three widths. It removes one pause with the native CLI in the
+exact disposable tracker and checks live row/count removal without a manual
+refresh. Synthetic base and history reads use separate v1.3 shapes. The probe
+waits for the existing thirty-second disconnect grace before selecting new
+Bead identities; it does not change the two-Bead admission limit. A returned
+Bead's explanation uses its explicit load control and starts with closed context.
+
 For verified Catch-Up Digest outcomes, run `studio-cutover.ps1 -Only digest-merge-qa`
 with a fresh invocation output directory. This starts/stops the exact isolated
 stack and verifies native host evidence, safe PR/commit links, cleanup separation,

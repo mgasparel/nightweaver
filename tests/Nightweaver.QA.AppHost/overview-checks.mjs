@@ -5,6 +5,7 @@ import { overviewVisualChecks } from './overview-visual-checks.mjs';
 // Extend the existing Studio journey; only reads are substituted. No new native setup.
 export async function overviewChecks(page, url, base, projectId, output) {
   await liveAttentionRemoval(page, url, base, projectId);
+  await page.goto(url + base + '/attention');
   // The shell journey leaves two Workspace identities in the required disconnect grace.
   await page.waitForTimeout(31000);
   await overviewVisualChecks(page, url, base, projectId, output);
@@ -143,6 +144,8 @@ export async function overviewChecks(page, url, base, projectId, output) {
   await page.locator('h1').focus();
   await replace(rows.slice(1), ['qa-context-1', 'qa-context-2', 'qa-context-3']);
   await replace(rows, ['qa-context-0', 'qa-context-1', 'qa-context-2']);
+  await row.getByRole('button', { name: 'Load pause explanation for qa-context-0', exact: true }).click();
+  await context.locator('summary').waitFor();
   assert.equal(await context.getAttribute('open'), null, 'Removed identity returns closed');
   console.log('Overview disclosure survives live reorder without focus; close and actual removal retire retention.');
 }
