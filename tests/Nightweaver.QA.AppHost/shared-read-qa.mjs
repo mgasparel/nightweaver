@@ -39,6 +39,7 @@ const nativeReady = bd(['--readonly', 'ready', '--limit', '0', '--json']).map(ro
 const nativeBlocked = bd(['--readonly', 'blocked', '--json']).map(row => row.id);
 assert(nativeBlocked.includes('qa-read-009'));
 const active = process.env.NIGHTWEAVER_PROBE_ACTIVITY === 'active';
+let current;
 const activity = ['qa-live-1', 'qa-live-2', 'qa-live-planning'].map(id => ({ id,
   ready: fs.readFileSync(path.join(root, id + '.ready'), 'utf8'),
   held: !fs.existsSync(path.join(root, id + '.release')) }));
@@ -67,7 +68,6 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 page.setDefaultTimeout(90000);
 const errors = [], resources = [], requests = [], samples = [], changes = [];
 page.on('pageerror', error => errors.push(String(error)));
-let current;
 page.on('request', request => {
   if (request.url().includes('/api/')) requests.push({ atMs: performance.now(), url: request.url(), method: request.method() });
 });

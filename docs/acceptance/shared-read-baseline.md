@@ -33,10 +33,12 @@ Settled trials release and observe those processes before navigation. Active
 trials retain them through the measured reads and guarded Save Note. The fixture
 does not run a full autonomous Delivery lifecycle.
 
-The frozen seed uses `2026-11-23T00:00:00Z`. The 24-hour window assertions must
-remain true on both tested revisions. A later date requires a new named fixture
-and baseline pair, with an explicit timestamp/hash change. Do not silently reuse
-an expired window. Overview uses its real automatic window; Catch Up explicitly
+The runner freezes one UTC timestamp for the whole matrix. Its default is one
+hour before preparation. Pass `-FixtureTimestamp <timestamp-from-baseline>` on
+the candidate to retain identical seed bytes. The 24-hour window assertions must
+remain true on both tested revisions. After that window expires, capture a new
+named baseline/candidate pair with a new timestamp and hash. This requires no
+source edit. Do not silently reuse an expired window. Overview uses its real automatic window; Catch Up explicitly
 uses 24 hours. Explorer uses All page 1. The requested Workspace sections are
 Summary, History, relations and environment. Output has no fixed requested range
 in this first manifest and is explicitly unmeasured.

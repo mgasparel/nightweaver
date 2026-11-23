@@ -5,7 +5,8 @@ param(
     [ValidateSet('overview','explorer','attention','workspace','digest')][string[]]$Surfaces = @('overview','explorer','attention','workspace','digest'),
     [ValidateSet('active','settled')][string[]]$Activity = @('settled','active'),
     [ValidateRange(1,5)][int]$WarmCycles = 1,
-    [ValidateRange(1,3)][int]$ColdRepetitions = 1
+    [ValidateRange(1,3)][int]$ColdRepetitions = 1,
+    [ValidatePattern('^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')][string]$FixtureTimestamp = [DateTimeOffset]::UtcNow.AddHours(-1).ToString('yyyy-MM-ddTHH:mm:ssZ')
 )
 $ErrorActionPreference = 'Stop'
 $checkout = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -15,7 +16,7 @@ if (Test-Path -LiteralPath $output) { throw 'Use a new evidence directory' }
 [IO.Directory]::CreateDirectory($output) | Out-Null
 $names = @('NIGHTWEAVER_QA_SCENARIO','NIGHTWEAVER_QA_URL','NIGHTWEAVER_QA_CONFIG','NIGHTWEAVER_QA_OUTPUT',
     'NIGHTWEAVER_PROBE_BD','NIGHTWEAVER_PROBE_GIT','NIGHTWEAVER_PROBE_TRACE','NIGHTWEAVER_PROBE_SHIM',
-    'NIGHTWEAVER_PROBE_ACTIVITY','NIGHTWEAVER_PROBE_SURFACE','NIGHTWEAVER_PROBE_WARM_CYCLES')
+    'NIGHTWEAVER_PROBE_ACTIVITY','NIGHTWEAVER_PROBE_SURFACE','NIGHTWEAVER_PROBE_WARM_CYCLES','NIGHTWEAVER_QA_FIXTURE_TIMESTAMP')
 $previous = @{}; foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name) }
 $runs = [Collections.Generic.List[object]]::new()
 $metadata = [ordered]@{
@@ -25,7 +26,7 @@ $metadata = [ordered]@{
     bootUtc = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')
     sdk = (& dotnet --version); bd = (& bd --version); aspire = (& aspire --version); node = (& node --version)
     temp = [IO.Path]::GetTempPath(); warmCycles = $WarmCycles; coldRepetitions = $ColdRepetitions
-    surfaces = $Surfaces; activity = $Activity; productionTouched = $false
+    surfaces = $Surfaces; activity = $Activity; fixtureTimestamp = $FixtureTimestamp; productionTouched = $false
     preparation = 'Restore and build tools; seed each tracker before web navigation; condition each warm surface once.'
     latencyTarget = $null; runs = $runs; failure = $null
 }
@@ -38,6 +39,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $shim 'bd.exe') -Destination (Join-Path $shim 'git.exe')
     $env:NIGHTWEAVER_PROBE_SHIM = $shim
     $env:NIGHTWEAVER_QA_SCENARIO = 'shared-read'
+    $env:NIGHTWEAVER_QA_FIXTURE_TIMESTAMP = $FixtureTimestamp
     $env:NIGHTWEAVER_PROBE_WARM_CYCLES = "$WarmCycles"
     foreach ($activityMode in $Activity) { foreach ($surface in $Surfaces) { foreach ($repetition in 1..$ColdRepetitions) {
         $run = [ordered]@{ surface = $surface; activity = $activityMode; repetition = $repetition;
