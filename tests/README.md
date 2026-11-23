@@ -12,6 +12,14 @@ proves that React renders base content before section responses arrive; injected
 source tests alone cannot prove that display behavior. Production uses existing
 bounded section reads and adds Planning identity projection to shared base rows.
 
+Digest receipt repair adds one controlled-clock Studio coordinator case. It
+checks failed reads, source expiry, a short view absence and successful recovery.
+The existing digest merge browser journey checks the actual view mount with a
+controlled monotonic clock and failed section responses. It shares the existing
+tracker, AppHost and browser, and adds a five-second navigation absence. No
+normal-suite native journey or fixture publication is added. Production exposes
+the existing shared receipt time and uses it for section age across view mounts.
+
 Digest base publication adds six injected observer cases, one projector case and one Studio model
 case. They hold history across base publication, check partial progress, comment
 and audit refresh, failed/capped evidence, checkpoint changes and identity races.

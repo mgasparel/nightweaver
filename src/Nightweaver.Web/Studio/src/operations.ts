@@ -11,7 +11,7 @@ export type Envelope<T = unknown> = Identity & {
   synchronization?: { journal: "catching-up" | "current" | "degraded" | "inactive"; pending: boolean; delayed?: boolean; error?: ObservationError | null } | null;
   sources: Record<string, SourceState>; error: ObservationError | null; targetIntervalMs: number; nextAttemptAt: string | null;
 };
-export type Snapshot<T = unknown> = { observation?: Envelope<T>; connectionState: "connecting" | "connected" | "recovering" | "disconnected";
+export type Snapshot<T = unknown> = { observation?: Envelope<T>; receivedAt?: number; connectionState: "connecting" | "connected" | "recovering" | "disconnected";
   dataState?: "loading" | "unavailable" | "current" | "refreshing" | "delayed" | "stale";
   synchronized?: boolean; updatesRecovering?: boolean;
   refreshing: boolean; stale: boolean; error?: string };
@@ -339,7 +339,7 @@ export class QueryCoordinator {
       entry.bytes = bytes; entry.watermark = version; entry.wanted = max(entry.wanted, version);
       entry.cancelCatchup?.(); entry.cancelCatchup = undefined;
       const refreshing = entry.snapshot.refreshing && observation.lastAttemptAt === entry.refreshAttempt;
-      this.publish(entry, { observation, stale: false, error: entry.refreshError, refreshing,
+      this.publish(entry, { observation, receivedAt: entry.receivedAt, stale: false, error: entry.refreshError, refreshing,
         synchronized: this.hello, updatesRecovering: !this.hello, connectionState: this.connection() });
     }).catch(error => { if (current()) this.publish(entry, { error: String(error) }); })
       .finally(() => {

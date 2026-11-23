@@ -1,6 +1,41 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { QueryCoordinator, InteractionStore, queryKey, observationStatus } from '../src/operations.ts';
+import { digestWithSections } from '../src/digest-model.ts';
+
+test('merge receipt survives failed reads and a short view absence after source expiry', async () => {
+  const f = fixture();
+  const key = 'digest-merges:all', selected = identity(key);
+  const updatedAt = '2026-11-23T18:00:00Z';
+  const base = {threads: [], standaloneOpen: [], standaloneCompleted: [{bead: {
+    id: 'one', updatedAt, status: 'closed', type: 'task'
+  }}]};
+  const data = {sections: {one: {beadId: 'one', updatedAt, state: 'available', pending: false,
+    validatedAgeMs: 0, source: {health: 'fresh', observedAt: updatedAt}, value: {state: 'verified'}}}};
+  const render = now => {
+    const snapshot = f.snapshot(key);
+    return digestWithSections(base, snapshot.observation.data, now - snapshot.receivedAt).standaloneCompleted[0];
+  };
+  let unmount = f.coordinator.subscribe(selected, () => {});
+  await f.advance(); f.hello(); await f.advance();
+  f.reads.at(-1).resolve(envelope('1', 'A', key, {data})); await f.advance();
+  assert.equal(f.snapshot(key).receivedAt, 0);
+  assert.equal(render(0).outcomeLabel, 'Merged');
+  f.transport.read = async () => { throw Error('Source unavailable'); };
+  await f.advance(125000);
+  assert.equal(render(125000).mergeEvidence.state, 'stale');
+  unmount(); await f.advance(5000);
+  unmount = f.coordinator.subscribe(selected, () => {});
+  await f.advance(); f.hello(); await f.advance();
+  assert.equal(f.snapshot(key).receivedAt, 0, 'mount and failed reads keep the original receipt');
+  assert.equal(render(130000).outcomeLabel, 'Closed');
+  assert.equal(render(130000).mergeEvidence.state, 'stale');
+  f.transport.read = async () => envelope('2', 'A', key, {data});
+  await f.advance(2000);
+  assert.equal(f.snapshot(key).receivedAt, 132000);
+  assert.equal(render(132000).outcomeLabel, 'Merged');
+  unmount(); f.coordinator.dispose();
+});
 
 const identity = (key = 'attention') => ({ projectId: 'qa', key });
 const envelope = (revision = '1', epoch = 'A', key = 'attention', extra = {}) => ({

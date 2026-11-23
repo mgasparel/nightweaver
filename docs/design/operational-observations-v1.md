@@ -130,7 +130,9 @@ shared validation. Comments hints and independent audits refresh the same map.
 The aggregate envelope sources describe window membership only. They cannot
 validate any entry. Each entry must pass its own identity and source-age checks.
 Consumers add monotonic receipt elapsed time to `validatedAgeMs` and reject
-evidence after its 120-second source-age bound. Base health,
+evidence after its 120-second source-age bound. The shared browser cache retains
+the monotonic receipt time with the observation. View mounts and failed reads
+do not renew this time. Base health,
 counts, order, checkpoint and window membership do not depend on entry progress.
 Base publication occurs before any optional section command. Checkpoint changes
 reproject the window while other entries remain loading. The current base row

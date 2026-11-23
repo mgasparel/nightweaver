@@ -14,11 +14,10 @@ const stamp = (value: string) => new Date(value).toLocaleString();
 function useDigest(project: string, resource: string) {
   const base = useObservation<BaseDigest>(project, resource);
   const merges = useObservation<DigestMerges>(project, resource.replace("base:digest:", "digest-merges:"));
-  const receipt = useRef({ data: merges.observation?.data, at: performance.now() });
-  if (receipt.current.data !== merges.observation?.data) receipt.current = { data: merges.observation?.data, at: performance.now() };
+  const elapsed = merges.receivedAt === undefined ? Infinity : Math.max(0, performance.now() - merges.receivedAt);
   return { ...base, observation: base.observation && { ...base.observation,
     data: base.observation.data ? digestWithSections(base.observation.data, merges.observation?.data
-      ?? (merges.error || merges.observation?.error ? {sections: {}, unavailableState: "failed"} : undefined), performance.now() - receipt.current.at) : null } };
+      ?? (merges.error || merges.observation?.error ? {sections: {}, unavailableState: "failed"} : undefined), elapsed) : null } };
 }
 
 /** Read DOM geometry before React moves keyed threads; restore the same focused anchor. */

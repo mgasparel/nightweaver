@@ -121,8 +121,35 @@ try {
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `overflow at ${width}`);
     await page.screenshot({ path: path.join(output, `digest-merge-${width}.png`), fullPage: true });
   }
+  // Keep the real shared receipt, then fail all replacement section reads.
+  // Advance only the browser monotonic clock; do not wait two minutes in this journey.
+  let failMerges = true;
+  await page.route('**/api/operations/v1/projects/qa/resources?**', async route => {
+    if (failMerges && new URL(route.request().url()).searchParams.get('key')?.startsWith('digest-merges:'))
+      return route.fulfill({status: 503, body: 'Source unavailable'});
+    return route.fallback();
+  });
+  await page.evaluate(() => {
+    const now = performance.now.bind(performance);
+    performance.now = () => now() + 125000;
+  });
+  await row(merged).getByText('Merge verification stale.', {exact: true}).waitFor();
+  assert.match(await row(merged).innerText(), /Closed/);
+  await page.getByRole('link', {name: 'Beads', exact: true}).click();
+  await page.waitForTimeout(5000);
+  await page.getByRole('link', {name: 'Catch up', exact: true}).click();
+  // The default window uses a separate resource. Return to the retained all-time resource.
+  if (await page.locator('#digest-toggle').getAttribute('aria-expanded') === 'false') await page.locator('#digest-toggle').click();
+  await page.locator('[data-digest-window="all"]').click();
+  await row(merged).getByText('Merge verification stale.', {exact: true}).waitFor();
+  assert.match(await row(merged).innerText(), /Closed/);
+  assert.equal(await row(merged).getByRole('link', {name: 'Merged pull request', exact: true}).count(), 0);
+  await page.screenshot({path: path.join(output, 'digest-stale-after-remount.png'), fullPage: true});
+  failMerges = false;
+  await page.locator('#digest-refresh').click();
+  await row(merged).getByRole('link', {name: 'Merged pull request', exact: true}).waitFor();
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
   assert(posts.every(url => url.endsWith('/refresh')), 'Only explicit read refresh requests are allowed');
   fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, merged, ordinary, late, noop, malformed, baseReadyMs, evidenceReadyMs,
-    checks: ['native empty closure and producer protocol', 'exact safe PR/commit links', 'matching non-PR URLs stay invalid/resolved', 'separate cleanup warning', 'ordinary SHA/agent-only stays resolved', 'non-code duplicate', 'automatic comments-only refresh', 'legacy shared evidence reuse', '1440/375/720 reflow', 'no browser mutations or external requests'], errors }, null, 2));
+    checks: ['native empty closure and producer protocol', 'exact safe PR/commit links', 'matching non-PR URLs stay invalid/resolved', 'separate cleanup warning', 'ordinary SHA/agent-only stays resolved', 'non-code duplicate', 'automatic comments-only refresh', 'legacy shared evidence reuse', '1440/375/720 reflow', 'expired evidence stays Closed across remount and recovers after source validation', 'no browser mutations or external requests'], errors }, null, 2));
 } finally { await browser.close(); }
