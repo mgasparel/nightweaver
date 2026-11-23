@@ -41,3 +41,16 @@ test('reports unavailable load below UTC correlation resolution', () => {
   const value = summarizeTools([], '2026-11-23T00:00:00.000Z', '2026-11-23T00:00:00.000Z');
   assert.equal(value.count, null); assert.equal(value.commandsPerSecond, null);
 });
+
+test('does not claim complete load from commands without final records', () => {
+  const start = '2026-11-23T00:00:01.000Z', end = '2026-11-23T00:00:02.000Z';
+  const result = summarizeTools([
+    { tool: 'bd', args: ['list'], startedUtc: start, elapsedMs: 100, outputBytes: 20, errorBytes: 0, exitCode: 0 }
+  ], start, end, [
+    { tool: 'bd', args: ['events', 'list'], startedUtc: '2026-11-23T00:00:00.000Z' },
+    { tool: 'git', args: ['status'], startedUtc: start }
+  ]);
+  for (const key of ['count','commandsPerSecond','families','bytes','nativeInclusiveMs','errors','peakConcurrency']) assert.equal(result[key], null);
+  assert.equal(result.startedCount, 2); assert.equal(result.startedFamilies['git:status'], 1);
+  assert.equal(result.settledOnly.count, 1); assert.equal(result.unsettledRecords.length, 2);
+});

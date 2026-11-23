@@ -115,3 +115,63 @@ The report rejects missing trials, missing cold or warm samples, invalid source
 evidence, browser errors, missing writes, lost native activity and unsettled
 commands. The runner returns a failure when the report is incomplete. Explicit
 unmeasured attribution remains separate from a failed measurement.
+
+## Retained baseline, 23 November 2026
+
+All ten browser trials passed. Each exact stack stopped with exit 0. The matrix
+retained 110 valid samples: ten cold, fifty conditioning and fifty warm. Each
+surface has one cold sample and five warm samples per activity mode. Those five
+warm samples come from five different cold-host trials, each with one warm cycle;
+they do not establish five consecutive warm cycles on one host.
+
+The measured source is `1511657553168b6edd94d8adf077895441639e91`, tree
+`05f8861bf942083d4a7f875595a7eef788876167`, with clean source. The run used
+.NET SDK 10.0.300, bd 1.3.1 (`c1c4b642a`), Aspire CLI 13.6.0, Node v25.2.0 and
+Playwright 1.64.1 on ARES. The fixture timestamp is `2026-11-23T05:01:24Z`.
+Preparation plus the serial matrix ran from `2026-11-23T06:01:24.7391696Z` to
+`2026-11-23T06:16:52.7904833Z`, about 928 seconds. This opt-in native measurement
+covers browser rendering, actual CLI reads, external writes and live Agent CLI
+process identity. Injected tests cannot establish these boundaries. It reuses
+the existing isolated AppHost, invocation executor and one tracker per trial.
+It adds no native journey to normal test discovery.
+
+Median useful-content times, in milliseconds:
+
+| Surface | Settled cold | Settled warm | Active cold | Active warm |
+| --- | ---: | ---: | ---: | ---: |
+| Overview | 26953.1 | 109.5 | 24632.0 | 110.1 |
+| Explorer All page 1 | 6888.0 | 155.9 | 8461.4 | 156.0 |
+| Attention | 10920.7 | 4.8 | 10702.9 | 4.5 |
+| Direct Workspace | 6978.2 | 8.2 | 10833.7 | 7.3 |
+| Catch Up 24h | 26061.0 | 75.8 | 26398.0 | 65.3 |
+
+Workspace detail medians were 7109.9/145.2 ms for settled cold/warm and
+10964.8/144.4 ms for active cold/warm. The raw samples retain HTTP receipt,
+Overview panel milestones, complete rendered text and source envelopes separately.
+All ten external comments became visible in 4479.7–8654.8 ms from mutation start.
+Dependency relation visibility took 12589.2–30923.5 ms. Blocker-closure Ready
+visibility took 1899.4–17484.8 ms. The raw changes also retain native settlement
+and settled-to-render intervals. All ten guarded Save Note writes returned 200,
+recorded the comment and kept workflow state unchanged. Each active trial retained
+three native Agent CLI processes before and after the measured work.
+
+The runner exited 1 because eight command starts have no final trace record.
+They occur in five trials. The report correctly refuses complete attribution.
+These gaps do not invalidate the separately validated rendered samples. Five
+trials retain complete tool traces; the other five retain exact recorded starts
+and explicit unknown overlap, bytes, exits, duration and concurrency. The analysis
+report uses null for affected totals and retains settled-only observations under
+`settledOnly`. It never presents those observations as complete load. Across the
+matrix, 3551 commands have final records. Journal, source and Git families remain
+separate in the raw traces. Queue, gate and projection timing remain unmeasured.
+The documented larger workloads and contention controls remain unmeasured too.
+No latency target or baseline/candidate improvement is claimed.
+
+The original directory is
+`H:/Nightweaver/prod/tmp/nightshift/ns-gjwx-p89ed2a6fe7ade8917f1e/20261123T0557550535836Z-implementer/shared-read-baseline`.
+Its `result.json`, `report.json` and `hashes.json` remain unchanged. The later
+`analysis-report.json` applies the explicit unknown-load handling without a new
+native run. The checked-in evidence archive retains raw results, seed bytes,
+tool start/final records, screenshots, lifecycle logs and both reports. It omits
+the generated shim binaries. Use the exact measured probe revision when repeating
+the native workload. The later change only corrects report attribution.

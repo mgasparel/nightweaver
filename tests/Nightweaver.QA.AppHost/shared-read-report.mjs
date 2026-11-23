@@ -40,16 +40,17 @@ for (const run of result.runs) {
     .map(name => JSON.parse(fs.readFileSync(path.join(trial, 'tools', name), 'utf8')));
   const unsettled = fs.readdirSync(path.join(trial, 'tools')).filter(name => name.endsWith('.pending')
     && !fs.existsSync(path.join(trial, 'tools', name.replace(/\.pending$/, '.json'))));
+  const pending = unsettled.map(name => JSON.parse(fs.readFileSync(path.join(trial, 'tools', name), 'utf8')));
   if (unsettled.length) failures.push(`Native command settlement unavailable: ${path.basename(trial)} (${unsettled.length} commands)`);
   for (const gap of value.missing) missing.add(gap);
   trials.push({ directory: path.basename(trial), manifest: value.manifest, changes: value.changes,
     activity: value.activity, lifecycle: run, errorCount: value.errors.length, unsettled, externalCommands: value.external,
-    fullToolLoad: summarizeTools(records, run.startedUtc ?? result.measuredUtc, run.finishedUtc ?? result.finishedUtc) });
+    fullToolLoad: summarizeTools(records, run.startedUtc ?? result.measuredUtc, run.finishedUtc ?? result.finishedUtc, pending) });
   for (const sample of value.samples) {
     let valid = true, reason = null;
     try { assertSample(sample); } catch (error) { valid = false; reason = String(error); failures.push(`Invalid sample: ${path.basename(trial)}/${sample.mode}/${sample.surface}: ${reason}`); }
     samples.push({ trial: path.basename(trial), ...sample, valid, reason,
-      trackerLoad: summarizeTools(records, sample.startedUtc, sample.completedUtc ?? sample.cutoffUtc) });
+      trackerLoad: summarizeTools(records, sample.startedUtc, sample.completedUtc ?? sample.cutoffUtc, pending) });
   }
 }
 const groups = [];
