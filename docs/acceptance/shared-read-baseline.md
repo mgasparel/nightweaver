@@ -175,3 +175,41 @@ native run. The checked-in evidence archive retains raw results, seed bytes,
 tool start/final records, screenshots, lifecycle logs and both reports. It omits
 the generated shim binaries. Use the exact measured probe revision when repeating
 the native workload. The later change only corrects report attribution.
+
+## Local test cost
+
+Candidate `8c84c7582fe9b0821caea4b6b68fb4ab150d186d`, tree
+`22fe66a0e1d0802c4cd03379292dedf5ffb051a2`, passed all 2133 tests with no skips
+or failures. Source was clean. The complete outer measurement was 259.6581192
+seconds at six threads. The 66 archive cases and 102 collector cases passed too.
+The hard limit passed. The run exceeded the 240-second operating target.
+
+The explicit accepted baseline is `cd60f820058e7ea4b0ba109f972fe961de52ac56`,
+tree `9e21b176a46f35fdb6c8af2ba56149ccf488b339`: 2133 passing tests in
+257.8436215 seconds. Its accepted result has SHA256
+`5B59746AE8F87A4F82B9D6E896998669C953A095D87397F5F555D3E0E1068A3E`.
+The candidate measurement used that exact file. Automatic comparison is
+unavailable because `tempRoot`, `TEMP` and `TMP` differ. Delta and ratio remain
+null. Machine, boot, tools, six-thread policy and production identity match.
+The two absolute elapsed times are diagnostic, not a controlled cost delta.
+
+This change adds no normal-suite test, fixture publish or production command.
+The new AppHost seed and tool shim run only for the opt-in probe. Existing native
+collections dominate cost: UpgradeActivationTests took 208.120 summed seconds,
+ManualDeliveryPilotSecondSignalTests 70.789, AgentStageDeliveryIntegrationTests
+65.176 and PoolConcurrencyIntegrationTests 56.692. These overlapping collection
+times are not outer elapsed deltas. Archive and collector script checks took
+4.608 and 6.582 seconds. This slice does not claim to repair the existing target
+miss. Any future cost repair must preserve the existing native boundaries.
+
+The 26 cheap Node evidence checks pass separately. `dotnet build Nightweaver.slnx`
+passed with zero warnings and errors. Later changes only retain documentation
+and evidence. Merger still owns exact-head checks and fresh latest-main acceptance
+after integration.
+
+The candidate raw directory is
+`H:/Nightweaver/prod/tmp/nightshift/ns-gjwx-p89ed2a6fe7ade8917f1e/20261123T0557550535836Z-implementer/f1bbb491b99c4c278291ab84721c8adf`.
+The retained suite archive contains the candidate result, log and XML, plus the
+accepted baseline and its original result, log and XML. The baseline probe
+archive hash is `4FB78E1D047208ED0A2B2AD489486105AAE36A5F0D9F2ABA2C71C5973D6380DB`.
+All 7326 archived file hashes were verified after packaging.
