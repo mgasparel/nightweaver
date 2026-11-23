@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { explorerQuery } from '../src/explorer-model.ts';
 
 test('Explorer defaults to operational readiness and keys include normalized Unicode search and page', () => {
-  assert.equal(explorerQuery(new URLSearchParams()).key, 'explorer:ready::1');
+  assert.equal(explorerQuery(new URLSearchParams()).key, 'base:explorer:ready::1');
   const query = explorerQuery(new URLSearchParams({ view: 'blocked', q: '  café  work  ', page: '3' }));
-  assert.equal(query.key, 'explorer:blocked:Y2Fmw6kgIHdvcms:3');
+  assert.equal(query.key, 'base:explorer:blocked:Y2Fmw6kgIHdvcms:3');
   assert.equal(query.search, 'café  work');
 });
 

@@ -9,7 +9,7 @@ export function explorerQuery(params: URLSearchParams) {
   const valid = views.some(item => item === view) && search.length <= 200
     && /^[1-9][0-9]*$/.test(text) && page <= 250
     && ["view", "q", "page"].every(name => params.getAll(name).length <= 1);
-  return { view, search, page, valid, key: valid ? `${queryKey("explorer", view, search)}:${page}` : "" };
+  return { view, search, page, valid, key: valid ? `base:${queryKey("explorer", view, search)}:${page}` : "" };
 }
-export type ExplorerData = { items: { id: string; title: string; type: string; priority: number;
+export type ExplorerData = { schema: "nightweaver-base-v1"; inventoryRevision: string; completeness: "complete" | "pending"; absence: null; items: { id: string; title: string; type: string; priority: number;
   status: string; assignee: string | null; stage: string | null }[]; total: number; page: number; pages: number; pageSize: number };

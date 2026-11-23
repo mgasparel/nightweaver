@@ -2,6 +2,23 @@
 
 Contract owner: ns-gjwx-p88cf0dfa3650cc8fbb7a. This amendment defines the next
 additive read contract. It does not claim that these resources are implemented.
+
+Implementation slice ns-gjwx-paea384f7cce36dfdace5 enables only
+`base:explorer:{view}:{query}:{page}` and `base:workspace:{id}`. Studio Explorer
+uses the new paged base key. Workspace keeps its full-response consumer until
+its section migration. The other reserved base and section keys remain
+unsupported. One compact inventory projection supplies exact-ID, ordered
+search, status, type, stage, pause, assignee and priority indexes. It shares the
+host memory budget with raw sources and resource envelopes. Base callbacks
+publish on the serialized collection turn before optional native reads.
+Callbacks retain captured admission identities and dirty generations. Ready
+and Blocked publish with independent native membership and source health.
+Skipped membership work continues on the next bounded turn. The compact cache
+retires when base interest ends; accepted resource bodies keep their existing
+bounded retention and freshness rules. Inventory lineage remains in the shared
+inventory used by the existing presentation projector. No base row certifies
+complete relations or history.
+
 The existing full-response resources and legacy HTTP routes keep their payloads,
 validation and publication rules during migration. Consumers must opt into the
 new keys together with their backend support. Existing keys never return a base

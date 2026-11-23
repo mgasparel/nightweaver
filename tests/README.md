@@ -1,5 +1,16 @@
 # Test suite
 
+Shared base publication adds injected observer cases for held legacy detail,
+cold direct-link validation, native membership failure and continuation,
+failed-refresh retention, confirmed absence, audit refresh, raced hints,
+late callbacks after eviction and the shared two-Workspace identity limit.
+These cases add no native journey or fixture publication. The existing isolated
+Explorer browser journey checks the new schema and inventory revision, native
+membership changes, warm navigation and retained stale rows at three sizes.
+Production projects one compact indexed cache per accepted inventory content
+identity when base keys have interest. Base callbacks add no native command.
+Legacy full-response collection and its native budgets remain unchanged.
+
 Admission titles use deterministic payload, publisher/reader and injected pool
 checks. They cover invalid title metadata, scalar bounds, slot identity changes,
 same-Bead stage updates, idle clearing, delayed foreign observations, both wire

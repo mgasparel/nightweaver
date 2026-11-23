@@ -14,6 +14,186 @@ namespace Nightweaver.Tests;
 
 public sealed class OperationalObservationSourceTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ColdDirectLinkWaitsForSharedValidationAndNeverUsesShow(bool fail)
+    {
+        using var target = new ObservationTargetFixture();
+        var runner = new Runner { TargetPath = target.Path, Rows = 0, FailEveryList = fail };
+        var held = new HoldingRunner(runner, "list");
+        using var factory = Factory(target.Path, held, new CostClock());
+        using var service = new OperationalObservationService("web-test", Adapter(factory), new CostClock(),
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        service.Read("base:workspace:absent");
+        var token = TestContext.Current.CancellationToken;
+        var collection = service.CollectOnceAsync(false, token);
+        try
+        {
+            await held.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+            Assert.Null(service.Read("base:workspace:absent").Data);
+        }
+        finally { held.Release.TrySetResult(); await collection; }
+        var result = service.Read("base:workspace:absent");
+        if (fail) Assert.Null(result.Data);
+        else Assert.Equal("absent", result.Data!.Value.GetProperty("absence").GetProperty("id").GetString());
+        Assert.DoesNotContain("show", runner.Commands);
+        Assert.Single(runner.Commands);
+    }
+
+    [Fact]
+    public async Task SkippedNativeMembershipContinuesWithoutErasingAcceptedBase()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { Advance = () => clock.Advance(TimeSpan.FromSeconds(2)), Blocked = true };
+        using var factory = Factory(target.Path, runner, clock);
+        var source = Adapter(factory);
+        var keys = Keys("base:explorer:all::1", "base:explorer:ready::1", "base:explorer:blocked::1");
+        var first = await source.ReadScheduledAsync(keys, (_, _) => { }, TestContext.Current.CancellationToken);
+        Assert.NotNull(first["base:explorer:all::1"].Data);
+        Assert.True(first["base:explorer:ready::1"].Pending);
+        Assert.Null(first["base:explorer:ready::1"].Data);
+        var next = await source.ReadScheduledAsync(keys, (_, _) => { }, TestContext.Current.CancellationToken);
+        Assert.False(next["base:explorer:ready::1"].Pending);
+        Assert.NotNull(next["base:explorer:ready::1"].Data);
+        Assert.Equal(1, runner.Commands.Count(command => command == "list"));
+    }
+
+    [Fact]
+    public async Task BaseAuditUpdatesSharedRevisionWithoutJournalAndRetiresItsReservation()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner();
+        using var factory = Factory(target.Path, runner, clock);
+        var memory = new ObservationMemoryBudget();
+        var source = Adapter(factory, memory);
+        var keys = Keys("base:workspace:task-1", "base:explorer:all::1");
+        var first = await source.ReadScheduledAsync(keys, (_, _) => { }, TestContext.Current.CancellationToken);
+        var revision = JsonSerializer.SerializeToElement(first[keys[0].Value].Data, ObservationJson.Options).GetProperty("inventoryRevision").GetString();
+        runner.Title = "Audit change";
+        clock.Advance(TimeSpan.FromSeconds(60));
+        var next = await source.ReadScheduledAsync(keys, (_, _) => { }, TestContext.Current.CancellationToken);
+        var data = JsonSerializer.SerializeToElement(next[keys[0].Value].Data, ObservationJson.Options);
+        Assert.NotEqual(revision, data.GetProperty("inventoryRevision").GetString());
+        Assert.Equal("Audit change", data.GetProperty("bead").GetProperty("title").GetString());
+        Assert.True(memory.Used > 0);
+        await source.ReadScheduledAsync([], (_, _) => { }, TestContext.Current.CancellationToken);
+        Assert.Equal(0, memory.Used);
+    }
+
+    [Theory]
+    [InlineData("show")]
+    [InlineData("comments")]
+    public async Task BasePublishesBeforeHeldLegacyDetailAndKeepsRacedRefreshPending(string command)
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { TargetPath = target.Path };
+        var held = new HoldingRunner(runner, command);
+        using var factory = Factory(target.Path, held, clock);
+        var source = Adapter(factory);
+        using var service = new OperationalObservationService("web-test", source, clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        using var pin = service.Pin(["base:explorer:all::1", "base:workspace:task-1", "workspace:task-1"]);
+        var token = TestContext.Current.CancellationToken;
+        var collection = service.CollectOnceAsync(false, token);
+        try
+        {
+            await held.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10), token);
+            Assert.False(collection.IsCompleted);
+            var explorer = service.Read("base:explorer:all::1");
+            Assert.Equal("fresh", explorer.Health);
+            Assert.Equal("task-1", explorer.Data!.Value.GetProperty("items")[0].GetProperty("id").GetString());
+            Assert.Equal(explorer.Data.Value.GetProperty("inventoryRevision").GetString(),
+                service.Read("base:workspace:task-1").Data!.Value.GetProperty("inventoryRevision").GetString());
+            Assert.Null(service.Read("workspace:task-1").Data);
+            runner.Title = "Changed during detail";
+            service.RequestReconciliation();
+            Assert.NotNull(service.Read("base:explorer:all::1").PendingAgeMs);
+        }
+        finally { held.Release.TrySetResult(); await collection; }
+        Assert.NotNull(service.Read("base:explorer:all::1").PendingAgeMs);
+        await service.CollectOnceAsync(false, token);
+        Assert.Equal("Changed during detail", service.Read("base:explorer:all::1").Data!.Value
+            .GetProperty("items")[0].GetProperty("title").GetString());
+        Assert.Null(service.Read("base:explorer:all::1").PendingAgeMs);
+    }
+
+    [Fact]
+    public async Task BaseKeysShareInventoryAndNativeMembershipWithoutTargetedBaseReads()
+    {
+        using var target = new ObservationTargetFixture();
+        var runner = new Runner { Rows = 41, FailReady = true, Blocked = true };
+        using var factory = Factory(target.Path, runner, new CostClock());
+        var source = Adapter(factory);
+        var keys = Keys("base:workspace:task-1", "base:workspace:absent", "base:explorer:all::1",
+            "base:explorer:all::2", "base:explorer:blocked::1", "base:explorer:ready::1");
+        var samples = await source.ReadScheduledAsync(keys, (_, _) => { }, TestContext.Current.CancellationToken);
+        Assert.Equal(1, runner.Commands.Count(command => command == "list"));
+        Assert.DoesNotContain("show", runner.Commands);
+        Assert.Equal(1, runner.Commands.Count(command => command == "ready"));
+        Assert.Equal(1, runner.Commands.Count(command => command == "blocked"));
+        Assert.NotNull(samples["base:explorer:ready::1"].Error);
+        Assert.Null(samples["base:explorer:ready::1"].Data);
+        var all = JsonSerializer.SerializeToElement(samples["base:explorer:all::1"].Data, ObservationJson.Options);
+        Assert.Equal(40, all.GetProperty("items").GetArrayLength());
+        var revision = all.GetProperty("inventoryRevision").GetString();
+        Assert.Equal(revision, JsonSerializer.SerializeToElement(samples["base:workspace:absent"].Data, ObservationJson.Options)
+            .GetProperty("absence").GetProperty("inventoryRevision").GetString());
+        Assert.Equal(1, JsonSerializer.SerializeToElement(samples["base:explorer:blocked::1"].Data, ObservationJson.Options)
+            .GetProperty("total").GetInt32());
+        Assert.Empty(await source.ReadScheduledAsync(keys, (_, _) => { }, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task FailedSharedValidationRetainsRowsAndCannotProveAbsence()
+    {
+        using var target = new ObservationTargetFixture();
+        var clock = new CostClock();
+        var runner = new Runner { FailEveryList = true };
+        using var factory = Factory(target.Path, runner, clock);
+        using var service = new OperationalObservationService("web-test", Adapter(factory), clock,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>());
+        service.Read("base:workspace:task-1");
+        var token = TestContext.Current.CancellationToken;
+        await service.CollectOnceAsync(false, token);
+        Assert.Null(service.Read("base:workspace:task-1").Data);
+        runner.FailEveryList = false;
+        clock.Advance(TimeSpan.FromSeconds(5));
+        await service.CollectOnceAsync(false, token);
+        var accepted = service.Read("base:workspace:task-1").Data;
+        Assert.NotNull(accepted);
+        runner.Rows = 0; runner.FailEveryList = true;
+        service.RequestReconciliation();
+        await service.CollectOnceAsync(false, token);
+        var failed = service.Read("base:workspace:task-1");
+        Assert.Equal(accepted, failed.Data);
+        Assert.Equal("stale", failed.Health);
+        Assert.Equal(JsonValueKind.Null, failed.Data!.Value.GetProperty("absence").ValueKind);
+        runner.FailEveryList = false;
+        clock.Advance(TimeSpan.FromSeconds(5));
+        await service.CollectOnceAsync(false, token);
+        var absent = service.Read("base:workspace:task-1");
+        Assert.Equal("fresh", absent.Health);
+        Assert.Equal("task-1", absent.Data!.Value.GetProperty("absence").GetProperty("id").GetString());
+        Assert.Equal(JsonValueKind.Null, absent.Data.Value.GetProperty("bead").ValueKind);
+        Assert.DoesNotContain("show", runner.Commands);
+    }
+
+    private sealed class HoldingRunner(Runner inner, string command) : IProcessRunner
+    {
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken token)
+        {
+            if (request.FileName == "bd" && request.Arguments.Contains(command))
+            { Entered.TrySetResult(); await Release.Task.WaitAsync(token); }
+            return await inner.RunAsync(request, token);
+        }
+    }
+
     [Fact]
     public async Task ScheduledSharedSourceNoOpDoesNotAddNativeWorkOrExportedAttempts()
     {
