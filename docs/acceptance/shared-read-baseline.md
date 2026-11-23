@@ -102,7 +102,7 @@ those tests or claim coverage for an unmeasured case.
 Run the cheap failure assertions separately:
 
 ```powershell
-node --test tests/Nightweaver.QA.AppHost/shared-read-assertions.test.mjs
+node --test tests/Nightweaver.QA.AppHost/shared-read-assertions.test.mjs tests/Nightweaver.QA.AppHost/shared-read-report.test.mjs
 ```
 
 The long probe and tool shim remain outside normal test discovery. No native
@@ -110,3 +110,8 @@ journey, production command, deadline or test scheduling change enters the norma
 suite. The QA AppHost gains only an opt-in seed and instrumentation configuration.
 The ordinary complete suite still uses six threads and the retained
 [measurement entry point](../agents/test-cost-evidence.md).
+
+The report rejects missing trials, missing cold or warm samples, invalid source
+evidence, browser errors, missing writes, lost native activity and unsettled
+commands. The runner returns a failure when the report is incomplete. Explicit
+unmeasured attribution remains separate from a failed measurement.

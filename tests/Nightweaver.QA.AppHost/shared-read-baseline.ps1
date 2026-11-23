@@ -84,8 +84,10 @@ try {
     $metadata.finishedUtc = [datetime]::UtcNow.ToString('o')
     $metadata | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $output 'result.json')
     & node (Join-Path $PSScriptRoot 'shared-read-report.mjs') $output > (Join-Path $output 'report.log')
+    $reportExit = $LASTEXITCODE
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $previous[$name]) }
     Get-ChildItem -LiteralPath $output -Recurse -File | Where-Object Extension -ne '.exe' |
         ForEach-Object { [pscustomobject]@{ path = [IO.Path]::GetRelativePath($output, $_.FullName); sha256 = (Get-FileHash -LiteralPath $_.FullName).Hash } } |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'hashes.json')
+    if ($reportExit -ne 0) { throw 'Shared read evidence is incomplete. See report.json.' }
 }

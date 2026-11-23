@@ -1,31 +1,53 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { assertSample, summarizeTools } from './shared-read-assertions.mjs';
 
-const root = path.resolve(process.argv[2]);
+export function buildReport(root) {
 const result = JSON.parse(fs.readFileSync(path.join(root, 'result.json'), 'utf8'));
-const samples = [], missing = new Set(), trials = [];
+const samples = [], missing = new Set(), trials = [], failures = [];
+for (const activity of result.activity) for (const surface of result.surfaces) {
+  for (let repetition = 1; repetition <= result.coldRepetitions; repetition++) {
+    if (!result.runs.some(run => run.activity === activity && run.surface === surface && run.repetition === repetition)) {
+      failures.push(`Missing trial: ${activity}-${surface}-${repetition}`);
+    }
+  }
+}
 for (const run of result.runs) {
   const trial = path.join(root, `${run.activity}-${run.surface}-${run.repetition}`);
   const file = path.join(trial, 'browser.json');
-  if (!fs.existsSync(file)) { missing.add(`No browser evidence: ${path.basename(trial)}`); continue; }
+  if (!fs.existsSync(file)) { failures.push(`No browser evidence: ${path.basename(trial)}`); continue; }
   const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-  if (run.probeExit !== 0 || run.stopExit !== 0) missing.add(`Failed probe or stack stop: ${path.basename(trial)}`);
+  if (run.startExit !== 0 || run.probeExit !== 0 || run.stopExit !== 0) failures.push(`Failed probe or stack stop: ${path.basename(trial)}`);
+  if (value.errors.length) failures.push(`Browser errors: ${path.basename(trial)}`);
+  for (const item of value.activity) {
+    if (!item.aliveBefore || item.aliveAfter !== value.active) failures.push(`Invalid native activity: ${path.basename(trial)}/${item.id}`);
+  }
+  const expected = [{ surface: run.surface, mode: 'cold', cycle: 0 }];
+  for (let cycle = 0; cycle < result.warmCycles; cycle++) {
+    for (const surface of ['overview','explorer','attention','workspace','digest']) expected.push({ surface, mode: 'warm', cycle });
+  }
+  for (const row of expected) {
+    if (!value.samples.some(sample => sample.surface === row.surface && sample.mode === row.mode
+      && sample.cycle === row.cycle && sample.activity === run.activity)) {
+      failures.push(`Missing sample: ${path.basename(trial)}/${row.mode}/${row.surface}/${row.cycle}`);
+    }
+  }
   for (const kind of ['comment', 'guarded-note', 'dependency', 'blocker-close']) {
-    if (!value.changes.some(change => change.kind === kind)) missing.add(`Missing ${kind}: ${path.basename(trial)}`);
+    if (!value.changes.some(change => change.kind === kind)) failures.push(`Missing ${kind}: ${path.basename(trial)}`);
   }
   const records = fs.readdirSync(path.join(trial, 'tools')).filter(name => name.endsWith('.json'))
     .map(name => JSON.parse(fs.readFileSync(path.join(trial, 'tools', name), 'utf8')));
   const unsettled = fs.readdirSync(path.join(trial, 'tools')).filter(name => name.endsWith('.pending')
     && !fs.existsSync(path.join(trial, 'tools', name.replace(/\.pending$/, '.json'))));
-  if (unsettled.length) missing.add(`Native command settlement unavailable: ${path.basename(trial)} (${unsettled.length} commands)`);
+  if (unsettled.length) failures.push(`Native command settlement unavailable: ${path.basename(trial)} (${unsettled.length} commands)`);
   for (const gap of value.missing) missing.add(gap);
   trials.push({ directory: path.basename(trial), manifest: value.manifest, changes: value.changes,
     activity: value.activity, lifecycle: run, errorCount: value.errors.length, unsettled, externalCommands: value.external,
     fullToolLoad: summarizeTools(records, run.startedUtc ?? result.measuredUtc, run.finishedUtc ?? result.finishedUtc) });
   for (const sample of value.samples) {
     let valid = true, reason = null;
-    try { assertSample(sample); } catch (error) { valid = false; reason = String(error); }
+    try { assertSample(sample); } catch (error) { valid = false; reason = String(error); failures.push(`Invalid sample: ${path.basename(trial)}/${sample.mode}/${sample.surface}: ${reason}`); }
     samples.push({ trial: path.basename(trial), ...sample, valid, reason,
       trackerLoad: summarizeTools(records, sample.startedUtc, sample.completedUtc ?? sample.cutoffUtc) });
   }
@@ -45,9 +67,17 @@ for (const activity of result.activity) for (const mode of ['cold','warm']) for 
   groups.push({ activity, mode, surface, actual: rows.length, complete: valid.length,
     httpMs: stats('httpMs'), usefulMs: stats('usefulMs'), detailMs: stats('detailMs') });
 }
-fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify({ schema: 'nightweaver-shared-read-report-v1',
+return { schema: 'nightweaver-shared-read-report-v1',
   revision: result.revision, tree: result.tree, dirty: result.dirty, latencyTarget: null,
-  completed: result.failure === null && result.runs.every(run => run.probeExit === 0 && run.stopExit === 0),
+  completed: result.failure === null && result.runs.length > 0 && failures.length === 0,
   clock: 'Node monotonic measurement; UTC correlates native shim intervals, not cross-process phase subtraction.',
-  groups, missing: [...missing], samples, trials }, null, 2));
-console.log(JSON.stringify({ groups, missing: [...missing] }, null, 2));
+  groups, missing: [...failures, ...missing], failures, samples, trials };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  const root = path.resolve(process.argv[2]);
+  const report = buildReport(root);
+  fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify(report, null, 2));
+  console.log(JSON.stringify({ completed: report.completed, groups: report.groups, missing: report.missing }, null, 2));
+  if (!report.completed) process.exitCode = 1;
+}
