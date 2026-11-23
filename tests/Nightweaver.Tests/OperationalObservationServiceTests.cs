@@ -435,6 +435,44 @@ public sealed class OperationalObservationServiceTests
         Assert.NotNull(service.Read("workspace:task-1").Data);
     }
 
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public async Task RetainedDigestSectionAgesAdvanceOnSuccessfulReads(bool pending, bool failed)
+    {
+        var clock = new Clock();
+        var source = new Source(clock) { DigestSections = true };
+        using var service = Service(source, clock);
+        const string key = "digest-merges:all";
+        using var pin = service.Pin([key]);
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        var original = service.Read(key);
+        static double Age(ObservationEnvelope response) => response.Data!.Value.GetProperty("sections")
+            .GetProperty("task-1").GetProperty("validatedAgeMs").GetDouble();
+        Assert.Equal(7000, Age(original));
+        source.Pending = pending;
+        source.Error = failed ? new("source-failed", "Inventory read failed.") : null;
+        for (var poll = 1; poll <= 65; poll++)
+        {
+            clock.Advance(TimeSpan.FromSeconds(2));
+            await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+            var response = service.Read(key);
+            Assert.Equal(7000 + poll * 2000, Age(response));
+            Assert.Equal("verified", response.Data!.Value.GetProperty("sections").GetProperty("task-1")
+                .GetProperty("value").GetProperty("state").GetString());
+            // A second HTTP read must age the original body, not the last response.
+            Assert.Equal(Age(response), Age(service.Read(key)));
+        }
+        Assert.Equal(7000, Age(original));
+        Assert.True(Age(service.Read(key)) > 120000);
+        source.Pending = false;
+        source.Error = null;
+        await service.CollectOnceAsync(false, TestContext.Current.CancellationToken);
+        Assert.Equal(7000, Age(service.Read(key)));
+        Assert.Equal("fresh", service.Read(key).Health);
+    }
+
     [Fact]
     public async Task PendingChangedSourceMetadataCannotRevalidateRetainedData()
     {
@@ -706,6 +744,7 @@ public sealed class OperationalObservationServiceTests
         internal string Content { get; set; } = "same";
         internal ObservationError? Error { get; set; }
         internal bool IncludeSamplingDates { get; set; }
+        internal bool DigestSections { get; set; }
         internal DateTimeOffset? Checkpoint { get; set; }
         internal DateTimeOffset? Activity { get; set; }
         internal TaskCompletionSource? CleanupHold { get; init; }
@@ -740,13 +779,18 @@ public sealed class OperationalObservationServiceTests
             var now = clock.GetUtcNow();
             return keys.ToDictionary(key => key.Value, _ => new ObservationSample(
                 runtime && RuntimeStopped ? new { availability = "stopped" } :
+                    DigestSections ? new { schema = "nightweaver-digest-merges-v1", sections = new Dictionary<string, object>
+                    {
+                        ["task-1"] = new { beadId = "task-1", updatedAt = now, state = "available", pending = false,
+                            validatedAgeMs = 7000d, source = new { health = "fresh", observedAt = now }, value = new { state = "verified" } }
+                    } } :
                     IncludeSamplingDates ? new { content = Content, generatedAt = now, lastCaughtUpAt = Checkpoint, activityAt = Activity } : new { content = Content },
                 now, now, new Dictionary<string, ObservationSourceState>
                 {
                     [runtime ? "runtime" : "inventory"] = new("fresh", now, now, null) { ContentIdentity = InventoryIdentity },
                     [runtime ? "cleanup" : "ready"] = new(Error is null || runtime ? "fresh" : "stale", now, now, runtime ? null : Error)
                         { ContentIdentity = ReadyIdentity }
-                }, runtime ? null : Error, Pending: Pending), StringComparer.Ordinal);
+                }, runtime ? null : Error, Pending: Pending) { SectionAgeTimestamp = DigestSections ? clock.GetTimestamp() : null }, StringComparer.Ordinal);
         }
     }
 }

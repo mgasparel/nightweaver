@@ -132,7 +132,11 @@ validate any entry. Each entry must pass its own identity and source-age checks.
 Consumers add monotonic receipt elapsed time to `validatedAgeMs` and reject
 evidence after its 120-second source-age bound. The shared browser cache retains
 the monotonic receipt time with the observation. View mounts and failed reads
-do not renew this time. Base health,
+do not renew this time. Each server response advances embedded section ages from
+the accepted body's monotonic collection anchor. Failed and pending replacement
+samples retain this anchor. Successful HTTP reads and membership revalidation
+cannot renew section validation. The response does not modify the cached body.
+Base health,
 counts, order, checkpoint and window membership do not depend on entry progress.
 Base publication occurs before any optional section command. Checkpoint changes
 reproject the window while other entries remain loading. The current base row

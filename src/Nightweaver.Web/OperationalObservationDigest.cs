@@ -74,6 +74,7 @@ internal sealed partial class OperationalObservationSource
                 ProjectDigestBases(keys, inventory, caughtUp, generatedAt, generatedAt, result);
             }
             var sections = new Dictionary<string, object>(StringComparer.Ordinal);
+            var sectionAgeTimestamp = clock.GetTimestamp();
             foreach (var item in candidates)
             {
                 var name = "merge:" + item.Id;
@@ -93,14 +94,15 @@ internal sealed partial class OperationalObservationSource
                     beadId = item.Id, updatedAt = initial.ById[item.Id].Payload.GetProperty("updated_at"),
                     state, value = evidence, source, pending = !current,
                     pendingAgeMs = scheduled ? schedule.PendingAge([name]) : null,
-                    validatedAgeMs = source?.ValidatedTimestamp is { } validated ? clock.GetElapsedTime(validated).TotalMilliseconds : (double?)null,
+                    validatedAgeMs = source?.ValidatedTimestamp is { } validated ? clock.GetElapsedTime(validated, sectionAgeTimestamp).TotalMilliseconds : (double?)null,
                     item.OutcomeLabel, item.Summary, item.Commits, item.PullRequests,
                     reason = state == "unavailable" ? "No matching merge verification is available." : null
                 };
             }
             // The aggregate is a set of independent sections. Its clocks cover
             // membership only; each section retains its own source provenance.
-            result[key.Value] = CurrentSample(Sample(new { schema = "nightweaver-digest-merges-v1", sections }, generatedAt, DigestCoreSources));
+            result[key.Value] = CurrentSample(Sample(new { schema = "nightweaver-digest-merges-v1", sections }, generatedAt, DigestCoreSources))
+                with { SectionAgeTimestamp = sectionAgeTimestamp };
         }
     }
 }

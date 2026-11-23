@@ -12,6 +12,15 @@ proves that React renders base content before section responses arrive; injected
 source tests alone cannot prove that display behavior. Production uses existing
 bounded section reads and adds Planning identity projection to shared base rows.
 
+Digest retention repair adds three controlled-clock service cases and two Studio
+coordinator cases. They poll retained successful responses for 130 seconds of
+controlled time after failed or pending replacement reads. They check section
+expiry and recovery separately from base age. No native journey or fixture
+publication is added. The existing digest browser journey checks HTTP 200 stale
+section responses in Catch Up and Overview. Production keeps one monotonic anchor
+per accepted resource and advances at most 128 section ages per response. It adds
+no tracker command and keeps the existing cache and native-work limits.
+
 Digest receipt repair adds one controlled-clock Studio coordinator case. It
 checks failed reads, source expiry, a short view absence and successful recovery.
 The existing digest merge browser journey checks the actual view mount with a

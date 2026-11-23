@@ -100,7 +100,11 @@ internal sealed record ObservationSynchronization(string Journal, bool Pending)
 }
 internal sealed record ObservationSample(object? Data, DateTimeOffset AttemptedAt, DateTimeOffset? ObservedAt,
     IReadOnlyDictionary<string, ObservationSourceState> Sources, ObservationError? Error = null, bool Partial = false, bool Pending = false,
-    bool ConfirmedAbsence = false);
+    bool ConfirmedAbsence = false)
+{
+    // Monotonic anchor for embedded section ages. Retained bodies keep this anchor.
+    internal long? SectionAgeTimestamp { get; init; }
+}
 
 internal interface IOperationalObservationSource
 {
