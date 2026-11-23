@@ -224,7 +224,7 @@ export function AttentionView({ project, compact = false }: { project: string; c
               <h2 className="attention-question">{attentionPreview(row.question || row.diagnostic || row.title)}</h2>
               {!row.sourceCommentId && <p role="status">{row.beadId === explanationId ? explanationState : "Pause explanation is not loaded. Open Review to read the evidence."}</p>}
               {row.beadId === explanationId && !row.sourceCommentId && retained && <HistoricalExplanation item={retained} />}
-              {row.beadId !== explanationId && <button className="text-link" onClick={() => setPreview(row.beadId)}>Load pause explanation for {row.beadId}</button>}
+              {row.beadId !== explanationId && <p><button className="text-link" onClick={() => setPreview(row.beadId)}>Load pause explanation for {row.beadId}</button></p>}
               {decisionSections(row).filter(section => section.label === "Recommended answer").slice(0, 1).map(section => <p className="attention-recommendation" key={section.label}>{row.message?.role ?? "Source"} recommendation: {attentionPreview(section.text)}</p>)}
               {attentionWarningSections(row).map(section => <p className="bead-notice" key={section.label}>{section.text}</p>)}
               {row.unavailableReason && <p className="bead-notice">{row.unavailableReason}</p>}
