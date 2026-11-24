@@ -1,5 +1,86 @@
 # Shared-read candidate evidence
 
+The launch-gap repair proves tool-process settlement in two replacement native
+trials. It closes Reviewer finding 1 at the Windows process boundary. The old
+unknown child records stay unknown. All failed reports remain unchanged.
+
+## Launch-gap repair
+
+The checked runtime is `c1b057fa61016b14d7dbb08ee723454df7587dc3`, tree
+`90a54a4c4a05f4d9b1dedfc7b648e59664e66a9b`. The runner recorded clean source.
+It repeats only settled Explorer and Attention, the two cells with unknown
+children in the previous retry. Both use the retained fixture timestamp
+`2026-11-23T05:01:24Z`. Both seed hashes are
+`427A449DEE11CB70E2485250E3969916E46CAE4026F6113D5330F885687491B4`.
+
+Each wrapper enters a separate nested Windows Job before it writes `.pending`.
+The observer opens that exact Job before it writes `.admitted`. The wrapper
+cannot launch a tool before admission. Children inherit the Job; breakaway is
+not permitted. The observer keeps its handle through exact Aspire stop. A Job
+with zero active processes proves settlement even if the wrapper dies before
+`.launched`. A missing Job with no admission proves non-launch under this new
+protocol. Legacy records have no such proof. Live or unknown containment makes
+the observer and runner fail. Neither a wrapper exit nor stack stop alone proves
+child settlement. This changes only optional instrumentation.
+
+Five controlled native checks passed in 1.4761595 seconds, without a tracker or
+browser. They cover termination before admission, before launch and after launch
+but before record publication. They distinguish proved non-launch from a launched
+child whose Job reaches zero. Negative checks require observer failure for a live
+child and unknown legacy evidence. The live-child check also confirms native
+settlement after exact Job cleanup. These checks use the real Windows boundary;
+injected source checks cannot prove Job inheritance or kernel settlement.
+
+| Replacement trial | Starts / final records / Job observations | Unproved Jobs | Outer seconds through exact stop |
+| --- | --- | ---: | ---: |
+| Settled Explorer | 129 / 129 / 129 | 0 | 94.2619984 |
+| Settled Attention | 129 / 128 / 129 | 0 | 98.1016351 |
+
+Both browser probes, stack starts, exact stops and observers returned 0. The
+observer recorded zero active processes for all 258 Jobs after stack stop. The
+Attention journal command without a final record has independently signalled
+wrapper and child handles, plus zero active Job processes. Its missing native
+result and byte counts remain unknown. The controlled after-launch case supplies
+the missing-record boundary that these browser trials need not hit by chance.
+Aspire then reported no running AppHost. Final read-only checks found all six
+recorded fixture PIDs absent. No process was stopped by those checks.
+
+The runner returned 1 and its report has `completed: false`. It retains the
+missing final record and `Invalid native activity: settled-attention-1/qa-live-planning`.
+That activity check tests a numerical PID. The browser had already required all
+settled fixture PIDs to be absent before navigation; the later check found that
+number present. It does not establish the later process identity. An initial
+post-stop check also found that number present; the final check found it absent.
+No retained creation identity identifies the later process. This repair makes no
+claim about its lifetime or identity. The 22 rendered samples are valid, but
+these trials supply separate settlement evidence, not replacement latency or
+activity distributions. The original 110-sample comparison remains separate from this
+instrumentation change. No failed result is declared passed.
+
+Local artifact identity is `settlement-repair` in invocation
+`20261124T0245571266625Z-implementer`. All 1,345 stored file hashes passed.
+Raw files stay local. Aggregate identities are:
+
+| Artifact | SHA256 |
+| --- | --- |
+| Trial result | `42CF94F300D5A2B21EF83A5B7467FBEA489AA9C1A990FB0F49BCA4C36A68FAAB` |
+| Trial report | `981975AC217949A1618424198C1B2AA513E9D72A8F0FD607A398522173E1080F` |
+| Five-check result (`settlement-check-v2`) | `26338F01FCC3C3C99B1B18556444A911339BAE61AC898C7449DB26E610B7B952` |
+| Final fixture PID observation | `813278A9B094E3094E42F08BB7E2F2F6C6E935EB3B1D5461A0A22BCF9365F11E` |
+
+Build the opt-in ToolProbe and run `bd.exe --settlement-check <new-local-directory>`
+from its output. Reproduce the native trials with
+`shared-read-baseline.ps1 -Surfaces explorer,attention -Activity settled`
+and the fixture timestamp above. Keep output local. One additional Node case
+requires a failed observer to fail report acceptance; all 59 Node checks passed.
+The solution and ToolProbe builds passed with zero warnings and errors. The
+repair adds no production or normal-suite work. The complete 2184-test measurement
+below remains applicable; production, normal test sources and fixture publishing
+match its revision. No unchanged full suite was repeated. Merger still owns
+fresh synchronized-head checks and latest-main acceptance.
+
+## Retained retry evidence
+
 The retry supplies bounded native-load evidence for all ten scenario windows.
 It has 110 valid rendered samples across all five surfaces. All browser trials
 and exact stack stops passed. Two scenario commands have finite settlement bounds

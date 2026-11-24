@@ -52,6 +52,22 @@ time and overlap bounds separate from complete final records. A bounded gap
 does not change the original `completed: false` result. The observer stops
 after the exact stack stops. Raw evidence stays local.
 
+The launch-gap repair adds a nested Windows Job per wrapper before `.pending`.
+The observer opens that exact Job and writes `.admitted` before any tool launch.
+Children inherit the non-breakaway Job. Zero active processes after exact stack
+stop proves settlement even without `.launched`. An absent Job before admission
+proves non-launch. Missing legacy proof or a live Job fails the observer and
+runner. This proof does not recover missing bytes, duration or native results.
+
+Build `tests/Nightweaver.QA.ToolProbe` to a fresh local directory and run its
+`bd.exe --settlement-check <new-local-directory>` for the five controlled launch
+checks. They stop a wrapper before admission, before launch and between launch
+and record publication. Negative cases require rejection of a live child and
+unknown legacy evidence. The check confirms native child settlement after
+cleanup. It uses no tracker or browser. The two affected matrix cells use
+`shared-read-baseline.ps1 -Surfaces explorer,attention -Activity settled`.
+Keep the original failed reports; new containment evidence cannot repair them.
+
 The report's additive `scenario` field covers cold navigation through final
 native Ready verification after browser changes. Its clock bridge rounds the
 cutoff outward. It excludes later shutdown starts and keeps full-trial load

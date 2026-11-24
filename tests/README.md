@@ -17,6 +17,16 @@ native matrix cells and adds only the missing settled Overview cell. Its
 It adds no normal-suite journey. The retained 2184-test complete measurement
 remains applicable because production and normal test sources are unchanged.
 
+The launch-gap repair adds one cheap Node rejection case and five opt-in native
+process checks. The native checks prove Windows Job inheritance and termination
+between launch and record publication. Injected source tests cannot prove this
+kernel boundary. They share one probe binary and need no tracker, AppHost or
+browser. The repair repeats only the two affected settled Explorer and Attention
+cells with the existing fixture. It adds Job admission polling to that optional
+instrumentation, with a one-second refusal bound inside the unchanged production
+command deadline. It adds no normal-suite work. The candidate acceptance report
+records measured check and trial costs. The unchanged complete suite is reused.
+
 Workspace base rendering adds five injected source cases and five Studio model
 cases. They check publication before held text, history and relations, shared
 Planning identity, section failure, delayed identity and confirmed absence.
