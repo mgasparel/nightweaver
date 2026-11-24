@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assertSample, summarizeTools } from './shared-read-assertions.mjs';
+import { assertSample, summarizeTools, boundTools } from './shared-read-assertions.mjs';
 import { analyzeReceipt } from './shared-read-receipts.mjs';
 
 export function buildReport(root) {
@@ -41,19 +41,33 @@ for (const run of result.runs) {
     .map(name => JSON.parse(fs.readFileSync(path.join(trial, 'tools', name), 'utf8')));
   const unsettled = fs.readdirSync(path.join(trial, 'tools')).filter(name => name.endsWith('.pending')
     && !fs.existsSync(path.join(trial, 'tools', name.replace(/\.pending$/, '.json'))));
-  const pending = unsettled.map(name => JSON.parse(fs.readFileSync(path.join(trial, 'tools', name), 'utf8')));
+  const pending = unsettled.map(name => {
+    const row = JSON.parse(fs.readFileSync(path.join(trial, 'tools', name), 'utf8'));
+    const observed = path.join(trial, 'tools', name.replace(/\.pending$/, '.observed'));
+    if (fs.existsSync(observed)) {
+      const value = JSON.parse(fs.readFileSync(observed, 'utf8'));
+      // Both identities must have native-handle settlement. A wrapper exit
+      // alone cannot establish settlement of the delegated native command.
+      if (value.wrapper?.pid === row.pid && value.wrapper.settledByUtc && value.child?.settledByUtc)
+        row.settledByUtc = [value.wrapper.settledByUtc, value.child.settledByUtc].sort().at(-1);
+      row.observation = value;
+    }
+    return row;
+  });
   if (unsettled.length) failures.push(`Native command settlement unavailable: ${path.basename(trial)} (${unsettled.length} commands)`);
   for (const gap of value.missing) missing.add(gap);
   trials.push({ directory: path.basename(trial), manifest: value.manifest, changes: value.changes,
     activity: value.activity, lifecycle: run, errorCount: value.errors.length, unsettled, externalCommands: value.external,
-    fullToolLoad: summarizeTools(records, run.startedUtc ?? result.measuredUtc, run.finishedUtc ?? result.finishedUtc, pending) });
+    fullToolLoad: summarizeTools(records, run.startedUtc ?? result.measuredUtc, run.finishedUtc ?? result.finishedUtc, pending),
+    fullToolBounds: boundTools(records, pending, run.startedUtc ?? result.measuredUtc, run.finishedUtc ?? result.finishedUtc) });
   for (const rawSample of value.samples) {
     const sample = analyzeReceipt(rawSample, value);
     if (sample.httpUnavailableReason) missing.add(`HTTP receipt unavailable: ${path.basename(trial)}/${sample.mode}/${sample.surface}/${sample.cycle}: ${sample.httpUnavailableReason}`);
     let valid = true, reason = null;
     try { assertSample(sample); } catch (error) { valid = false; reason = String(error); failures.push(`Invalid sample: ${path.basename(trial)}/${sample.mode}/${sample.surface}: ${reason}`); }
     samples.push({ trial: path.basename(trial), ...sample, valid, reason,
-      trackerLoad: summarizeTools(records, sample.startedUtc, sample.completedUtc ?? sample.cutoffUtc, pending) });
+      trackerLoad: summarizeTools(records, sample.startedUtc, sample.completedUtc ?? sample.cutoffUtc, pending),
+      trackerLoadBounds: boundTools(records, pending, sample.startedUtc, sample.completedUtc ?? sample.cutoffUtc) });
   }
 }
 const groups = [];

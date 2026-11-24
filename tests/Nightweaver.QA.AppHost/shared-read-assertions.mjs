@@ -19,6 +19,18 @@ export function assertSample(sample) {
   assert.equal(sample.proof.expected, true, 'Fixture facts differ');
 }
 
+export function toolCommand(row) {
+  const values = new Set(row.tool === 'git'
+    ? ['-C', '-c', '--git-dir', '--work-tree', '--namespace']
+    : ['--actor', '--database', '--db', '--directory', '-C', '--dolt-auto-commit', '--mem-profile']);
+  for (let index = 0; index < row.args.length; index++) {
+    const arg = row.args[index];
+    if (values.has(arg)) { index++; continue; }
+    if (!arg.startsWith('-')) return arg;
+  }
+  return 'unknown';
+}
+
 export function summarizeTools(records, startUtc, endUtc, pending = []) {
   const start = Date.parse(startUtc), end = Date.parse(endUtc);
   assert(Number.isFinite(start) && Number.isFinite(end) && end >= start);
@@ -33,7 +45,7 @@ export function summarizeTools(records, startUtc, endUtc, pending = []) {
   const events = [];
   for (const row of selected) {
     assert(Number.isFinite(row.elapsedMs) && row.elapsedMs >= 0);
-    const command = row.args.filter(arg => !arg.startsWith('--'))[0] ?? 'unknown';
+    const command = toolCommand(row);
     const family = `${row.tool}:${command}`;
     families[family] = (families[family] ?? 0) + 1;
     events.push([Date.parse(row.startedUtc), 1], [Date.parse(row.startedUtc) + row.elapsedMs, -1]);
@@ -51,13 +63,15 @@ export function summarizeTools(records, startUtc, endUtc, pending = []) {
     records: selected };
   // A missing final record proves a start, but not its end, bytes or exit.
   // It may overlap any later interval. Never report settled-only sums as totals.
-  const uncertain = pending.filter(row => Date.parse(row.startedUtc) < end);
+  const uncertain = pending.filter(row => Date.parse(row.startedUtc) < end
+    && !(Number.isFinite(Date.parse(row.settledByUtc)) && Date.parse(row.settledByUtc) >= Date.parse(row.startedUtc)
+      && Date.parse(row.settledByUtc) < start));
   if (!uncertain.length) return measured;
   const started = [...records, ...pending].filter(row => Date.parse(row.startedUtc) >= start
     && Date.parse(row.startedUtc) < end);
   const startedFamilies = {};
   for (const row of started) {
-    const family = `${row.tool}:${row.args.filter(arg => !arg.startsWith('--'))[0] ?? 'unknown'}`;
+    const family = `${row.tool}:${toolCommand(row)}`;
     startedFamilies[family] = (startedFamilies[family] ?? 0) + 1;
   }
   return { count: null, commandsPerSecond: null, families: null, bytes: null,
@@ -66,4 +80,31 @@ export function summarizeTools(records, startUtc, endUtc, pending = []) {
     startedCount: started.length, startedFamilies, settledOnly: measured,
     unsettledRecords: uncertain,
     unavailableReason: 'Command starts lack final records. Overlap, native duration, bytes, exits and peak concurrency are incomplete. startedCount counts recorded tool starts inside this UTC interval only.' };
+}
+
+// Additive bounds do not turn a killed shim into a successful final record.
+// Native-handle timestamps are upper bounds sampled by an independent process.
+export function boundTools(records, pending, startUtc, endUtc) {
+  const start = Date.parse(startUtc), end = Date.parse(endUtc);
+  assert(Number.isFinite(start) && Number.isFinite(end) && end > start);
+  const starts = [...records, ...pending].filter(row => Date.parse(row.startedUtc) >= start
+    && Date.parse(row.startedUtc) < end);
+  const final = records.filter(row => Date.parse(row.startedUtc) < end
+    && Date.parse(row.startedUtc) + row.elapsedMs >= start);
+  const possible = pending.filter(row => Date.parse(row.startedUtc) < end
+    && !(Number.isFinite(Date.parse(row.settledByUtc)) && Date.parse(row.settledByUtc) >= Date.parse(row.startedUtc)
+      && Date.parse(row.settledByUtc) < start));
+  const duration = final.reduce((sum, row) => sum + row.elapsedMs, 0);
+  const bounded = possible.every(row => Number.isFinite(Date.parse(row.settledByUtc))
+    && Date.parse(row.settledByUtc) >= Date.parse(row.startedUtc));
+  return { schema: 'nightweaver-tool-load-bounds-v1', startedCount: starts.length,
+    settledFinalCount: final.length, possibleMissingFinalCount: possible.length,
+    overlapCountLower: final.length, overlapCountUpper: final.length + possible.length,
+    nativeInclusiveMsLower: duration,
+    nativeInclusiveMsUpper: bounded ? duration + possible.reduce((sum, row) => sum
+      + Date.parse(row.settledByUtc) - Date.parse(row.startedUtc), 0) : null,
+    bytesLower: final.reduce((sum, row) => sum + row.outputBytes + row.errorBytes, 0),
+    bytesUpper: possible.length ? null : final.reduce((sum, row) => sum + row.outputBytes + row.errorBytes, 0),
+    missingFinalsBounded: bounded,
+    note: 'Recorded starts are exact. Overlap and inclusive time use conservative UTC bounds. Missing final bytes and native exit results remain unknown.' };
 }

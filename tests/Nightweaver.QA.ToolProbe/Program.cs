@@ -4,6 +4,9 @@ using System.Text.Json;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
+if (args is ["--observe", var traceDirectory])
+    return await ProcessObserver.RunAsync(traceDirectory);
+
 // Disposable QA PATH shim. It delegates to the exact native executable. It never
 // interprets or replaces tool output. One file per process avoids a shared log lock.
 var tool = Path.GetFileNameWithoutExtension(Environment.ProcessPath!);
@@ -17,7 +20,8 @@ var recordId = $"{Environment.ProcessId}-{Guid.NewGuid():N}";
 Directory.CreateDirectory(directory);
 File.WriteAllText(Path.Combine(directory, recordId + ".pending"), JsonSerializer.Serialize(new
 {
-    tool, args, startedUtc, pid = Environment.ProcessId
+    tool, args, startedUtc, pid = Environment.ProcessId,
+    processStartedUtc = Process.GetCurrentProcess().StartTime.ToUniversalTime()
 }));
 var start = new ProcessStartInfo(executable)
 {
@@ -31,10 +35,32 @@ var outputBytes = 0L; var errorBytes = 0L;
 var exitCode = -1;
 double? launchedMs = null;
 double? nativeSettledMs = null;
+var injectedFailure = false;
 try
 {
+    // Optional disposable fault control. Ordinary baseline trials create no file.
+    // A refused journal read cannot provide a hint; real source audits must recover.
+    var faults = Path.Combine(directory, "..", "faults.json");
+    if (tool == "bd" && File.Exists(faults))
+    {
+        using var control = JsonDocument.Parse(File.ReadAllText(faults));
+        var command = args.FirstOrDefault(arg => !arg.StartsWith("--", StringComparison.Ordinal));
+        if (command is "events" or "list" && control.RootElement.TryGetProperty(command, out var fail) && fail.GetBoolean())
+        {
+            injectedFailure = true;
+            var diagnostic = "Disposable QA command failure: " + command;
+            Console.Error.WriteLine(diagnostic);
+            errorBytes = Encoding.UTF8.GetByteCount(diagnostic + Environment.NewLine);
+            exitCode = 1;
+            return exitCode;
+        }
+    }
     process.Start();
     launchedMs = clock.Elapsed.TotalMilliseconds;
+    File.WriteAllText(Path.Combine(directory, recordId + ".launched"), JsonSerializer.Serialize(new
+    {
+        pid = process.Id, processStartedUtc = process.StartTime.ToUniversalTime(), launchedMs
+    }));
     async Task<long> ForwardAsync(Stream input, Stream output)
     {
         var buffer = new byte[8192]; long count = 0;
@@ -71,7 +97,7 @@ finally
         clock = "Per-process Stopwatch offsets in milliseconds", tool, args, pid = Environment.ProcessId,
         childPid = launchedMs is null ? (int?)null : process.Id,
         startedUtc, elapsedMs = clock.Elapsed.TotalMilliseconds, launchedMs, nativeSettledMs,
-        outputBytes, errorBytes, exitCode,
+        outputBytes, errorBytes, exitCode, injectedFailure,
         gateWaitMs = (double?)null, gateWaitReason = "Shim starts after the application gate.",
         settlement = "Native exit plus drained streams; wrapper and tool startup cost included."
     }));

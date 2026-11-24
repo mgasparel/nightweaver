@@ -1,5 +1,16 @@
 # Test suite
 
+Shared-read candidate evidence adds eleven cheap Node checks for actual Overview
+resource selection, section receipts and native command families. The opt-in native boundary trial checks cold shared base
+reads, confirmed absence, journal refusal, backup audit recovery and failed
+inventory retention. It reuses the existing isolated tracker, browser, Agent
+fixture and tool shim. It adds no normal-suite test, publish or production work.
+Source-substituted browser journeys retain presentation-only evidence.
+Three additional Node cases check independent settlement bounds and unknown
+bytes. The opt-in process observer shares each existing QA trial and adds no
+normal-suite journey. It polls identity-checked native handles every 10 ms,
+retains at most 10,000 entries and runs only in the explicit measurement runner.
+
 Workspace base rendering adds five injected source cases and five Studio model
 cases. They check publication before held text, history and relations, shared
 Planning identity, section failure, delayed identity and confirmed absence.

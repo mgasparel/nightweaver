@@ -51,7 +51,14 @@ try {
         $env:NIGHTWEAVER_QA_OUTPUT = $trial
         $env:NIGHTWEAVER_PROBE_ACTIVITY = $activityMode
         $env:NIGHTWEAVER_PROBE_SURFACE = $surface
+        [IO.Directory]::CreateDirectory($env:NIGHTWEAVER_PROBE_TRACE) | Out-Null
+        $observer = Start-Process -FilePath (Join-Path $shim 'bd.exe') -ArgumentList @('--observe', $env:NIGHTWEAVER_PROBE_TRACE) -WindowStyle Hidden -PassThru
         try {
+            $readyDeadline = [datetime]::UtcNow.AddSeconds(5)
+            while (!(Test-Path (Join-Path $env:NIGHTWEAVER_PROBE_TRACE 'observer.ready'))) {
+                if ($observer.HasExited -or [datetime]::UtcNow -gt $readyDeadline) { throw 'Native process observer did not start' }
+                Start-Sleep -Milliseconds 10
+            }
             & aspire start --isolated --non-interactive --apphost $apphost > (Join-Path $trial 'start.log')
             $run.startExit = $LASTEXITCODE
             if ($LASTEXITCODE -ne 0) { throw 'Isolated AppHost start failed' }
@@ -73,6 +80,10 @@ try {
                 & aspire stop --non-interactive --apphost $apphost > (Join-Path $trial 'stop.log')
                 $run.stopExit = $LASTEXITCODE
                 $run.finishedUtc = [datetime]::UtcNow.ToString('o')
+                Set-Content -LiteralPath (Join-Path $env:NIGHTWEAVER_PROBE_TRACE 'observer.stop') -Value stop
+                if (!$observer.WaitForExit(5000)) { throw 'Native process observer did not settle' }
+                $run.observerExit = $observer.ExitCode
+                $observer.Dispose()
                 if ($LASTEXITCODE -ne 0) { throw 'Exact isolated stack stop failed' }
             }
         }
