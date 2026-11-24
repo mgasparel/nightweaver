@@ -83,7 +83,9 @@ section retains request/receipt identity and a separate state. Merge entries wit
 no matching verified reports have null completion, not successful empty evidence.
 Explorer and unselected Attention request no section. Candidate non-Workspace
 `detailMs` measures base-key completion; it cannot measure explanation or merge
-completion. Output panel rendering is retained, but no fixed retained byte range
+completion. Section-interest-to-completion and admission timing remain unavailable;
+individual polling request times cannot establish the initial section interest.
+Output panel rendering is retained, but no fixed retained byte range
 was selected. Output completion is unmeasured.
 
 The corrected baseline HTTP medians range from 191.7 to 275.9 ms cold. First
@@ -211,3 +213,34 @@ the existing cheap fixtures. Raw recomputation output and local suite evidence
 remain in the dispatched invocation directory and are identified in the Bead
 handoff. See [test-cost policy](../agents/test-cost-evidence.md) for the required
 complete candidate measurement and the separate latest-main check after merge.
+
+The complete candidate measurement `99d99ddf8c7845dcb440b1ad9c67530f` tested clean
+revision `565b4e6f6a97a3e1f6040fcc73728b157acf4c54`, tree
+`88487d83dd94b4f89b0f3607472f281127c85e73`. All 2184 tests passed at six threads,
+with zero failures and skips. Outer elapsed time was 271.0822801 seconds. All 66
+archive checks and 102 collector checks passed. Measurement errors were empty.
+The hard limit passed; the 240-second operating target failed.
+
+The [raw result](<H:/Nightweaver/prod/tmp/nightshift/ns-gjwx-p25bbf6cce20b1b48cb05/20261124T0654390508876Z-implementer/99d99ddf8c7845dcb440b1ad9c67530f/result.json>)
+has SHA256 `4148b0e90d9e97467d3324a5086efee3adf82157121590d1c67114bc3c8fcc43`.
+Its directory also retains `suite.log` and `report-1.xml`. The explicit accepted
+baseline is `1b14daa242197b4fc830c7f0589932f299657933`, tree
+`8d0c58df5be57105a53f67701a1230026b82bce0`: 2184 passing tests in 283.9156518 seconds.
+Its [accepted result](<H:/Nightweaver/prod/tmp/nightshift/ns-gjwx-pa2d5e7f69ee8f9ee28be/20261123T2342548748565Z-implementer/accepted-suite-baseline.json>)
+has SHA256 `B1CC8787F1650158BEC83C0023E2C834D8A08FD101092A7D8495EC1755562441`.
+Machine, boot, tools, production identity and six-thread policy match. Different
+`tempRoot`, `TEMP` and `TMP` make automatic comparison unavailable. Delta and ratio
+remain null. Absolute times do not establish a controlled cost reduction. No
+resource trigger occurred. Subsequent edits only record evidence and update the
+specification's delivery status; production and test sources stay unchanged.
+
+The target miss needs cost review. This documentation slice adds no normal-suite
+work. Production and normal test sources also match the accepted baseline; the
+intervening changes affect optional QA tools and documentation. Existing native
+collections dominate execution cost: `UpgradeActivationTests` 178.695 summed
+seconds, `ManualDeliveryPilotSecondSignalTests` 93.810,
+`AgentStageDeliveryIntegrationTests` 85.206, `MergerCompletionFinalizerTests`
+74.049 and `PoolConcurrencyIntegrationTests` 72.480. Collection times overlap and
+are not outer elapsed deltas. The maintainer must review those costs with retained evidence;
+this report establishes no attributable material regression and no runtime fix.
+Merger must measure latest main after integration.
