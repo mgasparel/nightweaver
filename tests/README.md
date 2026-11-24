@@ -128,71 +128,17 @@ evidence before a changed diagnostic run. This proof covers Scheduler and Job
 boundaries that recording adapters cannot establish. It shares one isolated root
 and tests no live Project. Independent full recovery verification belongs to ns-8s1h.
 
-The resume cost repair gives `UpgradeActivationTests` and
-`UpgradeReplacementTests` measured collection weights of 150.465 and 38.491
-seconds. The retained `cost-before.xml` focused run passed all 110 cases.
-The previously unweighted activation collection starts with the longest
-collections so its serial work overlaps native tests. All cases, separate
-mutable roots, assertions, deadlines and six workers remain unchanged.
-Temporary probes measured 152 package constructions at 21.926 summed seconds,
-including 20.923 seconds for inventory generation and 0.404 seconds for assembly
-copies. They measured 719 package inspections at 15.163 seconds and 5,393 journal
-reads at 123.396 seconds. These inclusive times overlap other probes and tests;
-they are not outer elapsed deltas. Shared immutable package metadata could reduce
-setup hashing, but cannot replace inspection of each mutable root or fresh journal
-reads. This repair changes scheduling alone. Only a complete candidate measurement
-and fresh latest-main acceptance establish the resulting suite cost.
+Upgrade activation uses in-memory unit cases for orchestration and release
+attestation. The coordinator's production wiring still uses the real journal,
+payload replacement and lifecycle. The separate package replacement, journal,
+and lifecycle test collections cover their own filesystem contracts.
 
-Upgrade resume extends the existing replacement interruption and activation fault
-cases with reconciliation checks. It reuses each disposable package setup.
-Small additional cases cover exact byte decisions, partial backup/live bytes,
-lost retirement/inventory confirmations, lost launch replies, phase continuation,
-stale revisions and repeated completion. Controlled time retains the activation
-health interval. These checks add no native owner, Agent, Scheduler, browser or
-fixture publish journey. The normal application paths do not invoke resume.
-Three publication interruption cases reuse one retained operation per boundary.
-They check missing activation evidence, an interrupted activation file, and a
-two-Project maintenance release interrupted after the first release. Each case
-checks unchanged intent, a later stop, and then foreign maintenance. Two resume
-calls per intent must retain the exact journal, interlock and store bytes, root
-suppression, and zero launches. These cases add no native journey or publish.
-Five resume safety cases cover Stop during a blocked accepted probe, expiry of
-observation/control/runtime evidence across two Projects, and missing or uncertain
-original process/Job evidence at Verifying and Accepted. The expiry case shares
-one package setup per phase across timestamp checks. The Verifying case loses
-the second Project's launch reply, then expires control and runtime evidence
-during the second round of probes. It checks retained journal and suppression,
-zero repeat launches, and completion with fresh evidence. Each stopped case shares setup
-across four native evidence states and repeated resume calls. Injected probes,
-native observations and controlled time add no native journey or fixture publish.
+The unit cases exercise reserved launch ordering, resume without launch replay,
+intent changes, final owner health and expiry of prior observations. Unit
+coverage replaces the former package-backed activation journeys. The
+`UpgradeReplacementTests` collection keeps its 38.491-second scheduling
+weight from the earlier resume cost repair.
 
-Upgrade activation adds a pure live-identity matrix and disposable component
-checks for composed replacement, stopped intent, launch failure, cancellation,
-stop/disable/maintenance changes, unavailable stores, changed payload, changed
-second observation and the verification time window. Controlled time supplies
-the ten-second observation interval. The identity matrix uses no package copies
-or native setup; file/lock cases retain the real journal and replacement boundary.
-These cases add no native owner, Agent, Scheduler or fixture-publish journey.
-The representative native release-attestation proof belongs to `upgrade-proof`.
-Manual stop repair adds component checks through the actual manager stop and
-force-stop path after drain and settlement, and during the health interval.
-They check zero launches after the later stop, repeated stop, retained suppression
-and manual opt-out. Small file checks cover unrelated Projects and malformed,
-foreign or interrupted stop records. These add no native journey or publish.
-Stopped-owner repair adds two component cases with retained owner evidence and
-an unavailable control pipe. Four cases retain suppression for unsettled,
-reused or unavailable native evidence and an unknown owner lock. Two console
-stop cases cover intent capture and the later upgrade pipe request. Two small
-file-lock cases check command/admission contention and immediate second-signal
-force exit. They use injected native operations and the existing package setup.
-They add no native owner, Agent, Scheduler, browser or fixture publication.
-Final acceptance adds seven component cases. Two Healthy probes precede a final
-inventory with Web/runtime failure or an independently invalid state, failure,
-stop reason, Web health or runtime health. The exact native owner stays alive
-and holds its lock. These cases require retained pending evidence, backup and
-startup suppression, with no acceptance or repeated launch. They reuse the same
-package setup and add no native journey or fixture publication. Production adds
-five field checks to the final inventory already read during activation.
 Existing Web journeys also exercise the compatible health endpoint; legacy/dev
 hosts omit release evidence and keep their exact health JSON. Normal owner startup validates a release
 inventory only when one exists, and each owner health probe checks the launched
