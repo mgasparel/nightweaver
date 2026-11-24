@@ -188,6 +188,11 @@ internal sealed class OperationalRetryCoordinator
         {
             latest = await stages.RunAttemptAsync(session, beforeState, beforeHead, cancellationToken).ConfigureAwait(false);
         }
+        catch (PlanningContextTooLargeException exception)
+        {
+            return await PauseOversizedPlanningContextAsync(session, beforeState, expectedAssignee, 0,
+                exception, cancellationToken).ConfigureAwait(false);
+        }
         catch (AgentInvocationExecutionException exception) when (exception.InnerException is BeadEnvironmentException environmentException)
         {
             return await EscalateProvisionFailureAsync(paths, project, repository, beadId, role, expectedAssignee,
@@ -303,6 +308,11 @@ internal sealed class OperationalRetryCoordinator
             try
             {
                 latest = await stages.RunAttemptAsync(session, beforeState, beforeHead, cancellationToken).ConfigureAwait(false);
+            }
+            catch (PlanningContextTooLargeException exception)
+            {
+                return await PauseOversizedPlanningContextAsync(session, beforeState, expectedAssignee, attemptCount - 1,
+                    exception, cancellationToken).ConfigureAwait(false);
             }
             catch (AgentInvocationExecutionException exception) when (exception.InnerException is BeadEnvironmentException environmentException)
             {
@@ -825,6 +835,20 @@ internal sealed class OperationalRetryCoordinator
         return new(OperationalRetryStatus.Escalated, invocation, attempts, cause, progress, null);
     }
 
+    private async Task<OperationalRetryOutcome> PauseOversizedPlanningContextAsync(AgentStageSession session,
+        BeadWorkflowState before, string expectedAssignee, long attempts, PlanningContextTooLargeException error,
+        CancellationToken cancellationToken)
+    {
+        var failure = new AgentOperationalFailure(AgentOperationalFailureKind.OutcomeVerificationFailed, error.Message);
+        var result = new AgentStageResult(session.Role, session.BeadId, "planning-context", "", failure, [error.Message], before);
+        if (ContinuousAgentLaunchContext.StopRequested)
+            return StoppedForDrain(result, attempts);
+        var paused = await EscalateAsync(session, expectedAssignee, result, attempts, NeedsHumanCause.PlanningContextTooLarge,
+            ["The Planning agent was skipped before launch. The retained candidate and repair count are preserved."],
+            null, WorktreePurpose.Planning, cancellationToken, expectedWorkflowState: before).ConfigureAwait(false);
+        return paused with { StageResult = result with { VerifiedState = before with { NeedsHuman = true, Status = "open" } } };
+    }
+
     private async Task<OperationalRetryOutcome> EscalateDeliveryOutcomeAsync(
         AgentStageSession session,
         AgentStageResult invocation,
@@ -912,10 +936,11 @@ internal sealed class OperationalRetryCoordinator
             NeedsHumanCause.EnvironmentBlocked => $"Operational retry environment is blocked after {attempts} attempt(s): {failure.Kind}.",
             NeedsHumanCause.RepairBudgetExhausted => failure.Reason,
             NeedsHumanCause.DeliveryOutcomeFailure => $"Delivery outcome was not verified after {attempts} completed attempt(s): {failure.Reason}.",
+            NeedsHumanCause.PlanningContextTooLarge => failure.Reason,
             _ => throw new ArgumentOutOfRangeException(nameof(cause), cause, "Unsupported retry escalation cause")
         };
         var request = new NeedsHumanRequest(session.BeadId, expectedAssignee, cause, session.Role,
-            reason, findings, latest.InvocationId, logPaths, cleanupPurpose,
+            reason, findings, cause == NeedsHumanCause.PlanningContextTooLarge ? null : latest.InvocationId, logPaths, cleanupPurpose,
             expectedWorkflowState ?? session.InitialState);
         NeedsHumanEscalationResult progress;
         try
