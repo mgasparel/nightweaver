@@ -43,6 +43,7 @@ for (const [name, change] of [
   ['missing warm cycle', f => { f.result.warmCycles = 2; }],
   ['failed sample', f => { f.browser.samples[0].error = 'timeout'; }],
   ['failed stack stop', f => { f.result.runs[0].stopExit = 1; }],
+  ['failed process observer', f => { f.result.runs[0].observerExit = 1; }],
   ['missing guarded write', f => { f.browser.changes.pop(); }],
   ['browser error', f => { f.browser.errors.push('render error'); }],
   ['native activity stopped', f => { f.browser.activity[0].aliveAfter = false; }]

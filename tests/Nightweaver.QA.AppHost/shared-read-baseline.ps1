@@ -86,6 +86,7 @@ try {
                 $run.observerExit = $observer.ExitCode
                 $observer.Dispose()
                 if ($LASTEXITCODE -ne 0) { throw 'Exact isolated stack stop failed' }
+                if ($run.observerExit -ne 0) { throw 'Native process containment did not prove settlement' }
             }
         }
     } } }

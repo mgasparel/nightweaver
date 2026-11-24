@@ -26,8 +26,12 @@ internal static class ProcessObserver
                     var value = Read(file);
                     if (value is null) continue;
                     using var document = value;
-                    entry = new Entry(file, Open(document.RootElement));
+                    var root = document.RootElement;
+                    var job = root.TryGetProperty("jobName", out var name) ? ProbeJob.Open(name.GetString()!) : null;
+                    entry = new Entry(file, Open(root), job);
                     entries.Add(file, entry);
+                    if (job is not null)
+                        File.WriteAllText(Path.ChangeExtension(file, ".admitted"), "observer holds containing Job");
                 }
                 var launched = Path.ChangeExtension(file, ".launched");
                 if (entry.Child is null && File.Exists(launched))
@@ -43,16 +47,29 @@ internal static class ProcessObserver
         }
         foreach (var entry in entries.Values)
         {
+            entry.Wrapper.Poll();
+            entry.Child?.Poll();
+            var active = entry.Job?.ActiveProcesses;
+            var admitted = File.Exists(Path.ChangeExtension(entry.File, ".admitted"));
+            // A new-protocol wrapper cannot launch before observer admission.
+            // Legacy records have no such guarantee and must remain unknown.
+            using var pending = Read(entry.File);
+            var nonLaunch = entry.Job is null && !admitted &&
+                pending?.RootElement.TryGetProperty("jobName", out _) == true;
+            var settled = active == 0 || nonLaunch;
+            if (!settled) errors.Add(Path.GetFileName(entry.File) + ": process containment settlement is unproved.");
             // Native handles signal only after rundown. No missing observation
             // becomes a successful settlement, and no byte count is reconstructed.
             File.WriteAllText(Path.ChangeExtension(entry.File, ".observed"), JsonSerializer.Serialize(new
             {
                 schema = "nightweaver-tool-observation-v1",
                 wrapper = entry.Wrapper.Record(), child = entry.Child?.Record(),
+                containment = new { activeProcesses = active, provedNonLaunch = nonLaunch, settled },
                 observedUtc = DateTimeOffset.UtcNow
             }));
             entry.Wrapper.Process?.Dispose();
             entry.Child?.Process?.Dispose();
+            entry.Job?.Dispose();
         }
         File.WriteAllText(Path.Combine(directory, "observer.summary"), JsonSerializer.Serialize(new
         {
@@ -89,7 +106,7 @@ internal static class ProcessObserver
         }
     }
 
-    private sealed record Entry(string File, ObservedProcess Wrapper)
+    private sealed record Entry(string File, ObservedProcess Wrapper, ProbeJob? Job)
     {
         internal ObservedProcess? Child { get; set; }
     }

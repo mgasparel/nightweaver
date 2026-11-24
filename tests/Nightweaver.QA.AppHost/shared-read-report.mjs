@@ -21,6 +21,7 @@ for (const run of result.runs) {
   if (!fs.existsSync(file)) { failures.push(`No browser evidence: ${path.basename(trial)}`); continue; }
   const value = JSON.parse(fs.readFileSync(file, 'utf8'));
   if (run.startExit !== 0 || run.probeExit !== 0 || run.stopExit !== 0) failures.push(`Failed probe or stack stop: ${path.basename(trial)}`);
+  if (run.observerExit !== undefined && run.observerExit !== 0) failures.push(`Failed process observer: ${path.basename(trial)}`);
   if (value.errors.length) failures.push(`Browser errors: ${path.basename(trial)}`);
   for (const item of value.activity) {
     if (!item.aliveBefore || item.aliveAfter !== value.active) failures.push(`Invalid native activity: ${path.basename(trial)}/${item.id}`);
