@@ -840,7 +840,7 @@ internal sealed class OperationalRetryCoordinator
         CancellationToken cancellationToken)
     {
         var failure = new AgentOperationalFailure(AgentOperationalFailureKind.OutcomeVerificationFailed, error.Message);
-        var result = new AgentStageResult(session.Role, session.BeadId, "planning-context", "", failure, [error.Message], before);
+        var result = new AgentStageResult(session.Role, session.BeadId, "", "", failure, [error.Message], before);
         if (ContinuousAgentLaunchContext.StopRequested)
             return StoppedForDrain(result, attempts);
         var paused = await EscalateAsync(session, expectedAssignee, result, attempts, NeedsHumanCause.PlanningContextTooLarge,
@@ -940,7 +940,7 @@ internal sealed class OperationalRetryCoordinator
             _ => throw new ArgumentOutOfRangeException(nameof(cause), cause, "Unsupported retry escalation cause")
         };
         var request = new NeedsHumanRequest(session.BeadId, expectedAssignee, cause, session.Role,
-            reason, findings, cause == NeedsHumanCause.PlanningContextTooLarge ? null : latest.InvocationId, logPaths, cleanupPurpose,
+            reason, findings, string.IsNullOrEmpty(latest.InvocationId) ? null : latest.InvocationId, logPaths, cleanupPurpose,
             expectedWorkflowState ?? session.InitialState);
         NeedsHumanEscalationResult progress;
         try

@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
@@ -28,10 +27,6 @@ internal sealed class PlanningContextTooLargeException(string message) : Nightwe
 internal sealed class PlanningEvidence(IProcessRunner runner)
 {
     internal static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private static readonly JsonSerializerOptions ContextJsonOptions = new(JsonOptions)
-    {
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-    };
     private const int MaximumContextBytes = 128 * 1024;
     private const int RecentDiscussionLimit = 12;
     private const int DiscussionExcerptLength = 240;
@@ -97,7 +92,7 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
             olderDiscussionExcerpts = excerpts?.Select(c => new { c.Id, c.Text }) ?? [],
             candidateCommentId = candidate?.Comment.Id,
             candidateText = candidate?.Comment.Text
-        }, ContextJsonOptions);
+        }, JsonOptions);
 
         var context = SerializeContext(discussion, 0);
         if (Encoding.UTF8.GetByteCount(context) <= MaximumContextBytes) return context;
@@ -108,7 +103,7 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
         if (requiredBytes > MaximumContextBytes)
             throw new PlanningContextTooLargeException(
                 $"Required Planning context is {requiredBytes} UTF-8 bytes (limit {MaximumContextBytes}). "
-                + "Consolidate the Product requirements or human guidance, or prepare a smaller candidate preserving the requirements, then use guarded Resume.");
+                + "Consolidate the Product requirements or human guidance, or prepare a smaller candidate preserving the requirements, then choose Reset Budget & Retry in Attention Desk.");
 
         IEnumerable<BeadCommentSnapshot> included = guidance;
         for (var count = Math.Min(RecentDiscussionLimit, ordinary.Length); count > 0; count--)
@@ -136,7 +131,7 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
         return text[..length];
     }
 
-    private static bool IsHumanGuidance(string text) => ReadSchema(text) == "nightweaver-human-guidance-v1";
+    private static bool IsHumanGuidance(string text) => ReadSchema(text, out _) == "nightweaver-human-guidance-v1";
 
     internal static string Hash(string value) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
@@ -149,16 +144,25 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
         return sha;
     }
 
-    internal static bool IsProtocol(string text) => ReadSchema(text) is CandidateSchema or ReviewSchema or QuestionSchema
-        or "nightweaver-planning-outcome-v1" or PlanningPublisher.ReleaseSchema;
-
-    private static string? ReadSchema(string text)
+    internal static bool IsProtocol(string text) => ReadSchema(text, out var diagnosticCause) switch
     {
+        CandidateSchema or ReviewSchema or QuestionSchema or "nightweaver-planning-outcome-v1" or PlanningPublisher.ReleaseSchema => true,
+        "nightweaver-needs-human-v1" => diagnosticCause == "planning-context-too-large",
+        _ => false
+    };
+
+    private static string? ReadSchema(string text, out string? diagnosticCause)
+    {
+        diagnosticCause = null;
         try
         {
             using var json = JsonDocument.Parse(text);
-            return json.RootElement.TryGetProperty("schema", out var schema)
-                ? schema.GetString() : null;
+            if (!json.RootElement.TryGetProperty("schema", out var schema)) return null;
+            var name = schema.GetString();
+            if (name == "nightweaver-needs-human-v1" && json.RootElement.TryGetProperty("cause", out var cause)
+                && cause.ValueKind == JsonValueKind.String)
+                diagnosticCause = cause.GetString();
+            return name;
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException) { return null; }
     }

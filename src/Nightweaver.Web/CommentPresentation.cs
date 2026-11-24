@@ -70,7 +70,7 @@ internal static class CommentPresenter
                     if (Required("bead_type") != bead.IssueType) throw new JsonException("Bead type mismatch.");
                     var cause = Required("cause");
                     if (cause is not ("operational-retries-exhausted" or "duplicate-failure" or "repair-budget-exhausted"
-                        or "environment-blocked" or "delivery-outcome-failure")) throw new JsonException("Unknown escalation cause.");
+                        or "environment-blocked" or "delivery-outcome-failure" or "planning-context-too-large")) throw new JsonException("Unknown escalation cause.");
                     role = Required("failed_role");
                     if (role is not ("planner" or "plan_challenger" or "implementer" or "reviewer" or "qa" or "merger"))
                         throw new JsonException("Unknown role.");

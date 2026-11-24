@@ -32,6 +32,7 @@ public sealed class PlanningExecutionTests
     public async Task OversizedRequiredContextPausesAndReleasesWithoutRunningTheAgent()
     {
         using var fixture = new PlanningFixture("approval") { Description = new string('d', 135_000) };
+        var groundingBeforePause = await fixture.CaptureAsync();
         var result = await fixture.RunAsync();
         Assert.Equal(OperationalRetryStatus.Escalated, result.Status);
         Assert.True(result.Escalation?.ClaimReleased);
@@ -46,7 +47,8 @@ public sealed class PlanningExecutionTests
         Assert.Contains("131072", fixture.Comments[1].Text, StringComparison.Ordinal);
         Assert.Contains("planning-context-too-large", fixture.Comments[1].Text, StringComparison.Ordinal);
         Assert.NotNull(PlanningEvidence.LatestCandidate(fixture.Comments));
-        Assert.NotNull(await fixture.ReadAdmissionRefusalAsync());
+        Assert.Contains("already planned or paused", await fixture.ReadAdmissionRefusalAsync(), StringComparison.Ordinal);
+        Assert.Equal(groundingBeforePause.ProductInputs, (await fixture.CaptureAsync()).ProductInputs);
     }
 
     [Fact]
