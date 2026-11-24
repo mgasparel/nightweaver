@@ -128,7 +128,12 @@ evidence before a changed diagnostic run. This proof covers Scheduler and Job
 boundaries that recording adapters cannot establish. It shares one isolated root
 and tests no live Project. Independent full recovery verification belongs to ns-8s1h.
 
-The resume cost repair gives `UpgradeActivationTests` and
+Upgrade activation uses in-memory unit cases for orchestration and release
+attestation. The coordinator's production wiring still uses the real journal,
+payload replacement and lifecycle. The separate package replacement, journal,
+and lifecycle test collections cover their own filesystem contracts.
+
+The earlier resume cost repair gave `UpgradeActivationTests` and
 `UpgradeReplacementTests` measured collection weights of 150.465 and 38.491
 seconds. The retained `cost-before.xml` focused run passed all 110 cases.
 The previously unweighted activation collection starts with the longest
