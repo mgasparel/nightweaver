@@ -7,6 +7,8 @@ import { chromium } from 'playwright';
 import { createHash } from 'node:crypto';
 import { assertSample } from './shared-read-assertions.mjs';
 import { resourceKey, sampleReceipt } from './shared-read-receipts.mjs';
+import { surfaceKeys } from './shared-read-keys.mjs';
+import { coldBase, auditRecovery } from './shared-read-boundaries.mjs';
 
 const base = process.env.NIGHTWEAVER_QA_URL;
 const configPath = process.env.NIGHTWEAVER_QA_CONFIG;
@@ -64,6 +66,9 @@ if (!active) {
     }
   }), 'Native fixture settlement', 10000);
 }
+if (process.env.NIGHTWEAVER_PROBE_BOUNDARIES === '1') {
+  await coldBase({ base, output, selected: manifest.selected });
+}
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 page.setDefaultTimeout(90000);
@@ -91,12 +96,7 @@ const latest = key => resources.findLast(row => row.key === key);
 const id = manifest.selected;
 const surfacePaths = { overview: '/overview', explorer: '/beads?view=all', attention: '/attention',
   workspace: `/beads/${id}`, digest: '/catch-up?window=24h' };
-const keys = { overview: ['attention', 'digest:auto', 'factory'], explorer: ['explorer:all::1'],
-  attention: ['attention'], workspace: [`workspace:${id}`], digest: ['digest:24h'] };
-const baseKeys = { overview: 'base:overview', explorer: 'base:explorer:all::1', attention: 'base:attention',
-  workspace: `base:workspace:${id}`, digest: 'base:digest:24h' };
-const keysFor = surface => latest(baseKeys[surface])?.dataPresent
-  ? [baseKeys[surface], ...(surface === 'overview' ? ['factory'] : [])] : keys[surface];
+const keysFor = surface => surfaceKeys(surface, latest, id);
 const requiredSources = key => key === 'factory' ? ['runtime'] : key.includes('digest:') || key === 'base:overview'
   ? ['inventory', 'checkpoint'] : ['inventory'];
 async function until(predicate, reason, cutoff = 180000) {
@@ -292,6 +292,9 @@ try {
   changes.push({ kind: 'blocker-close', startMs: closeStart, settledMs: closeSettled,
     readyRenderedMs: readyRendered, startToRenderMs: readyRendered - closeStart,
     settledToRenderMs: readyRendered - closeSettled, nativeReady: ready.map(row => row.id), source: latest('explorer:ready::1') });
+  if (process.env.NIGHTWEAVER_PROBE_BOUNDARIES === '1') {
+    await auditRecovery({ page, base, output, selected: id, bd });
+  }
   if (active) for (const item of activity) process.kill(item.invocation.process_id, 0);
   assert.deepEqual(errors, []);
 } finally {

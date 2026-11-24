@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assertSample, summarizeTools } from './shared-read-assertions.mjs';
+import { assertSample, summarizeTools, boundTools } from './shared-read-assertions.mjs';
 import { analyzeReceipt } from './shared-read-receipts.mjs';
+import { windowLoad, settlementBoundary } from './shared-read-window.mjs';
 
 export function buildReport(root) {
 const result = JSON.parse(fs.readFileSync(path.join(root, 'result.json'), 'utf8'));
@@ -20,6 +21,7 @@ for (const run of result.runs) {
   if (!fs.existsSync(file)) { failures.push(`No browser evidence: ${path.basename(trial)}`); continue; }
   const value = JSON.parse(fs.readFileSync(file, 'utf8'));
   if (run.startExit !== 0 || run.probeExit !== 0 || run.stopExit !== 0) failures.push(`Failed probe or stack stop: ${path.basename(trial)}`);
+  if (run.observerExit !== undefined && run.observerExit !== 0) failures.push(`Failed process observer: ${path.basename(trial)}`);
   if (value.errors.length) failures.push(`Browser errors: ${path.basename(trial)}`);
   for (const item of value.activity) {
     if (!item.aliveBefore || item.aliveAfter !== value.active) failures.push(`Invalid native activity: ${path.basename(trial)}/${item.id}`);
@@ -41,19 +43,35 @@ for (const run of result.runs) {
     .map(name => JSON.parse(fs.readFileSync(path.join(trial, 'tools', name), 'utf8')));
   const unsettled = fs.readdirSync(path.join(trial, 'tools')).filter(name => name.endsWith('.pending')
     && !fs.existsSync(path.join(trial, 'tools', name.replace(/\.pending$/, '.json'))));
-  const pending = unsettled.map(name => JSON.parse(fs.readFileSync(path.join(trial, 'tools', name), 'utf8')));
+  const pending = unsettled.map(name => {
+    const row = JSON.parse(fs.readFileSync(path.join(trial, 'tools', name), 'utf8'));
+    const observed = path.join(trial, 'tools', name.replace(/\.pending$/, '.observed'));
+    if (fs.existsSync(observed)) {
+      const value = JSON.parse(fs.readFileSync(observed, 'utf8'));
+      // Both identities must have native-handle settlement. A wrapper exit
+      // alone cannot establish settlement of the delegated native command.
+      const launched = path.join(trial, 'tools', name.replace(/\.pending$/, '.launched'));
+      row.settledByUtc = settlementBoundary(row,
+        fs.existsSync(launched) ? JSON.parse(fs.readFileSync(launched, 'utf8')) : null, value);
+      row.observation = value;
+    }
+    return row;
+  });
   if (unsettled.length) failures.push(`Native command settlement unavailable: ${path.basename(trial)} (${unsettled.length} commands)`);
   for (const gap of value.missing) missing.add(gap);
   trials.push({ directory: path.basename(trial), manifest: value.manifest, changes: value.changes,
     activity: value.activity, lifecycle: run, errorCount: value.errors.length, unsettled, externalCommands: value.external,
-    fullToolLoad: summarizeTools(records, run.startedUtc ?? result.measuredUtc, run.finishedUtc ?? result.finishedUtc, pending) });
+    scenario: windowLoad(value, records, pending),
+    fullToolLoad: summarizeTools(records, run.startedUtc ?? result.measuredUtc, run.finishedUtc ?? result.finishedUtc, pending),
+    fullToolBounds: boundTools(records, pending, run.startedUtc ?? result.measuredUtc, run.finishedUtc ?? result.finishedUtc) });
   for (const rawSample of value.samples) {
     const sample = analyzeReceipt(rawSample, value);
     if (sample.httpUnavailableReason) missing.add(`HTTP receipt unavailable: ${path.basename(trial)}/${sample.mode}/${sample.surface}/${sample.cycle}: ${sample.httpUnavailableReason}`);
     let valid = true, reason = null;
     try { assertSample(sample); } catch (error) { valid = false; reason = String(error); failures.push(`Invalid sample: ${path.basename(trial)}/${sample.mode}/${sample.surface}: ${reason}`); }
     samples.push({ trial: path.basename(trial), ...sample, valid, reason,
-      trackerLoad: summarizeTools(records, sample.startedUtc, sample.completedUtc ?? sample.cutoffUtc, pending) });
+      trackerLoad: summarizeTools(records, sample.startedUtc, sample.completedUtc ?? sample.cutoffUtc, pending),
+      trackerLoadBounds: boundTools(records, pending, sample.startedUtc, sample.completedUtc ?? sample.cutoffUtc) });
   }
 }
 const groups = [];

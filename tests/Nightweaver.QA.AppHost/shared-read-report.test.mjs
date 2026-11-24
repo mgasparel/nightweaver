@@ -43,6 +43,7 @@ for (const [name, change] of [
   ['missing warm cycle', f => { f.result.warmCycles = 2; }],
   ['failed sample', f => { f.browser.samples[0].error = 'timeout'; }],
   ['failed stack stop', f => { f.result.runs[0].stopExit = 1; }],
+  ['failed process observer', f => { f.result.runs[0].observerExit = 1; }],
   ['missing guarded write', f => { f.browser.changes.pop(); }],
   ['browser error', f => { f.browser.errors.push('render error'); }],
   ['native activity stopped', f => { f.browser.activity[0].aliveAfter = false; }]
@@ -58,6 +59,26 @@ test('rejects missing browser evidence', t => {
 test('rejects unsettled native commands', t => {
   const f = fixture(t); fs.writeFileSync(path.join(f.trial, 'tools', 'one.pending'), '{}');
   assert.equal(buildReport(f.root).completed, false);
+});
+
+for (const childPid of [2, 3]) test(`bounds a missing final only for the launched child (${childPid})`, t => {
+  const f = fixture(t), tools = path.join(f.trial, 'tools');
+  f.browser.clockIdentity = 'node/clock';
+  f.browser.clockOriginUtc = f.result.runs[0].startedUtc;
+  f.browser.external = [{ args: ['--readonly', 'ready'], settledMs: 900 }];
+  f.browser.changes.at(-1).readyRenderedMs = 800;
+  f.save();
+  const save = (name, value) => fs.writeFileSync(path.join(tools, name), JSON.stringify(value));
+  save('one.pending', { tool: 'bd', args: ['comments'], pid: 1, startedUtc: f.result.runs[0].startedUtc });
+  save('one.launched', { pid: 2 });
+  save('one.observed', { schema: 'nightweaver-tool-observation-v1', observedUtc: f.result.runs[0].finishedUtc,
+    wrapper: { pid: 1, settledByUtc: '2026-11-23T00:00:00.500Z' },
+    child: { pid: childPid, settledByUtc: '2026-11-23T00:00:00.600Z' } });
+  const report = buildReport(f.root);
+  assert.equal(report.completed, false);
+  assert.equal(report.trials[0].scenario.bounds.missingFinalsBounded, childPid === 2);
+  assert.equal(report.trials[0].scenario.bounds.bytesUpper, null);
+  assert.equal(report.trials[0].scenario.load.count, null);
 });
 test('report replaces unrelated raw HTTP times and groups only matched receipts', t => {
   const f = fixture(t);

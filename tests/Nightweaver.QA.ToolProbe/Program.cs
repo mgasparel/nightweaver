@@ -4,6 +4,17 @@ using System.Text.Json;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
+if (args is ["--observe", var traceDirectory])
+    return await ProcessObserver.RunAsync(traceDirectory);
+if (args is ["--settlement-check", var checkDirectory])
+    return await SettlementCheck.RunAsync(checkDirectory);
+if (args is ["--fixture-child", var childMarker] && Environment.GetEnvironmentVariable("NIGHTWEAVER_PROBE_CHECK_WRAPPER") != "1")
+{
+    File.WriteAllText(childMarker, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    await Task.Delay(Timeout.Infinite);
+    return 0;
+}
+
 // Disposable QA PATH shim. It delegates to the exact native executable. It never
 // interprets or replaces tool output. One file per process avoids a shared log lock.
 var tool = Path.GetFileNameWithoutExtension(Environment.ProcessPath!);
@@ -15,9 +26,12 @@ var clock = Stopwatch.StartNew();
 var startedUtc = DateTimeOffset.UtcNow;
 var recordId = $"{Environment.ProcessId}-{Guid.NewGuid():N}";
 Directory.CreateDirectory(directory);
+var jobName = "Local\\Nightweaver.QA.ToolProbe." + recordId;
+using var containment = ProbeJob.Attach(jobName);
 File.WriteAllText(Path.Combine(directory, recordId + ".pending"), JsonSerializer.Serialize(new
 {
-    tool, args, startedUtc, pid = Environment.ProcessId
+    tool, args, startedUtc, jobName, pid = Environment.ProcessId,
+    processStartedUtc = Process.GetCurrentProcess().StartTime.ToUniversalTime()
 }));
 var start = new ProcessStartInfo(executable)
 {
@@ -25,16 +39,52 @@ var start = new ProcessStartInfo(executable)
     RedirectStandardOutput = true, RedirectStandardError = true,
     StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false)
 };
+// Instrument the application's CLI boundary once. Native tools must resolve
+// their own subprocesses through the original PATH, not another QA shim.
+start.Environment["PATH"] = Environment.GetEnvironmentVariable("NIGHTWEAVER_PROBE_NATIVE_PATH")
+    ?? throw new InvalidOperationException("Missing original native PATH.");
+start.Environment.Remove("NIGHTWEAVER_PROBE_CHECK_WRAPPER");
 foreach (var arg in args) start.ArgumentList.Add(arg);
 using var process = new Process { StartInfo = start };
 var outputBytes = 0L; var errorBytes = 0L;
 var exitCode = -1;
 double? launchedMs = null;
 double? nativeSettledMs = null;
+var injectedFailure = false;
 try
 {
+    // No launch is permitted until another process holds the containing Job.
+    var admission = Path.Combine(directory, recordId + ".admitted");
+    while (!File.Exists(admission))
+    {
+        if (clock.Elapsed > TimeSpan.FromSeconds(1)) throw new TimeoutException("Probe observer admission failed.");
+        await Task.Delay(1);
+    }
+    await PauseForCheckAsync("before-launch");
+    // Optional disposable fault control. Ordinary baseline trials create no file.
+    // A refused journal read cannot provide a hint; real source audits must recover.
+    var faults = Path.Combine(directory, "..", "faults.json");
+    if (tool == "bd" && File.Exists(faults))
+    {
+        using var control = JsonDocument.Parse(File.ReadAllText(faults));
+        var command = args.FirstOrDefault(arg => !arg.StartsWith("--", StringComparison.Ordinal));
+        if (command is "events" or "list" && control.RootElement.TryGetProperty(command, out var fail) && fail.GetBoolean())
+        {
+            injectedFailure = true;
+            var diagnostic = "Disposable QA command failure: " + command;
+            Console.Error.WriteLine(diagnostic);
+            errorBytes = Encoding.UTF8.GetByteCount(diagnostic + Environment.NewLine);
+            exitCode = 1;
+            return exitCode;
+        }
+    }
     process.Start();
     launchedMs = clock.Elapsed.TotalMilliseconds;
+    await PauseForCheckAsync("after-launch");
+    File.WriteAllText(Path.Combine(directory, recordId + ".launched"), JsonSerializer.Serialize(new
+    {
+        pid = process.Id, processStartedUtc = process.StartTime.ToUniversalTime(), launchedMs
+    }));
     async Task<long> ForwardAsync(Stream input, Stream output)
     {
         var buffer = new byte[8192]; long count = 0;
@@ -71,12 +121,19 @@ finally
         clock = "Per-process Stopwatch offsets in milliseconds", tool, args, pid = Environment.ProcessId,
         childPid = launchedMs is null ? (int?)null : process.Id,
         startedUtc, elapsedMs = clock.Elapsed.TotalMilliseconds, launchedMs, nativeSettledMs,
-        outputBytes, errorBytes, exitCode,
+        outputBytes, errorBytes, exitCode, injectedFailure,
         gateWaitMs = (double?)null, gateWaitReason = "Shim starts after the application gate.",
         settlement = "Native exit plus drained streams; wrapper and tool startup cost included."
     }));
 }
 return exitCode;
+
+async Task PauseForCheckAsync(string boundary)
+{
+    if (Environment.GetEnvironmentVariable("NIGHTWEAVER_PROBE_PAUSE") != boundary) return;
+    File.WriteAllText(Path.Combine(directory, recordId + ".paused"), boundary);
+    await Task.Delay(Timeout.Infinite);
+}
 
 internal static class NativeSettlement
 {

@@ -30,6 +30,64 @@ See [baseline boundaries and missing measurements](../../docs/acceptance/shared-
 Run `node --test shared-read-assertions.test.mjs shared-read-report.test.mjs shared-read-receipts.test.mjs`
 for the cheap evidence checks.
 
+The candidate probe selects Overview's separate Attention and Catch Up base
+resources. Run `node --test shared-read-keys.test.mjs` for that selection check.
+Keep the ordinary matrix free of fault controls. For a separate native boundary
+trial, set `NIGHTWEAVER_PROBE_BOUNDARIES=1` and run the same runner with
+`-Surfaces workspace -Activity active` and a fresh output directory. This trial
+first requests only cold Workspace base keys, including a missing ID. Its tool
+trace must contain shared inventory validation and no targeted detail command.
+It then refuses observer journal reads through the disposable tool shim and
+checks real comments audit recovery without refresh or navigation. A refused
+inventory read must retain facts without absence. The shim records each injected
+failure. These fault trials are separate from ordinary native latency evidence.
+The runner still stops the exact stack in `finally`.
+
+The runner also starts an independent process observer before Web startup.
+It holds identity-checked native handles for each shim and delegated tool.
+Its `.observed` files bound settlement when a timeout or shutdown kills a shim
+before its final record. Missing bytes and native results stay unknown.
+The additive `fullToolBounds` and `trackerLoadBounds` fields keep conservative
+time and overlap bounds separate from complete final records. A bounded gap
+does not change the original `completed: false` result. The observer stops
+after the exact stack stops. Raw evidence stays local.
+
+The launch-gap repair adds a nested Windows Job per wrapper before `.pending`.
+The observer opens that exact Job and writes `.admitted` before any tool launch.
+Children inherit the non-breakaway Job. Zero active processes after exact stack
+stop proves settlement even without `.launched`. An absent Job before admission
+proves non-launch. Missing legacy proof or a live Job fails the observer and
+runner. This proof does not recover missing bytes, duration or native results.
+
+Build `tests/Nightweaver.QA.ToolProbe` to a fresh local directory and run its
+`bd.exe --settlement-check <new-local-directory>` for the five controlled launch
+checks. They stop a wrapper before admission, before launch and between launch
+and record publication. Negative cases require rejection of a live child and
+unknown legacy evidence. The check confirms native child settlement after
+cleanup. It uses no tracker or browser. The two affected matrix cells use
+`shared-read-baseline.ps1 -Surfaces explorer,attention -Activity settled`.
+Keep the original failed reports; new containment evidence cannot repair them.
+
+The report's additive `scenario` field covers cold navigation through final
+native Ready verification after browser changes. Its clock bridge rounds the
+cutoff outward. It excludes later shutdown starts and keeps full-trial load
+separate. Paired settlement bounds require the recorded wrapper and launched
+child identities. Missing bytes and native results remain unknown. A bounded
+scenario never changes the original runner's `completed: false` result.
+Run `node --test shared-read-window.test.mjs shared-read-report.test.mjs` for
+the window, identity and incomplete-evidence checks. To retain an original report,
+use `node shared-read-report.mjs <matrix-directory> <new-local-report.json>`.
+
+Run `node --test shared-read-section-report.test.mjs` for the section evidence
+checks. Create a separate section report with
+`node shared-read-section-report.mjs <matrix-directory> <new-report.json>`.
+The report separates base facts, new section receipts, retained section state
+and per-entry merge state. A base receipt cannot certify detail completion.
+The boundary trial also checks a guarded Save Note during a selected history
+refresh. The successful receipt and current history remain separate evidence.
+Its base-only check warms the host before browser navigation. Exclude its later
+browser samples from the ordinary cold/warm comparison.
+
 The existing `factory-qa` probe also checks compact/full Delivery stage geometry
 (four equal 5px rounded segments, 6px gaps), exact stage captions and repair return,
 paused/unknown/stale positions, long Bead identities, separate keyboard Bead
@@ -67,6 +125,9 @@ with a fresh invocation output directory. This starts/stops the exact isolated
 stack and verifies native host evidence, safe PR/commit links, cleanup separation,
 comments-only refresh and 1440/375/720 layouts. See
 [digest merge acceptance](../../docs/acceptance/digest-merge.md).
+For stable fixture counts during the held-evidence comparison, run this probe
+alone on that fresh stack. A reused warm stack can publish a prior valid inventory
+while the last native fixture closure reaches the shared cache.
 
 ## Observation cost investigation
 
