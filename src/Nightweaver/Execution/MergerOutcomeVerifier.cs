@@ -775,7 +775,10 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
         {
             try
             {
-                using var document = JsonDocument.Parse(comment.Text, new JsonDocumentOptions { MaxDepth = 8 });
+                // A file-based comment can retain one UTF-8 BOM. Keep stored evidence intact.
+                var text = comment.Text.AsMemory();
+                if (!text.IsEmpty && text.Span[0] == '\uFEFF') text = text[1..];
+                using var document = JsonDocument.Parse(text, new JsonDocumentOptions { MaxDepth = 8 });
                 var root = document.RootElement;
                 if (root.ValueKind != JsonValueKind.Object || !HasUniqueNames(root)
                     || !ReadString(root, "schema", out var schema) || schema != "nightweaver-merger-rejection-v1"

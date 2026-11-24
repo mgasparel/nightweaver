@@ -40,6 +40,15 @@ If an unresolved conflict, semantic design invalidation, or local or remote chec
 }
 ```
 
+Write JSON comment files as UTF-8 without a BOM. Use an absolute `$path` in the current invocation's temporary directory and the complete JSON in `$json`:
+
+```powershell
+[System.IO.File]::WriteAllText($path, $json, [System.Text.UTF8Encoding]::new($false))
+bd comments add <bead-id> -f $path
+```
+
+The explicit encoding prevents a shell version's `utf8` default from adding a BOM. The rejection parser accepts at most one U+FEFF at position zero. It keeps stored comment text and source IDs unchanged. All schema, invocation, PR/HEAD, transcript and timing checks still apply. See [test-cost evidence](../docs/agents/test-cost-evidence.md#json-comment-encoding) for the retained file-to-comment evidence.
+
 For a local build/test failure, use `check_source: "local"`, set `subject` to exactly `dotnet build` or `dotnet test`, and add integer `local_exit_code` with the observed nonzero result. After all checks and reruns settle, produce one V2 local-check frame in this invocation's output and post the matching JSON Bead comment. Read `NIGHTWEAVER_LOCAL_CHECK_OUTPUT` from the launch environment: for `terminal` (Codex), print the frame through a terminal tool before posting the comment and refer to it in the final reply; for `final-response` (Claude print mode), post the comment then include the frame once as plain text in the final reply. Codex repeats final answers across output streams, while Claude print mode exposes the final answer alone, so use exactly the selected channel. Merely describing a frame, posting the JSON comment or saving a file does not complete this step.
 
 Read `NIGHTWEAVER_INVOCATION_ID` from the launched environment. Construct both marker lines at runtime by concatenating the marker name, one space, and that environment value. This binds results to this dispatch and keeps echoed tool commands from containing literal authoritative markers. The opening line adds one space and compact JSON with exactly `command`, `checked_head`, `exit_code`, and `pull_request`. Use the observed current HEAD, PR URL and positive command exit code. Copy the comment's exact concise `summary` and `details` between the markers alongside the observed terminal result. A failed test needs terminal `total` and positive `failed` counts; a failed build needs `Build FAILED.` and a positive `Error(s)` count.
