@@ -1,7 +1,9 @@
 ## Amendment v1.3 — shared base and independent sections (ns-gjwx)
 
-Contract owner: ns-gjwx-p88cf0dfa3650cc8fbb7a. This amendment defines the next
-additive read contract. It does not claim that these resources are implemented.
+Contract owner: ns-gjwx-p88cf0dfa3650cc8fbb7a. The additive read contract is
+implemented through `060d84fe14751a077402602cbdfad3a1e9fb0169` as scoped below.
+The [result report](../acceptance/shared-read-results.md) records measured behavior,
+remaining evidence limits and target proposal decisions. It claims no numerical SLO.
 
 Implementation slice ns-gjwx-paea384f7cce36dfdace5 enables only
 `base:explorer:{view}:{query}:{page}` and `base:workspace:{id}`. Studio Explorer

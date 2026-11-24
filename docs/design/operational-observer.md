@@ -1,10 +1,14 @@
 ## Shared base contract amendment (ns-gjwx)
 
 [Wire amendment v1.3](operational-observations-v1.md#amendment-v13--shared-base-and-independent-sections-ns-gjwx)
-defines additive base and section resources for all five Studio surfaces. It is
-the implementation contract for subsequent ns-gjwx slices, not a claim of shipped
-support for every surface. Explorer and Workspace now consume shared base keys;
-Workspace consumes independent text, history, relations and environment sections.
+defines additive base and section resources for all five Studio surfaces.
+The architecture slices are merged through `060d84fe14751a077402602cbdfad3a1e9fb0169`.
+Explorer and Workspace consume shared base keys. Workspace consumes independent
+text, history, relations and environment sections. Attention publishes paused
+membership before history. Catch Up publishes closure before merge acquisition.
+Overview composes Attention and Digest bases with independent runtime state;
+reserved `base:overview` remains unsupported. The [result report](../acceptance/shared-read-results.md)
+separates implementation support from incomplete measurement and target proposals.
 The retained implementation also assembles full responses. Existing keys and legacy routes keep their complete-response
 rules throughout migration.
 

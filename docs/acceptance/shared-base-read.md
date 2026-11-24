@@ -1,11 +1,11 @@
 # Shared base read acceptance and measurement
 
 The [v1.3 amendment](../design/operational-observations-v1.md#amendment-v13--shared-base-and-independent-sections-ns-gjwx)
-defines the next read contract. This document defines acceptance and measurement;
-it reports no implemented latency improvement. Baseline capture and candidate
-verification belong to the subsequent ns-gjwx delivery slices. Keep the current
-CLI adapter, journal and backup audits for the first comparison. Do not set a
-numerical latency target until the comparable measurements exist.
+defines the implemented additive read contract. This document defines acceptance
+and measurement. The [result report](shared-read-results.md) compares the retained
+baseline and candidate, maps Product coverage and records remaining evidence
+limits. The measured cold improvement does not establish a numerical SLO. Keep
+the current CLI adapter, journal and backup audits.
 
 ## Source and consumer trace
 
@@ -34,8 +34,9 @@ Record declarations are in [Workspace](../../src/Nightweaver.Web/BeadWorkspace.c
 Collection and publication currently occur in
 [OperationalObservationSource](../../src/Nightweaver.Web/OperationalObservationSource.cs)
 and [OperationalObservationService](../../src/Nightweaver.Web/OperationalObservationService.cs).
-The new contract changes that publication boundary; these links do not assert
-that the retained implementation already supports v1.3 keys.
+The implementation now supports the base and section keys listed in v1.3.
+Reserved `base:overview` remains unsupported; Overview composes independent bases
+and runtime. The result report states the exact shipped scope and measurement limits.
 
 ## Functional acceptance
 
