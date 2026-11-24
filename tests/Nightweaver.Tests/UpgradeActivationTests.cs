@@ -160,6 +160,138 @@ public sealed class UpgradeActivationTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReservedLaunchesReleaseAdmissionBeforeStartAndCommandsBeforeProbing(bool reconciling)
+    {
+        var events = new List<string>();
+        UpgradeLaunch[] launches = [new("first", "run-1"), new("second", "run-2")];
+        await UpgradeLifecycle.StartReservedOwnersAsync(reconciling, launches,
+            new RecordingLease(() => events.Add("release-admission")),
+            new RecordingLease(() => events.Add("release-commands")), launch =>
+            {
+                events.Add(launch.RunId);
+                return Task.CompletedTask;
+            });
+        events.Add("probe");
+
+        Assert.Equal((reconciling ? "release-admission release-commands probe"
+            : "release-admission run-1 run-2 release-commands probe").Split(' '), events);
+    }
+
+    [Theory]
+    [InlineData("current", true)]
+    [InlineData("digest", false)]
+    [InlineData("missing", false)]
+    [InlineData("foreign", false)]
+    [InlineData("duplicate", false)]
+    public void RetainedLaunchGrantMustMatchThePackageAndStartRequests(string fault, bool expected)
+    {
+        var (progress, _, _) = LiveIdentity(DateTimeOffset.UnixEpoch, "demo");
+        progress = progress with
+        {
+            Maintenance = [new("demo", null, 0, 0) { StartRequested = true }, new("stopped", null, 0, 0)]
+        };
+        var grant = new UpgradeActivation(1, progress.OperationId, progress.NewPackageDigest, [new("demo", "run")]);
+        grant = fault switch
+        {
+            "digest" => grant with { PackageDigest = progress.OldPackageDigest },
+            "missing" => grant with { Launches = [] },
+            "foreign" => grant with { Launches = [new("stopped", "run")] },
+            "duplicate" => grant with { Launches = [.. grant.Launches, new("demo", "other")] },
+            _ => grant
+        };
+        Assert.Equal(expected, UpgradeAcceptance.MatchesLaunchGrant(progress, grant));
+    }
+
+    [Theory]
+    [InlineData("current", true)]
+    [InlineData("manual", true)]
+    [InlineData("missing", false)]
+    [InlineData("unavailable", false)]
+    [InlineData("generation", false)]
+    [InlineData("revision", false)]
+    [InlineData("token", false)]
+    [InlineData("stopped", false)]
+    [InlineData("disabled", false)]
+    public void FinalIntentCheckRequiresTheOriginalAuthority(string fault, bool expected)
+    {
+        var item = new UpgradeMaintenance("demo", "maintenance", 5, 6) { StartRequested = true };
+        var state = SupervisionState.Manual(new("root", "config", "git", "sid"))
+            with { Revision = item.Revision, Generation = item.Generation, MaintenanceToken = item.Token, Enabled = true, DesiredRunning = true };
+        state = fault switch
+        {
+            "generation" => state with { Generation = 7 },
+            "revision" => state with { Revision = 7 },
+            "token" => state with { MaintenanceToken = "foreign" },
+            "stopped" => state with { DesiredRunning = false },
+            "disabled" => state with { Enabled = false },
+            _ => state
+        };
+        SupervisionRead? read = fault switch
+        {
+            "manual" or "missing" => null,
+            "unavailable" => new(SupervisionAvailability.Unavailable, null, "store", "read failed"),
+            _ => new(SupervisionAvailability.Available, state, "store", null)
+        };
+        if (fault == "manual") item = item with { Revision = 0 };
+        Assert.Equal(expected, UpgradeLifecycle.ActivationIntentMatches(item, read));
+    }
+
+    [Theory]
+    [InlineData("healthy", true)]
+    [InlineData("state", false)]
+    [InlineData("failure", false)]
+    [InlineData("stop-reason", false)]
+    [InlineData("web", false)]
+    [InlineData("runtime", false)]
+    public void FinalInventoryRejectsAnOwnerThatBecameUnhealthy(string fault, bool expected)
+    {
+        var (_, _, owner) = LiveIdentity(DateTimeOffset.UnixEpoch, "demo");
+        owner = fault switch
+        {
+            "state" => owner with { State = "degraded" },
+            "failure" => owner with { Failure = new(DateTimeOffset.UnixEpoch, "WebFailure", owner.RunId,
+                owner.RuntimeId, owner.ProcessId, owner.ProcessStartedAtUtc) },
+            "stop-reason" => owner with { StopReason = "RuntimeFailure" },
+            "web" => owner with { WebHealth = "unavailable" },
+            "runtime" => owner with { RuntimeHealth = "failed" },
+            _ => owner
+        };
+        Assert.Equal(expected, UpgradeAcceptance.HasHealthyFinalOwner(owner));
+    }
+
+    [Theory]
+    [InlineData("observation")]
+    [InlineData("control")]
+    [InlineData("runtime")]
+    public void FinalAcceptanceRechecksEarlierProofAfterAnotherProjectIsProbed(string clock)
+    {
+        var firstSeen = DateTimeOffset.UnixEpoch.AddHours(1);
+        var (progress, first, firstOwner) = LiveIdentity(firstSeen, "demo");
+        var (_, second, secondOwner) = LiveIdentity(firstSeen.AddSeconds(2), "other");
+        progress = progress with { Scope = progress.Scope with { Projects = [first, second] } };
+        var identities = new[] { new UpgradeLaunch(first.Name, firstOwner.RunId), new UpgradeLaunch(second.Name, secondOwner.RunId) };
+        var current = firstSeen.AddSeconds(11);
+        var firstProof = Observe(first, firstOwner, current);
+        firstProof = clock switch
+        {
+            "observation" => firstProof with { Utc = firstSeen },
+            "control" => firstProof with { ControlObservedUtc = firstSeen },
+            _ => firstProof with { RuntimeObservedUtc = firstSeen }
+        };
+        var proofs = new Dictionary<string, DeploymentObservation>(StringComparer.Ordinal)
+        {
+            [first.Name] = firstProof,
+            [second.Name] = Observe(second, secondOwner, firstSeen.AddSeconds(2))
+        };
+
+        UpgradeAcceptance.ConfirmCurrentPairs(progress, secondOwner.CliRelease!.Build, [identities[1]], proofs, new FixedClock(current));
+        Assert.Throws<InvalidOperationException>(() =>
+            UpgradeAcceptance.ConfirmCurrentPairs(progress, secondOwner.CliRelease.Build, identities, proofs, new FixedClock(current)));
+    }
+
+    [Theory]
     [InlineData(1234, 0, 1, true)]
     [InlineData(1235, 0, 1, false)]
     [InlineData(1234, 1, 1, false)]
@@ -192,15 +324,9 @@ public sealed class UpgradeActivationTests
     public void ChecksLivePairWithoutPackageOrNativeSetup(string fault)
     {
         var now = DateTimeOffset.UnixEpoch.AddHours(1);
-        var root = Path.GetFullPath(".");
-        var project = new AffectedUpgradeProject("demo", Path.Combine(root, "demo.json"), new('0', 64), root, root, "physical");
-        var scope = new UpgradeScope(root, "sid", [project]);
-        var progress = new UpgradeProgress(1, new('a', 32), 1, scope, new('0', 64), new('1', 64), new('2', 64),
-            UpgradePhase.Verifying, null, null, new('b', 32), [], [], [], []);
-        var cli = new LiveRelease(1, progress.NewPackageDigest, new('3', 40), 1234, now, root, project.Configuration, "demo");
-        var owner = new BackgroundOwnerRecord(1, "running", new('c', 32), cli.ProcessId, now, root, project.Configuration,
-            "demo", root, new('d', 32), "http://127.0.0.1:5000", "healthy", "live", "", "", null)
-            { CliRelease = cli, WebRelease = cli with { ProcessId = 1235 }, GitCommonDirectory = root, ContainmentVersion = 1 };
+        var (progress, project, owner) = LiveIdentity(now, "demo");
+        var root = progress.Scope.Root;
+        var cli = owner.CliRelease!;
         owner = fault switch
         {
             "legacy-cli" => owner with { CliRelease = null },
@@ -222,6 +348,35 @@ public sealed class UpgradeActivationTests
             fault == "runtime-stale" ? now.AddSeconds(-30) : now, fault == "control-stale" ? now.AddSeconds(-30) : now);
         if (fault == "healthy") Assert.Equal(cli, UpgradeAcceptance.Confirm(progress, project, cli.Build, owner.RunId, observation, now).Cli);
         else Assert.Throws<InvalidOperationException>(() => UpgradeAcceptance.Confirm(progress, project, cli.Build, owner.RunId, observation, now));
+    }
+
+    private static (UpgradeProgress Progress, AffectedUpgradeProject Project, BackgroundOwnerRecord Owner)
+        LiveIdentity(DateTimeOffset now, string name)
+    {
+        var root = Path.GetFullPath(".");
+        var project = new AffectedUpgradeProject(name, Path.Combine(root, name + ".json"), new('0', 64), root, root, "physical");
+        var scope = new UpgradeScope(root, "sid", [project]);
+        var progress = new UpgradeProgress(1, new('a', 32), 1, scope, new('0', 64), new('1', 64), new('2', 64),
+            UpgradePhase.Verifying, null, null, new('b', 32), [], [], [], []);
+        var cli = new LiveRelease(1, progress.NewPackageDigest, new('3', 40), 1234, now, root, project.Configuration, name);
+        var owner = new BackgroundOwnerRecord(1, "running", new('c', 32), cli.ProcessId, now, root, project.Configuration,
+            name, root, new('d', 32), "http://127.0.0.1:5000", "healthy", "live", "", "", null)
+            { CliRelease = cli, WebRelease = cli with { ProcessId = 1235 }, GitCommonDirectory = root, ContainmentVersion = 1 };
+        return (progress, project, owner);
+    }
+
+    private static DeploymentObservation Observe(AffectedUpgradeProject project, BackgroundOwnerRecord owner, DateTimeOffset utc) =>
+        new(1, utc, "test", 1, new(owner.Root, project.Configuration, project.Name, project.Repository, project.GitCommonDirectory),
+            owner, DeploymentHealth.Healthy, "test", true, new(OwnerProcessState.Alive, false), utc, utc);
+
+    private sealed class FixedClock(DateTimeOffset utc) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utc;
+    }
+
+    private sealed class RecordingLease(Action release) : IDisposable
+    {
+        public void Dispose() => release();
     }
 
     private sealed class Scenario

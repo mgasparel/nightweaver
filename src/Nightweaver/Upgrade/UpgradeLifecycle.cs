@@ -185,8 +185,7 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
         var grant = reconciling ? UpgradeInterlock.ReadActivation(paths, Reservation(progress)) : null;
         var launches = grant?.Launches ?? progress.Maintenance.Where(m => m.StartRequested)
             .Select(m => new UpgradeLaunch(m.Project, Guid.NewGuid().ToString("N"))).ToArray();
-        if (grant is not null && (grant.PackageDigest != progress.NewPackageDigest
-            || !launches.Select(l => l.Project).Order().SequenceEqual(progress.Maintenance.Where(m => m.StartRequested).Select(m => m.Project).Order())))
+        if (grant is not null && !UpgradeAcceptance.MatchesLaunchGrant(progress, grant))
             throw new InvalidDataException("Activation reservation does not match the operation.");
         var intent = reconciling ? progress.PendingOperation! : Guid.NewGuid().ToString("N");
         if (!reconciling)
@@ -211,17 +210,11 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
             progress = (await journal.SaveAsync(progress.Revision, progress with { Maintenance = maintenance.ToArray() }, token)
                 .ConfigureAwait(false)).Progress!;
         }
-        // The root interlock still excludes every ordinary launch. Only these exact
-        // owner runs may acquire payload leases. Do not hold admission while children start.
-        admission.Dispose();
-        foreach (var launch in reconciling ? [] : launches)
+        await StartReservedOwnersAsync(reconciling, launches, admission, commands, async launch =>
         {
             await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
             await start(progress.Scope.Projects.Single(p => p.Name == launch.Project), launch.RunId, token).ConfigureAwait(false);
-        }
-        // Stop must remain usable during the health window. Final publication takes
-        // fresh command/admission locks and compares the same intent revisions again.
-        commands.Dispose();
+        }).ConfigureAwait(false);
         await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
         var inventory = await InspectAsync(progress, token).ConfigureAwait(false);
         if (inventory.Owners.Any(o => operations.OwnerActive(o.Project) != false && !launches.Contains(new(o.Project, o.RunId))))
@@ -276,8 +269,7 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
                 : current is null || OwnerEvidence(current) != expected.Owner || operations.OwnerActive(project.Name) != true
                     || operations.Observe(current).State != OwnerProcessState.Alive)
                 throw new InvalidOperationException("Final replacement native identity is unconfirmed.");
-            if (expected is not null && (current!.State != "running" || current.Failure is not null
-                || current.StopReason is not null || current.WebHealth != "healthy" || current.RuntimeHealth != "live"))
+            if (expected is not null && !UpgradeAcceptance.HasHealthyFinalOwner(current!))
                 throw new InvalidOperationException("Final replacement health is unconfirmed; retain the upgrade interlock.");
             if (expected is null) RequireStoppedSettlement(progress, project, inventory);
         }
@@ -288,9 +280,7 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
             throw new InvalidOperationException("Replacement acceptance observations expired before publication.");
         await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
         // Inventory, hashing, intent reads and other Project probes can expire any proof.
-        foreach (var launch in launches)
-            UpgradeAcceptance.Confirm(progress, progress.Scope.Projects.Single(p => p.Name == launch.Project),
-                package.BuildVersion, launch.RunId, confirmedObservations[launch.Project], time.GetUtcNow());
+        UpgradeAcceptance.ConfirmCurrentPairs(progress, package.BuildVersion, launches, confirmedObservations, time);
         var accepted = progress with { Phase = UpgradePhase.Accepted, PendingOperation = null, LastConfirmedOperation = intent,
             AcceptedPairs = pairs.Select(p => p with { FirstObservedUtc = firstTimes[p.Owner.Project], ConfirmedUtc = confirmedObservations[p.Owner.Project].Utc }).ToArray(),
             Evidence = [.. progress.Evidence, new(Guid.NewGuid().ToString("N"),
@@ -352,26 +342,32 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
             var current = inventory.Owners.SingleOrDefault(o => o.Project == project.Name);
             if (expected is null) { RequireStoppedSettlement(progress, project, inventory); continue; }
             if (current is null || OwnerEvidence(current) != expected.Owner || operations.OwnerActive(project.Name) != true
-                    || operations.Observe(current).State != OwnerProcessState.Alive || current.State != "running"
-                    || current.Failure is not null || current.StopReason is not null
-                    || current.WebHealth != "healthy" || current.RuntimeHealth != "live")
+                    || operations.Observe(current).State != OwnerProcessState.Alive || !UpgradeAcceptance.HasHealthyFinalOwner(current))
                 throw new InvalidOperationException("Final accepted native identity or health is unresolved.");
         }
         if (PreparedRelease.Inspect(paths.Root, true).Digest != progress.NewPackageDigest)
             throw new InvalidDataException("Accepted payload changed during observation.");
         if (!released) await RequireActivationIntentAsync(progress, token).ConfigureAwait(false);
         // Recheck all three probe times after inventory, hashing and intent reads.
-        foreach (var project in progress.Scope.Projects.Where(p => observations.ContainsKey(p.Name)))
-        {
-            var pair = progress.AcceptedPairs.Single(p => p.Owner.Project == project.Name);
-            UpgradeAcceptance.Confirm(progress, project, package.BuildVersion, pair.Owner.RunId,
-                observations[project.Name], time.GetUtcNow());
-        }
+        var launches = progress.Scope.Projects.Where(p => observations.ContainsKey(p.Name))
+            .Select(p => new UpgradeLaunch(p.Name, progress.AcceptedPairs.Single(pair => pair.Owner.Project == p.Name).Owner.RunId));
+        UpgradeAcceptance.ConfirmCurrentPairs(progress, package.BuildVersion, launches, observations, time);
         if (!released)
         {
             await UpgradeInterlock.ReleaseAsync(paths, Reservation(progress), token).ConfigureAwait(false);
         }
         return progress;
+    }
+
+    internal static async Task StartReservedOwnersAsync(bool reconciling, UpgradeLaunch[] launches, IDisposable admission,
+        IDisposable commands, Func<UpgradeLaunch, Task> start)
+    {
+        // Exact reserved owners can acquire payload leases after admission is released.
+        admission.Dispose();
+        foreach (var launch in reconciling ? [] : launches)
+            await start(launch).ConfigureAwait(false);
+        // Stop must be able to take the command locks during observation.
+        commands.Dispose();
     }
 
     private void RequireStoppedSettlement(UpgradeProgress progress, AffectedUpgradeProject project,
@@ -402,12 +398,18 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
             UpgradeInterlock.RequireActivationAllowed(paths, Reservation(progress), ProjectSlug.Parse(item.Project));
             var read = lifecycle?.Read();
             RequireNoPendingAttempt(read);
-            if (read?.Availability == SupervisionAvailability.Unavailable
-                || read?.State is { } state && (state.Generation != item.Generation || state.Revision != item.Revision
-                    || state.MaintenanceToken != item.Token || item.StartRequested && (!state.Enabled || !state.DesiredRunning))
-                || read?.State is null && item.Revision != 0)
+            if (!ActivationIntentMatches(item, read))
                 throw new InvalidOperationException("Activation intent changed; retain the upgrade interlock.");
         }
+    }
+
+    internal static bool ActivationIntentMatches(UpgradeMaintenance item, SupervisionRead? read)
+    {
+        if (read?.Availability == SupervisionAvailability.Unavailable) return false;
+        return read?.State is { } state
+            ? state.Generation == item.Generation && state.Revision == item.Revision && state.MaintenanceToken == item.Token
+                && (!item.StartRequested || state.Enabled && state.DesiredRunning)
+            : item.Revision == 0;
     }
 
     private async Task ConfirmAsync(UpgradeProgress progress, CancellationToken token)

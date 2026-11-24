@@ -5,6 +5,23 @@ namespace Nightweaver.Upgrade;
 
 internal static class UpgradeAcceptance
 {
+    internal static bool MatchesLaunchGrant(UpgradeProgress progress, UpgradeActivation grant) =>
+        grant.PackageDigest == progress.NewPackageDigest
+        && grant.Launches.Select(launch => launch.Project).Order()
+            .SequenceEqual(progress.Maintenance.Where(item => item.StartRequested).Select(item => item.Project).Order());
+
+    internal static bool HasHealthyFinalOwner(BackgroundOwnerRecord current) =>
+        current.State == "running" && current.Failure is null && current.StopReason is null
+        && current.WebHealth == "healthy" && current.RuntimeHealth == "live";
+
+    internal static void ConfirmCurrentPairs(UpgradeProgress progress, string build, IEnumerable<UpgradeLaunch> launches,
+        IReadOnlyDictionary<string, DeploymentObservation> observations, TimeProvider time)
+    {
+        foreach (var launch in launches)
+            Confirm(progress, progress.Scope.Projects.Single(p => p.Name == launch.Project),
+                build, launch.RunId, observations[launch.Project], time.GetUtcNow());
+    }
+
     internal static UpgradeAcceptedPair Confirm(UpgradeProgress progress, AffectedUpgradeProject project,
         string build, string runId, DeploymentObservation observation, DateTimeOffset now)
     {
