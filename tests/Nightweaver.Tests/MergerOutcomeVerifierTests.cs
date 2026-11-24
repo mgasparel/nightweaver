@@ -10,6 +10,102 @@ namespace Nightweaver.Tests;
 public sealed class MergerOutcomeVerifierTests
 {
     [Theory]
+    [InlineData("performance")]
+    [InlineData("remote")]
+    [InlineData("dotnet build")]
+    [InlineData("dotnet test")]
+    [InlineData("conflict")]
+    [InlineData("design")]
+    public async Task OneLeadingBomPreservesVerifiedFindingAndStoredEvidence(string kind)
+    {
+        using var fixture = new VerifierFixture();
+        if (kind == "performance") fixture.SetPerformanceFinding();
+        else if (kind.StartsWith("dotnet", StringComparison.Ordinal)) fixture.SetLocalCheckFinding(kind, 1);
+        else if (kind != "remote")
+            fixture.SetFinding(kind, "README.md", "The changed requirement needs repair.",
+                "The conflict or design mismatch needs implementation repair.");
+        var plain = await fixture.VerifyAsync();
+        Assert.True(plain.Succeeded, plain.Diagnostic);
+        var original = fixture.Comments[^1];
+        var stored = original with { Text = "\uFEFF" + original.Text };
+        fixture.Comments = [stored];
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.Equal(plain, result);
+        Assert.Equal(original.Id, result.Finding!.SourceCommentId);
+        Assert.Same(stored, Assert.Single(fixture.Comments));
+        Assert.Equal("\uFEFF" + original.Text, stored.Text);
+        Assert.Equal(0, fixture.Runner.NativeGitCommandCount);
+    }
+
+    [Theory]
+    [InlineData("old")]
+    [InlineData("schema")]
+    [InlineData("pr")]
+    [InlineData("head")]
+    [InlineData("transcript")]
+    [InlineData("timing")]
+    [InlineData("missing-result")]
+    [InlineData("contradictory-result")]
+    [InlineData("malformed")]
+    [InlineData("duplicate-key")]
+    [InlineData("repeated-bom")]
+    [InlineData("whitespace-bom")]
+    public async Task LeadingBomDoesNotAuthorizeInvalidEvidence(string mode)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.SetPerformanceFinding();
+        var text = fixture.Comments[^1].Text;
+        switch (mode)
+        {
+            case "old": fixture.Invocation = fixture.Invocation with { PreInvocationCommentIds = new HashSet<string>(["current"]) }; break;
+            case "schema": text = text.Replace("nightweaver-merger-rejection-v1", "unknown", StringComparison.Ordinal); break;
+            case "pr": fixture.Runner.ReportedPullRequestUrl = "https://github.com/example/project/pull/456"; break;
+            case "head": text = text.Replace(fixture.Head, new string('d', 40), StringComparison.Ordinal); break;
+            case "transcript": File.WriteAllText(fixture.Invocation.LogFilePath, ""); break;
+            case "timing": text = text.Replace("300.5", "299.999", StringComparison.Ordinal); break;
+            case "missing-result": File.Delete(Path.Combine(fixture.MeasurementDirectory, "result.json")); break;
+            case "contradictory-result":
+                var path = Path.Combine(fixture.MeasurementDirectory, "result.json");
+                File.WriteAllText(path, File.ReadAllText(path).Replace("300.5", "301.5", StringComparison.Ordinal));
+                break;
+            case "malformed": text = "{ malformed"; break;
+            case "duplicate-key": text = text.Replace("\"kind\":", "\"kind\":\"performance\",\"kind\":", StringComparison.Ordinal); break;
+            case "repeated-bom": text = "\uFEFF" + text; break;
+            case "whitespace-bom": text = " \uFEFF" + text; break;
+        }
+        var stored = fixture.Comments[^1] with { Text = mode == "whitespace-bom" ? text : "\uFEFF" + text };
+        fixture.Comments = [stored];
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.False(result.Succeeded);
+        Assert.Same(stored, Assert.Single(fixture.Comments));
+        Assert.Equal(0, fixture.Runner.RepairCycles);
+        Assert.Empty(fixture.Runner.PublicationWrites);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("\uFEFF")]
+    public async Task BomInsideJsonStringRemainsData(string prefix)
+    {
+        using var fixture = new VerifierFixture();
+        const string details = "The design \uFEFF requirement needs implementation repair.";
+        fixture.SetFinding("design", "README.md", "The changed requirement needs repair.", details);
+        fixture.Comments = [fixture.Comments[^1] with
+        {
+            Text = prefix + fixture.Comments[^1].Text.Replace("\\uFEFF", "\uFEFF", StringComparison.Ordinal)
+        }];
+
+        var result = await fixture.VerifyAsync();
+
+        Assert.True(result.Succeeded, result.Diagnostic);
+        Assert.Equal(details, result.Finding!.Details);
+    }
+
+    [Theory]
     [InlineData("absent-terminal")]
     [InlineData("failed-terminal")]
     [InlineData("incomplete-terminal")]
@@ -76,11 +172,14 @@ public sealed class MergerOutcomeVerifierTests
         Assert.False((await fixture.VerifyAsync()).Succeeded);
     }
 
-    [Fact]
-    public async Task AllPassingHardLimitUsesOrdinaryGuardedRepairWithoutInventingFailures()
+    [Theory]
+    [InlineData("")]
+    [InlineData("\uFEFF")]
+    public async Task AllPassingHardLimitUsesOrdinaryGuardedRepairWithoutInventingFailures(string prefix)
     {
         using var fixture = new VerifierFixture();
         fixture.SetPerformanceFinding();
+        fixture.Comments = [fixture.Comments[^1] with { Text = prefix + fixture.Comments[^1].Text }];
         var verified = await fixture.VerifyAsync();
         Assert.True(verified.Succeeded, verified.Diagnostic);
         Assert.Equal(0, verified.Finding!.LocalExitCode);

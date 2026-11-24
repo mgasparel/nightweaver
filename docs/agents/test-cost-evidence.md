@@ -114,6 +114,34 @@ Compare same-process deltas and correlated resource cost. RAM/RSS alone or one
 growth sample cannot prove a leak. ns-726.5 owns attribution; this hook packages
 and invokes capture only. No always-running monitor is installed.
 
+## JSON comment encoding
+
+Write JSON comment files as UTF-8 without a BOM. Set `$path` to an absolute file
+path in the current invocation's temporary directory. Set `$json` to the complete
+comment JSON. Use the explicit encoding in all PowerShell versions:
+
+```powershell
+[System.IO.File]::WriteAllText($path, $json, [System.Text.UTF8Encoding]::new($false))
+bd comments add <bead-id> -f $path
+```
+
+`Set-Content -Encoding utf8` can add a BOM, depending on the shell version.
+The retained file
+`H:/Nightweaver/prod/tmp/nightshift/ns-gjwx-p89ed2a6fe7ade8917f1e/20261123T1230348658366Z-merger/performance-rejection.json`
+starts with `EF-BB-BF-7B-22-73-63-68`. Stored comment
+`e060eb87-9adf-52f3-a59c-e15e31ba610b` starts with code point `65279`.
+The retained invocation log shows `Set-Content -Encoding utf8`, followed by
+`bd comments add` with `-f`. This evidence proves that the BOM reached the stored
+comment. It does not prove that the full historical Merger invocation is valid.
+Do not rewrite the historical comment, logs or paused Bead state.
+
+The rejection parser removes at most one U+FEFF at position zero from its local
+input view. It preserves stored comment text, source comment IDs and U+FEFF inside
+JSON strings. Repeated leading BOMs and a BOM after whitespace remain invalid.
+All schema, current-invocation, PR/HEAD, transcript, measurement and timing checks
+still apply. Parser cases use the existing component fixture and guarded repair
+handoff. They add no native journey or fixture publication.
+
 ## All-passing hard-limit Merger rejection
 
 Use the existing `nightweaver-merger-rejection-v1` comment with exactly ten top-level
