@@ -371,22 +371,8 @@ internal sealed class UpgradeLifecycle(HostPaths paths, UpgradeJournal journal, 
     }
 
     private void RequireStoppedSettlement(UpgradeProgress progress, AffectedUpgradeProject project,
-        UpgradeLifecycleInventory inventory)
-    {
-        if (operations.OwnerActive(project.Name) != false)
-            throw new InvalidOperationException("Stopped acceptance settlement is unresolved.");
-        var current = inventory.Owners.SingleOrDefault(o => o.Project == project.Name);
-        var originals = progress.Owners.Where(o => o.Project == project.Name).ToArray();
-        if (current is not null && !originals.Contains(OwnerEvidence(current)))
-            throw new InvalidOperationException("Stopped acceptance has a foreign owner.");
-        foreach (var original in originals)
-        {
-            var owner = inventory.Owners.SingleOrDefault(o => OwnerEvidence(o) == original)
-                ?? throw new InvalidOperationException("Original owner evidence is inaccessible or missing.");
-            if (operations.Observe(owner) is not { State: OwnerProcessState.Exited, DescendantsSettled: true })
-                throw new InvalidOperationException("Original owner and descendant settlement is pending or unavailable.");
-        }
-    }
+        UpgradeLifecycleInventory inventory) =>
+        UpgradeAcceptance.RequireStoppedSettlement(progress, project.Name, inventory, operations.OwnerActive, operations.Observe);
 
     private async Task RequireActivationIntentAsync(UpgradeProgress progress, CancellationToken token)
     {

@@ -22,6 +22,24 @@ internal static class UpgradeAcceptance
                 build, launch.RunId, observations[launch.Project], time.GetUtcNow());
     }
 
+    internal static void RequireStoppedSettlement(UpgradeProgress progress, string project,
+        UpgradeLifecycleInventory inventory, Func<string, bool?> ownerActive, Func<BackgroundOwnerRecord, OwnerProcessObservation> observe)
+    {
+        if (ownerActive(project) != false)
+            throw new InvalidOperationException("Stopped acceptance settlement is unresolved.");
+        var current = inventory.Owners.SingleOrDefault(o => o.Project == project);
+        var originals = progress.Owners.Where(o => o.Project == project).ToArray();
+        if (current is not null && !originals.Contains(UpgradeLifecycle.OwnerEvidence(current)))
+            throw new InvalidOperationException("Stopped acceptance has a foreign owner.");
+        foreach (var original in originals)
+        {
+            var owner = inventory.Owners.SingleOrDefault(o => UpgradeLifecycle.OwnerEvidence(o) == original)
+                ?? throw new InvalidOperationException("Original owner evidence is inaccessible or missing.");
+            if (observe(owner) is not { State: OwnerProcessState.Exited, DescendantsSettled: true })
+                throw new InvalidOperationException("Original owner and descendant settlement is pending or unavailable.");
+        }
+    }
+
     internal static UpgradeAcceptedPair Confirm(UpgradeProgress progress, AffectedUpgradeProject project,
         string build, string runId, DeploymentObservation observation, DateTimeOffset now)
     {

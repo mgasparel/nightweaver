@@ -262,6 +262,43 @@ public sealed class UpgradeActivationTests
     }
 
     [Theory]
+    [InlineData("settled")]
+    [InlineData("missing")]
+    [InlineData("foreign")]
+    [InlineData("reused")]
+    [InlineData("unavailable")]
+    [InlineData("descendants")]
+    [InlineData("owner-lock")]
+    public void StoppedAcceptanceRequiresFreshSettlementForTheExactOriginalOwner(string fault)
+    {
+        var (progress, project, original) = LiveIdentity(DateTimeOffset.UnixEpoch, "demo");
+        progress = progress with { Owners = [UpgradeLifecycle.OwnerEvidence(original)] };
+        BackgroundOwnerRecord[] owners = fault switch
+        {
+            "missing" => [],
+            "foreign" => [original with { RunId = new('e', 32) }],
+            _ => [original]
+        };
+        var inventory = new UpgradeLifecycleInventory(progress.Scope, owners, true);
+        var processState = fault switch
+        {
+            "reused" => OwnerProcessState.Reused,
+            "unavailable" => OwnerProcessState.Unavailable,
+            _ => OwnerProcessState.Exited
+        };
+
+        void Verify() => UpgradeAcceptance.RequireStoppedSettlement(progress, project.Name, inventory,
+            _ => fault == "owner-lock" ? null : false, observed =>
+            {
+                Assert.Equal(original, observed);
+                return new(processState, fault != "descendants");
+            });
+
+        if (fault == "settled") Verify();
+        else Assert.Throws<InvalidOperationException>(Verify);
+    }
+
+    [Theory]
     [InlineData("observation")]
     [InlineData("control")]
     [InlineData("runtime")]
