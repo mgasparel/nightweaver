@@ -1,10 +1,139 @@
 # Shared-read candidate evidence
 
-The candidate has 110 valid rendered samples across all five surfaces. All ten
-browser trials passed. Each exact isolated stack stopped with exit 0. Complete
-native-load attribution remains unavailable: 37 command starts have no final
-record. The matrix runner exited 1 and its report has `completed: false`. This
-report does not replace that failure with a passing result or set a latency target.
+The retry supplies bounded native-load evidence for all ten scenario windows.
+It has 110 valid rendered samples across all five surfaces. All browser trials
+and exact stack stops passed. Two scenario commands have finite settlement bounds
+but unknown final bytes and native results. The original runner reports remain
+incomplete. The earlier matrix below retains its 37 missing final records.
+This report does not replace a failed result or set a latency target.
+
+## Retry result and native-load bounds
+
+The retry measures runtime revision `44b2116e25908125ae07b2652c956d49a7fe4fbc`,
+tree `b626e5b884351ce89d51ec3c636c4861254db00c`. It uses three retained runs:
+
+| Local artifact identity | Result SHA256 | Cells |
+| --- | --- | ---: |
+| `observed-active-overview` | `eb67e4bbb624dae63a2cd18f93db3d77a0e0926806c602036a5621c29b36e525` | 1 |
+| `direct-boundary-remaining` | `98f08c155851c72e9cec551a208aaa3f55b056bb812f5d40d7b189db3cccfd04` | 8 |
+| `direct-settled-overview` | `3d5d0a8b1f6b2a2caaa4ad23b60cf1f04a80411bb0ff6bb83489d03082094761` | 1 |
+
+The source was clean when each runner recorded its identity. Only the final
+settled Overview cell was missing at this dispatch. It took 76.8006866 seconds
+from trial start through stack stop. This dispatch reused the other nine cells.
+Report analysis changed during the final trial; its runtime, shim and browser
+probe did not change. Derived reports use the analysis in this candidate.
+All 4,859 stored file hashes passed. All ten seed hashes match the baseline.
+All ten browser probes, stack starts, stack stops and independent observers
+returned 0. `aspire ps` then returned no running AppHost.
+
+The operator required a reproduction before any measured-window claim. The
+retained `repro-overview` run reproduced one missing final record at
+`195f6bae6dada8f077606d907cb8414d427d46ec`. The next observed Overview run at
+`f9bc14bcca2dbee139879e7695a3a4ea4789fa10` recorded four missing finals.
+Three paired wrapper/tool handles signalled within 1.98–2.00 seconds of their
+recorded starts, during browser work. The fourth pair signalled during shutdown.
+Both processes reported exit `-1` in these pairs. This is consistent with the
+bounded caller termination path. It is not proof of a successful tool command,
+an exact cancellation instant or the missing byte count. The runner retained
+the failed reports and resource capture before further diagnostic work.
+
+That run also showed nested Git instrumentation inside native Beads. The retry
+restores the original PATH in delegated native tools and starts its observer
+outside the Web process tree. Thus it measures the application's CLI boundary
+once. It does not change production deadlines, turns, fairness or cancellation.
+The old baseline includes nested shim work. Its native totals cannot establish
+a direct load delta against this retry. The earlier same-shim comparison below
+remains available with its original unknown values.
+
+The scenario window starts at cold navigation. It ends after the final native
+Ready verification, following comment, guarded note, dependency and blocker
+closure checks. It includes conditioning, all warm navigation and their waits.
+It excludes preparation and subsequent shutdown. The end uses the browser's
+stored Node clock origin and monotonic offset, rounded outward. The report keeps
+this window separate from the full trial. It never changes `completed` to true
+because a missing final has a bound.
+
+| Scenario | Recorded starts | Missing finals in window | Inclusive native ms, lower–upper | Bytes, lower |
+| --- | ---: | ---: | ---: | ---: |
+| Settled Overview | 120 | 0 | 41771.7–41771.7 | 999844 |
+| Settled Explorer | 96 | 0 | 34427.6–34427.6 | 826847 |
+| Settled Attention | 108 | 0 | 38626.5–38626.5 | 831757 |
+| Settled Workspace | 96 | 0 | 35535.0–35535.0 | 782176 |
+| Settled Catch Up | 104 | 0 | 36726.4–36726.4 | 857869 |
+| Active Overview | 128 | 1 | 45940.6–47922.6 | 1043278 |
+| Active Explorer | 101 | 0 | 35646.1–35646.1 | 740112 |
+| Active Attention | 133 | 1 | 46644.4–48361.4 | 1040727 |
+| Active Workspace | 118 | 0 | 42680.5–42680.5 | 965494 |
+| Active Catch Up | 118 | 0 | 42138.7–42138.7 | 948785 |
+
+The ten windows have 1,122 starts and 1,120 final records. Inclusive time is
+400137.6–403836.6 ms across these serial windows. Bytes are at least 9,036,889.
+The two active commands lack final byte and native-result records. Their paired
+handles signalled within 1,982 and 1,717 ms, respectively. These are conservative
+upper bounds, not measured exact durations. Byte upper bounds, exact missing
+exits, exact overlap and peak concurrency remain unknown in those two windows.
+All 110 sample intervals have finite load bounds.
+
+Full trials contain 1,152 starts, 1,141 final records and eleven missing finals.
+Nine missing finals start after their scenario ends. Two of those nine have no
+delegated-child observation; their full-trial settlement and duration remain
+unknown. The exact Aspire stops passed, but those receipts do not reconstruct
+missing child records. Complete full-trial native attribution remains unavailable.
+Nine affected trials retain failures. All three grouped reports retain
+`completed: false`; no report failure is suppressed. The active Catch Up cell
+has no missing final.
+
+The unchanged seed and workload support this descriptive browser comparison.
+The baseline remains `1511657553168b6edd94d8adf077895441639e91`. Machine, boot and
+tool versions match those below. TEMP differs and runs are serial. Native PATH
+forwarding and independent observation add instrumentation differences. These
+facts prevent controlled causal latency claims and a numerical native-load delta.
+
+| Surface | Settled cold ms | Settled warm median ms | Active cold ms | Active warm median ms |
+| --- | ---: | ---: | ---: | ---: |
+| Overview | 2209.0 | 113.5 | 2309.0 | 7.2 |
+| Explorer | 1567.2 | 149.3 | 2540.6 | 153.2 |
+| Attention | 1779.1 | 5.6 | 1451.0 | 5.0 |
+| Workspace | 1552.5 | 9.6 | 2123.5 | 9.3 |
+| Catch Up | 1673.3 | 74.6 | 1593.3 | 73.9 |
+
+Each cold cell has one sample. Each warm cell has five samples from separate
+hosts. The independent section analysis has 154 observations and 100 new
+successful receipts. It retains null completion for unavailable merge evidence.
+All ten external comments reached rendered History in 4287.3–8974.9 ms.
+Dependency visibility took 6569.9–15168.4 ms; Ready after blocker closure took
+3504.4–10587.0 ms. All guarded notes passed. Use these descriptive values with
+the baseline table below. Do not combine samples from different revisions into
+a single candidate latency distribution.
+
+The separate retained native boundary trial below still supplies cold shared
+base, confirmed absence, no targeted fallback, guarded-write progress, failed
+inventory retention and missed-journal audit evidence. Existing responsive
+browser evidence still supplies presentation checks across all five surfaces.
+No UI or production source changed in this retry.
+
+Reproduce the three run groups with the existing matrix runner and the same
+fixture timestamp. Use `-Surfaces overview -Activity active`, then the other
+four surfaces in both activity modes, then `-Surfaces overview -Activity settled`.
+Use fresh local output directories. `shared-read-report.mjs` adds `scenario`
+beside full-trial load. Its `window`, `load` and `bounds` retain independent
+identity checks and explicit unknowns. Reanalyse retained data into a new local
+report path; never overwrite an original result or hash manifest.
+
+The branch retains archive-free ancestry from
+`1b14daa242197b4fc830c7f0589932f299657933`. The original archive-bearing commit
+`195f6bae6dada8f077606d907cb8414d427d46ec` has a retained local reference and is
+not an ancestor. Raw evidence remains local. Only reviewed aggregate evidence,
+probe code and reproduction instructions belong in this candidate.
+
+All 58 focused Node checks pass, including window boundaries, missing clocks,
+unknown bytes, child-identity mismatch and outward timestamp rounding. The
+normal solution build passes with zero warnings and errors. The complete
+2184-test measurement below is reused: production and normal test sources are
+byte-identical to that measured revision. This retry adds eight cheap Node
+checks and no normal-suite native journey or fixture publication. Merger still
+owns fresh synchronized-head and latest-main acceptance.
 
 ## Identities and comparison limits
 
@@ -248,7 +377,8 @@ location. Later changes affect only opt-in QA tools and this aggregate report.
 
 Browser facts, independent section receipts, native membership, guarded-write
 progress, cold base validation and backup-audit recovery have retained evidence.
-Complete native-load attribution remains unavailable. The shim writes final
+Complete full-trial native-load attribution remains unavailable. The retry above
+supplies bounded scenario load with explicit byte and result gaps. The shim writes final
 records in `finally`; a missing final record does not prove an exit, timeout or
 duration. The retained files cannot recover those values. The matrix remains
 incomplete. This report does not declare every acceptance criterion passed.

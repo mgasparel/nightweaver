@@ -52,6 +52,16 @@ time and overlap bounds separate from complete final records. A bounded gap
 does not change the original `completed: false` result. The observer stops
 after the exact stack stops. Raw evidence stays local.
 
+The report's additive `scenario` field covers cold navigation through final
+native Ready verification after browser changes. Its clock bridge rounds the
+cutoff outward. It excludes later shutdown starts and keeps full-trial load
+separate. Paired settlement bounds require the recorded wrapper and launched
+child identities. Missing bytes and native results remain unknown. A bounded
+scenario never changes the original runner's `completed: false` result.
+Run `node --test shared-read-window.test.mjs shared-read-report.test.mjs` for
+the window, identity and incomplete-evidence checks. To retain an original report,
+use `node shared-read-report.mjs <matrix-directory> <new-local-report.json>`.
+
 Run `node --test shared-read-section-report.test.mjs` for the section evidence
 checks. Create a separate section report with
 `node shared-read-section-report.mjs <matrix-directory> <new-report.json>`.

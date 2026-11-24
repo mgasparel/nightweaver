@@ -10,6 +10,12 @@ Three additional Node cases check independent settlement bounds and unknown
 bytes. The opt-in process observer shares each existing QA trial and adds no
 normal-suite journey. It polls identity-checked native handles every 10 ms,
 retains at most 10,000 entries and runs only in the explicit measurement runner.
+Eight more cheap Node cases check scenario boundaries, identity confirmation,
+missing clock evidence and incomplete native results. The retry reuses nine
+native matrix cells and adds only the missing settled Overview cell. Its
+76.8006866-second trial includes startup, browser work and exact stack stop.
+It adds no normal-suite journey. The retained 2184-test complete measurement
+remains applicable because production and normal test sources are unchanged.
 
 Workspace base rendering adds five injected source cases and five Studio model
 cases. They check publication before held text, history and relations, shared

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { assertSample, summarizeTools, boundTools } from './shared-read-assertions.mjs';
 import { analyzeReceipt } from './shared-read-receipts.mjs';
+import { windowLoad, settlementBoundary } from './shared-read-window.mjs';
 
 export function buildReport(root) {
 const result = JSON.parse(fs.readFileSync(path.join(root, 'result.json'), 'utf8'));
@@ -48,8 +49,9 @@ for (const run of result.runs) {
       const value = JSON.parse(fs.readFileSync(observed, 'utf8'));
       // Both identities must have native-handle settlement. A wrapper exit
       // alone cannot establish settlement of the delegated native command.
-      if (value.wrapper?.pid === row.pid && value.wrapper.settledByUtc && value.child?.settledByUtc)
-        row.settledByUtc = [value.wrapper.settledByUtc, value.child.settledByUtc].sort().at(-1);
+      const launched = path.join(trial, 'tools', name.replace(/\.pending$/, '.launched'));
+      row.settledByUtc = settlementBoundary(row,
+        fs.existsSync(launched) ? JSON.parse(fs.readFileSync(launched, 'utf8')) : null, value);
       row.observation = value;
     }
     return row;
@@ -58,6 +60,7 @@ for (const run of result.runs) {
   for (const gap of value.missing) missing.add(gap);
   trials.push({ directory: path.basename(trial), manifest: value.manifest, changes: value.changes,
     activity: value.activity, lifecycle: run, errorCount: value.errors.length, unsettled, externalCommands: value.external,
+    scenario: windowLoad(value, records, pending),
     fullToolLoad: summarizeTools(records, run.startedUtc ?? result.measuredUtc, run.finishedUtc ?? result.finishedUtc, pending),
     fullToolBounds: boundTools(records, pending, run.startedUtc ?? result.measuredUtc, run.finishedUtc ?? result.finishedUtc) });
   for (const rawSample of value.samples) {
