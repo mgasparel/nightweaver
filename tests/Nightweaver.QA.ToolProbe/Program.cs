@@ -29,6 +29,10 @@ var start = new ProcessStartInfo(executable)
     RedirectStandardOutput = true, RedirectStandardError = true,
     StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false)
 };
+// Instrument the application's CLI boundary once. Native tools must resolve
+// their own subprocesses through the original PATH, not another QA shim.
+start.Environment["PATH"] = Environment.GetEnvironmentVariable("NIGHTWEAVER_PROBE_NATIVE_PATH")
+    ?? throw new InvalidOperationException("Missing original native PATH.");
 foreach (var arg in args) start.ArgumentList.Add(arg);
 using var process = new Process { StartInfo = start };
 var outputBytes = 0L; var errorBytes = 0L;

@@ -15,7 +15,7 @@ $output = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $output) { throw 'Use a new evidence directory' }
 [IO.Directory]::CreateDirectory($output) | Out-Null
 $names = @('NIGHTWEAVER_QA_SCENARIO','NIGHTWEAVER_QA_URL','NIGHTWEAVER_QA_CONFIG','NIGHTWEAVER_QA_OUTPUT',
-    'NIGHTWEAVER_PROBE_BD','NIGHTWEAVER_PROBE_GIT','NIGHTWEAVER_PROBE_TRACE','NIGHTWEAVER_PROBE_SHIM',
+    'NIGHTWEAVER_PROBE_BD','NIGHTWEAVER_PROBE_GIT','NIGHTWEAVER_PROBE_TRACE','NIGHTWEAVER_PROBE_SHIM','NIGHTWEAVER_PROBE_NATIVE_PATH',
     'NIGHTWEAVER_PROBE_ACTIVITY','NIGHTWEAVER_PROBE_SURFACE','NIGHTWEAVER_PROBE_WARM_CYCLES','NIGHTWEAVER_QA_FIXTURE_TIMESTAMP')
 $previous = @{}; foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name) }
 $runs = [Collections.Generic.List[object]]::new()
@@ -31,6 +31,7 @@ $metadata = [ordered]@{
     latencyTarget = $null; runs = $runs; failure = $null
 }
 try {
+    $env:NIGHTWEAVER_PROBE_NATIVE_PATH = $env:PATH
     $env:NIGHTWEAVER_PROBE_BD = (Get-Command bd -CommandType Application).Source
     $env:NIGHTWEAVER_PROBE_GIT = (Get-Command git -CommandType Application).Source
     $shim = Join-Path $output 'shim'

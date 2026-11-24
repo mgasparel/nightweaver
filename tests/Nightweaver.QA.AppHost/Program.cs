@@ -201,6 +201,7 @@ try
         web.WithEnvironment("PATH", shim + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"))
             .WithEnvironment("NIGHTWEAVER_PROBE_BD", Environment.GetEnvironmentVariable("NIGHTWEAVER_PROBE_BD"))
             .WithEnvironment("NIGHTWEAVER_PROBE_GIT", Environment.GetEnvironmentVariable("NIGHTWEAVER_PROBE_GIT"))
+            .WithEnvironment("NIGHTWEAVER_PROBE_NATIVE_PATH", Environment.GetEnvironmentVariable("NIGHTWEAVER_PROBE_NATIVE_PATH"))
             .WithEnvironment("NIGHTWEAVER_PROBE_TRACE", Environment.GetEnvironmentVariable("NIGHTWEAVER_PROBE_TRACE"));
     }
     using var app = builder.Build();
