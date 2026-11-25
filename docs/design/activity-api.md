@@ -101,9 +101,11 @@ disconnect before that item completes leaves the prior identity in force.
 
 Status reports source failure, truncation, expired history and loss before resumed
 items. `reconnectGap` identifies a resumed cursor with unavailable continuity.
-`runtimeReplaced` compares the retained cursor's runtime with the current runtime,
-and also detects replacement during an open stream. If that retained position has
-expired, the explicit history gap replaces any claim of complete runtime coverage.
+`runtimeReplaced` compares the retained cursor's runtime with the current runtime
+only when a cached record matches both the cursor journal and offset exactly.
+A foreign journal or missing offset supplies no runtime comparison evidence.
+The history gap stays explicit. A separate comparison of runtime observations
+detects replacement during an open stream, even without a retained cursor match.
 Record-level replacement evidence remains in history. A healthy socket never
 certifies a fresh source or a verified lifecycle outcome.
 

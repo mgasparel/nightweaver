@@ -187,7 +187,8 @@ internal sealed class ActivityReadService : BackgroundService
             var details = new List<ActivityRecordDetail>();
             var runtimeHealth = runtime.Availability == FactoryTelemetryAvailability.Live && runtimeReceipt is { } lastRead
                 && clock.GetElapsedTime(lastRead) > TimeSpan.FromSeconds(10) ? FactoryTelemetryAvailability.Stale : runtime.Availability;
-            var priorRuntime = cursor is null ? null : rows.LastOrDefault(r => r.Position.Offset <= cursor.Offset)?.Position.Runtime;
+            var priorRuntime = cursor is null ? null : rows.FirstOrDefault(r =>
+                r.Position.Journal == cursor.Journal && r.Position.Offset == cursor.Offset)?.Position.Runtime;
             var replaced = priorRuntime is { } prior && Guid.TryParse(runtime.Snapshot?.RuntimeId, out var current) && current != prior;
             // Encode fixed metadata with the longest cursor and scan count. False
             // is the longer JSON boolean, so it also bounds SSE reconnect flags.

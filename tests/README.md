@@ -20,6 +20,13 @@ pages. These cases add no native journey, tracker work or fixture publication.
 Wire accounting adds bounded serialization per selected record. It adds no file
 read and keeps shared refresh, six test threads and production deadlines.
 
+Cursor runtime repair adds three controlled HTTP/SSE cases. A foreign journal
+or missing offset cannot supply runtime replacement evidence from another row.
+An exact retained cursor still detects replacement. Each case keeps gap evidence
+and checks the separate comparison of runtime observations on an open stream.
+The repair adds one journal comparison per examined cache row. It adds no native
+journey, fixture publication, source read or tracker command.
+
 Activity journal tests add controlled storage and clock cases plus disposable-file
 read, write, rotation, cursor, corruption, identity and sentinel checks. One short
 junction command and one hard-link call prove actual Windows path safety. They

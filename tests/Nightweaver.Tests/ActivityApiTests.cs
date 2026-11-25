@@ -248,6 +248,50 @@ public sealed class ActivityApiTests
     private static FactoryTelemetryReadResult Live(Guid runtime) => new(FactoryTelemetryAvailability.Live, null,
         new(2, "test", "target", runtime.ToString("N"), 1, DateTimeOffset.UtcNow, "live", new(1, []), new(1, [])));
 
+    [Theory]
+    [InlineData("foreign", false)]
+    [InlineData("missing", false)]
+    [InlineData("exact", true)]
+    public async Task RuntimeReplacementRequiresExactRetainedCursorIdentity(string identity, bool replaced)
+    {
+        var source = new Source
+        {
+            Page = new([Row(1), Row(3)], Cursor(3), 1, 3, ActivityPageState.Gap, 8192),
+            RuntimeResult = Live(Guid.NewGuid())
+        };
+        using var service = new ActivityReadService(source, TimeProvider.System, new(), "test");
+        var token = TestContext.Current.CancellationToken;
+        await service.RefreshAsync(token);
+        var cursor = identity switch
+        {
+            "foreign" => new ActivityCursor(1, Guid.NewGuid(), 1),
+            "missing" => Cursor(2),
+            _ => Cursor(1)
+        };
+        await using var app = await App(service);
+        using var client = app.GetTestClient();
+        using var history = JsonDocument.Parse(await client.GetStringAsync(
+            "/api/activity/v1/projects/test/history?cursor=" + ActivityEndpoints.FormatCursor(cursor), token));
+        Assert.Equal(replaced, history.RootElement.GetProperty("runtimeReplaced").GetBoolean());
+        Assert.Contains("Gap", history.RootElement.GetProperty("state").GetString(), StringComparison.Ordinal);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/activity/v1/projects/test/events");
+        request.Headers.Add("Last-Event-ID", ActivityEndpoints.FormatCursor(cursor));
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        using var reader = new StreamReader(await response.Content.ReadAsStreamAsync(token));
+        Assert.Equal("event: status", await reader.ReadLineAsync(token));
+        var line = Assert.IsType<string>(await reader.ReadLineAsync(token));
+        Assert.StartsWith("data: ", line, StringComparison.Ordinal);
+        using var status = JsonDocument.Parse(line[6..]);
+        Assert.Equal(replaced, status.RootElement.GetProperty("runtimeReplaced").GetBoolean());
+        Assert.True(status.RootElement.GetProperty("reconnectGap").GetBoolean());
+
+        // A stream can independently observe a real runtime change even when
+        // its cursor has no retained runtime evidence.
+        using var changed = JsonDocument.Parse(ActivityEndpoints.EncodeBatch(service.Read(cursor, All), cursor,
+            Runtime.ToString("N")).Split('\n')[1][6..]);
+        Assert.True(changed.RootElement.GetProperty("runtimeReplaced").GetBoolean());
+    }
+
     [Fact]
     public async Task RuntimeReplacementAndExpiredInvocationStayIndependentOfJournalFacts()
     {
