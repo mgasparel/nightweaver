@@ -3,7 +3,7 @@ using Nightweaver.Inspection;
 
 namespace Nightweaver.ActivityFeed;
 
-internal sealed record ActivityJournalHealth(bool Available, ActivityReason Reason, long Lost);
+internal sealed record ActivityJournalHealth(bool Available, ActivityReason Reason, long? Lost);
 internal sealed record ActivityJournalStart(Guid Journal, long NextOffset, bool Gap, bool Replaced,
     ActivityReason GapReason = ActivityReason.None);
 
@@ -29,6 +29,7 @@ internal sealed class ActivityJournal : IAsyncDisposable
     private ActivityJournalHealth health = new(false, ActivityReason.RuntimeStarting, 0);
     private long pendingLoss;
     private long totalLoss;
+    private int unknownLoss;
     private int closing;
 
     internal ActivityJournal(IActivityJournalStorage storage, GitHubRepositoryIdentity repository,
@@ -40,7 +41,8 @@ internal sealed class ActivityJournal : IAsyncDisposable
         worker = Task.Run(RunAsync);
     }
 
-    internal ActivityJournalHealth Health => Volatile.Read(ref health) with { Lost = Interlocked.Read(ref totalLoss) };
+    internal ActivityJournalHealth Health => Volatile.Read(ref health) with
+    { Lost = Volatile.Read(ref unknownLoss) != 0 ? null : Interlocked.Read(ref totalLoss) };
 
     // No serialization, disk access, async wait or viewer work on the caller path.
     internal bool TrySubmit(ActivityEvidence evidence, ActivityMergeProof? proof = null)
@@ -114,6 +116,7 @@ internal sealed class ActivityJournal : IAsyncDisposable
                 }
                 catch (Exception e) when (StorageFailure(e))
                 {
+                    Volatile.Write(ref unknownLoss, 1);
                     Lose(); Volatile.Write(ref health, new(false, ActivityReason.DiskFailure, 0));
                     // An uncertain write must be recovered by a new runtime. Do not
                     // append behind a torn record or reuse its position.
@@ -124,13 +127,17 @@ internal sealed class ActivityJournal : IAsyncDisposable
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
         catch (Exception e) when (StorageFailure(e))
-        { Volatile.Write(ref health, new(false, ActivityReason.DiskFailure, 0)); queue.Writer.TryComplete(); }
+        {
+            Volatile.Write(ref unknownLoss, 1);
+            Volatile.Write(ref health, new(false, ActivityReason.DiskFailure, 0)); queue.Writer.TryComplete();
+        }
         finally
         {
             queue.Writer.TryComplete();
             while (queue.Reader.TryRead(out _)) Lose();
             try { storage.Dispose(); }
-            catch (Exception e) when (StorageFailure(e)) { Volatile.Write(ref health, new(false, ActivityReason.DiskFailure, 0)); }
+            catch (Exception e) when (StorageFailure(e))
+            { Volatile.Write(ref unknownLoss, 1); Volatile.Write(ref health, new(false, ActivityReason.DiskFailure, 0)); }
         }
     }
 
@@ -142,7 +149,11 @@ internal sealed class ActivityJournal : IAsyncDisposable
         if (Interlocked.Exchange(ref closing, 1) != 0) return;
         queue.Writer.TryComplete();
         try { await worker.WaitAsync(ActivityLimits.WriteDeadline).ConfigureAwait(false); }
-        catch (TimeoutException) { stop.Cancel(); Volatile.Write(ref health, new(false, ActivityReason.DiskFailure, 0)); }
+        catch (TimeoutException)
+        {
+            Volatile.Write(ref unknownLoss, 1);
+            stop.Cancel(); Volatile.Write(ref health, new(false, ActivityReason.DiskFailure, 0));
+        }
         // A blocked worker retains the lease and its bounded queue until it settles.
     }
 }

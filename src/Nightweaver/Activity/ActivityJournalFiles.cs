@@ -111,6 +111,7 @@ internal sealed class ActivityJournalFiles : IActivityJournalStorage
             && !Path.IsPathFullyQualified(physicalRelative))
             throw new InvalidDataException("Activity storage resolves inside the Target Repository.");
         lease = InvocationRuntimeFiles.OpenExclusiveRuntimeFile(Path.Combine(root, "writer.lock"), true);
+        if (lease.Stream.Length != 0) throw new InvalidDataException("Activity lock contains unknown data.");
         if (!string.Equals(physicalRoot, InvocationRuntimeFiles.ResolveExistingDirectoryPath(root), StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Activity storage ancestry changed.");
         var manifest = Path.Combine(root, "manifest.json");
@@ -136,8 +137,10 @@ internal sealed class ActivityJournalFiles : IActivityJournalStorage
                 catch (IOException absent) when (Missing(absent)) { }
             }
             identity = new(1, project, target, repository.CliRepository, Guid.NewGuid());
+            var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(identity);
+            if (manifestBytes.Length > 16384) throw new InvalidDataException("Activity manifest exceeds its limit.");
             using var created = InvocationRuntimeFiles.OpenActivityFileForWrite(manifest, true);
-            created.Stream.Write(JsonSerializer.SerializeToUtf8Bytes(identity)); created.Stream.Flush(true);
+            created.Stream.Write(manifestBytes); created.Stream.Flush(true);
         }
         var segments = new List<Segment>();
         var state = ActivityPageState.Ready;

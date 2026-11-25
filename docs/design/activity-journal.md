@@ -22,7 +22,10 @@ A full queue drops the new entry. Saturating loss counters remain outside the
 queue. The worker writes `RecordsLost` before the next ordinary record. The loss
 reason stays unspecified because queue loss and rejected input can share that
 count. Counts above the schema limit become unknown in the record. The health
-object retains the full saturating count for this runtime.
+object retains the full saturating count for this runtime when loss is known.
+It reports unknown loss after an uncertain write, storage failure or settlement
+timeout. A failed write can have reached storage, so a failed call is not an
+exact lost-record count.
 
 `Health` exposes availability, a safe reason code and runtime loss count. It
 never stores exception text. An uncertain storage failure closes the writer

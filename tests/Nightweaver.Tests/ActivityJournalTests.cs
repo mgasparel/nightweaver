@@ -28,6 +28,7 @@ public sealed class ActivityJournalTests
         internal bool Hold;
         internal bool HoldAppend;
         internal bool Fail;
+        internal bool FailAfterWrite;
         internal bool Disposed;
         internal bool Cancelled;
         public async Task<ActivityJournalStart> StartAsync(Guid runtime, CancellationToken token)
@@ -43,6 +44,7 @@ public sealed class ActivityJournalTests
             token.ThrowIfCancellationRequested();
             if (Fail) throw new UnauthorizedAccessException("SECRET_SENTINEL");
             lock (Records) Records.Add(record);
+            if (FailAfterWrite) throw new IOException("SECRET_SENTINEL");
         }
         public void Dispose() { Disposed = true; Settled.TrySetResult(); }
     }
@@ -102,10 +104,12 @@ public sealed class ActivityJournalTests
         Assert.Equal(Enumerable.Range(1, storage.Records.Count).Select(i => (long)i), storage.Records.Select(r => r.Position.Sequence));
     }
 
-    [Fact]
-    public async Task DeniedWritesExposeSafeHealthAndLoseQueuedRecords()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedWritesExposeUnknownLossAndSafeHealth(bool afterWrite)
     {
-        var storage = new MemoryStorage { Hold = true, Fail = true };
+        var storage = new MemoryStorage { Hold = true, Fail = !afterWrite, FailAfterWrite = afterWrite };
         await using var writer = new ActivityJournal(storage, Repository, Guid.NewGuid());
         await storage.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         for (var i = 0; i < 10; i++) Assert.True(writer.TrySubmit(Evidence(i)));
@@ -113,7 +117,9 @@ public sealed class ActivityJournalTests
         await storage.Settled.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.False(writer.Health.Available);
         Assert.Equal(ActivityReason.DiskFailure, writer.Health.Reason);
-        Assert.Equal(10, writer.Health.Lost);
+        Assert.Null(writer.Health.Lost); // A failed write can have reached storage.
+        if (afterWrite) Assert.Single(storage.Records);
+        else Assert.Empty(storage.Records);
         Assert.DoesNotContain("SECRET_SENTINEL", writer.Health.ToString());
         Assert.False(writer.TrySubmit(Evidence()));
     }
@@ -131,7 +137,7 @@ public sealed class ActivityJournalTests
         Assert.False(writer.TrySubmit(Evidence()));
         storage.Release.SetResult();
         await storage.Settled.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        Assert.Equal(1, writer.Health.Lost);
+        Assert.Null(writer.Health.Lost);
     }
 
     [Fact]
@@ -157,6 +163,23 @@ public sealed class ActivityJournalTests
         internal Files() { Directory.CreateDirectory(Target); }
         internal ActivityJournalFiles Store(string? target = null) => new(Paths, ProjectSlug.Parse("test"), target ?? Target, Repository);
         public void Dispose() { Directory.Delete(Root, true); }
+    }
+
+    [Fact]
+    public async Task MetadataLimitAndUnknownLockDataFailBeforeManifestCreation()
+    {
+        using var fixture = new Files();
+        using (var oversized = new ActivityJournalFiles(fixture.Paths, ProjectSlug.Parse("test"), fixture.Target,
+            new(new string('x', 17000), "owner", "repo")))
+            await Assert.ThrowsAsync<InvalidDataException>(() => oversized.StartAsync(Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.False(File.Exists(Path.Combine(fixture.ActivityRoot, "manifest.json")));
+        var lockPath = Path.Combine(fixture.ActivityRoot, "writer.lock");
+        Assert.Equal(0, new FileInfo(lockPath).Length);
+        File.WriteAllText(lockPath, "unknown-data");
+        using (var unknown = fixture.Store())
+            await Assert.ThrowsAsync<InvalidDataException>(() => unknown.StartAsync(Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.Equal("unknown-data", File.ReadAllText(lockPath));
+        Assert.False(File.Exists(Path.Combine(fixture.ActivityRoot, "manifest.json")));
     }
 
     [Fact]
