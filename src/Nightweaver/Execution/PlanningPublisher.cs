@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 using Nightweaver.Telemetry;
@@ -10,6 +12,12 @@ namespace Nightweaver.Execution;
 internal sealed class PlanningPublisher(IProcessRunner runner)
 {
     internal const string ReleaseSchema = "nightweaver-plan-release-v1";
+    internal const string IntentSchema = "nightweaver-plan-create-v1";
+    private static readonly ConcurrentDictionary<(string Repository, string Product), byte> Active = new();
+    private static readonly JsonSerializerOptions IntentJson = new(PlanningEvidence.JsonOptions)
+    { RespectRequiredConstructorParameters = true, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow };
+    private sealed class Authority(string? version) { internal string? Version = version; }
+    private sealed record CreationIntent(string Schema, string Product, string Revision, string Entry, string Task, bool Resolved);
     private readonly BeadsReader reader = new(runner);
     private readonly PlanningEvidence evidence = new(runner);
 
@@ -25,16 +33,25 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
     internal async Task<AgentStageResult> PublishAsync(AgentStageSession session, CancellationToken token,
         bool releaseRevalidationClaim = true)
     {
-        return await WorkflowTiming.MeasureAsync(WorkflowOperation.PlanningPublication, WorkflowPhase.Publication,
-            () => PublishCoreAsync(session, token, releaseRevalidationClaim),
-            result => OperationalTelemetry.Current?.Telemetry.RecordPublication(result)
-                ?? (result.PublicationReceipt is not null ? WorkflowResult.Success : WorkflowResult.Uncertain)).ConfigureAwait(false);
+        // Runtime callers hold the process-lifetime physical repository mutex.
+        // Also exclude overlap across publisher instances inside that process.
+        var key = (ProcessLifetimeTargetRepositoryLock.ResolveIdentity(session.Repository.GitCommonDirectory), session.BeadId);
+        if (!Active.TryAdd(key, 0)) throw Refuse("Another publication call owns this Product; preserve the retained evidence.");
+        try
+        {
+            return await WorkflowTiming.MeasureAsync(WorkflowOperation.PlanningPublication, WorkflowPhase.Publication,
+                () => PublishCoreAsync(session, token, releaseRevalidationClaim),
+                result => OperationalTelemetry.Current?.Telemetry.RecordPublication(result)
+                    ?? (result.PublicationReceipt is not null ? WorkflowResult.Success : WorkflowResult.Uncertain)).ConfigureAwait(false);
+        }
+        finally { Active.TryRemove(key, out _); }
     }
 
     private async Task<AgentStageResult> PublishCoreAsync(AgentStageSession session, CancellationToken token,
         bool releaseRevalidationClaim = true)
     {
         BeadsReader.EnsureMutationFreeBackend(session.Repository);
+        var authority = new Authority(session.PublicationVersion);
         var comments = await reader.ReadCommentsAsync(session.Repository, session.BeadId, token);
         var approval = ReadApproval(comments);
         var plan = PlanningEvidence.LatestCandidate(comments)?.Document
@@ -50,7 +67,10 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
             revision = approval.PlanRevision, tasks = ids }, PlanningEvidence.JsonOptions);
         var releasing = comments.Any(c => c.Text == receipt);
 
-        var grounding = await evidence.CaptureAsync(session, token);
+        var initial = await evidence.ObserveAsync(session, token);
+        CheckOwnership(session, initial.Product, authority);
+        authority.Version = Version(initial.Product);
+        var grounding = initial.Grounding;
         if (grounding != approval.Grounding && PlanningEvidence.ApprovalStillCurrent(approval, approval.Grounding, comments))
             return await RevalidateAsync(session, releaseRevalidationClaim, token);
 
@@ -58,20 +78,47 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         await CheckChildrenAsync(session, ids.Values, token);
         foreach (var task in tasks)
         {
-            await CheckAuthorityAsync(session, approval, token);
+            await CheckAuthorityAsync(session, approval, authority, token);
             var id = ids[task.Id];
             var inventory = await reader.ReadSnapshotAsync(session.Repository, token);
             if (!inventory.ById.ContainsKey(id))
             {
                 if (releasing) throw Refuse($"Verified task '{id}' disappeared; human-guided replanning is required.");
+                var intent = new CreationIntent(IntentSchema, session.BeadId, approval.PlanRevision, task.Id, id, false);
+                var intentProduct = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
+                var retainedIntent = await ReadIntentAsync(session, intentProduct, intent, token);
+                if (retainedIntent is not null || Matches(inventory, intent).Any())
+                    throw IntentFailure(intent, inventory, "The intended task is missing or its binding conflicts");
+                await WriteIntentAsync(session, approval, authority, intent, token);
+                // A confirmed intent does not carry authority across reads or a pause.
+                intentProduct = await CheckAuthorityAsync(session, approval, authority, token);
+                if (await ReadIntentAsync(session, intentProduct, intent, token) != intent)
+                    throw IntentFailure(intent, inventory, "The creation intent changed before launch");
                 await WriteUncertainAsync(session, ["create", "--id", id, "--type", "task", "--title", task.Title,
                     "--description", Description(task, plan), "--acceptance", string.Join("\n", task.AcceptanceCriteria),
                     "--labels", "plan-unpublished", "--deps", "discovered-from:" + session.BeadId,
                     "--metadata", JsonSerializer.Serialize(new { publication_product = session.BeadId,
                         publication_revision = approval.PlanRevision, publication_entry = task.Id }), "--json"], token);
             }
-            var bead = await reader.ReadDetailAsync(session.Repository, id, token);
-            CheckTask(bead, task, plan, session.BeadId, approval.PlanRevision, releasing);
+            // A full fresh inventory reconciles a command whose response or ID was lost.
+            inventory = await reader.ReadSnapshotAsync(session.Repository, token);
+            var binding = new CreationIntent(IntentSchema, session.BeadId, approval.PlanRevision, task.Id, id, true);
+            var matches = Matches(inventory, binding).ToArray();
+            if (matches.Length != 1 || matches[0].Id != id)
+                throw IntentFailure(binding, inventory, "The task binding is not unique and exact");
+            var bead = matches[0];
+            try { CheckTask(bead, task, plan, session.BeadId, approval.PlanRevision, releasing); }
+            catch (AgentStageInputException exception) { throw IntentFailure(binding, inventory, exception.Message); }
+            if (!bead.Payload.TryGetProperty("dependencies", out var dependencies)
+                || !BeadsReader.ParseDownDependencies(dependencies, bead.Id)
+                .Contains(new BeadDependency(id, session.BeadId, "discovered-from")))
+                throw IntentFailure(binding, inventory, "The native Product link is missing");
+            if (BeadsReader.ParseDownDependencies(dependencies, bead.Id).Except(Edges(session.BeadId, task, ids)).Any())
+                throw IntentFailure(binding, inventory, "The task has conflicting dependencies");
+            var intentParent = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
+            var existingIntent = await ReadIntentAsync(session, intentParent, binding, token);
+            if (existingIntent != binding)
+                await WriteIntentAsync(session, approval, authority, binding, token);
         }
 
         foreach (var task in tasks)
@@ -85,7 +132,7 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
                 // dep add has no native status/assignee compare-and-swap guards.
                 // Read the target last, immediately before each mutation, rather
                 // than relying on its earlier creation-loop snapshot.
-                await CheckAuthorityAsync(session, approval, token);
+                await CheckAuthorityAsync(session, approval, authority, token);
                 CheckTask(await reader.ReadDetailAsync(session.Repository, missing.IssueId, token), task, plan,
                     session.BeadId, approval.PlanRevision, allowReleased: false);
                 await WriteUncertainAsync(session, ["dep", "add", missing.IssueId, missing.DependsOnId, "--type", missing.Type], token);
@@ -102,25 +149,28 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         if (Metadata(retained, "publication_graph") is { } existingGraph && existingGraph != graphJson
             || Metadata(retained, "publication_revision") is { } existingRevision && existingRevision != approval.PlanRevision)
             throw Refuse("Retained publication identity conflicts with the approved graph; preserve it for human reconciliation.");
-        await CheckAuthorityAsync(session, approval, token);
+        await CheckAuthorityAsync(session, approval, authority, token);
         if (Metadata(retained, "publication_graph") != graphJson || Metadata(retained, "publication_revision") != approval.PlanRevision)
         {
             await WritePublicationMetadataAsync(session, approval.PlanRevision, graphJson, ["update", session.BeadId,
                 "--status", "in_progress", "--assignee", session.InitialAssignee!,
                 "--if-status", "in_progress", "--if-assignee", session.InitialAssignee!, "--json"], token);
             retained = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
+            authority.Version = Version(retained);
             if (Metadata(retained, "publication_graph") != graphJson || Metadata(retained, "publication_revision") != approval.PlanRevision)
                 throw Refuse("Independent publication membership was not confirmed; all remaining holds are preserved.");
         }
         if (!releasing)
         {
+            await CheckAuthorityAsync(session, approval, authority, token);
             await WriteUncertainAsync(session, ["comments", "add", session.BeadId, receipt], token);
             if (!(await reader.ReadCommentsAsync(session.Repository, session.BeadId, token)).Any(c => c.Text == receipt))
                 throw Refuse("Complete graph release evidence was not confirmed.");
+            authority.Version = Version(await reader.ReadDetailAsync(session.Repository, session.BeadId, token));
         }
         foreach (var task in tasks)
         {
-            await CheckAuthorityAsync(session, approval, token);
+            await CheckAuthorityAsync(session, approval, authority, token);
             var bead = await reader.ReadDetailAsync(session.Repository, ids[task.Id], token);
             CheckTask(bead, task, plan, session.BeadId, approval.PlanRevision, allowReleased: true);
             if (!bead.Labels.Contains("plan-unpublished", StringComparer.Ordinal)) continue;
@@ -133,7 +183,7 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         foreach (var id in ids.Values)
             if (releasedGraph.ById[id].Labels.Contains("plan-unpublished", StringComparer.Ordinal))
                 throw Refuse($"Task '{id}' still has a publication hold.");
-        await CheckAuthorityAsync(session, approval, token);
+        await CheckAuthorityAsync(session, approval, authority, token);
         // All task holds are gone, but generated-task admission still requires this
         // exact parent revision and planned state. No multi-row transaction is assumed.
         await WritePublicationMetadataAsync(session, approval.PlanRevision, graphJson, ["update", session.BeadId, "--add-label", "planned",
@@ -207,15 +257,75 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
             throw Refuse("Unmapped preexisting Product tasks require human-guided reconciliation; no work was removed.");
     }
 
-    private async Task CheckAuthorityAsync(AgentStageSession session, PlanningApproval approval, CancellationToken token)
+    private async Task<BeadSnapshot> CheckAuthorityAsync(AgentStageSession session, PlanningApproval approval, Authority authority, CancellationToken token)
     {
         var observation = await evidence.ObserveAsync(session, token);
         var parent = observation.Product;
-        if (BeadWorkflowState.Parse(parent) != session.InitialState || parent.Status != "in_progress"
-            || parent.Assignee != session.InitialAssignee || string.IsNullOrWhiteSpace(parent.Assignee))
-            throw Refuse("Product workflow, pause or ownership changed during publication.");
+        CheckOwnership(session, parent, authority);
         if (!PlanningEvidence.ApprovalStillCurrent(approval, observation.Grounding, observation.Comments))
             throw Refuse("Approved content or grounding changed; preserve tasks for Challenger revalidation and human-guided replanning.");
+        return parent;
+    }
+
+    internal static string? Version(BeadSnapshot bead) => bead.Payload.TryGetProperty("updated_at", out var value) ? value.ToString() : null;
+
+    private static void CheckOwnership(AgentStageSession session, BeadSnapshot parent, Authority authority)
+    {
+        if (BeadWorkflowState.Parse(parent) != session.InitialState || parent.Status != "in_progress"
+            || parent.Assignee != session.InitialAssignee || string.IsNullOrWhiteSpace(parent.Assignee)
+            || authority.Version is not null && Version(parent) != authority.Version)
+            throw Refuse("Product workflow, pause, ownership or observation version changed during publication.");
+    }
+
+    private static string IntentKey(CreationIntent intent) => "publication_create_" + PlanningEvidence.Hash(intent.Revision + "\n" + intent.Entry);
+
+    private static CreationIntent? ReadIntent(BeadSnapshot parent, CreationIntent expected)
+    {
+        if (!parent.Payload.TryGetProperty("metadata", out var metadata)) return null;
+        if (metadata.ValueKind != JsonValueKind.Object)
+            throw Refuse("Product metadata is malformed");
+        if (!metadata.TryGetProperty(IntentKey(expected), out var raw)) return null;
+        try
+        {
+            var actual = raw.ValueKind == JsonValueKind.String
+                ? JsonSerializer.Deserialize<CreationIntent>(raw.GetString()!, IntentJson) : null;
+            if (actual is not null && (actual with { Resolved = expected.Resolved }) == expected) return actual;
+        }
+        catch (JsonException) { }
+        throw Refuse("Creation evidence is malformed or conflicting");
+    }
+
+    private async Task<CreationIntent?> ReadIntentAsync(AgentStageSession session, BeadSnapshot parent,
+        CreationIntent expected, CancellationToken token)
+    {
+        try { return ReadIntent(parent, expected); }
+        catch (AgentStageInputException exception)
+        {
+            throw IntentFailure(expected, await reader.ReadSnapshotAsync(session.Repository, token), exception.Message);
+        }
+    }
+
+    private static IEnumerable<BeadSnapshot> Matches(BeadsInventory inventory, CreationIntent intent) =>
+        inventory.ById.Values.Where(b => b.Id == intent.Task || Metadata(b, "publication_product") == intent.Product
+            && Metadata(b, "publication_revision") == intent.Revision && Metadata(b, "publication_entry") == intent.Entry);
+
+    private static AgentStageInputException IntentFailure(CreationIntent intent, BeadsInventory inventory, string check) =>
+        Refuse($"Product '{intent.Product}', revision '{intent.Revision}', entry '{intent.Entry}', observed IDs [{string.Join(", ", Matches(inventory, intent).Select(b => b.Id))}]: {check}. Maintainer: inspect the evidence and reconcile the task binding before guarded Retry.");
+
+    private async Task WriteIntentAsync(AgentStageSession session, PlanningApproval approval, Authority authority,
+        CreationIntent intent, CancellationToken token)
+    {
+        await CheckAuthorityAsync(session, approval, authority, token);
+        using var file = InvocationRuntimeFiles.CreatePlanningPublicationMetadataFile(session.HostPaths, session.Project.Name, session.BeadId);
+        await JsonSerializer.SerializeAsync(file.Stream, new Dictionary<string, string>
+        { [IntentKey(intent)] = JsonSerializer.Serialize(intent, PlanningEvidence.JsonOptions) }, PlanningEvidence.JsonOptions, token);
+        await file.Stream.FlushAsync(token);
+        await WriteUncertainAsync(session, ["update", session.BeadId, "--status", "in_progress", "--assignee", session.InitialAssignee!,
+            "--if-status", "in_progress", "--if-assignee", session.InitialAssignee!, "--metadata", "@" + file.Stream.Name, "--json"], token);
+        var parent = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
+        if (await ReadIntentAsync(session, parent, intent, token) != intent)
+            throw IntentFailure(intent, await reader.ReadSnapshotAsync(session.Repository, token), "The creation intent was not confirmed");
+        authority.Version = Version(parent);
     }
 
     internal static PlanningApproval ReadApproval(IReadOnlyList<BeadCommentSnapshot> comments)

@@ -705,3 +705,14 @@ time, stage, pause labels, repair count, source health and action eligibility.
 They add no native journey or fixture publication. Browser checks extend the
 existing Studio and Overview journey. Production adds one inventory-only base
 projection and defers selected explanations to the existing shared history cache.
+
+Planning creation safety adds controlled-runner cases for intent confirmation,
+pre-launch authority, lost responses, late child completion, publisher restart,
+malformed or duplicate evidence, legacy task recovery and same-process overlap.
+Coordinator coverage checks a changed Product version during provisioning with a
+reused assignee. These cases add no native journey or fixture publication.
+Existing repository mutex integration coverage proves physical-repository process
+exclusion. Existing approved-stage dispatch journeys exercise the new metadata
+transport. Each newly created task adds two guarded metadata writes, confirmation
+reads and fresh authority observations. Recovery never uses a zero-match intent as
+permission to repeat a create. Six-thread scheduling and deadlines stay unchanged.
