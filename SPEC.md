@@ -506,8 +506,10 @@ The optional top-level `decisions_api_key` (legacy alias `openai_api_key`) accep
 
 The [Activity evidence contract](docs/design/activity-feed.md) defines the pure
 event model, evidence strengths, safe fields, journal order, loss states and
-finite limits for the local Project Activity feed. This contract adds no active
-connected runtime producer or console route. The additive journal module provides
+finite limits for the local Project Activity feed. The additive read API serves
+finite history and reconnectable SSE through one shared Web collector. It adds
+no runtime producer or visible console view. See [Activity read API](docs/design/activity-api.md).
+The additive journal module provides
 bounded local storage and reads. See [Activity journal](docs/design/activity-journal.md).
 Activity records grant no lifecycle authority.
 

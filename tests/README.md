@@ -1,5 +1,16 @@
 # Test suite
 
+Activity API cases use injected readers, clocks and held response streams for
+pagination, filters, loss, cursor expiry, runtime replacement, source failure,
+cache bounds and write deadlines. In-process HTTP/SSE checks cover actual wire
+identity, reconnect, refusal, capacity and cancellation. A disposable-file case
+checks that missing history stays absent with one injected origin read. No native
+journey or fixture publication is added. Production reads one bounded journal page
+and one runtime file per shared refresh, at most once per two seconds during
+Activity interest. One bounded origin Git command runs on first Activity use.
+Idle Web hosts add no reads. Existing tests, deadlines and six threads remain.
+See [Activity read API](../docs/design/activity-api.md).
+
 Activity journal tests add controlled storage and clock cases plus disposable-file
 read, write, rotation, cursor, corruption, identity and sentinel checks. One short
 junction command and one hard-link call prove actual Windows path safety. They

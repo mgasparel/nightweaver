@@ -2,7 +2,8 @@
 
 The Activity journal stores bounded display evidence. It has no lifecycle
 authority. This slice adds storage and a reader. A later slice connects runtime
-producers and HTTP routes. Existing factory work calls neither module yet.
+producers. The [Activity read API](activity-api.md) now shares this reader across
+history and SSE viewers. Existing factory work still has no connected producer.
 
 `HostPaths.ActivityRoot` selects `<root>/telemetry/<project>/activity`. The store
 binds the Project, full Target Repository path, GitHub repository and journal ID.
