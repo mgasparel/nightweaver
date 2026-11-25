@@ -21,6 +21,7 @@ internal sealed record HostPaths
     internal string TelemetryRoot(ProjectSlug slug) => Path.Combine(Root, "telemetry", slug.Value);
     internal string FactoryTelemetryPath(ProjectSlug slug) => Path.Combine(TelemetryRoot(slug), "factory.json");
     internal string CatchUpStatePath(ProjectSlug slug) => Path.Combine(TelemetryRoot(slug), "catch-up.json");
+    internal string ActivityRoot(ProjectSlug slug) => Path.Combine(TelemetryRoot(slug), "activity");
     internal string CleanupRoot(ProjectSlug slug) => Path.Combine(Root, "run", slug.Value, "cleanup");
     internal string BackgroundRoot(ProjectSlug slug) => Path.Combine(Root, "run", slug.Value, "background");
     internal string SupervisionRoot(ProjectSlug slug) => Path.Combine(Root, "run", slug.Value, "supervision");

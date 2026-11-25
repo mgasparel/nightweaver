@@ -123,6 +123,50 @@ internal static class ActivityProjector
         return bytes;
     }
 
+    // Re-project stored fields and require the canonical wire representation.
+    // This rejects extra/duplicate keys, altered messages, strengths and enums.
+    internal static ActivityRecord Deserialize(byte[] bytes, GitHubRepositoryIdentity repository)
+    {
+        if (bytes.Length + 1 > ActivityLimits.RecordBytes) throw new InvalidDataException("Oversized Activity record.");
+        using var document = JsonDocument.Parse(bytes);
+        var root = document.RootElement;
+        T Field<T>(string name) => root.GetProperty(name).Deserialize<T>(Json)!;
+        try
+        {
+            var position = Field<ActivityPosition>("position");
+            var observed = Field<DateTimeOffset>("observedAt");
+            var evidence = new ActivityEvidence(Field<ActivityKind>("kind"), Field<ActivitySource>("source"),
+                Field<ActivityPhase>("phase"), Field<Guid>("cause"), Field<string>("sourceReference"))
+            {
+                Bead = Field<string?>("bead"), Invocation = Field<string?>("invocation"),
+                SourceTime = Field<DateTimeOffset?>("sourceTime"), Freshness = Field<ActivityFreshness>("freshness"),
+                Reason = Field<ActivityReason>("reason"), Count = Field<int?>("count"), Limit = Field<int?>("limit"),
+                Detail = Field<ActivityDetail?>("detail"), Role = Field<ActivityRole?>("role"),
+                ObservedPublication = Field<ActivityKind?>("observedPublication")
+            };
+            var merge = Field<MergerFacts?>("merge");
+            ActivityRecord? record;
+            if (evidence.Kind == ActivityKind.EvidenceUnavailable && evidence.Source != ActivitySource.Journal)
+            {
+                // Failed stronger projections preserve their original source.
+                if (!Enum.IsDefined(evidence.Source) || evidence.Reason is not
+                    (ActivityReason.StaleSource or ActivityReason.MissingEvidence or ActivityReason.ConflictingEvidence)
+                    || merge is not null || evidence.ObservedPublication is not null)
+                    throw new InvalidDataException("Invalid unavailable Activity evidence.");
+                var safe = Project(position, observed, evidence with { Source = ActivitySource.Journal }, repository);
+                record = safe is null ? null : new(position, observed, evidence, ActivityStrength.Unknown, safe.Message);
+            }
+            else record = Project(position, observed, evidence, repository, merge is null ? null : new(merge, merge));
+            if (record is null || !bytes.AsSpan().SequenceEqual(Serialize(record)))
+                throw new InvalidDataException("Invalid stored Activity evidence.");
+            return record;
+        }
+        catch (Exception e) when (e is KeyNotFoundException or InvalidOperationException or ArgumentException)
+        { throw new InvalidDataException("Invalid stored Activity fields.", e); }
+    }
+
+    internal static bool SafeIdentifier(string? value) => Identifier(value);
+
     internal static ActivityRecord? Project(ActivityPosition position, DateTimeOffset observedAt,
         ActivityEvidence evidence, GitHubRepositoryIdentity repository, ActivityMergeProof? mergeProof = null)
     {

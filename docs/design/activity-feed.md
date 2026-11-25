@@ -6,6 +6,10 @@ pause change, or a repair-budget change. A consumer must use the existing guarde
 command path. This contract adds a pure model in `Activity/ActivityModel.cs`.
 It adds no active writer, producer hook, route, file scan, or browser behavior.
 
+The dependent [Activity journal module](activity-journal.md) now implements
+bounded storage and shared reads. It remains separate from runtime producers
+and console routes.
+
 One runtime-owned Project journal will supply Web. It must work with OTLP export
 disabled. Keep it under the Nightweaver Project runtime root, outside the Target
 Repository. Do not parse runtime logs or scan transcripts to reconstruct events.

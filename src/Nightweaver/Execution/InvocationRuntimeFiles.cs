@@ -612,6 +612,16 @@ internal sealed class InvocationRuntimeFiles : IDisposable
     internal static PinnedLogReadStream OpenExistingPackageFileForRead(string path) =>
         OpenPinnedReadOnlyFile(Path.GetFullPath(path), FileShareRead, "package file", rejectHardLinks: true);
 
+    // Activity readers never hold up append or retirement. Each reader validates
+    // the opened segment identity and consumes only complete fixed-size slots.
+    internal static PinnedLogReadStream OpenActivityFileForRead(string path) =>
+        OpenPinnedReadOnlyFile(Path.GetFullPath(path), FileShareRead | FileShareWrite | FileShareDelete,
+            "Activity file", rejectHardLinks: true);
+
+    internal static PinnedLogReadStream OpenActivityFileForWrite(string path, bool create) =>
+        OpenPinnedReadOnlyFile(Path.GetFullPath(path), FileShareRead, "Activity mutation", true,
+            GenericRead | GenericWrite | DeleteAccess, create ? CreateNew : OpenExisting, FileAccess.ReadWrite, create);
+
     // Upgrade handles deny write/delete sharing and reject aliases before mutation.
     internal static PinnedLogReadStream OpenPackageFileForMutation(string path, bool create) =>
         OpenPinnedReadOnlyFile(Path.GetFullPath(path), FileShareNone, "package mutation", true,
