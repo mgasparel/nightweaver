@@ -1,3 +1,4 @@
+using Nightweaver.ActivityFeed;
 using Nightweaver.Application;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
@@ -101,6 +102,7 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner, IC
         AgentStageResult invocation, MergerVerifiedMergeEvidence evidence, BeadWorkflowState closedState,
         CancellationToken cancellationToken)
     {
+        ActivityRuntime.Current?.Closed(session, invocation, closedState);
         var export = OperationalTelemetry.Current;
         if (export is not null && session.TryRecordMergeTelemetry())
             export.Telemetry.RecordVerifiedMerge(session.BeadId, export.RuntimeId, invocation.InvocationId,
@@ -108,6 +110,7 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner, IC
         try
         {
             var result = await FinalizeHousekeepingAsync(session, evidence, closedState, cancellationToken).ConfigureAwait(false);
+            if (!result.Receipt!.CleanupSucceeded) ActivityRuntime.Current?.CleanupFailed(session, invocation);
             export?.Telemetry.RecordMergeCleanup(result.Receipt!.CleanupQueued ? "queued"
                 : result.Receipt.CleanupSucceeded ? "completed" : "failed");
             return result;

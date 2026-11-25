@@ -16,8 +16,10 @@ public sealed class PlanningPublicationTests
     [InlineData("[{\"id\":\"wrong-response-id\"}]")]
     public async Task NativeAllocationUsesInventoryRatherThanCreateResponse(string response)
     {
+        using var capture = new ActivityCapture();
         using var fixture = new Fixture { CreateResponse = response };
         Assert.True((await fixture.Publish()).Succeeded);
+        Assert.Equal(Nightweaver.ActivityFeed.ActivityKind.PlanningPublished, Assert.Single(capture.Evidence).Kind);
         var tasks = fixture.Tasks.ToDictionary(t => PlanningPublisher.Metadata(t, "publication_entry")!, t => t.Id);
         Assert.Equal("native-1", tasks["first"]);
         Assert.Equal("native-2", tasks["second"]);
@@ -36,8 +38,10 @@ public sealed class PlanningPublicationTests
     [InlineData(7)]
     public async Task LegacyPartialPublicationReusesRetainedIdsAndReleaseEvidence(int stop)
     {
+        using var capture = new ActivityCapture();
         using var fixture = new Fixture { CrashAfterWrite = stop };
         await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
+        Assert.Empty(capture.Items);
         fixture.ConvertToLegacy();
         var retained = fixture.Tasks.Select(t => t.Id).ToArray();
         fixture.CrashAfterWrite = null;

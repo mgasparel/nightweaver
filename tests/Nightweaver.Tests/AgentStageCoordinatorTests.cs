@@ -9,9 +9,37 @@ public sealed class AgentStageCoordinatorTests
 {
     private static readonly string[] StatusArguments = ["status", "--porcelain"];
     private static readonly string[] HeadArguments = ["rev-parse", "HEAD"];
+    private static readonly string[] QaLabels = ["stage:qa"];
     private static readonly string[] PlanLabels = ["stage:plan"];
     private static readonly string[] ChallengeLabels = ["stage:plan-challenge"];
     private static readonly string[] ApprovedLabels = ["ready-for-planning", "stage:plan-approved"];
+
+    [Fact]
+    public async Task QaAdmissionRequiresFreshOpeningAndPreparationFailureDoesNotAssertLaunch()
+    {
+        using var capture = new ActivityCapture();
+        var reads = 0;
+        var runner = new RecordingProcessRunner((_, _) =>
+        {
+            reads++;
+            return Task.FromResult(new ProcessResult(0, JsonSerializer.Serialize(new[] { new
+            {
+                id = "product", issue_type = "task", status = "in_progress", assignee = "owner",
+                priority = 2, created_at = "2026-10-24T00:00:00Z", labels = QaLabels
+            } }), ""));
+        });
+        var coordinator = new AgentStageCoordinator(runner,
+            provision: (_, _, _, _, _, _) => Task.FromResult(new ProvisionedWorktree("worktree", new string('a', 40))),
+            prepare: (_, _, _, _, _, _) => throw new IOException("PRIVATE_PREPARATION_ERROR"));
+        var session = await coordinator.OpenSessionAsync(Host(), Project("target"), new("target", "main"),
+            "product", AgentRole.Qa, "owner", TestContext.Current.CancellationToken);
+        await Assert.ThrowsAsync<IOException>(() => coordinator.RunAttemptAsync(session, session.InitialState,
+            session.Worktree.HeadSha, TestContext.Current.CancellationToken));
+        Assert.Equal(2, reads);
+        Assert.Equal([Nightweaver.ActivityFeed.ActivityKind.QaAdmitted, Nightweaver.ActivityFeed.ActivityKind.EvidenceUnavailable],
+            capture.Evidence.Select(e => e.Kind));
+        Assert.Equal(Nightweaver.ActivityFeed.ActivityReason.PreparationFailed, capture.Evidence[^1].Reason);
+    }
 
     [Fact]
     public async Task ApprovedPublicationRejectsReusedOwnerDuringProvisioning()
@@ -95,6 +123,7 @@ public sealed class AgentStageCoordinatorTests
     [Fact]
     public async Task InvalidInputPreCancelledAndStaleInputNeverLaunch()
     {
+        using var capture = new ActivityCapture();
         var invalidProvisionCount = 0;
         var invalidRunner = new RecordingProcessRunner((request, _) =>
         {
@@ -132,6 +161,7 @@ public sealed class AgentStageCoordinatorTests
         await Assert.ThrowsAsync<AgentStageInputException>(() => staleCoordinator.RunAsync(Host(), Project("target"),
             new("target", "main"), "product", AgentRole.Planner, TestContext.Current.CancellationToken));
         Assert.Equal((2, 1, 0), (staleReads, staleProvisionCount, stalePrepareCount));
+        Assert.Empty(capture.Items);
     }
 
     [Fact]

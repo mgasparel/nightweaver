@@ -1,3 +1,5 @@
+using ActivityKind = Nightweaver.ActivityFeed.ActivityKind;
+using Nightweaver.ActivityFeed;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
@@ -137,6 +139,7 @@ internal sealed class AgentInvocationExecutor
                 throw new AgentLaunchDeniedException();
             var launchedChild = child ?? throw new InvalidOperationException("Native Agent launch completed without returning its process handle.");
             ContinuousAgentLaunchContext.ObserveLaunched(invocation, launchedChild.ProcessId, DateTimeOffset.UtcNow);
+            ActivityRuntime.Current?.Invocation(invocation, beadId, ActivityKind.InvocationStarted);
             rootExit = launchedChild.WaitForRootExitAsync();
             logGate = new SemaphoreSlim(1, 1);
             stdoutPump = PumpOutputAsync(launchedChild.StandardOutput, runtimeFiles.LogStream, logGate, stdoutCapture);
@@ -213,6 +216,20 @@ internal sealed class AgentInvocationExecutor
         logFlushStop?.Dispose();
 
         phaseTiming?.Dispose();
+        if (child is not null && cleanupFailure is null)
+            ActivityRuntime.Current?.Invocation(invocation, beadId,
+                ActivityKind.InvocationCompleted,
+                cancelled || cancellationToken.IsCancellationRequested ? ActivityReason.InvocationCancelled
+                : status == AgentExecutionStatus.TimedOut ? ActivityReason.InvocationTimedOut
+                : primaryFailure is not null || exitCode != 0 ? ActivityReason.InvocationFailed
+                : ActivityReason.None);
+        else if (!launchDenied)
+            ActivityRuntime.Current?.Invocation(invocation, beadId,
+                ActivityKind.EvidenceUnavailable,
+                child is not null ? ActivityReason.MissingEvidence
+                : cancelled ? ActivityReason.InvocationCancelled
+                : nativeLaunchAttempted ? ActivityReason.LaunchFailed
+                : ActivityReason.PreparationFailed);
         if (telemetryStarted is long started && !launchDenied && OperationalTelemetry.Current is { } export)
         {
             var settled = cleanupFailure is not null || primaryFailure is not null ? "failed"

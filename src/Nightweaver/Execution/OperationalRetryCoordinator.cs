@@ -1,3 +1,4 @@
+using Nightweaver.ActivityFeed;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 using Nightweaver.Telemetry;
@@ -279,6 +280,7 @@ internal sealed class OperationalRetryCoordinator
                         out var resetTask))
                     return StoppedForDrain(latest, attemptCount, lastClassification);
                 OperationalTelemetry.Current?.Telemetry.RecordRetry(latest.Failure!.Kind);
+                ActivityRuntime.Current?.Retry(session, latest, attemptCount + 1);
                 progress?.Invoke(new(OperationalRetryProgressKind.RetryPreparing, attemptCount + 1, maximumAttempts,
                     latest.Failure!.Kind, latest.Failure.Reason, InvocationId: latest.InvocationId,
                     LogFilePath: latest.LogFilePath));

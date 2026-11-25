@@ -54,6 +54,7 @@ public sealed class AgentInvocationExecutorTests
     [Fact]
     public async Task GracefulStopDeniesNativeLaunchAfterPreparingInvocationFiles()
     {
+        using var capture = new ActivityCapture();
         using var fixture = new ExecutionFixture();
         var invocation = fixture.Invocation("inspect", "payload");
         var launcher = new CountingProcessLauncher();
@@ -65,6 +66,7 @@ public sealed class AgentInvocationExecutorTests
             fixture.Paths, fixture.Project, invocation, launcher, TestContext.Current.CancellationToken));
 
         Assert.Equal(0, launcher.LaunchCount);
+        Assert.Empty(capture.Items);
     }
 
     [Theory]
@@ -88,9 +90,13 @@ public sealed class AgentInvocationExecutorTests
         var beforeSlot = (string?)Environment.GetEnvironmentVariable(slotName);
         try
         {
+            using var capture = new ActivityCapture();
             var invocation = fixture.Invocation("inspect", payload, "space argument", "quoted\"value", "C:\\trailing\\");
             var result = await AgentInvocationExecutor.ExecuteAsync(fixture.Paths, fixture.Project, invocation, TestContext.Current.CancellationToken);
 
+            Assert.Equal([Nightweaver.ActivityFeed.ActivityKind.InvocationStarted, Nightweaver.ActivityFeed.ActivityKind.InvocationCompleted],
+                capture.Evidence.Select(e => e.Kind));
+            Assert.All(capture.Evidence, e => Assert.Equal(invocation.InvocationId, e.Invocation));
             Assert.Equal(AgentExecutionStatus.Exited, result.Status);
             Assert.Equal(0, result.ExitCode);
             Assert.Equal(invocation.LogFilePath, result.LogFilePath);
@@ -480,10 +486,12 @@ public sealed class AgentInvocationExecutorTests
     [Fact]
     public async Task MissingExecutableRetainsContextAndReservedLog()
     {
+        using var capture = new ActivityCapture();
         using var fixture = new ExecutionFixture();
         var invocation = ExecutionFixture.WithExecutable(fixture.Invocation("inspect", "payload"), "nightweaver-missing-agent-cli-77e2.exe");
         var exception = await Assert.ThrowsAsync<AgentInvocationExecutionException>(() => AgentInvocationExecutor.ExecuteAsync(
             fixture.Paths, fixture.Project, invocation, TestContext.Current.CancellationToken));
+        Assert.Equal(Nightweaver.ActivityFeed.ActivityKind.EvidenceUnavailable, Assert.Single(capture.Evidence).Kind);
         Assert.Contains(invocation.InvocationId, exception.Message, StringComparison.Ordinal);
         Assert.Contains(invocation.LogFilePath, exception.Message, StringComparison.Ordinal);
         Assert.True(File.Exists(invocation.LogFilePath));

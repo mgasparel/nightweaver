@@ -12,7 +12,7 @@ internal enum ActivityKind
     StateObserved, PauseObserved, PauseRemovalObserved, ResumeConfirmed,
     RecoveryStarted, RecoveryCompleted, RecoveryFailed, HealthChanged,
     WaitStarted, WaitChanged, WaitEnded, CleanupFailed, EvidenceUnavailable,
-    RecordsLost, RuntimeReplaced, HistoryGap
+    RecordsLost, RuntimeReplaced, HistoryGap, OperationalRetryStarted
 }
 internal enum ActivitySource { Invocation, Publication, Admission, MergeVerifier, Inventory, Attention, Recovery, Health, Pool, Journal }
 internal enum ActivityStrength { Unknown, Observed, Confirmed, Verified }
@@ -24,7 +24,11 @@ internal enum ActivityReason
     NeedsHuman, ProductDecision, CombinedPause, Capacity, Backpressure, Blocked,
     Deferred, Maintenance, Unhealthy, Recovered, QueueFull, DiskFailure, PartialTail,
     CursorExpired, Retention, ClientEviction, Replaced, RuntimeStarting, RuntimeRunning,
-    RuntimeDraining, RuntimeStopped, RuntimeFailed, UnknownOwner
+    RuntimeDraining, RuntimeStopped, RuntimeFailed, UnknownOwner,
+    OperationalRetry, CleanupFailure, PreparationFailed, LaunchFailed, InvocationFailed,
+    InvocationTimedOut, InvocationCancelled, OperationalRetriesExhausted, DuplicateFailure,
+    RepairBudgetExhausted, EnvironmentBlocked, OutcomeFailed, PlanningContextTooLarge,
+    NeedsHumanReasonUnavailable, ProductDecisionReasonUnavailable, CombinedPauseReasonUnavailable
 }
 internal enum ActivityFreshness { Unknown, Fresh, Stale, Unavailable }
 internal enum ActivityConnection { Connecting, Connected, Disconnected }
@@ -255,6 +259,7 @@ internal static class ActivityProjector
         ActivityKind.PauseObserved => (ActivitySource.Inventory, ActivityStrength.Observed, "Pause labels were observed."),
         ActivityKind.PauseRemovalObserved => (ActivitySource.Inventory, ActivityStrength.Observed, "Pause label removal was observed. Resume is not confirmed."),
         ActivityKind.ResumeConfirmed => (ActivitySource.Attention, ActivityStrength.Confirmed, "Resume or Retry was confirmed."),
+        ActivityKind.OperationalRetryStarted => (ActivitySource.Recovery, ActivityStrength.Observed, "Operational retry started."),
         ActivityKind.RecoveryStarted => (ActivitySource.Recovery, ActivityStrength.Observed, "Runtime recovery started."),
         ActivityKind.RecoveryCompleted => (ActivitySource.Recovery, ActivityStrength.Confirmed, "Runtime recovery completed."),
         ActivityKind.RecoveryFailed => (ActivitySource.Recovery, ActivityStrength.Observed, "Runtime recovery failed."),

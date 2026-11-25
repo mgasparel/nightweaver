@@ -7,8 +7,8 @@ command path. This contract adds a pure model in `Activity/ActivityModel.cs`.
 It adds no active writer, producer hook, route, file scan, or browser behavior.
 
 The dependent [Activity journal module](activity-journal.md) implements bounded
-storage and shared reads. Continuous runtime producers now submit pool wait and
-runtime health observations. Console routes remain a separate slice.
+storage and shared reads. Continuous runtime producers submit lifecycle progress,
+pool wait and runtime health observations independently of OTLP export. Console routes remain a separate slice.
 The additive [Activity read API](activity-api.md) connects one shared Web reader
 to finite history and reconnectable SSE.
 
@@ -85,6 +85,7 @@ The following table lists all event kinds and source rules.
 | `PauseObserved` | Inventory, observed | Pause labels appear in the successful inventory. Reason distinguishes needs-human, product decision and combined pause. |
 | `PauseRemovalObserved` | Inventory, observed | Inventory no longer contains the prior pause labels. This does not prove console Resume. |
 | `ResumeConfirmed` | Attention, confirmed | Persisted guarded Resume or Retry succeeds. A note, comment or audit record alone is insufficient. |
+| `OperationalRetryStarted` | Recovery, observed | Existing stop gate permits the next operational retry preparation. This does not consume semantic repair budget or assert background recovery. |
 | `RecoveryStarted` | Recovery, observed | Exact background recovery attempt starts. |
 | `RecoveryCompleted` | Recovery, confirmed | Identity-bound recovery completion is confirmed. No Beads recovery authority follows. |
 | `RecoveryFailed` | Recovery, observed | Exact recovery attempt fails. |
@@ -230,3 +231,6 @@ journey, fixture publication, tracker command or active production work is added
 The full local measurement still includes existing builds, fixture publication,
 six-thread execution and teardown. Storage and live browser proof belong to the
 dependent tasks once those boundaries exist.
+
+Runtime producers now connect the existing evidence boundaries. See
+[Activity lifecycle producers](activity-lifecycle.md). Console routes remain separate.

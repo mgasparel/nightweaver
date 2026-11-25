@@ -192,6 +192,8 @@ internal sealed class DeliveryPoolCoordinator
         cancellationToken.ThrowIfCancellationRequested();
         // Never carry a preceding evaluation's tracker state across this gate.
         DeliveryPoolSnapshot snapshot;
+        var lifecycleActivity = ActivityRuntime.Current;
+        var activityVersion = lifecycleActivity?.InventoryVersion;
         try
         {
             snapshot = await readSnapshot(repository, project.RecoveryActor, cancellationToken).ConfigureAwait(false);
@@ -202,10 +204,12 @@ internal sealed class DeliveryPoolCoordinator
             observation?.Unknown(WaitCensor.Failure);
             activity?.Unknown();
             OperationalTelemetry.Current?.Telemetry.Lifecycle.Unknown(LifecycleLoss.Failure);
+            ActivityRuntime.Current?.UnknownInventory();
             throw;
         }
 
         OperationalTelemetry.Current?.Telemetry.Lifecycle.Observe(snapshot.Inventory.ById.Values);
+        lifecycleActivity?.Observe(snapshot.Inventory.ById.Values, activityVersion);
         var diagnostics = new List<DeliveryPoolDiagnostic>();
         var eligible = SelectEligible(snapshot, diagnostics);
         lock (stateGate) observation?.Observe(eligible.Select(bead => bead.Id));

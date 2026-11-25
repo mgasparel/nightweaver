@@ -1,3 +1,4 @@
+using Nightweaver.ActivityFeed;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Nightweaver.Configuration;
@@ -35,10 +36,12 @@ internal sealed class DeliveryOutcomePublisher(IProcessRunner processRunner) : I
         bool releaseClaim,
         CancellationToken cancellationToken)
     {
-        return await WorkflowTiming.MeasureAsync(WorkflowOperation.Publication, WorkflowPhase.Publication,
+        var published = await WorkflowTiming.MeasureAsync(WorkflowOperation.Publication, WorkflowPhase.Publication,
             () => PublishCoreAsync(session, invocation, classification, releaseClaim, cancellationToken),
             result => OperationalTelemetry.Current?.Telemetry.RecordPublication(result)
                 ?? (result.PublicationReceipt is not null ? WorkflowResult.Success : WorkflowResult.Uncertain)).ConfigureAwait(false);
+        ActivityRuntime.Current?.Published(published);
+        return published;
     }
 
     private async Task<AgentStageResult> PublishCoreAsync(

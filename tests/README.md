@@ -47,6 +47,13 @@ and journal storage coverage retain those boundaries. Production adds fixed
 state per pool, one nonblocking submission per change, and the existing bounded
 journal worker. It adds no tracker command. Unchanged polling adds no disk write.
 
+Activity lifecycle producers add controlled record assertions at existing host
+boundaries and nine cheap runtime cases. Existing native launch and closure/cleanup
+journeys gain record assertions. They add no native journey, fixture publication
+or browser work. Production adds one bounded journal worker, finite receipt and
+inventory state, and one Git origin read at runtime startup. Producer hooks add no
+tracker command. See [Activity lifecycle producers](../docs/design/activity-lifecycle.md).
+
 Activity journal tests add controlled storage and clock cases plus disposable-file
 read, write, rotation, cursor, corruption, identity and sentinel checks. One short
 junction command and one hard-link call prove actual Windows path safety. They

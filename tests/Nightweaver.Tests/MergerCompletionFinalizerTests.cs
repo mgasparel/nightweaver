@@ -133,12 +133,16 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
                 removalCalls++;
             return result;
         });
+        using var capture = new ActivityCapture();
         var finalizer = new MergerCompletionFinalizer(runner);
 
         var completion = await finalizer.CompleteAsync(session, invocation, project.RecoveryActor, evidence,
             TestContext.Current.CancellationToken);
         Assert.True(completion.Succeeded, completion.Diagnostic);
         Assert.False(completion.Receipt!.CleanupSucceeded);
+        Assert.Contains(capture.Evidence, e => e.Kind == Nightweaver.ActivityFeed.ActivityKind.BeadClosed);
+        Assert.Contains(capture.Evidence, e => e.Kind == Nightweaver.ActivityFeed.ActivityKind.CleanupFailed);
+        Assert.DoesNotContain(capture.Evidence, e => e.Kind == Nightweaver.ActivityFeed.ActivityKind.MergeVerified);
         Assert.True(remoteDeleted);
         Assert.False(target.RunTarget("git", ["branch", "--list", $"nightweaver/{beadId}"]).Length > 0);
         var store = new CompletedEnvironmentStore(target.Host, project.Name, repository);

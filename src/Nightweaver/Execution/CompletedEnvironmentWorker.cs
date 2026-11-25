@@ -1,3 +1,4 @@
+using Nightweaver.ActivityFeed;
 using System.Threading.Channels;
 using System.Collections.Concurrent;
 using Nightweaver.Planning;
@@ -107,7 +108,10 @@ internal sealed class CompletedEnvironmentWorker(HostPaths paths, ProjectConfig 
                 item.Key, item.Value.Evidence, discoverOnly: true).ConfigureAwait(false);
             var record = store.Read().Obligations.Single(record => record.BeadId == item.Key);
             if (record.Status == CleanupStatus.NeedsAttention)
+            {
+                ActivityRuntime.Current?.CleanupFailed(record.BeadId, "cleanup-obligation", record.Attempts);
                 report($"Cleanup needs attention for '{record.BeadId}': {record.Diagnostic}");
+            }
             else
                 branchCompletions.TryAdd(item.Key, item.Value);
             completions.TryRemove(item.Key, out _);
@@ -180,7 +184,12 @@ internal sealed class CompletedEnvironmentWorker(HostPaths paths, ProjectConfig 
                     if (lease is null) continue;
                     var diagnostics = await cleanup.ReconcileAsync(paths, project.Name, repository, project.RecoveryActor,
                         token, record.BeadId).ConfigureAwait(false);
-                    foreach (var diagnostic in diagnostics) report($"Cleanup retained '{diagnostic.BeadId}': {diagnostic.Reason}");
+                    foreach (var diagnostic in diagnostics)
+                    {
+                        ActivityRuntime.Current?.CleanupFailed(diagnostic.BeadId,
+                            "cleanup-obligation", record.Attempts);
+                        report($"Cleanup retained '{diagnostic.BeadId}': {diagnostic.Reason}");
+                    }
                     // Preserve completion's existing one-shot ref cleanup. Startup/timer/manual
                     // retries never gain branch or Product completion authority.
                     if (!stopGate.IsStopRequested && branchCompletions.Remove(record.BeadId, out var completion))
@@ -194,6 +203,7 @@ internal sealed class CompletedEnvironmentWorker(HostPaths paths, ProjectConfig 
                         catch (Exception exception)
                         {
                             var message = $"Verified completion one-shot branch cleanup retained '{record.BeadId}': {exception.Message}";
+                            ActivityRuntime.Current?.CleanupFailed(record.BeadId, "branch-cleanup");
                             report(message);
                             await new BeadsWriter(runner).AddCommentAsync(repository, record.BeadId,
                                 message.Length <= 1024 ? message : message[..1024], token).ConfigureAwait(false);

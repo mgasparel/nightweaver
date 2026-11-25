@@ -72,6 +72,7 @@ public sealed class MergerOutcomeVerifierTests
     [InlineData("\r\n")]
     public async Task TerminalLineEndingPreservesVerifiedMergeAndStoredComment(string ending)
     {
+        using var capture = new ActivityCapture();
         using var fixture = new VerifierFixture();
         fixture.Runner.ApprovalMode = true;
         fixture.Runner.CheckFailed = false;
@@ -85,6 +86,12 @@ public sealed class MergerOutcomeVerifierTests
         var result = await fixture.VerifyApprovalAsync();
 
         Assert.Equal(plain, result);
+        var item = Assert.Single(capture.Items);
+        Assert.Equal(Nightweaver.ActivityFeed.ActivityKind.MergeVerified, item.Evidence.Kind);
+        Assert.Equal(result.Evidence!.SourceCommentId, item.Proof!.Report.ReportReference);
+        Assert.Equal(result.Evidence.PullRequest, item.Proof.Report.PullRequest);
+        Assert.Equal(result.Evidence.CheckedHead, item.Proof.Report.CheckedHead);
+        Assert.Equal(result.Evidence.MergeCommit, item.Proof.Report.MergeCommit);
         Assert.Equal(original.Id, result.Evidence!.SourceCommentId);
         Assert.Same(stored, Assert.Single(fixture.Comments));
         Assert.Equal(original.Text + ending, stored.Text);
@@ -100,6 +107,7 @@ public sealed class MergerOutcomeVerifierTests
     [InlineData("duplicate-with-malformed", false)]
     public async Task TerminalLineEndingsKeepInvocationEvidenceGuards(string kind, bool succeeds)
     {
+        using var capture = new ActivityCapture();
         using var fixture = new VerifierFixture();
         fixture.Runner.ApprovalMode = true;
         fixture.Runner.CheckFailed = false;
@@ -124,6 +132,7 @@ public sealed class MergerOutcomeVerifierTests
         var result = await fixture.VerifyApprovalAsync();
 
         Assert.Equal(succeeds, result.Succeeded);
+        Assert.Equal(succeeds ? 1 : 0, capture.Items.Count);
         if (succeeds) Assert.Equal(current.Id, result.Evidence!.SourceCommentId);
         else Assert.Equal(0, fixture.Runner.PullRequestViewCount);
     }
