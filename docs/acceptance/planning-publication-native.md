@@ -144,3 +144,29 @@ Temporary roots, retained build output and the measured collection order differ.
 An automatic comparison is unavailable. Raw times do not establish a zero delta
 or a speed change. The two added native tests explain the added work. Merger must
 measure the synchronized head and latest main after integration.
+
+## Hosted cleanup repair
+
+Hosted run `45536102602`, attempt 1, job `138942957995` failed at
+`StandaloneHostReadsEnvironmentAndCommandLineOverrides(useCommandLine: True)`.
+Fixture deletion found `host/run/standalone/web-payload.lock` still open after
+the managed exit wait. The diagnostic reported `Owners: []`; it did not identify
+the lock owner. The checked head was `d54266ae7f861a8bb9f7ab6c4a9eb9de6c033cf8`.
+
+An isolated process probe reproduced the missing settlement boundary in four
+attempts. Each child held 20,000 handles to one disposable file. After
+`Kill(entireProcessTree: true)` and `WaitForExitAsync`, the native wait returned
+`258` and exclusive file access failed. After the native process signal, the
+wait returned `0` and exclusive access passed. The probe proves the race exists;
+it does not identify the historical hosted lock owner. Its script and
+`native-rundown-async-fresh-result.json` remain under
+`H:/Nightweaver/prod/tmp/nightshift/ns-nll-pbd28ec1512a40fd2b7bd/20261125T0306429933730Z-implementer`.
+
+The existing standalone Web host tests now use
+`SystemProcessRunner.WaitForSettlementAsync` before fixture deletion. Both
+environment/command-line cases and the configured-target case require exclusive
+payload access after exit. Live-lock checks and strict fixture deletion remain.
+The repair adds three payload opens with existing directory safety checks and
+a native settlement observation per existing host exit. It adds no native
+journey, fixture publication or production work. All deadlines and the
+six-thread cap remain unchanged. The publication proof above remains intact.

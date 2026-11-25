@@ -1,5 +1,13 @@
 # Test suite
 
+Standalone Web host teardown waits for the native process signal before fixture
+deletion. Managed exit can precede Windows handle rundown and leave the
+process-lifetime `web-payload.lock` open. The existing environment/command-line
+and configured-target journeys now require exclusive payload access after exit.
+They retain their live-lock and cleanup assertions. This repair adds three
+exclusive file opens across existing cases. It adds no native journey, fixture
+publication or production work. Deadlines and six threads stay unchanged.
+
 Publication native proof adds two tests in `PlanningPublicationNativeTests`.
 One test shares a copied Beads template, an isolated host and one detached
 Planning checkout across response-loss recovery, provenance conflict and legacy

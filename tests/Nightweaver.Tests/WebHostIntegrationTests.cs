@@ -7,6 +7,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Nightweaver.Configuration;
 using Nightweaver.Background;
+using Nightweaver.Inspection;
 
 namespace Nightweaver.Tests;
 
@@ -185,9 +186,13 @@ public sealed class WebHostIntegrationTests
         finally
         {
             if (!process.HasExited) process.Kill(entireProcessTree: true);
-            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+            // Managed exit can precede Windows handle rundown. Settle the native
+            // process before the fixture removes its process-lifetime payload lock.
+            await SystemProcessRunner.WaitForSettlementAsync(process, TestContext.Current.CancellationToken);
             await stderr;
         }
+        using var releasedPayload = Nightweaver.Execution.InvocationRuntimeFiles.OpenExclusiveRuntimeFile(
+            Nightweaver.Upgrade.UpgradeInterlock.WebPayloadPath(new HostPaths(host), ProjectSlug.Parse("standalone")), false);
     }
 
     [Fact]
@@ -290,9 +295,11 @@ public sealed class WebHostIntegrationTests
         finally
         {
             if (!process.HasExited) process.Kill(entireProcessTree: true);
-            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+            await SystemProcessRunner.WaitForSettlementAsync(process, TestContext.Current.CancellationToken);
             await stderr;
         }
+        using var releasedPayload = Nightweaver.Execution.InvocationRuntimeFiles.OpenExclusiveRuntimeFile(
+            Nightweaver.Upgrade.UpgradeInterlock.WebPayloadPath(new HostPaths(host), ProjectSlug.Parse("web-smoke")), false);
     }
 
     [Fact]
