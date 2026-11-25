@@ -1,5 +1,88 @@
 # Activity console acceptance
 
+## Pending history pause repair
+
+The remaining Review finding passes. A pending history response cannot cancel a
+later pause, row focus or page suspension. Follow starts at request entry. The
+response clears evidence only if follow remains active. Cursor recovery defers
+row removal until that same check. Navigation cancellation and finite reads stay
+in place. The repair starts at `0a4a897fab6393a16e2f3aab3d954f8cdc3164f2`.
+
+The extended browser probe failed before the fix. Its first held initial read
+removed `Browsing paused` after Pause. The failed run remains at
+`H:/Nightweaver/prod/tmp/nightshift/ns-ejr-p95942f1ecde1d100ce8d/20261125T2340189864146Z-implementer/pause-before`.
+The exact stack stopped. The repaired run passed at the same invocation's
+`pause-after` directory. The direct Web URL was `http://localhost:23769`.
+The exact stack stopped successfully in `finally`.
+
+Command: `pwsh -NoProfile -File tests/Nightweaver.QA.AppHost/studio-cutover.ps1 -Group Activity -OutputDirectory <invocation-TEMP>/pause-after`.
+The Node process took 14.5070825 seconds. Probe assertions took 14.0327064 seconds.
+Both exclude AppHost start and stop. No page errors or lifecycle mutations occurred.
+The [result](activity/pause-repair/result.json) records five held-response cases:
+initial load with Pause or suspension, and Return to latest with Pause,
+suspension or row focus. Return cases retain 80 rows and one open evidence
+section. Every case retains scroll position, with zero delta. Later arrival and
+wake keep browsing paused. Only a new explicit return resumes follow and catch-up.
+Initial cases retain the empty display until that return.
+
+The existing real executor-to-journal-to-API-to-SSE-to-browser start and completion
+checks also passed. Completion occurred after subscription. Exact invocation
+output passed. [Native history](activity/pause-repair/native-history.json) and
+the result bind journal `9bf13fe8-22c1-461f-81e3-13b66b16b3b1`, runtime
+`df72fb55-9b19-4575-bce8-64a1903a4146` and invocation
+`20261125T2343263141906Z-implementer`. This native boundary reuses existing
+fixture processes. The five new cases use controlled history responses in that
+same opt-in journey. They add no normal-suite native journey or publication.
+
+I inspected the [1440](activity/pause-repair/activity-expanded-1440.png),
+[720](activity/pause-repair/activity-expanded-720.png) and
+[375](activity/pause-repair/activity-expanded-375.png) CSS-pixel captures.
+Controls remain visible. Evidence wraps without page or feed overflow.
+The prior replacement and older-capacity assertions still pass.
+[Source hashes](activity/pause-repair/sources.json) match all five tested files.
+
+Studio passed 104 tests, with zero failures or skips, in 1.9323453 seconds.
+`npm.cmd run build` passed. `dotnet build Nightweaver.slnx -warnaserror` passed
+with zero warnings or errors. Measurement policy passed 460 cases. Publisher
+contracts passed 16 cases in PowerShell 7 and 16 in Windows PowerShell.
+The repair diff passed `git diff --check`.
+
+Complete measurement `ad06b86c396f4f9cad5389bfe4a7a01c` tested clean revision
+`fd1680517625dbd384020b612705e2f52b5b3ddb`, tree
+`a556586dced9f2b0c7876ce5873586235f5c07d7`. Base revision was
+`cdc378599d8edceac118f98713e34f860e070632`. All 2,447 tests passed. Failed 0.
+Skipped 0. XML errors 0. Outer elapsed time was 245.1771603 seconds. Build,
+fixture publication, execution and teardown used six threads. Archive fixtures
+passed 66 cases. Collector fixtures passed 102 cases. Measurement errors are empty.
+Artifacts remain under the current invocation's
+`complete-candidate/ad06b86c396f4f9cad5389bfe4a7a01c` directory as `result.json`,
+`suite.log` and `report-1.xml`. Result SHA256 is
+`103EE951FA2DFD2D9BEC23D0576005937A40E0FF9F23B79E10EC5CACFD60D701`.
+
+Cost review: Correctness and the below-300-second hard limit passed. The
+below-240-second target was missed by 5.1771603 seconds. The unchanged native
+publication case took 172.997 seconds. The unchanged second-signal case took
+66.253 seconds. Cases overlap across six threads; their times are not additive.
+Archive and collector checks took 5.2183668 and 6.1326555 seconds. The .NET
+runner reported 227.396 seconds. This repair changes no .NET test or production
+runtime path used by these cases. It adds one current-pause check and deferred
+client state changes per history response. It adds no request, timer, tracker
+command or normal-suite work. No attributable material regression is established.
+Review must assess this retained cost evidence. Merger must measure the required
+synchronized head and latest main. If the target miss persists, retain the native
+publication and setup timings for cost diagnosis. Do not rerun this unchanged
+candidate or alter coverage, deadlines or parallelism to obtain a lower result.
+
+The explicit accepted baseline remains
+`H:/Nightweaver/prod/tmp/nightshift/ns-ejr-p0576c5b4432a78c1fd65/20261125T2225078340478Z-merger/accepted-main-baseline.json`.
+SHA256 is `9293ECEF95CE9CEDE382FDF40EA75A53CB52D08DD3C46CB4CEADB87DE0E494AA`.
+Evidence `ab8d48a5d1c3491683e279e94dd54db4` tested the exact base and passed
+the same 2,447 cases in 213.3012778 seconds. Machine, boot, tools, production
+identity and six-thread scheduling match. Preparation and temporary paths differ.
+Timing comparison is unavailable. Delta and ratio remain unknown. No resource
+capture trigger occurred. Only documentation changes follow this measurement.
+The five production and fixture hashes still match the tested candidate.
+
 ## Review repair
 
 Both blocking review findings pass the repaired model and browser checks.

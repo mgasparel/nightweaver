@@ -34,14 +34,14 @@ record list is not a live announcement region.
 Return to latest resumes after the last displayed scan cursor. History and SSE
 catch up over unseen records, with duplicate suppression and bounded eviction.
 The control starts live follow when the read starts. It closes evidence only
-when the response arrives and follow is still active. A later pause, row focus, evidence expansion
-or page suspension takes precedence over the pending response. That response
+when the response arrives and follow is still active. A later pause, row focus,
+evidence expansion or page suspension takes precedence over the pending response. That response
 keeps the displayed rows, evidence and scan cursor. It cannot enable follow or
 clear evidence. A fresh explicit Return to latest is required, including after
 a failed cursor read falls back to fresh history.
 
-Source gaps and client eviction remain explicit. A replacement journal resets rows only during follow
-or an explicit return; paused rows stay readable. Runtime replacement remains
+Source gaps and client eviction remain explicit. A replacement journal resets
+rows only during follow or an explicit return; paused rows stay readable. Runtime replacement remains
 visible. Prior-runtime records retain their original evidence. Displayed journal
 identity is separate from received scan progress. An empty replacement scan clears
 old rows during follow. During pause, it holds the old rows and open evidence
