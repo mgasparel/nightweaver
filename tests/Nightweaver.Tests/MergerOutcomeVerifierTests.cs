@@ -9,6 +9,125 @@ namespace Nightweaver.Tests;
 
 public sealed class MergerOutcomeVerifierTests
 {
+    private const string RetainedMergeRecord = "nightweaver-merge-v1 pull_request=https://github.com/mgasparel/nightweaver/pull/95 checked_head=9fe6e0d558fc6a0b15eea38f3e9f038560c7ed78 required_checks=passed merge_method=squash merge_commit=3e655fb1b677819554d612093d923fc9ab7f0c95";
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public void TerminalLineEndingPreservesRetainedMergeFields(string ending)
+    {
+        var result = MergerOutcomeVerifier.ParseMergeEvidence(RetainedMergeRecord + ending);
+
+        Assert.NotNull(result);
+        Assert.Equal(("https://github.com/mgasparel/nightweaver/pull/95",
+            "9fe6e0d558fc6a0b15eea38f3e9f038560c7ed78", "squash",
+            "3e655fb1b677819554d612093d923fc9ab7f0c95"), result.Value);
+    }
+
+    [Theory]
+    [InlineData("embedded-lf")]
+    [InlineData("embedded-crlf")]
+    [InlineData("url-lf")]
+    [InlineData("url-cr")]
+    [InlineData("bare-cr")]
+    [InlineData("two-lf")]
+    [InlineData("two-crlf")]
+    [InlineData("prose")]
+    [InlineData("two-records")]
+    [InlineData("duplicate")]
+    [InlineData("extra")]
+    [InlineData("head")]
+    [InlineData("commit")]
+    [InlineData("quote")]
+    [InlineData("fence")]
+    public void RejectsMalformedMergeRecords(string kind)
+    {
+        var text = kind switch
+        {
+            "embedded-lf" => RetainedMergeRecord.Replace(" required_checks", "\n required_checks", StringComparison.Ordinal),
+            "embedded-crlf" => RetainedMergeRecord.Replace(" required_checks", "\r\n required_checks", StringComparison.Ordinal),
+            "url-lf" => RetainedMergeRecord.Replace("/pull/95", "/pull/\n95", StringComparison.Ordinal),
+            "url-cr" => RetainedMergeRecord.Replace("/pull/95", "/pull/\r95", StringComparison.Ordinal),
+            "bare-cr" => RetainedMergeRecord + "\r",
+            "two-lf" => RetainedMergeRecord + "\n\n",
+            "two-crlf" => RetainedMergeRecord + "\r\n\r\n",
+            "prose" => RetainedMergeRecord + "\nThe merge passed.",
+            "two-records" => RetainedMergeRecord + "\n" + RetainedMergeRecord,
+            "duplicate" => RetainedMergeRecord.Replace("merge_method=squash", "required_checks=passed", StringComparison.Ordinal),
+            "extra" => RetainedMergeRecord + " extra=value",
+            "head" => RetainedMergeRecord.Replace("9fe6e0d558fc6a0b15eea38f3e9f038560c7ed78", new string('g', 40), StringComparison.Ordinal),
+            "commit" => RetainedMergeRecord[..^1],
+            "quote" => "> " + RetainedMergeRecord,
+            "fence" => "```text\n" + RetainedMergeRecord + "\n```",
+            _ => throw new ArgumentOutOfRangeException(nameof(kind))
+        };
+
+        Assert.Null(MergerOutcomeVerifier.ParseMergeEvidence(text));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public async Task TerminalLineEndingPreservesVerifiedMergeAndStoredComment(string ending)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.Runner.ApprovalMode = true;
+        fixture.Runner.CheckFailed = false;
+        fixture.SetMergeEvidence();
+        var plain = await fixture.VerifyApprovalAsync();
+        Assert.True(plain.Succeeded, plain.Diagnostic);
+        var original = fixture.Comments[^1];
+        var stored = original with { Text = original.Text + ending };
+        fixture.Comments = [stored];
+
+        var result = await fixture.VerifyApprovalAsync();
+
+        Assert.Equal(plain, result);
+        Assert.Equal(original.Id, result.Evidence!.SourceCommentId);
+        Assert.Same(stored, Assert.Single(fixture.Comments));
+        Assert.Equal(original.Text + ending, stored.Text);
+        Assert.Equal(0, fixture.Runner.NativeGitCommandCount);
+    }
+
+    [Theory]
+    [InlineData("duplicate", false)]
+    [InlineData("historical", false)]
+    [InlineData("no-baseline", false)]
+    [InlineData("malformed-only", false)]
+    [InlineData("malformed-companion", true)]
+    [InlineData("duplicate-with-malformed", false)]
+    public async Task TerminalLineEndingsKeepInvocationEvidenceGuards(string kind, bool succeeds)
+    {
+        using var fixture = new VerifierFixture();
+        fixture.Runner.ApprovalMode = true;
+        fixture.Runner.CheckFailed = false;
+        fixture.SetMergeEvidence();
+        var current = fixture.Comments[^1];
+        var first = current with { Text = current.Text + "\r\n" };
+        var second = current with { Id = "second", Text = current.Text + "\n" };
+        var malformed = current with { Id = "malformed", Text = current.Text + "\n" + current.Text };
+        fixture.Comments = kind switch
+        {
+            "duplicate" => [first, second],
+            "malformed-only" => [malformed],
+            "malformed-companion" => [malformed, first],
+            "duplicate-with-malformed" => [first, malformed, second],
+            _ => [first]
+        };
+        if (kind == "historical")
+            fixture.Invocation = fixture.Invocation with { PreInvocationCommentIds = new HashSet<string>([current.Id], StringComparer.Ordinal) };
+        if (kind == "no-baseline")
+            fixture.Invocation = fixture.Invocation with { PreInvocationCommentIds = null };
+
+        var result = await fixture.VerifyApprovalAsync();
+
+        Assert.Equal(succeeds, result.Succeeded);
+        if (succeeds) Assert.Equal(current.Id, result.Evidence!.SourceCommentId);
+        else Assert.Equal(0, fixture.Runner.PullRequestViewCount);
+    }
+
     [Theory]
     [InlineData("performance")]
     [InlineData("remote")]

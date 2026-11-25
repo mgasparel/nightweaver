@@ -252,6 +252,11 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
 
     internal static (string PullRequest, string CheckedHead, string MergeMethod, string MergeCommit)? ParseMergeEvidence(string text)
     {
+        // File writers can add one terminal line ending. Keep the stored comment unchanged.
+        if (text.EndsWith("\r\n", StringComparison.Ordinal)) text = text[..^2];
+        else if (text.EndsWith('\n')) text = text[..^1];
+        if (text.Contains('\r') || text.Contains('\n')) return null;
+
         var fields = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (fields.Length != 6 || fields[0] != "nightweaver-merge-v1") return null;
         var values = new Dictionary<string, string>(StringComparer.Ordinal);

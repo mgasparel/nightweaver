@@ -142,6 +142,47 @@ All schema, current-invocation, PR/HEAD, transcript, measurement and timing chec
 still apply. Parser cases use the existing component fixture and guarded repair
 handoff. They add no native journey or fixture publication.
 
+## Merge success line ending
+
+The success parser accepts one terminal LF or CRLF. It removes that ending only
+from its local input view. It rejects all remaining CR and LF characters before
+it checks the existing six-field grammar. Stored text and source IDs stay unchanged.
+It does not extract a record from prose or quoted text.
+
+The retained `merge-success.txt` for PR #95 has SHA256
+`0DD8634B8B574990280D1868BE34CABB37790BE05196F75390AC8A3141196D5D`.
+Its path is
+`H:/Nightweaver/prod/tmp/nightshift/ns-a3d4/20261121T1444145098722Z-merger/merge-success.txt`.
+Native comment `ebff9911-a5fe-5cb5-9f19-f788e736e8e8` contains the same
+record followed by CRLF. The previous parser split on ASCII space. It left CRLF
+in `merge_commit`, so SHA validation failed. The regression fixture uses this
+record with no ending, LF and CRLF. It does not replay the historical merge.
+
+Native comment IDs identify rows. `BeadsReader` orders comments by timestamp and
+native row order. The success row has author Michael Gasparelli and timestamp
+`2026-11-21T14:59:22Z`. Summary row `a29049f5-58ac-5db0-a90d-d7d7559af1eb`
+precedes it at `2026-11-21T14:59:21Z`. Pause row
+`95f63c21-f6cd-5407-9e0f-a9efbc4c2267` follows at `2026-11-21T14:59:44Z`.
+`BeadCommentSnapshot` does not carry author. The verifier selects new IDs against
+`PreInvocationCommentIds`; it does not authenticate authors. Missing baselines,
+historical IDs and two valid new records still prevent completion. A malformed
+companion does not replace a valid record or hide a second valid record.
+
+The retained `comments.json` has 22 rows. Its last ID is
+`df6191ee-1877-580e-a5af-f508155bf52f` at `2026-11-21T14:44:02Z`.
+It excludes the success ID. This supports a timing comparison. It is not a saved
+copy of the host's in-memory baseline. The settled invocation log records the
+later `Set-Content` and `bd comments add` calls and the success ID. The terminal
+CRLF explains the parser failure without a race claim. This repair does not
+verify the full historical invocation or change the paused `ns-a3d4` workflow.
+
+The repair adds 27 deterministic parser and injected verifier cases to
+`MergerOutcomeVerifierTests`. It adds no native journey or fixture publication.
+The existing native Git, required-check and workflow cases remain. Production
+adds a bounded terminal-ending check and a scan for remaining CR and LF per
+candidate comment. It adds no native command. Report measured candidate cost
+and the retained baseline comparison in the Delivery evidence.
+
 ## All-passing hard-limit Merger rejection
 
 Use the existing `nightweaver-merger-rejection-v1` comment with exactly ten top-level
