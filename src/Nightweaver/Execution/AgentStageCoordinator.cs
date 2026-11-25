@@ -28,6 +28,7 @@ internal sealed record AgentStageSession(
     AgentDispatchContext DispatchContext,
     bool PreserveInheritedChanges)
 {
+    internal string? PublicationVersion { get; init; }
     private readonly MergeTelemetryEmission mergeTelemetry = new();
     internal bool TryRecordMergeTelemetry() => mergeTelemetry.TryRecord();
 
@@ -143,7 +144,9 @@ internal sealed class AgentStageCoordinator
         EnsureValidInput(role, fresh.State);
         if (expectedAssignee is not null) EnsureExpectedClaim(fresh, expectedAssignee, requireInProgress: true);
         if (fresh.State != initial.State || (expectedAssignee is not null
-            && !string.Equals(fresh.Bead.Assignee, initial.Bead.Assignee, StringComparison.Ordinal)))
+            && !string.Equals(fresh.Bead.Assignee, initial.Bead.Assignee, StringComparison.Ordinal))
+            || initial.State.Stage == "stage:plan-approved"
+            && PlanningPublisher.Version(fresh.Bead) != PlanningPublisher.Version(initial.Bead))
             throw new AgentStageInputException($"Bead '{beadId}' workflow state changed during provisioning; refusing to dispatch a stale stage.");
 
         if (!allowPublication) EnsurePlanningExecutionBoundary(role, fresh.State);
@@ -152,7 +155,7 @@ internal sealed class AgentStageCoordinator
         return new AgentStageSession(hostPaths, project, sessionRepository, beadId, role, purpose, worktree,
             fresh.State, fresh.Bead.Assignee,
             new AgentDispatchContext(fresh.State.Id, fresh.State.IssueType, fresh.State.Stage, fresh.State.RepairCycles),
-            worktree.WasDirty);
+            worktree.WasDirty) { PublicationVersion = PlanningPublisher.Version(fresh.Bead) };
     }
 
     private static void EnsurePlanningExecutionBoundary(AgentRole role, BeadWorkflowState state)

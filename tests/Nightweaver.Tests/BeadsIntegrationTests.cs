@@ -22,13 +22,14 @@ public sealed class BeadsIntegrationTests
             cancellationToken: TestContext.Current.CancellationToken);
         await file.Stream.FlushAsync(TestContext.Current.CancellationToken);
         // Keep the same immutable, readable file pinned across both native writes.
+        BeadSnapshot? published = null;
         foreach (var status in new[] { "in_progress", "open" })
         {
             var request = BeadsCommand.CreateWrite(target.Path, ["update", id, "--metadata", "@" + file.Stream.Name,
                 "--status", status, "--assignee", status == "open" ? "" : actor,
                 "--if-status", "in_progress", "--if-assignee", actor, "--json"], actor);
             Assert.True(request.Arguments.Sum(a => a.Length + 3) < 2000);
-            target.Run("bd", request.Arguments);
+            published = BeadsReader.ParsePublicationResult(target.Run("bd", request.Arguments), id);
         }
         var bead = BeadsReader.Parse(target.Run("bd", BeadsCommand.CreateShow(target.Path, id).Arguments)).ById[id];
         Assert.Equal("open", bead.Status);
@@ -36,6 +37,14 @@ public sealed class BeadsIntegrationTests
         Assert.Equal(graph, PlanningPublisher.Metadata(bead, "publication_graph"));
         Assert.Equal("revision", PlanningPublisher.Metadata(bead, "publication_revision"));
         Assert.Equal("preserve", PlanningPublisher.Metadata(bead, "operator"));
+        Assert.NotNull(published);
+        Assert.False(string.IsNullOrWhiteSpace(PlanningPublisher.Version(published)));
+        Assert.Equal(PlanningPublisher.Version(published), PlanningPublisher.Version(bead));
+        // The release receipt response contains a comment, not a Product version.
+        // Native comments must leave the Product version unchanged for continuation.
+        target.Run("bd", ["comments", "add", id, "Retain release evidence"]);
+        var afterComment = BeadsReader.Parse(target.Run("bd", BeadsCommand.CreateShow(target.Path, id).Arguments)).ById[id];
+        Assert.Equal(PlanningPublisher.Version(bead), PlanningPublisher.Version(afterComment));
     }
 
     [Fact]

@@ -11,6 +11,26 @@ public sealed class AgentStageCoordinatorTests
     private static readonly string[] HeadArguments = ["rev-parse", "HEAD"];
     private static readonly string[] PlanLabels = ["stage:plan"];
     private static readonly string[] ChallengeLabels = ["stage:plan-challenge"];
+    private static readonly string[] ApprovedLabels = ["ready-for-planning", "stage:plan-approved"];
+
+    [Fact]
+    public async Task ApprovedPublicationRejectsReusedOwnerDuringProvisioning()
+    {
+        var version = "first claim";
+        var runner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(0,
+            JsonSerializer.Serialize(new[] { new { id = "product", issue_type = "feature", status = "in_progress",
+                assignee = "nightweaver:demo", priority = 2, created_at = "2026-10-24T00:00:00Z", updated_at = version,
+                labels = ApprovedLabels } }), "")));
+        var coordinator = new AgentStageCoordinator(runner, provision: (_, _, _, _, _, _) =>
+        {
+            version = "second claim with the same assignee";
+            return Task.FromResult(new ProvisionedWorktree("worktree", new string('a', 40)));
+        });
+        await Assert.ThrowsAsync<AgentStageInputException>(() => coordinator.OpenSessionAsync(Host(), Project("target"),
+            new("target", "main"), "product", AgentRole.Planner, "nightweaver:demo",
+            TestContext.Current.CancellationToken, allowPublication: true));
+        Assert.Equal(2, runner.Requests.Count);
+    }
 
     [Fact]
     public async Task RunsProvisionFreshBaselinePrepareExecuteAndVerificationInOrder()

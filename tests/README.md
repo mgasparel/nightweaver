@@ -1,5 +1,17 @@
 # Test suite
 
+Publication confirmation repair adds three controlled cases for a reused assignee
+at intent, membership and receipt confirmation. The existing publication fixture
+now advances the Product version on ordinary updates and returns native-shaped
+mutation responses. Lost-update cases require preserved holds and fresh recovery
+authority. The duplicate case includes its native Product link and checks every
+required diagnostic field. The existing isolated metadata transport journey also
+checks returned versions and the unchanged Product version after a comment. It
+adds two native commands (comment and show), no new journey or fixture publish.
+These native version semantics cannot be proved by an injected runner. Production
+adds one complete inventory read per publication call before the generic child
+check. It adds no grounding sweep or write to a successful publication.
+
 Shared-read candidate evidence adds eleven cheap Node checks for actual Overview
 resource selection, section receipts and native command families. The opt-in native boundary trial checks cold shared base
 reads, confirmed absence, journal refusal, backup audit recovery and failed
@@ -705,3 +717,18 @@ time, stage, pause labels, repair count, source health and action eligibility.
 They add no native journey or fixture publication. Browser checks extend the
 existing Studio and Overview journey. Production adds one inventory-only base
 projection and defers selected explanations to the existing shared history cache.
+
+Planning creation safety adds controlled-runner cases for intent confirmation,
+pre-launch authority, lost responses, late child completion, publisher restart,
+malformed or duplicate evidence, legacy task recovery and same-process overlap.
+Coordinator coverage checks a changed Product version during provisioning with a
+reused assignee. These cases add no native journey or fixture publication.
+`UpgradeLifecycleTests.CompetingProcessLeavesFreshHostRootUnchanged` proves native
+process exclusion at the same repository path. The native guarded metadata test
+proves file transport and metadata merging. The approved-stage publication and
+cross-Project/host-root alias scenarios in `DispatchScenarioSupport` have no test
+wrappers in the retained suite. Full native intent publication, abrupt owner death
+with a late child, and alias/restart recovery remain proof for the `native-proof`
+slice. This change adds no native journey. Each newly created task adds two guarded metadata writes, confirmation
+reads and fresh authority observations. Recovery never uses a zero-match intent as
+permission to repeat a create. Six-thread scheduling and deadlines stay unchanged.
