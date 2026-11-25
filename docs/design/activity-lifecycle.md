@@ -3,9 +3,9 @@
 The continuous runtime owns one Project Activity journal. Its runtime GUID is the
 existing factory snapshot identity. The journal starts after startup recovery and
 stops after pool drain. Its producer scope is independent of OTLP configuration.
-Startup reads the existing Git origin once to bind hosted links. It adds no
-tracker command. A local repository without a hosted origin uses the reserved
-unavailable.invalid identity. Such a journal cannot accept a hosted merge URL.
+Startup uses the existing single Git origin read to bind hosted links. It adds no
+tracker command. A missing, invalid or failed origin read disables the journal
+and preserves factory execution. Both producer sets share the same journal.
 Unavailable journal preparation does not stop factory execution. Storage failures
 retain the journal's safe health and loss state.
 
@@ -32,6 +32,10 @@ identity derived from the current invocation. The live verifier supplies both
 normalized sides only after its full checks pass. The projector still checks
 agreement and Project repository identity. Closure and cleanup never manufacture
 merge proof. The retained Planning guards and Merger parsing checks are unchanged.
+
+Successful cleanup queue entry remains pending. It does not produce CleanupFailed.
+A failed queue entry or direct cleanup failure produces CleanupFailed. The deferred
+worker reports any later cleanup failure independently. BeadClosed remains separate.
 
 The Delivery discovery pass supplies its existing successful complete inventory.
 Initial pauses are observations. Label-only reasons explicitly say that the

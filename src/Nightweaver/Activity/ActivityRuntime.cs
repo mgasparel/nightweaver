@@ -32,26 +32,6 @@ internal sealed class ActivityRuntime : IDisposable
         active.Value = this;
     }
 
-    internal static async Task<ActivityJournal?> StartAsync(HostPaths paths, ProjectConfig project,
-        ValidatedTargetRepository repository, string runtime, IProcessRunner runner, CancellationToken token)
-    {
-        try
-        {
-            var origin = repository.OriginRepository;
-            if (origin is null)
-            {
-                var result = await runner.RunAsync(GitCommand.Create(["config", "--get", "remote.origin.url"], repository.Path), token);
-                origin = result.ExitCode == 0 ? GitHubRepositoryIdentity.ParseRemoteUrl(result.StandardOutput.Trim()) : null;
-            }
-            // Local repositories can still record progress. No hosted merge URL can
-            // match this reserved identity when hosted origin evidence is absent.
-            origin ??= new("unavailable.invalid", "unavailable", "unavailable");
-            return new(new ActivityJournalFiles(paths, project.Name, repository.Path, origin), origin, Guid.Parse(runtime));
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch (Exception) { return null; }
-    }
-
     private void Emit(ActivityKind kind, ActivitySource source, ActivityPhase phase, string? bead,
         string reference, string? invocation = null, ActivityRole? role = null,
         ActivityReason reason = ActivityReason.None, int? count = null, ActivityMergeProof? proof = null,

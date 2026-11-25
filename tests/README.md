@@ -1,5 +1,11 @@
 # Test suite
 
+Cleanup Activity repair adds three controlled finalizer cases for successful queue
+entry, failed queue entry and direct cleanup failure. Existing native direct
+cleanup and deferred worker failure checks remain. The repair adds no native
+journey, fixture publication or production command. It checks the existing cleanup
+diagnostic before it emits CleanupFailed.
+
 Activity API cases use injected readers, clocks and held response streams for
 pagination, filters, loss, cursor expiry, runtime replacement, source failure,
 cache bounds and write deadlines. In-process HTTP/SSE checks cover actual wire

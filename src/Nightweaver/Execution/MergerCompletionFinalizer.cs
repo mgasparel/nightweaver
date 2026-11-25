@@ -110,7 +110,7 @@ internal sealed class MergerCompletionFinalizer(IProcessRunner processRunner, IC
         try
         {
             var result = await FinalizeHousekeepingAsync(session, evidence, closedState, cancellationToken).ConfigureAwait(false);
-            if (!result.Receipt!.CleanupSucceeded) ActivityRuntime.Current?.CleanupFailed(session, invocation);
+            if (result.Receipt!.CleanupDiagnostic is not null) ActivityRuntime.Current?.CleanupFailed(session, invocation);
             export?.Telemetry.RecordMergeCleanup(result.Receipt!.CleanupQueued ? "queued"
                 : result.Receipt.CleanupSucceeded ? "completed" : "failed");
             return result;
