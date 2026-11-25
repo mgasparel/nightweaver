@@ -19,7 +19,8 @@ internal static class ContinuousApplication
         RuntimeShutdownSignals? shutdownSignals,
         CancellationToken cancellationToken,
         Func<FactoryTelemetryPublisher, ProjectConfig, HostPaths, ValidatedTargetRepository, CancellationToken, Task>? onRuntimeReady = null,
-        Func<Task>? onRuntimeFailure = null)
+        Func<Task>? onRuntimeFailure = null,
+        Action<HostPaths, ProjectSlug, ValidatedTargetRepository>? acquireRuntime = null)
     {
         var startupTimestamp = Stopwatch.GetTimestamp();
         var selector = options.Selector ?? throw new InvalidOperationException("A Project selector is required");
@@ -43,7 +44,7 @@ internal static class ContinuousApplication
             .ValidateAsync(project.TargetRepository, project.ConfigFilePath, cancellationToken).ConfigureAwait(false);
 
         // The process-owned lock precedes startup recovery and every live Delivery admission.
-        UpgradeInterlock.AcquireRuntime(hostPaths, project.Name, repository);
+        (acquireRuntime ?? UpgradeInterlock.AcquireRuntime)(hostPaths, project.Name, repository);
         EnsureInitialRoots(hostPaths, project.Name);
 
         var beadsReader = new BeadsReader(processRunner);
@@ -62,7 +63,10 @@ internal static class ContinuousApplication
 
         using var slotLifetime = new CancellationTokenSource();
         var stopGate = shutdownSignals?.StopGate ?? new ContinuousStopGate();
-        await using var activityJournal = repository.OriginRepository is { } origin
+        var activityOrigin = await ReadActivityOriginAsync(processRunner, repository, cancellationToken).ConfigureAwait(false);
+        if (activityOrigin is null)
+            environment.Err.WriteLine("nightweaver: Activity journal unavailable: repository origin identity is unavailable.");
+        await using var activityJournal = activityOrigin is { } origin
             ? new ActivityJournal(new ActivityJournalFiles(hostPaths, project.Name, repository.Path, origin),
                 origin, Guid.Parse(telemetry.RuntimeId)) : null;
         bool SubmitActivity(ActivityEvidence evidence) => !stopGate.IsForceStopRequested
@@ -190,6 +194,23 @@ internal static class ContinuousApplication
                     await operationalTelemetry.StopAsync(stopGate.IsForceStopRequested).ConfigureAwait(false);
                 }
             }
+        }
+    }
+
+    private static async Task<GitHubRepositoryIdentity?> ReadActivityOriginAsync(
+        IProcessRunner processRunner, ValidatedTargetRepository repository, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await processRunner.RunAsync(
+                GitCommand.Create(["config", "--get", "remote.origin.url"], repository.Path), cancellationToken)
+                .ConfigureAwait(false);
+            return result.ExitCode == 0 ? GitHubRepositoryIdentity.ParseRemoteUrl(result.StandardOutput.Trim()) : null;
+        }
+        catch (ToolExecutionException)
+        {
+            // Observation identity failure must not prevent factory execution.
+            return null;
         }
     }
 

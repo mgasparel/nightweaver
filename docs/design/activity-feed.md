@@ -17,6 +17,11 @@ to finite history and reconnectable SSE.
 Each continuous runtime owns one Project journal, independent of OTLP export.
 The runtime uses its existing identity. The journal worker performs projection,
 serialization and storage. Producer calls only try the bounded queue.
+Continuous startup reads `remote.origin.url` once through the scrubbed Git
+command path and parses the repository identity for the journal. Missing,
+unsupported or failed origin reads disable only the journal and emit a fixed
+diagnostic. Cancellation still stops startup. This adds one Git command per
+runtime startup and no tracker command or per-poll origin read.
 
 Each pool keeps one suppression state and one current numeric detail record.
 No per-Bead keys or diagnostic text enter this state. Planning uses the exact

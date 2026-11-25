@@ -27,6 +27,15 @@ and checks the separate comparison of runtime observations on an open stream.
 The repair adds one journal comparison per examined cache row. It adds no native
 journey, fixture publication, source read or tracker command.
 
+Activity startup repair adds five controlled application cases. They run real
+repository validation, recovery, pool setup and file-backed journal creation.
+HTTPS and SSH origins produce stored runtime and Planning gate records. Missing,
+invalid and failed origin reads preserve admission and report journal loss.
+Only process-lifetime exclusion is substituted; its native coverage remains.
+The fixture refuses native watcher setup. No native process, journey or fixture
+publication is added. Production adds one scrubbed Git origin read per startup.
+Tracker reads and scheduling limits remain unchanged.
+
 Activity wait and health producers add six controlled helper cases, two discovery
 drain cases and one large-inventory gate case. Existing Planning, Delivery and Merger coordinator cases
 now assert Activity records beside unchanged admission results and source read
