@@ -99,6 +99,13 @@ Bead, phase and invocation. Do not use Bead plus stage alone. Initial inventory
 without causal proof uses a new cause and remains observed. Each invocation and
 repair visit has its own cause. Distinct semantic kinds remain separate, even
 with the same cause; `StateObserved` can coalesce with its proven publication.
+The adapter must set `observedPublication` on that inventory record to the exact
+publication kind: `PlanningApproved`, `PlanningPublished`, `DeliveryApproved`,
+`ChangesRequired` or `BeadClosed`. The shared causal identity must bind that
+publication. An absent binding keeps inventory separate. Other event kinds cannot
+set this field. Invocation, admission, merge, recovery, wait, health and loss facts
+remain separate from inventory. Two different publication kinds remain separate,
+even when they share a cause. An inventory binding grants no confirmation strength.
 
 The bounded presentation fold retains the first row position as its anchor.
 Stronger evidence updates that row in place. Weaker inventory cannot downgrade

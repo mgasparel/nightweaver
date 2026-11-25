@@ -61,6 +61,7 @@ internal sealed record ActivityEvidence(ActivityKind Kind, ActivitySource Source
     public int? Limit { get; init; }
     public ActivityDetail? Detail { get; init; }
     public ActivityRole? Role { get; init; }
+    public ActivityKind? ObservedPublication { get; init; }
     public MergerFacts? Merge { get; init; }
 }
 
@@ -82,7 +83,7 @@ internal sealed class ActivityRecord
         Bead = evidence.Bead; Invocation = evidence.Invocation; SourceTime = evidence.SourceTime;
         Freshness = evidence.Freshness; Reason = evidence.Reason; Count = evidence.Count;
         Limit = evidence.Limit; Detail = evidence.Detail; Role = evidence.Role; Merge = evidence.Merge;
-        Strength = strength; Message = message;
+        Strength = strength; Message = message; ObservedPublication = evidence.ObservedPublication;
     }
     public int Schema { get; } = 1;
     public ActivityPosition Position { get; }
@@ -101,6 +102,7 @@ internal sealed class ActivityRecord
     public int? Limit { get; }
     public ActivityDetail? Detail { get; }
     public ActivityRole? Role { get; }
+    public ActivityKind? ObservedPublication { get; }
     public MergerFacts? Merge { get; }
     public ActivityStrength Strength { get; }
     public string Message { get; }
@@ -136,6 +138,8 @@ internal static class ActivityProjector
 
         var rule = Rule(evidence.Kind);
         if (rule.Source != evidence.Source) return null;
+        if (evidence.ObservedPublication is { } publication
+            && (evidence.Kind != ActivityKind.StateObserved || !IsPublication(publication))) return null;
         if (evidence.Kind is ActivityKind.PlanningApproved or ActivityKind.PlanningPublished or ActivityKind.DeliveryApproved
             or ActivityKind.ChangesRequired or ActivityKind.QaAdmitted or ActivityKind.MergeVerified or ActivityKind.BeadClosed
             or ActivityKind.StateObserved or ActivityKind.PauseObserved or ActivityKind.PauseRemovalObserved or ActivityKind.ResumeConfirmed
@@ -180,6 +184,8 @@ internal static class ActivityProjector
 
     private static bool Identifier(string? value) => value is { Length: > 0 and <= ActivityLimits.IdentifierCharacters }
         && char.IsAsciiLetterOrDigit(value[0]) && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
+    private static bool IsPublication(ActivityKind kind) => kind is ActivityKind.PlanningApproved
+        or ActivityKind.PlanningPublished or ActivityKind.DeliveryApproved or ActivityKind.ChangesRequired or ActivityKind.BeadClosed;
     private static bool Hash(string? value) => value is { Length: 40 } && value.All(Uri.IsHexDigit);
     private static bool SafePullRequest(string? value, GitHubRepositoryIdentity repository)
     {
@@ -266,8 +272,7 @@ internal static class ActivityReplay
             same = rows.FindIndex(r => r.Evidence.Position.Runtime == record.Position.Runtime
                 && r.Evidence.Cause == record.Cause && r.Evidence.Bead == record.Bead
                 && r.Evidence.Phase == record.Phase && r.Evidence.Invocation == record.Invocation
-                && (r.Evidence.Kind == record.Kind || r.Evidence.Kind == ActivityKind.StateObserved
-                    || record.Kind == ActivityKind.StateObserved));
+                && (r.Evidence.ObservedPublication ?? r.Evidence.Kind) == (record.ObservedPublication ?? record.Kind));
             if (same >= 0)
             {
                 var prior = rows[same].Evidence;

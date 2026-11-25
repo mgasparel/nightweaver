@@ -198,7 +198,8 @@ public sealed class ActivityModelTests
     [Fact]
     public void DuplicateLateAndClockChangedInputsKeepJournalOrderAndAnchor()
     {
-        var initial = Project(ActivityKind.StateObserved);
+        var initial = ActivityProjector.Project(Position(), Now, Evidence(ActivityKind.StateObserved) with
+        { ObservedPublication = ActivityKind.DeliveryApproved }, Repository)!;
         var confirmed = ActivityProjector.Project(Position(2), Now.AddHours(-2), Evidence(ActivityKind.DeliveryApproved) with
         { SourceTime = Now.AddDays(-2) }, Repository)!;
         var late = ActivityProjector.Project(Position(3), Now.AddHours(-3), Evidence(ActivityKind.InvocationStarted) with
@@ -276,7 +277,8 @@ public sealed class ActivityModelTests
     public void LaterInventoryCannotDowngradeConfirmationOrLoseCursorProgress()
     {
         var confirmed = Project(ActivityKind.DeliveryApproved);
-        var observed = Project(ActivityKind.StateObserved, 2);
+        var observed = ActivityProjector.Project(Position(2), Now, Evidence(ActivityKind.StateObserved) with
+        { ObservedPublication = ActivityKind.DeliveryApproved }, Repository)!;
         var state = ActivityReplay.Apply(ActivityReplayResult.Empty, [confirmed, observed]);
         Assert.Single(state.Rows);
         Assert.Same(confirmed, state.Rows[0].Evidence);
@@ -284,5 +286,73 @@ public sealed class ActivityModelTests
         var next = ActivityReplay.Apply(state, [Project(ActivityKind.InvocationStarted, 3)]);
         Assert.Equal(2, next.Rows.Count);
         Assert.Equal(3, next.Cursor!.Value.Offset);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void InventoryAndDistinctEventsKeepEveryFactWithSharedCause(bool inventoryFirst)
+    {
+        ActivityKind[] kinds = [ActivityKind.InvocationStarted, ActivityKind.InvocationCompleted,
+            ActivityKind.RecoveryStarted, ActivityKind.RecoveryCompleted, ActivityKind.WaitChanged,
+            ActivityKind.HealthChanged, ActivityKind.RecordsLost];
+        var ordered = inventoryFirst ? kinds.Prepend(ActivityKind.StateObserved) : kinds.Append(ActivityKind.StateObserved);
+        var records = ordered.Select((kind, index) => Project(kind, index + 1)).ToArray();
+        var state = ActivityReplay.Apply(ActivityReplayResult.Empty, records);
+        Assert.Equal(records.Length, state.Rows.Count);
+        Assert.Equal(0, state.Suppressed);
+        Assert.Equal(records.Select(r => r.Kind), state.Rows.Select(r => r.Evidence.Kind));
+        Assert.Equal(records.Select(r => r.Position), state.Rows.Select(r => r.Anchor));
+        Assert.Equal(records[^1].Position, state.Cursor);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void InventorySuppressesOnlyItsExactPublication(bool inventoryFirst)
+    {
+        var inventory = Evidence(ActivityKind.StateObserved) with { ObservedPublication = ActivityKind.DeliveryApproved };
+        ActivityEvidence[] inputs = inventoryFirst
+            ? [inventory, Evidence(ActivityKind.DeliveryApproved), Evidence(ActivityKind.ChangesRequired), Evidence(ActivityKind.InvocationCompleted)]
+            : [Evidence(ActivityKind.ChangesRequired), Evidence(ActivityKind.DeliveryApproved), inventory, Evidence(ActivityKind.InvocationCompleted)];
+        var records = inputs.Select((input, index) => ActivityProjector.Project(Position(index + 1), Now, input, Repository)!).ToArray();
+        var state = ActivityReplay.Apply(ActivityReplayResult.Empty, records);
+        Assert.Equal(3, state.Rows.Count);
+        Assert.Equal(1, state.Suppressed);
+        var approval = Assert.Single(state.Rows, row => row.Evidence.Kind == ActivityKind.DeliveryApproved);
+        Assert.Equal(inventoryFirst ? records[0].Position : records[1].Position, approval.Anchor);
+        Assert.Equal(ActivityStrength.Confirmed, approval.Evidence.Strength);
+        Assert.Contains(state.Rows, row => row.Evidence.Kind == ActivityKind.ChangesRequired);
+        Assert.Contains(state.Rows, row => row.Evidence.Kind == ActivityKind.InvocationCompleted);
+        Assert.Equal(records[^1].Position, state.Cursor);
+    }
+
+    [Fact]
+    public void UnboundInventoryCannotSuppressAPublication()
+    {
+        var state = ActivityReplay.Apply(ActivityReplayResult.Empty,
+            [Project(ActivityKind.StateObserved), Project(ActivityKind.DeliveryApproved, 2)]);
+        Assert.Equal(2, state.Rows.Count);
+        Assert.Equal(0, state.Suppressed);
+    }
+
+    [Fact]
+    public void PublicationBindingRejectsOtherKindsAndInvalidValues()
+    {
+        foreach (var kind in Enum.GetValues<ActivityKind>().Append((ActivityKind)999))
+        {
+            var input = Evidence(ActivityKind.StateObserved) with { ObservedPublication = kind };
+            var record = ActivityProjector.Project(Position(), Now, input, Repository);
+            var allowed = kind is ActivityKind.PlanningApproved or ActivityKind.PlanningPublished
+                or ActivityKind.DeliveryApproved or ActivityKind.ChangesRequired or ActivityKind.BeadClosed;
+            Assert.Equal(allowed, record is not null);
+            if (record is not null)
+            {
+                Assert.Equal(kind, record.ObservedPublication);
+                Assert.Contains($"\"observedPublication\":\"{kind}\"", Encoding.UTF8.GetString(ActivityProjector.Serialize(record)));
+            }
+        }
+        var nonInventory = Evidence(ActivityKind.InvocationCompleted) with { ObservedPublication = ActivityKind.DeliveryApproved };
+        Assert.Null(ActivityProjector.Project(Position(), Now, nonInventory, Repository));
     }
 }
