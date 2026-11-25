@@ -46,10 +46,33 @@ visible and evidence wraps without horizontal overflow. The
 Studio passed 104 cases with zero failures or skips in 1.6701712 seconds.
 Five added cases cover four empty replacement combinations and older overflow.
 The overflow case took 2.0217 milliseconds. The four replacement cases took
-0.4739 milliseconds in total. These cases use controlled records and no native
+0.4749 milliseconds in total. These cases use controlled records and no native
 process. Production adds a journal comparison per batch or row and a bounded
 older-page capacity check. It adds no tracker command or source read.
 The implementation Bead records the final candidate measurement and baseline.
+
+The complete measurement tested clean revision
+`143a6c40616437ab1f369a8e0386abd21c1bed3c`, tree
+`37df20b759da857ef8ee89dddc8a6e775d97d454`. All 2,447 tests passed with zero
+failures or skips in 231.7461791 outer seconds. Six threads, normal build,
+fixture publication and teardown remain. Archive and collector fixtures passed
+66 and 102 cases. Measurement errors are empty. Both local time limits passed.
+Evidence `5b1bbc9290104acd99f4ad6400ab5254` is retained under this invocation's
+`complete-candidate` directory. The result SHA256 is
+`D0F2663BF7DFED8DBB4BCC3A49113E5EB4E22D319D677E9C8E989B4AD1F617A6`.
+
+The explicit accepted baseline is evidence
+`ab8d48a5d1c3491683e279e94dd54db4` at base
+`cdc378599d8edceac118f98713e34f860e070632`. It passed the same 2,447 tests in
+213.3012778 seconds. Its accepted file SHA256 is
+`9293ECEF95CE9CEDE382FDF40EA75A53CB52D08DD3C46CB4CEADB87DE0E494AA`.
+Preparation and temporary paths differ. Timing comparison is unavailable.
+Delta and ratio remain unknown. The repair adds five controlled Studio cases,
+bounded client checks and browser assertions in the existing opt-in journey.
+It adds no normal-suite native journey, fixture publication or source read.
+No attributable material cost regression was established. No resource capture
+trigger occurred. After measurement, only this report and the source-hash file's
+line endings changed. Production, test and fixture source hashes still match.
 
 ## Initial implementation evidence
 
