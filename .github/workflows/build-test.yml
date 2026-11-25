@@ -115,6 +115,10 @@ jobs:
         id: suite
         shell: pwsh
         run: |
+          $diagnostics = Join-Path $env:RUNNER_TEMP 'hosted-bd-investigation'
+          New-Item -ItemType Directory -Force $diagnostics | Out-Null
+          $env:NIGHTWEAVER_BD_PHASE_DIRECTORY = $diagnostics
+          Start-Process pwsh -WindowStyle Hidden -ArgumentList @('-NoProfile', '-File', "$pwd/scripts/Observe-HostedBd.ps1", '-OutputDirectory', $diagnostics)
           & ./tests/TestSuiteMeasurement.Tests.ps1
           "fixture-temp=$([IO.Path]::GetTempPath().Replace('\', '/').TrimEnd('/'))" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -127,6 +131,18 @@ jobs:
           $timer.Stop()
           Write-Host "Suite wall time including build, fixture publishing and teardown $($timer.Elapsed)"
           if ($testExit -ne 0) { exit $testExit }
+      - name: Retain hosted investigation
+        if: always()
+        shell: pwsh
+        run: |
+          $diagnostics = Join-Path $env:RUNNER_TEMP 'hosted-bd-investigation'
+          if (Test-Path $diagnostics) { New-Item -ItemType File -Force (Join-Path $diagnostics 'stop') | Out-Null }
+      - name: Upload hosted investigation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-bd-investigation
+          path: ${{ runner.temp }}/hosted-bd-investigation/**
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4

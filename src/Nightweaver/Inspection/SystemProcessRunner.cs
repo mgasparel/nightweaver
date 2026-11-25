@@ -13,6 +13,27 @@ internal sealed class SystemProcessRunner : IProcessRunner
     internal Action<string>? PhaseObserved { get; init; }
     public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
     {
+        // Temporary bounded hosted investigation. Do not record arguments or output.
+        var traceRoot = Environment.GetEnvironmentVariable("NIGHTWEAVER_BD_PHASE_DIRECTORY");
+        var tracePath = !string.IsNullOrEmpty(traceRoot) && Path.GetFileNameWithoutExtension(request.FileName).Equals("bd", StringComparison.OrdinalIgnoreCase)
+            ? Path.Combine(traceRoot, $"{Environment.ProcessId}-{Guid.NewGuid():N}.jsonl") : null;
+        var traceTimer = Stopwatch.StartNew();
+        int? childId = null;
+        void Observe(string phase)
+        {
+            PhaseObserved?.Invoke(phase);
+            if (tracePath is null) return;
+            try
+            {
+                File.AppendAllText(tracePath, System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    utc = DateTime.UtcNow, elapsedMilliseconds = traceTimer.Elapsed.TotalMilliseconds,
+                    parentPid = Environment.ProcessId, childPid = childId, phase,
+                    workingDirectory = request.WorkingDirectory, timeoutSeconds = request.Timeout.TotalSeconds
+                }) + "\n");
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
         var startInfo = new ProcessStartInfo
         {
             FileName = request.FileName,
@@ -44,7 +65,7 @@ internal sealed class SystemProcessRunner : IProcessRunner
         }
 
         using var process = new Process { StartInfo = startInfo };
-        PhaseObserved?.Invoke("start-requested");
+        Observe("start-requested");
         try
         {
             bool started;
@@ -71,8 +92,9 @@ internal sealed class SystemProcessRunner : IProcessRunner
             throw new ToolExecutionException($"required executable '{request.FileName}' could not be started: {exception.Message}", exception.Message);
         }
 
+        childId = process.Id;
         process.StandardInput.Close();
-        PhaseObserved?.Invoke("started");
+        Observe("started");
         using var outputLimit = new CancellationTokenSource();
         var exceeded = false;
         async Task<string> ReadOutputAsync(StreamReader reader)
@@ -105,11 +127,11 @@ internal sealed class SystemProcessRunner : IProcessRunner
 
         try
         {
-            await WaitForSettlementAsync(process, linkedCancellation.Token, PhaseObserved);
+            await WaitForSettlementAsync(process, linkedCancellation.Token, Observe);
         }
         catch (OperationCanceledException)
         {
-            PhaseObserved?.Invoke("cancellation-observed");
+            Observe("cancellation-observed");
             try
             {
                 if (!HasSettled(process))
@@ -122,7 +144,7 @@ internal sealed class SystemProcessRunner : IProcessRunner
                 // The child exited while cancellation was being handled.
             }
 
-            await WaitForSettlementAsync(process, CancellationToken.None, PhaseObserved);
+            await WaitForSettlementAsync(process, CancellationToken.None, Observe);
             var timedOut = timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested;
             var stderr = await stderrTask;
             _ = await stdoutTask;
@@ -138,7 +160,7 @@ internal sealed class SystemProcessRunner : IProcessRunner
 
         var standardOutput = await stdoutTask;
         var standardError = await stderrTask;
-        PhaseObserved?.Invoke("streams-drained");
+        Observe("streams-drained");
         if (exceeded) throw new ToolExecutionException("observer output exceeded read limit");
         return new ProcessResult(ReadExitCode(process), standardOutput, standardError);
     }
