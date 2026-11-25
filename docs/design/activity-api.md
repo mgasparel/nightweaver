@@ -34,6 +34,13 @@ offset. It contains no path, source text or authority. A foreign journal or an
 expired offset produces `Expired, Gap` and resumes at available cached history.
 The page retains the source journal's oldest and newest offsets.
 
+A cursor request waits for the shared collector's first attempt before it sends
+successful headers. This wait has a four-second deadline and observes request
+cancellation. If bounds remain unavailable, the request receives 503. A same-
+journal cursor above the initialized newest offset receives 400 on both routes.
+Waiting SSE requests count against the 16-stream limit. These requests do not
+start additional source reads.
+
 The level filter is a display grouping. `RecoveryFailed` and `CleanupFailed` are
 error. `HealthChanged` with `RuntimeFailed` or `Unhealthy` is also error.
 `ChangesRequired`, `PauseObserved`, `EvidenceUnavailable`, `RecordsLost`,
@@ -67,10 +74,13 @@ Continue polling the returned cursor while loading. An empty filtered page can
 advance its cursor. Cache gaps remain explicit even when a filter hides loss
 records. The API never treats an incomplete cache as complete retained history.
 
-Each response returns at most 100 records. Its scan decodes at most 192 KiB of
-canonical record bytes. The remaining 64 KiB of the contract's 256 KiB ceiling
-reserves response metadata, detail links and SSE framing. Request filters never
-trigger a disk scan or an unbounded memory scan of record content.
+Each response returns at most 100 records. Its scan decodes at most 256 KiB of
+canonical record bytes. The complete history response and each complete SSE
+batch also fit 256 KiB. Before adding a record, the collector charges its encoded
+record, detail links, array separators and SSE framing against both wire limits.
+It measures fixed metadata with the longest cursor and scan count. A record that
+does not fit stays after the continuation cursor for the next page. Request
+filters never trigger a disk scan or an unbounded memory scan of record content.
 
 ## Wire and reconnect
 

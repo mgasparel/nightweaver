@@ -11,6 +11,15 @@ Activity interest. One bounded origin Git command runs on first Activity use.
 Idle Web hosts add no reads. Existing tests, deadlines and six threads remain.
 See [Activity read API](../docs/design/activity-api.md).
 
+Activity API repair adds six controlled cases. Cold history and SSE requests
+must wait for shared bounds and refuse a future cursor before successful headers.
+Unavailable bounds return 503. Controlled time proves the initialization deadline
+and independent cancellation. Maximum permitted PR links and identifiers exercise
+complete UTF-8 history and SSE batch sizes, with loss-free continuation across
+pages. These cases add no native journey, tracker work or fixture publication.
+Wire accounting adds bounded serialization per selected record. It adds no file
+read and keeps shared refresh, six test threads and production deadlines.
+
 Activity journal tests add controlled storage and clock cases plus disposable-file
 read, write, rotation, cursor, corruption, identity and sentinel checks. One short
 junction command and one hard-link call prove actual Windows path safety. They

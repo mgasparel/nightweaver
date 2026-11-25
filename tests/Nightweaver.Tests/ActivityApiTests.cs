@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -23,6 +24,114 @@ public sealed class ActivityApiTests
             new(ActivityKind.HealthChanged, ActivitySource.Health, ActivityPhase.Runtime, Guid.NewGuid(), "health")
             { Bead = bead, Invocation = "invocation-1", Detail = detail, Freshness = ActivityFreshness.Fresh }, Repository)!;
     private static ActivityCursor Cursor(long offset) => new(1, Journal, offset);
+
+    [Theory]
+    [InlineData("history")]
+    [InlineData("events")]
+    public async Task ColdFutureCursorIsRefusedBeforeSuccessfulHeaders(string route)
+    {
+        var source = new Source { Page = new([Row(1)], Cursor(1), 1, 1, ActivityPageState.Ready, 4096) };
+        using var service = new ActivityReadService(source, TimeProvider.System, new(), "test");
+        var initialization = service.InitializeCursorAsync(Cursor(2), TestContext.Current.CancellationToken);
+        Assert.False(initialization.IsCompleted);
+        var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var app = await App(service, responseStarted: started);
+        using var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/activity/v1/projects/test/" + route
+            + (route == "history" ? "?cursor=" + ActivityEndpoints.FormatCursor(Cursor(2)) : ""));
+        if (route == "events") request.Headers.Add("Last-Event-ID", ActivityEndpoints.FormatCursor(Cursor(2)));
+        var responseTask = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, TestContext.Current.CancellationToken);
+        Assert.False(await started.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        await service.RefreshAsync(TestContext.Current.CancellationToken);
+        Assert.True(await initialization);
+        using var response = await responseTask;
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(1, source.Reads);
+    }
+
+    [Fact]
+    public async Task MaximumLinksFitCompleteHistoryAndSseBatchesWithContinuation()
+    {
+        var repository = new GitHubRepositoryIdentity("github.com", new string('o', 230), new string('r', 247));
+        var url = "https://github.com/" + repository.Owner + "/" + repository.Name + "/pull/123456789";
+        Assert.Equal(512, url.Length);
+        var bead = new string('b', 128);
+        var facts = new MergerFacts(bead, url, new('a', 40), new('b', 40), new('r', 128), new('v', 128), true);
+        var records = Enumerable.Range(1, 100).Select(i => Assert.IsType<ActivityRecord>(ActivityProjector.Project(
+            new(Journal, i, Runtime, i), DateTimeOffset.UtcNow,
+            new(ActivityKind.MergeVerified, ActivitySource.MergeVerifier, ActivityPhase.Merger, Guid.NewGuid(), new('v', 128))
+            { Bead = bead, Invocation = new('i', 128), Detail = ActivityDetail.Bead, Count = 1000000000, Limit = 1000000000,
+                Freshness = ActivityFreshness.Fresh, SourceTime = DateTimeOffset.UtcNow },
+            repository, new(facts, facts)))).ToArray();
+        Assert.All(records, row => Assert.Equal(ActivityKind.MergeVerified, row.Kind));
+        var source = new Source { Page = new(records, Cursor(100), 1, 100, ActivityPageState.Ready, 262144) };
+        using var service = new ActivityReadService(source, TimeProvider.System, new(), "test");
+        await service.RefreshAsync(TestContext.Current.CancellationToken);
+        await using var app = await App(service); using var client = app.GetTestClient();
+        var offsets = new List<long>();
+        string? cursor = null;
+        do
+        {
+            var page = service.Read(cursor is null ? null : ParseCursor(cursor), All);
+            var history = await client.GetByteArrayAsync("/api/activity/v1/projects/test/history" + (cursor is null ? "" : "?cursor=" + cursor), TestContext.Current.CancellationToken);
+            Assert.InRange(history.Length, 1, ActivityLimits.BatchBytes);
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/api/activity/v1/projects/test/events");
+            if (cursor is not null) request.Headers.Add("Last-Event-ID", cursor);
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, TestContext.Current.CancellationToken);
+            using var reader = new StreamReader(await response.Content.ReadAsStreamAsync(TestContext.Current.CancellationToken));
+            var text = "";
+            while (!text.EndsWith("data: {}\n\n", StringComparison.Ordinal))
+                text += await reader.ReadLineAsync(TestContext.Current.CancellationToken) + "\n";
+            Assert.InRange(Encoding.UTF8.GetByteCount(text), 1, ActivityLimits.BatchBytes);
+            Assert.Equal(ActivityEndpoints.EncodeBatch(page, cursor is null ? null : ParseCursor(cursor)), text);
+            offsets.AddRange(page.Records.Select(r => r.Position.Offset));
+            Assert.NotEqual(cursor, page.Cursor);
+            cursor = page.Cursor;
+        } while (offsets.Count < 100);
+        Assert.Equal(Enumerable.Range(1, 100).Select(i => (long)i), offsets);
+        Assert.Equal(1, source.Reads);
+    }
+
+    private static ActivityCursor ParseCursor(string value)
+    { Assert.True(ActivityEndpoints.TryCursor(value, out var cursor)); return cursor!; }
+
+    [Theory]
+    [InlineData("history")]
+    [InlineData("events")]
+    public async Task ColdCursorWithUnavailableBoundsReturnsServiceUnavailable(string route)
+    {
+        var source = new Source { Fail = true };
+        using var service = new ActivityReadService(source, TimeProvider.System, new(), "test");
+        await service.RefreshAsync(TestContext.Current.CancellationToken);
+        await using var app = await App(service); using var client = app.GetTestClient();
+        using var response = await client.GetAsync("/api/activity/v1/projects/test/" + route
+            + "?cursor=" + ActivityEndpoints.FormatCursor(Cursor(1)), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(1, source.Reads);
+        for (var i = 0; i < 16; i++) Assert.True(service.TryEnterStream());
+        Assert.False(service.TryEnterStream());
+        for (var i = 0; i < 16; i++) service.ExitStream();
+    }
+
+    [Fact]
+    public async Task ColdCursorWaitHasFiniteDeadlineAndIndependentCancellation()
+    {
+        var source = new Source(); var clock = new Clock();
+        using var service = new ActivityReadService(source, clock, new(), "test");
+        using var cancel = new CancellationTokenSource();
+        var cancelled = service.InitializeCursorAsync(Cursor(1), cancel.Token);
+        var waiting = service.InitializeCursorAsync(Cursor(1), TestContext.Current.CancellationToken);
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+        Assert.False(waiting.IsCompleted);
+        clock.Advance(ActivityLimits.Refresh * 2);
+        Assert.False(await waiting);
+        Assert.Equal(0, source.Reads);
+        await service.RefreshAsync(TestContext.Current.CancellationToken);
+        Assert.True(await service.InitializeCursorAsync(Cursor(0), TestContext.Current.CancellationToken));
+        Assert.Equal(1, source.Reads);
+    }
 
     private sealed class Source : IActivityReadSource
     {
@@ -284,7 +393,8 @@ public sealed class ActivityApiTests
         Assert.False(ActivityEndpoints.TryRequest(context.Request, true, out _, out _));
     }
 
-    private static async Task<WebApplication> App(ActivityReadService service, TaskCompletionSource? requestSettled = null)
+    private static async Task<WebApplication> App(ActivityReadService service, TaskCompletionSource? requestSettled = null,
+        TaskCompletionSource<bool>? responseStarted = null)
     {
         var builder = WebApplication.CreateBuilder(); builder.WebHost.UseTestServer();
         using var directory = new TempDirectory();
@@ -298,7 +408,12 @@ public sealed class ActivityApiTests
         var app = builder.Build();
         app.Use(async (context, next) =>
         {
-            try { await next(context); }
+            try
+            {
+                var execution = next(context);
+                responseStarted?.TrySetResult(context.Response.HasStarted);
+                await execution;
+            }
             finally { requestSettled?.TrySetResult(); }
         });
         app.MapActivity();

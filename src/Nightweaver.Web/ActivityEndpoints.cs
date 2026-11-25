@@ -28,11 +28,13 @@ internal static class ActivityEndpoints
         app.MapGet("/api/activity/v1/projects/{projectId}/events", StreamAsync);
     }
 
-    private static IResult History(HttpContext context, string projectId, ProjectConfig project, ActivityReadService service)
+    private static async Task<IResult> History(HttpContext context, string projectId, ProjectConfig project, ActivityReadService service)
     {
         context.Response.Headers.CacheControl = "no-store";
         if (projectId != project.Name.Value) return Results.NotFound();
         if (!TryRequest(context.Request, false, out var cursor, out var filter)) return Results.BadRequest();
+        if (!await service.InitializeCursorAsync(cursor, context.RequestAborted).ConfigureAwait(false))
+            return Results.StatusCode(503);
         try { return Results.Json(service.Read(cursor, filter!), Json); }
         catch (ArgumentException) { return Results.BadRequest(); }
     }
@@ -43,13 +45,15 @@ internal static class ActivityEndpoints
         context.Response.Headers.CacheControl = "no-store";
         if (projectId != project.Name.Value) return Results.NotFound();
         if (!TryRequest(context.Request, true, out var cursor, out var filter)) return Results.BadRequest();
-        ActivityReadPage page;
-        try { page = service.Read(cursor, filter!); }
-        catch (ArgumentException) { return Results.BadRequest(); }
         if (!service.TryEnterStream())
         { context.Response.Headers.RetryAfter = "2"; return Results.StatusCode(429); }
         try
         {
+            if (!await service.InitializeCursorAsync(cursor, context.RequestAborted).ConfigureAwait(false))
+                return Results.StatusCode(503);
+            ActivityReadPage page;
+            try { page = service.Read(cursor, filter!); }
+            catch (ArgumentException) { return Results.BadRequest(); }
             context.Response.ContentType = "text/event-stream; charset=utf-8";
             context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
             string? previousRuntime = null;
@@ -58,19 +62,7 @@ internal static class ActivityEndpoints
                 // Status precedes resumed data, including every reconnect and gap.
                 // Each complete item advances Last-Event-ID. The final cursor
                 // also advances over filtered or unavailable positions.
-                var payload = JsonSerializer.Serialize(new
-                {
-                    page.Oldest, page.Newest, page.LoadedThrough, page.Loading, page.State,
-                    page.JournalHealth, page.AttemptedAt, page.ObservedAt, page.RuntimeHealth,
-                    page.RuntimeId, page.RuntimeObservedAt, page.Details,
-                    reconnectGap = cursor is not null && (page.JournalHealth != ActivityFreshness.Fresh || page.State.HasFlag(ActivityPageState.Gap)),
-                    runtimeReplaced = page.RuntimeReplaced || previousRuntime is not null && page.RuntimeId is not null && previousRuntime != page.RuntimeId
-                }, Json);
-                var batch = "event: status\ndata: " + payload + "\n\n";
-                foreach (var record in page.Records)
-                    batch += "event: activity\nid: " + FormatCursor(new(1, record.Position.Journal, record.Position.Offset))
-                        + "\ndata: " + Encoding.UTF8.GetString(ActivityProjector.Serialize(record)) + "\n\n";
-                if (page.Cursor is { } next) batch += "event: cursor\nid: " + next + "\ndata: {}\n\n";
+                var batch = EncodeBatch(page, cursor, previousRuntime);
                 await WriteAsync(context, batch, clock).ConfigureAwait(false);
                 if (page.RuntimeId is not null) previousRuntime = page.RuntimeId;
                 if (page.Cursor is { } value) { TryCursor(value, out cursor); }
@@ -84,6 +76,26 @@ internal static class ActivityEndpoints
         finally { service.ExitStream(); }
         return Results.Empty;
     }
+
+    internal static string EncodeBatch(ActivityReadPage page, ActivityCursor? cursor = null, string? previousRuntime = null)
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            page.Oldest, page.Newest, page.LoadedThrough, page.Loading, page.State,
+            page.JournalHealth, page.AttemptedAt, page.ObservedAt, page.RuntimeHealth,
+            page.RuntimeId, page.RuntimeObservedAt, page.Details,
+            reconnectGap = cursor is not null && (page.JournalHealth != ActivityFreshness.Fresh || page.State.HasFlag(ActivityPageState.Gap)),
+            runtimeReplaced = page.RuntimeReplaced || previousRuntime is not null && page.RuntimeId is not null && previousRuntime != page.RuntimeId
+        }, Json);
+        var batch = new StringBuilder("event: status\ndata: " + payload + "\n\n");
+        foreach (var record in page.Records) batch.Append(EncodeRecord(record));
+        if (page.Cursor is { } next) batch.Append("event: cursor\nid: " + next + "\ndata: {}\n\n");
+        return batch.ToString();
+    }
+
+    internal static string EncodeRecord(ActivityRecord record) =>
+        "event: activity\nid: " + FormatCursor(new(1, record.Position.Journal, record.Position.Offset))
+        + "\ndata: " + Encoding.UTF8.GetString(ActivityProjector.Serialize(record)) + "\n\n";
 
     internal static async Task WriteAsync(HttpContext context, string batch, TimeProvider clock)
     {

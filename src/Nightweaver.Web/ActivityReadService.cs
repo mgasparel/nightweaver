@@ -2,6 +2,8 @@ using Nightweaver.ActivityFeed;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 using Nightweaver.Telemetry;
+using System.Text;
+using System.Text.Json;
 
 namespace Nightweaver.Web;
 
@@ -84,6 +86,7 @@ internal sealed class ActivityReadService : BackgroundService
     private FactoryTelemetryReadResult runtime = new(FactoryTelemetryAvailability.Unavailable, null, null);
     private int streams;
     private long? interest;
+    private readonly TaskCompletionSource initializedBounds = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     internal ActivityReadService(IActivityReadSource source, TimeProvider clock, ObservationMemoryBudget budget, string projectId)
     { this.source = source; this.clock = clock; this.budget = budget; this.projectId = projectId; }
@@ -93,6 +96,20 @@ internal sealed class ActivityReadService : BackgroundService
         lock (sync) { if (streams == 16) return false; streams++; return true; }
     }
     internal void ExitStream() { lock (sync) streams--; }
+
+    internal async Task<bool> InitializeCursorAsync(ActivityCursor? cursor, CancellationToken cancellationToken)
+    {
+        if (cursor is null) return true;
+        lock (sync)
+        {
+            interest = clock.GetTimestamp();
+            if (loaded is not null) return true;
+        }
+        // Wait for the shared collector. Never start a per-request source read.
+        try { await initializedBounds.Task.WaitAsync(ActivityLimits.Refresh * 2, clock, cancellationToken).ConfigureAwait(false); }
+        catch (TimeoutException) { return false; }
+        lock (sync) return loaded is not null;
+    }
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken) => Task.Run(async () =>
     {
@@ -148,6 +165,7 @@ internal sealed class ActivityReadService : BackgroundService
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception) when (SourceFailure(exception))
         { lock (sync) { available = false; state = ActivityPageState.Unknown; } }
+        finally { initializedBounds.TrySetResult(); }
     }
 
     internal ActivityReadPage Read(ActivityCursor? cursor, ActivitySelection filter)
@@ -166,26 +184,44 @@ internal sealed class ActivityReadService : BackgroundService
             if (cursor is not null && loaded is not null && cursor.Journal == loaded.Journal && cursor.Offset > (newest ?? 0))
                 throw new ArgumentException("Future Activity cursor.");
             var result = new List<ActivityRecord>();
+            var details = new List<ActivityRecordDetail>();
+            var runtimeHealth = runtime.Availability == FactoryTelemetryAvailability.Live && runtimeReceipt is { } lastRead
+                && clock.GetElapsedTime(lastRead) > TimeSpan.FromSeconds(10) ? FactoryTelemetryAvailability.Stale : runtime.Availability;
+            var priorRuntime = cursor is null ? null : rows.LastOrDefault(r => r.Position.Offset <= cursor.Offset)?.Position.Runtime;
+            var replaced = priorRuntime is { } prior && Guid.TryParse(runtime.Snapshot?.RuntimeId, out var current) && current != prior;
+            // Encode fixed metadata with the longest cursor and scan count. False
+            // is the longer JSON boolean, so it also bounds SSE reconnect flags.
+            var envelope = new ActivityReadPage([], loaded is null ? null : ActivityEndpoints.FormatCursor(new(1, loaded.Journal, long.MaxValue)),
+                oldest, newest, loaded?.Offset, newest > loaded?.Offset, flags, health, attempted, observed,
+                runtimeHealth, runtime.Snapshot?.RuntimeId, runtime.Snapshot?.ObservedAt, replaced, ActivityLimits.BatchBytes, []);
+            var historyBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, ActivityEndpoints.Json).Length;
+            var streamBytes = Encoding.UTF8.GetByteCount(ActivityEndpoints.EncodeBatch(envelope));
             var bytes = 0;
             foreach (var row in rows)
             {
                 if (row.Position.Offset <= after) continue;
                 var size = ActivityProjector.Serialize(row).Length;
-                if (bytes + size > ActivityLimits.BatchBytes - 65536 || result.Count == ActivityLimits.PageRecords) break;
+                if (bytes + size > ActivityLimits.BatchBytes || result.Count == ActivityLimits.PageRecords) break;
+                if (filter.Matches(row))
+                {
+                    var detail = ResolveDetail(row, runtimeHealth);
+                    var detailBytes = JsonSerializer.SerializeToUtf8Bytes(detail, ActivityEndpoints.Json).Length;
+                    // Charge a comma for each array entry, including the first.
+                    var historyCost = JsonSerializer.SerializeToUtf8Bytes(row, ActivityEndpoints.Json).Length + detailBytes + 2;
+                    var streamCost = Encoding.UTF8.GetByteCount(ActivityEndpoints.EncodeRecord(row)) + detailBytes + 1;
+                    if (historyBytes + historyCost > ActivityLimits.BatchBytes || streamBytes + streamCost > ActivityLimits.BatchBytes) break;
+                    historyBytes += historyCost; streamBytes += streamCost;
+                    result.Add(row); details.Add(detail);
+                }
                 bytes += size; after = row.Position.Offset;
-                if (filter.Matches(row)) result.Add(row);
             }
             // A scan can cross corrupt or filtered records without displaying a row.
             if (result.Count < ActivityLimits.PageRecords && bytes < ActivityLimits.BatchBytes
                 && (rows.Count == 0 || after >= rows[^1].Position.Offset)) after = Math.Max(after, loaded?.Offset ?? 0);
             var id = loaded is null ? null : ActivityEndpoints.FormatCursor(new(1, loaded.Journal, after));
-            var runtimeHealth = runtime.Availability == FactoryTelemetryAvailability.Live && runtimeReceipt is { } lastRead
-                && clock.GetElapsedTime(lastRead) > TimeSpan.FromSeconds(10) ? FactoryTelemetryAvailability.Stale : runtime.Availability;
-            var priorRuntime = cursor is null ? null : rows.LastOrDefault(r => r.Position.Offset <= cursor.Offset)?.Position.Runtime;
-            var replaced = priorRuntime is { } prior && Guid.TryParse(runtime.Snapshot?.RuntimeId, out var current) && current != prior;
             return new(result, id, oldest, newest, loaded?.Offset, newest > loaded?.Offset, flags, health,
                 attempted, observed, runtimeHealth, runtime.Snapshot?.RuntimeId, runtime.Snapshot?.ObservedAt, replaced, bytes,
-                result.Select(r => ResolveDetail(r, runtimeHealth)).ToArray());
+                details);
         }
     }
 
