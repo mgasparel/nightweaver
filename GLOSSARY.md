@@ -4,6 +4,12 @@ Nightweaver is an autonomous software factory that discovers user-authored Produ
 
 ## Language
 
+**Activity record**:
+A bounded local Project observation with a fixed message, source identity,
+evidence strength and journal position. An Activity record grants no lifecycle
+authority. See [Activity evidence](docs/design/activity-feed.md).
+_Avoid_: Workflow ledger, audit authority
+
 **Bead**:
 A tracked unit of work in the Beads (`bd`) tracker managed by Nightweaver.
 _Avoid_: Ticket, issue, card, story

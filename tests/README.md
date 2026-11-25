@@ -1,5 +1,15 @@
 # Test suite
 
+Activity evidence uses in-memory projection, schema and replay cases in
+`ActivityModelTests`. They cover all event families, evidence strength, absent or
+conflicting merge proof, stale sources, unsafe links, secret sentinels, Unicode
+identifier rejection, clock changes, runtime replacement and finite client
+memory. They add no native journey, fixture publication or active production
+work. The model is not connected to runtime or Web behavior in this task.
+Replay repair adds six in-memory cases. They check inventory before and after
+distinct events, exact publication binding, absent binding and invalid binding.
+They preserve publication row anchors and cursor progress. No native cost is added.
+
 Pause handoff repair removes one redundant inventory command after a successful
 diagnostic write and final workflow check. The guarded claim release uses that
 immediately preceding check. Failed or cancelled verification still requires a
