@@ -126,6 +126,7 @@ internal sealed class NeedsHumanEscalator
         Exception? primaryFailure = null;
         Exception? releaseFailure = null;
         OperationCanceledException? cancellationFailure = null;
+        BeadSnapshot? verifiedReleaseBead = null;
 
         try
         {
@@ -150,8 +151,8 @@ internal sealed class NeedsHumanEscalator
             if (initialClaimOwned) mayReleaseClaim = true;
 
             cancellationToken.ThrowIfCancellationRequested();
-            _ = await ReadPausedBeadAsync(repository, request, purpose, initialClaimOwned, initialUnclaimedPause,
-                expectedStage, expectedRepairCycles, cancellationToken);
+            verifiedReleaseBead = (await ReadPausedBeadAsync(repository, request, purpose, initialClaimOwned, initialUnclaimedPause,
+                expectedStage, expectedRepairCycles, cancellationToken)).Bead;
         }
         catch (OperationCanceledException exception)
         {
@@ -168,7 +169,12 @@ internal sealed class NeedsHumanEscalator
                 try
                 {
                     using var releaseTimeout = new CancellationTokenSource(ClaimReleaseTimeout);
-                    var current = await ReadBeadAsync(repository, request.BeadId, releaseTimeout.Token);
+                    // The successful path just verified this exact paused claim after the comment.
+                    // No intervening await separates that read from the guarded release.
+                    // Reserve the detached budget for release, not a duplicate inventory query.
+                    // An interrupted/failed verification still requires a fresh recovery read.
+                    var current = verifiedReleaseBead
+                        ?? await ReadBeadAsync(repository, request.BeadId, releaseTimeout.Token);
                     var currentState = ParseState(current);
                     if (currentState.IssueType != initialBead.IssueType || !currentState.NeedsHuman
                         || currentState.Stage != expectedStage || currentState.RepairCycles != expectedRepairCycles)

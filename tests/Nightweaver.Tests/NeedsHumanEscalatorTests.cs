@@ -301,6 +301,72 @@ public sealed class NeedsHumanEscalatorTests
     }
 
     [Fact]
+    public async Task SuccessfulPauseChecksWorkflowBeforeTheBoundedClaimRelease()
+    {
+        using var target = new FakeEscalationTarget("task", ["stage:implement"]);
+        using var cancellation = new CancellationTokenSource();
+        var releaseObserved = false;
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            if (request.Arguments.SequenceEqual(BeadsCommand.Create(target.RepositoryRoot).Arguments)
+                && token != cancellation.Token)
+                // Model exhaustion of the detached release budget by a redundant read.
+                // Successful workflow verification belongs to the active turn.
+                throw new OperationCanceledException(token);
+            if (request.Arguments.Contains("--if-assignee") && !request.Arguments.Contains("--add-label"))
+            {
+                Assert.NotEqual(cancellation.Token, token);
+                Assert.True(token.CanBeCanceled);
+                releaseObserved = true;
+            }
+            return target.Runner.RunAsync(request, token);
+        });
+
+        var result = await new NeedsHumanEscalator(runner).EscalateAsync(
+            target.Paths, target.Project, target.Repository,
+            target.Request(NeedsHumanCause.DeliveryOutcomeFailure, AgentRole.Implementer), cancellation.Token);
+
+        Assert.True(result.Succeeded);
+        Assert.True(releaseObserved);
+        Assert.Equal("open", target.Status);
+        Assert.Null(target.Assignee);
+        Assert.Contains("needs-human", target.Labels);
+        Assert.True(Directory.Exists(target.WorktreePath));
+        Assert.True(Directory.Exists(target.TemporaryPath));
+    }
+
+    [Fact]
+    public async Task ChangedPauseAfterDiagnosticRequiresFreshRecoveryReadAndRefusesRelease()
+    {
+        using var target = new FakeEscalationTarget("task", ["stage:implement"]);
+        using var cancellation = new CancellationTokenSource();
+        var recoveryReadObserved = false;
+        var runner = new RecordingProcessRunner(async (request, token) =>
+        {
+            if (request.Arguments.SequenceEqual(BeadsCommand.Create(target.RepositoryRoot).Arguments)
+                && token != cancellation.Token)
+                recoveryReadObserved = true;
+            var result = await target.Runner.RunAsync(request, token);
+            if (request.Arguments.Contains("comments") && request.Arguments.Contains("add"))
+                target.Labels.Remove("needs-human");
+            return result;
+        });
+
+        var error = await Assert.ThrowsAsync<NeedsHumanEscalationException>(() =>
+            new NeedsHumanEscalator(runner).EscalateAsync(target.Paths, target.Project, target.Repository,
+                target.Request(NeedsHumanCause.DeliveryOutcomeFailure, AgentRole.Implementer), cancellation.Token));
+
+        Assert.True(recoveryReadObserved);
+        Assert.False(error.Progress.ClaimReleased);
+        Assert.Equal("in_progress", target.Status);
+        Assert.Equal("nightweaver:demo", target.Assignee);
+        Assert.DoesNotContain(target.Runner.Requests, request =>
+            request.Arguments.Contains("--if-assignee") && !request.Arguments.Contains("--add-label"));
+        Assert.True(Directory.Exists(target.WorktreePath));
+        Assert.True(Directory.Exists(target.TemporaryPath));
+    }
+
+    [Fact]
     public async Task FailedClaimReleaseReportsIncompleteProgressAndRetainsEnvironment()
     {
         using var target = new FakeEscalationTarget("feature", ["stage:plan"]) { FailRelease = true };

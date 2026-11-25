@@ -1,5 +1,17 @@
 # Test suite
 
+Pause handoff repair removes one redundant inventory command after a successful
+diagnostic write and final workflow check. The guarded claim release uses that
+immediately preceding check. Failed or cancelled verification still requires a
+fresh read before release. The separate ten-second release bound stays unchanged.
+Two controlled cases check success without a read inside that bound and refusal
+after a pause change during the diagnostic write. The existing second-signal
+native journey retains its dirty-worktree, foreign-claim, process-settlement and
+pause assertions. No native journey or fixture publication is added. Six threads
+and all deadlines stay unchanged. See the
+[publication proof](../docs/acceptance/planning-publication-native.md#hosted-pause-handoff-repair)
+for the failure boundary and evidence limits.
+
 Standalone Web host teardown waits for the native process signal before fixture
 deletion. Managed exit can precede Windows handle rundown and leave the
 process-lifetime `web-payload.lock` open. The existing environment/command-line

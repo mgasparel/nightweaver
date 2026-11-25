@@ -145,6 +145,37 @@ An automatic comparison is unavailable. Raw times do not establish a zero delta
 or a speed change. The two added native tests explain the added work. Merger must
 measure the synchronized head and latest main after integration.
 
+## Hosted pause handoff repair
+
+Hosted run `45541030756`, attempt 1, job `138959295910` failed the second-signal
+restart journey at `cde9c56359f90e21ed4601395565f7daf4afd9f2`. The recovered
+Agent settled, but pause finalization reported `Failed; claim handoff=False`
+and `The operation was canceled.` The local complete suite had passed all
+2292 tests. The retained hosted fixture and log remain unchanged.
+
+The wrapped escalation error identifies the detached claim-release path. Caller
+cancellation follows a different exception path. The detached ten-second budget
+previously covered another complete inventory command and the guarded release,
+even after the successful post-comment workflow check. The hosted evidence does
+not identify which command consumed that budget.
+
+The repair reuses the immediately preceding successful workflow check for the
+guarded release. There is no intervening await. It removes one native inventory
+command on success. Failed or cancelled verification still performs a fresh
+recovery read. Status and assignee guards, environment retention, the ten-second
+release bound and all other deadlines remain unchanged. External tracker edits
+remain subject to the same guarded-write boundary.
+
+`SuccessfulPauseChecksWorkflowBeforeTheBoundedClaimRelease` models cancellation
+of an inventory read inside the detached budget without a timed wait. It fails
+before the repair with the wrapped escalation error. A second controlled case
+changes the pause during the diagnostic write. It requires a fresh recovery read,
+refuses release and preserves the claim and environment. The existing native
+second-signal journey keeps its safety assertions unchanged. These cases add no
+native journey or fixture publication. The implementation Bead retains focused
+and complete candidate results, exact revisions, artifact identities and cost.
+Final hosted and integrated-main verification remain Merger responsibilities.
+
 ## Hosted cleanup repair
 
 Hosted run `45536102602`, attempt 1, job `138942957995` failed at
