@@ -711,8 +711,12 @@ pre-launch authority, lost responses, late child completion, publisher restart,
 malformed or duplicate evidence, legacy task recovery and same-process overlap.
 Coordinator coverage checks a changed Product version during provisioning with a
 reused assignee. These cases add no native journey or fixture publication.
-Existing repository mutex integration coverage proves physical-repository process
-exclusion. Existing approved-stage dispatch journeys exercise the new metadata
-transport. Each newly created task adds two guarded metadata writes, confirmation
+`UpgradeLifecycleTests.CompetingProcessLeavesFreshHostRootUnchanged` proves native
+process exclusion at the same repository path. The native guarded metadata test
+proves file transport and metadata merging. The approved-stage publication and
+cross-Project/host-root alias scenarios in `DispatchScenarioSupport` have no test
+wrappers in the retained suite. Full native intent publication, abrupt owner death
+with a late child, and alias/restart recovery remain proof for the `native-proof`
+slice. This change adds no native journey. Each newly created task adds two guarded metadata writes, confirmation
 reads and fresh authority observations. Recovery never uses a zero-match intent as
 permission to repeat a create. Six-thread scheduling and deadlines stay unchanged.
