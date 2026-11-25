@@ -66,6 +66,7 @@ internal static class PlanningPublicationGate
                     || Text(actual, "acceptance_criteria") != task.AcceptanceCriteria) return false;
                 var entry = PlanningPublisher.Metadata(actual, "publication_entry");
                 if (string.IsNullOrWhiteSpace(entry) || !entries.Add(entry)
+                    || PlanningPublisher.IsLegacyTaskId(task.Id, product) && task.Id != PlanningPublisher.TaskId(product, revision, entry)
                     || bindings.Any(i => i.Entry == entry && i.Task.Length > 0 && i.Task != task.Id)
                     || inventory.ById.Values.Any(b => b.Id != task.Id
                         && (b.Id == PlanningPublisher.TaskId(product, revision, entry)

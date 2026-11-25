@@ -25,6 +25,10 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
     internal static string TaskId(string product, string revision, string entry) =>
         product + "-p" + PlanningEvidence.Hash(revision + "\n" + entry)[..20];
 
+    internal static bool IsLegacyTaskId(string id, string product) =>
+        id.Length == product.Length + 22 && id.StartsWith(product + "-p", StringComparison.Ordinal)
+        && id[(product.Length + 2)..].All(Uri.IsHexDigit);
+
     internal static string Description(PlanningTask task, PlanningDocument plan) =>
         $"## Outcome\n{task.Outcome}\n\n## Relevant code and contracts\n{task.Context}\n\n"
         + $"## Sourced constraints\n{string.Join("\n", plan.Constraints!.Select(c => $"- {c.Requirement} (source: {c.Source})"))}\n\n"

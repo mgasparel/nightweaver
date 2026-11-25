@@ -1,8 +1,8 @@
 # Test suite
 
-Actual task ID publication adds 24 controlled publication cases. They check native
+Actual task ID publication adds 26 controlled publication cases. They check native
 allocation, invalid or missing create responses, legacy partial creation and
-release, retained graph and receipt conflicts, unlinked duplicates, damaged
+release, changed entries, retained graph and receipt conflicts, unlinked duplicates, damaged
 provenance, missing tasks and late task appearance. They add no native journey
 or fixture publication. The fixture rejects `--id` in every new create command.
 Production adds one complete inventory check per new task before launch and one

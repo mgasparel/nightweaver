@@ -60,6 +60,19 @@ public sealed class PlanningPublicationTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ChangedEntryCannotReusePublishedGraphMembership(bool legacy)
+    {
+        using var fixture = new Fixture(singleTask: true);
+        await fixture.Publish();
+        if (legacy) fixture.ConvertToLegacy();
+        fixture.Rows[fixture.Tasks.Single().Id]["metadata"]!["publication_entry"] = "changed-entry";
+        Assert.False(PlanningPublicationGate.Allows(fixture.Tasks.Single(), fixture.Inventory));
+        Assert.True(await fixture.Reconcile());
+    }
+
+    [Theory]
     [InlineData(1)]
     [InlineData(2)]
     public async Task LegacyCreationIntentsKeepTheirOriginalTaskIds(int stop)
