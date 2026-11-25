@@ -71,6 +71,11 @@ internal static class ContinuousApplication
                 origin, Guid.Parse(telemetry.RuntimeId)) : null;
         bool SubmitActivity(ActivityEvidence evidence) => !stopGate.IsForceStopRequested
             && activityJournal?.TrySubmit(evidence) == true;
+        using var activityScope = activityJournal is null ? null : new ActivityRuntime(
+            (evidence, proof) =>
+            {
+                if (!stopGate.IsForceStopRequested) activityJournal.TrySubmit(evidence, proof);
+            });
         var activity = new ActivityRuntimeObservation(SubmitActivity);
         activity.Observe(ActivityReason.RuntimeStarting);
         var environments = new EnvironmentReservations();

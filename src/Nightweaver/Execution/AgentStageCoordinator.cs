@@ -1,3 +1,4 @@
+using Nightweaver.ActivityFeed;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 using Nightweaver.Telemetry;
@@ -152,10 +153,12 @@ internal sealed class AgentStageCoordinator
         if (!allowPublication) EnsurePlanningExecutionBoundary(role, fresh.State);
 
         _ = ParseProvisionedHead(worktree.HeadSha);
-        return new AgentStageSession(hostPaths, project, sessionRepository, beadId, role, purpose, worktree,
+        var session = new AgentStageSession(hostPaths, project, sessionRepository, beadId, role, purpose, worktree,
             fresh.State, fresh.Bead.Assignee,
             new AgentDispatchContext(fresh.State.Id, fresh.State.IssueType, fresh.State.Stage, fresh.State.RepairCycles),
             worktree.WasDirty) { PublicationVersion = PlanningPublisher.Version(fresh.Bead) };
+        if (expectedAssignee is not null) ActivityRuntime.Current?.Admitted(session);
+        return session;
     }
 
     private static void EnsurePlanningExecutionBoundary(AgentRole role, BeadWorkflowState state)
@@ -180,33 +183,43 @@ internal sealed class AgentStageCoordinator
             || before.RepairCycles != session.InitialState.RepairCycles)
             throw new AgentStageInputException("Attempt workflow state no longer matches the original stage session.");
         var validHead = ParseProvisionedHead(beforeHead);
-        var invocation = await prepare(session.HostPaths, session.Project, session.Role, session.DispatchContext,
-            session.Worktree.Path, cancellationToken);
-        WorkflowTiming.ObserveInvocation(invocation.InvocationId);
-        cancellationToken.ThrowIfCancellationRequested();
+        PreparedAgentInvocation invocation;
         IReadOnlySet<string>? preInvocationCommentIds = null;
-        if (session.Role != AgentRole.Classifier)
-        {
-            var comments = await beadsReader.ReadCommentsAsync(session.Repository, session.BeadId, cancellationToken)
-                .ConfigureAwait(false);
-            preInvocationCommentIds = comments.Select(comment => comment.Id).ToHashSet(StringComparer.Ordinal);
-        }
         PlanningGrounding? grounding = null;
         string? planningContext = null;
-        if (session.Purpose == WorktreePurpose.Planning)
+        try
         {
-            var evidence = new PlanningEvidence(processRunner);
-            grounding = await evidence.CaptureAsync(session, cancellationToken);
-            planningContext = await evidence.ReadContextAsync(session, cancellationToken);
-            invocation = new PreparedAgentInvocation(invocation.Executable, invocation.Arguments,
-                invocation.WorkingDirectory, invocation.StandardInput + "\n\nHost grounding (copy exactly into evidence):\n"
-                    + System.Text.Json.JsonSerializer.Serialize(grounding, PlanningEvidence.JsonOptions),
-                invocation.EnvironmentOverrides, invocation.Timeout, invocation.InvocationId,
-                invocation.TemporaryDirectory, invocation.LogFilePath, invocation.Purpose,
-                invocation.Stage, invocation.RepairCycles, invocation.MaxRepairCycles,
-                invocation.ConfiguredModel, invocation.Effort);
+            invocation = await prepare(session.HostPaths, session.Project, session.Role, session.DispatchContext,
+                session.Worktree.Path, cancellationToken);
+            WorkflowTiming.ObserveInvocation(invocation.InvocationId);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (session.Role != AgentRole.Classifier)
+            {
+                var comments = await beadsReader.ReadCommentsAsync(session.Repository, session.BeadId, cancellationToken)
+                    .ConfigureAwait(false);
+                preInvocationCommentIds = comments.Select(comment => comment.Id).ToHashSet(StringComparer.Ordinal);
+            }
+            if (session.Purpose == WorktreePurpose.Planning)
+            {
+                var evidence = new PlanningEvidence(processRunner);
+                grounding = await evidence.CaptureAsync(session, cancellationToken);
+                planningContext = await evidence.ReadContextAsync(session, cancellationToken);
+                invocation = new PreparedAgentInvocation(invocation.Executable, invocation.Arguments,
+                    invocation.WorkingDirectory, invocation.StandardInput + "\n\nHost grounding (copy exactly into evidence):\n"
+                        + System.Text.Json.JsonSerializer.Serialize(grounding, PlanningEvidence.JsonOptions),
+                    invocation.EnvironmentOverrides, invocation.Timeout, invocation.InvocationId,
+                    invocation.TemporaryDirectory, invocation.LogFilePath, invocation.Purpose,
+                    invocation.Stage, invocation.RepairCycles, invocation.MaxRepairCycles,
+                    invocation.ConfiguredModel, invocation.Effort);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
         }
-        cancellationToken.ThrowIfCancellationRequested();
+        catch (OperationCanceledException) { throw; }
+        catch (Exception)
+        {
+            ActivityRuntime.Current?.PreparationFailed(session);
+            throw;
+        }
         preparationTiming?.Dispose();
         var execution = await execute(session.HostPaths, session.Project.Name, invocation, cancellationToken);
         var result = await verifier.VerifyAsync(session.Repository, session.Worktree.Path, session.Role, before,

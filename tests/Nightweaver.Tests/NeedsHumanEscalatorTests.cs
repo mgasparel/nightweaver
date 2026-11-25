@@ -17,6 +17,7 @@ public sealed class NeedsHumanEscalatorTests
     public async Task EscalationWritesPauseBeforeDiagnosticAndRetainsTheOwnedEnvironment(
         string issueType, string roleName, string causeName, string stage)
     {
+        using var capture = new ActivityCapture();
         var role = Enum.Parse<AgentRole>(roleName);
         var cause = Enum.Parse<NeedsHumanCause>(causeName);
         var labels = new List<string> { "product-decision-required", "retain-me" };
@@ -32,6 +33,9 @@ public sealed class NeedsHumanEscalatorTests
         Assert.DoesNotContain("product-decision-required", target.Labels);
         Assert.Equal("open", target.Status);
         Assert.Null(target.Assignee);
+        var pauseRecord = Assert.Single(capture.Evidence);
+        Assert.Equal(Nightweaver.ActivityFeed.ActivityKind.PauseObserved, pauseRecord.Kind);
+        Assert.Equal(causeName, pauseRecord.Reason.ToString());
         Assert.True(result.EnvironmentRetained);
         Assert.True(Directory.Exists(target.WorktreePath));
         Assert.True(Directory.Exists(target.TemporaryPath));

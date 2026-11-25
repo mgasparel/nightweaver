@@ -135,10 +135,13 @@ public sealed class PlanningExecutionTests
     [InlineData("classifier-mutation")]
     public async Task GroundedTurnsPublishOnlyVerifiedOutcomesAndPreserveEvidence(string scenario)
     {
+        using var capture = new ActivityCapture();
         using var fixture = new PlanningFixture(scenario);
         var result = await fixture.RunAsync();
         var success = scenario is "draft" or "approval" or "repair" or "question";
         Assert.Equal(success, result.Succeeded);
+        Assert.Equal(scenario == "approval", capture.Evidence.Any(e => e.Kind == Nightweaver.ActivityFeed.ActivityKind.PlanningApproved));
+        Assert.Equal(scenario == "repair", capture.Evidence.Any(e => e.Kind == Nightweaver.ActivityFeed.ActivityKind.ChangesRequired));
         Assert.Equal(1, fixture.Executions);
         Assert.True(File.Exists(fixture.Sentinel));
         Assert.NotEmpty(fixture.Comments);

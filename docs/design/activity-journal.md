@@ -1,9 +1,9 @@
 # Activity journal v1
 
 The Activity journal stores bounded display evidence. It has no lifecycle
-authority. This slice adds storage and a reader. A later slice connects runtime
-producers. The [Activity read API](activity-api.md) now shares this reader across
-history and SSE viewers. Existing factory work still has no connected producer.
+authority. This module provides storage and a reader. The continuous runtime
+connects lifecycle, pool wait and runtime health producers. The
+[Activity read API](activity-api.md) shares this reader across history and SSE viewers.
 
 `HostPaths.ActivityRoot` selects `<root>/telemetry/<project>/activity`. The store
 binds the Project, full Target Repository path, GitHub repository and journal ID.
@@ -105,3 +105,6 @@ rejection and shared reads. Sentinel checks preserve unrelated data. A short
 junction command and one hard-link call prove the actual Windows no-follow
 boundary. An injected path response cannot prove this boundary. These tests add
 no factory, Agent, tracker, Aspire or browser journey and no fixture publication.
+
+Runtime producers now connect the existing evidence boundaries. See
+[Activity lifecycle producers](activity-lifecycle.md). Console routes remain separate.

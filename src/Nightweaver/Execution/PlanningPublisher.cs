@@ -1,3 +1,4 @@
+using Nightweaver.ActivityFeed;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -44,10 +45,12 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         if (!Active.TryAdd(key, 0)) throw Refuse("Another publication call owns this Product; preserve the retained evidence.");
         try
         {
-            return await WorkflowTiming.MeasureAsync(WorkflowOperation.PlanningPublication, WorkflowPhase.Publication,
+            var published = await WorkflowTiming.MeasureAsync(WorkflowOperation.PlanningPublication, WorkflowPhase.Publication,
                 () => PublishCoreAsync(session, token, releaseRevalidationClaim),
                 result => OperationalTelemetry.Current?.Telemetry.RecordPublication(result)
                     ?? (result.PublicationReceipt is not null ? WorkflowResult.Success : WorkflowResult.Uncertain)).ConfigureAwait(false);
+            ActivityRuntime.Current?.Published(published);
+            return published;
         }
         finally { Active.TryRemove(key, out _); }
     }

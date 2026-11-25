@@ -1,3 +1,4 @@
+using Nightweaver.ActivityFeed;
 using System.Text.Json;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
@@ -193,8 +194,10 @@ internal sealed class MergerOutcomeVerifier(IProcessRunner processRunner) : IMer
             if (!await OriginMatchesValidatedTargetAsync(session.Repository, expectedRepository, cancellationToken).ConfigureAwait(false))
                 return ApprovalFailed("The Target Repository origin changed during merge verification.");
 
-            return new(true, "Verified current-invocation PR, target-repository required checks, merged commit, and configured default-branch reachability.",
-                new(evidence.PullRequest, evidence.CheckedHead, evidence.MergeCommit, evidence.MergeMethod, evidence.Comment.Id));
+            var verifiedMerge = new MergerVerifiedMergeEvidence(evidence.PullRequest, evidence.CheckedHead,
+                evidence.MergeCommit, evidence.MergeMethod, evidence.Comment.Id);
+            ActivityRuntime.Current?.MergeVerified(session, invocation, verifiedMerge);
+            return new(true, "Verified current-invocation PR, target-repository required checks, merged commit, and configured default-branch reachability.", verifiedMerge);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception exception)

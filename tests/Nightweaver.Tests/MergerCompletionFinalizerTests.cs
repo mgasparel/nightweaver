@@ -10,6 +10,97 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
     private static readonly string[] ClosedMergeLabels = ["stage:merge"];
 
     [Theory]
+    [InlineData("queued", false)]
+    [InlineData("queue-failed", true)]
+    [InlineData("direct-failed", true)]
+    public async Task CleanupActivityRequiresFailureRatherThanPendingQueue(string mode, bool failed)
+    {
+        using var temp = new TempDirectory();
+        var repository = new ValidatedTargetRepository(temp.CreateDirectory("target"), "main");
+        var host = new HostPaths(temp.CreateDirectory("host"));
+        var slug = ProjectSlug.Parse("demo");
+        var settings = new AgentSettings(AgentCli.Codex, null, "low", 1);
+        var project = new ProjectConfig(slug, "fixture.json", new(repository.Path, "main"),
+            new(1, 1, 1), new(3, 1), settings,
+            new RoleSettings(AgentRoles.All.ToDictionary(role => role, _ => settings)));
+        const string id = "task-1";
+        var head = new string('a', 40);
+        var state = new BeadWorkflowState(id, "task", "in_progress", "stage:merge", false, false, false, 0);
+        // The direct case fails the owned-path guard before any filesystem mutation.
+        var worktreePath = mode == "direct-failed" ? repository.Path : Path.Combine(host.WorktreesRoot(slug), id);
+        var session = new AgentStageSession(host, project, repository, id, AgentRole.Merger,
+            WorktreePurpose.Delivery, new(worktreePath, head), state, null,
+            new AgentDispatchContext(id, "task", "stage:merge", 0), PreserveInheritedChanges: true);
+        var invocation = new AgentStageResult(AgentRole.Merger, id, "fixture-invocation", "fixture.log", null, [],
+            Observations: new(state, state, project.RecoveryActor, project.RecoveryActor,
+                AgentExecutionStatus.Exited, 0, $"nightweaver/{id}", head, string.Empty, true));
+        var closed = false;
+        var comments = new List<object>();
+        string TaskRows() => System.Text.Json.JsonSerializer.Serialize(new[] { new
+        {
+            id, issue_type = "task", status = closed ? "closed" : "in_progress", priority = 2,
+            created_at = "2026-11-15T00:00:00Z", assignee = closed ? null : project.RecoveryActor,
+            labels = ClosedMergeLabels, metadata = new { repair_cycles = 0 }
+        } });
+        var runner = new RecordingProcessRunner((request, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            Assert.Equal("bd", request.FileName);
+            var args = request.Arguments;
+            string output;
+            if (args.Contains("show") || args.Contains("list")) output = TaskRows();
+            else if (args.Contains("comments"))
+            {
+                if (args.Contains("add"))
+                {
+                    comments.Add(new { id = $"comment-{comments.Count}", issue_id = id,
+                        text = args[^1], created_at = "2026-11-15T00:00:00Z" });
+                    output = "{}";
+                }
+                else output = System.Text.Json.JsonSerializer.Serialize(comments);
+            }
+            else if (args.Contains("update"))
+            {
+                Assert.Contains("--if-assignee", args);
+                Assert.Contains(project.RecoveryActor, args);
+                closed = true;
+                output = TaskRows();
+            }
+            else if (args.Contains("dep")) output = "[]";
+            else throw new InvalidOperationException("Unexpected command: " + string.Join(' ', args));
+            return Task.FromResult(new ProcessResult(0, output, ""));
+        });
+        var queue = mode == "direct-failed" ? null : new CleanupQueue(failed);
+        using var capture = new ActivityCapture();
+
+        var result = await new MergerCompletionFinalizer(runner, queue).CompleteAsync(session, invocation,
+            project.RecoveryActor, Evidence(head), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Diagnostic);
+        Assert.Equal(state with { Status = "closed" }, result.FinalState);
+        Assert.False(result.Receipt!.CleanupSucceeded);
+        Assert.Equal(!failed, result.Receipt.CleanupQueued);
+        Assert.Equal(failed, result.Receipt.CleanupDiagnostic is not null);
+        Assert.Equal(mode == "direct-failed" ? 0 : 1, queue?.Calls ?? 0);
+        Assert.Single(capture.Evidence, item => item.Kind == Nightweaver.ActivityFeed.ActivityKind.BeadClosed);
+        Assert.Equal(failed ? 1 : 0,
+            capture.Evidence.Count(item => item.Kind == Nightweaver.ActivityFeed.ActivityKind.CleanupFailed));
+        Assert.DoesNotContain(capture.Evidence, item => item.Kind == Nightweaver.ActivityFeed.ActivityKind.MergeVerified);
+        Assert.Single(runner.Requests, request => request.Arguments.Contains("update"));
+    }
+
+    private sealed class CleanupQueue(bool fail) : ICompletedEnvironmentQueue
+    {
+        internal int Calls { get; private set; }
+        public Task EnqueueAsync(AgentStageSession session, MergerVerifiedMergeEvidence evidence, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            Calls++;
+            return fail ? Task.FromException(new IOException("Queue entry failed")) : Task.CompletedTask;
+        }
+    }
+
+    [Theory]
     [InlineData("open")]
     [InlineData("paused")]
     [InlineData("assigned")]
@@ -133,12 +224,16 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
                 removalCalls++;
             return result;
         });
+        using var capture = new ActivityCapture();
         var finalizer = new MergerCompletionFinalizer(runner);
 
         var completion = await finalizer.CompleteAsync(session, invocation, project.RecoveryActor, evidence,
             TestContext.Current.CancellationToken);
         Assert.True(completion.Succeeded, completion.Diagnostic);
         Assert.False(completion.Receipt!.CleanupSucceeded);
+        Assert.Contains(capture.Evidence, e => e.Kind == Nightweaver.ActivityFeed.ActivityKind.BeadClosed);
+        Assert.Contains(capture.Evidence, e => e.Kind == Nightweaver.ActivityFeed.ActivityKind.CleanupFailed);
+        Assert.DoesNotContain(capture.Evidence, e => e.Kind == Nightweaver.ActivityFeed.ActivityKind.MergeVerified);
         Assert.True(remoteDeleted);
         Assert.False(target.RunTarget("git", ["branch", "--list", $"nightweaver/{beadId}"]).Length > 0);
         var store = new CompletedEnvironmentStore(target.Host, project.Name, repository);

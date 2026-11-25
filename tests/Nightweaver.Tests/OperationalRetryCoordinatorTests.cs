@@ -39,6 +39,7 @@ public sealed class OperationalRetryCoordinatorTests
     [Fact]
     public async Task OperationalFailureResetsOneRetainedWorktreeAndCanSucceedWithoutRepairCycleMutation()
     {
+        using var capture = new ActivityCapture();
         var fixture = new RetryFixture(2,
             new Attempt(19, null),
             new Attempt(0, "stage:review"));
@@ -57,6 +58,8 @@ public sealed class OperationalRetryCoordinatorTests
         Assert.Equal(0, fixture.CompareCount);
         Assert.Equal(0, fixture.EscalateCount);
         Assert.Equal(["attempt-1", "reset", "attempt-2"], order);
+        Assert.Single(capture.Evidence, e => e.Reason == Nightweaver.ActivityFeed.ActivityReason.OperationalRetry);
+        Assert.DoesNotContain(capture.Evidence, e => e.Kind == Nightweaver.ActivityFeed.ActivityKind.ChangesRequired);
     }
 
     [Fact]

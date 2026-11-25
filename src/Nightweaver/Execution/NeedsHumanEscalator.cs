@@ -1,3 +1,4 @@
+using Nightweaver.ActivityFeed;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -154,6 +155,7 @@ internal sealed class NeedsHumanEscalator
             cancellationToken.ThrowIfCancellationRequested();
             verifiedReleaseBead = (await ReadPausedBeadAsync(repository, request, purpose, initialClaimOwned, initialUnclaimedPause,
                 expectedStage, expectedRepairCycles, cancellationToken)).Bead;
+            ActivityRuntime.Current?.Paused(request, verifiedReleaseBead);
         }
         catch (OperationCanceledException exception)
         {

@@ -10,6 +10,34 @@ namespace Nightweaver.Tests;
 public sealed class DeliveryOutcomePublisherTests
 {
     [Theory]
+    [InlineData("confirmed", true)]
+    [InlineData("reread", true)]
+    [InlineData("refused", false)]
+    public async Task ActivityWorksWithoutExportAndRequiresConfirmedQaReceipt(string mode, bool confirmed)
+    {
+        using var capture = new ActivityCapture();
+        using var fixture = new PublisherFixture(AgentRole.Qa, "stage:qa", AgentOutcomeChoice.Approved)
+        {
+            FailAfterCommittedHandoffWithReceiver = mode == "reread",
+            ChangeAfterEvidenceComment = mode == "refused" ? "owner" : null
+        };
+        try
+        {
+            await fixture.Publisher.PublishAsync(fixture.Session, fixture.Invocation,
+                fixture.Classification, false, TestContext.Current.CancellationToken);
+        }
+        catch (AgentStageInputException) when (!confirmed) { }
+        Assert.Equal(confirmed ? 1 : 0, capture.Items.Count);
+        if (confirmed)
+        {
+            var record = Assert.Single(capture.Evidence);
+            Assert.Equal(Nightweaver.ActivityFeed.ActivityKind.DeliveryApproved, record.Kind);
+            Assert.Equal(Nightweaver.ActivityFeed.ActivityRole.Qa, record.Role);
+            Assert.Equal(fixture.Invocation.InvocationId, record.Invocation);
+        }
+    }
+
+    [Theory]
     [InlineData("confirmed", "success", true)]
     [InlineData("reread", "success", true)]
     [InlineData("refused", "refused", false)]
