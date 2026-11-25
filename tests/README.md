@@ -1,5 +1,22 @@
 # Test suite
 
+Legacy ID adoption repair adds four controlled publication cases. They reject an
+ID for another entry or revision, with and without a retained binding, before any
+publication write. They preserve the task and its publication hold. The repair
+adds one in-memory identity check per binding. It adds no native command, journey
+or fixture publication.
+
+Actual task ID publication adds 26 controlled publication cases. They check native
+allocation, invalid or missing create responses, legacy partial creation and
+release, changed entries, retained graph and receipt conflicts, unlinked duplicates, damaged
+provenance, missing tasks and late task appearance. They add no native journey
+or fixture publication. The fixture rejects `--id` in every new create command.
+Production adds one complete inventory check per new task before launch and one
+native child check after task resolution. Graph verification and Delivery use
+the verified actual IDs. Detailed recovery checks stay in the controlled fixture.
+The separate native-proof Plan Bead owns full isolated native publication proof.
+Six test threads and all existing deadlines remain unchanged.
+
 Publication confirmation repair adds three controlled cases for a reused assignee
 at intent, membership and receipt confirmation. The existing publication fixture
 now advances the Product version on ordinary updates and returns native-shaped

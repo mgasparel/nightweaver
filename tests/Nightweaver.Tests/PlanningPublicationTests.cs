@@ -11,6 +11,235 @@ namespace Nightweaver.Tests;
 public sealed class PlanningPublicationTests
 {
     [Theory]
+    [InlineData("")]
+    [InlineData("{")]
+    [InlineData("[{\"id\":\"wrong-response-id\"}]")]
+    public async Task NativeAllocationUsesInventoryRatherThanCreateResponse(string response)
+    {
+        using var fixture = new Fixture { CreateResponse = response };
+        Assert.True((await fixture.Publish()).Succeeded);
+        var tasks = fixture.Tasks.ToDictionary(t => PlanningPublisher.Metadata(t, "publication_entry")!, t => t.Id);
+        Assert.Equal("native-1", tasks["first"]);
+        Assert.Equal("native-2", tasks["second"]);
+        Assert.Contains(new("native-2", "native-1", "blocks"), fixture.Edges);
+        using var receipt = JsonDocument.Parse(fixture.Comments.Single(c => c.Text.Contains(PlanningPublisher.ReleaseSchema, StringComparison.Ordinal)).Text);
+        Assert.Equal(tasks["first"], receipt.RootElement.GetProperty("tasks").GetProperty("first").GetString());
+        Assert.All(fixture.Tasks, t => Assert.True(PlanningPublicationGate.Allows(t, fixture.Inventory)));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    public async Task LegacyPartialPublicationReusesRetainedIdsAndReleaseEvidence(int stop)
+    {
+        using var fixture = new Fixture { CrashAfterWrite = stop };
+        await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
+        fixture.ConvertToLegacy();
+        var retained = fixture.Tasks.Select(t => t.Id).ToArray();
+        fixture.CrashAfterWrite = null;
+        Assert.True((await fixture.PublishWithNewPublisher()).Succeeded);
+        Assert.All(retained, id => Assert.Contains(fixture.Tasks, t => t.Id == id));
+        Assert.Equal(2, fixture.CreateAttemptCount);
+        Assert.All(fixture.Tasks, t => Assert.True(PlanningPublicationGate.Allows(t, fixture.Inventory)));
+    }
+
+    [Fact]
+    public async Task PublishedLegacyGraphKeepsAdmissionWithoutCreationBindings()
+    {
+        using var fixture = new Fixture();
+        await fixture.Publish();
+        fixture.ConvertToLegacy();
+        var before = JsonSerializer.Serialize(fixture.Rows);
+        Assert.All(fixture.Tasks, t => Assert.True(PlanningPublicationGate.Allows(t, fixture.Inventory)));
+        Assert.False(await fixture.Reconcile());
+        Assert.Equal(before, JsonSerializer.Serialize(fixture.Rows));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ChangedEntryCannotReusePublishedGraphMembership(bool legacy)
+    {
+        using var fixture = new Fixture(singleTask: true);
+        await fixture.Publish();
+        if (legacy) fixture.ConvertToLegacy();
+        fixture.Rows[fixture.Tasks.Single().Id]["metadata"]!["publication_entry"] = "changed-entry";
+        Assert.False(PlanningPublicationGate.Allows(fixture.Tasks.Single(), fixture.Inventory));
+        Assert.True(await fixture.Reconcile());
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task LegacyCreationIntentsKeepTheirOriginalTaskIds(int stop)
+    {
+        using var fixture = new Fixture { CrashAfterWrite = stop };
+        await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
+        fixture.ConvertToLegacy(retainIntents: true);
+        var ids = fixture.Tasks.Select(t => t.Id).ToArray();
+        fixture.CrashAfterWrite = null;
+        Assert.True((await fixture.PublishWithNewPublisher()).Succeeded);
+        Assert.All(ids, id => Assert.Contains(fixture.Tasks, t => t.Id == id));
+        Assert.Equal(2, fixture.CreateAttemptCount);
+    }
+
+    [Theory]
+    [InlineData("graph")]
+    [InlineData("receipt")]
+    [InlineData("binding")]
+    [InlineData("missing")]
+    [InlineData("duplicate-without-link")]
+    [InlineData("damaged-provenance")]
+    [InlineData("unknown-entry-without-link")]
+    public async Task ConflictingActualIdentityStopsRecoveryBeforeAnyWrite(string conflict)
+    {
+        using var fixture = new Fixture { CrashAfterWrite = 5 };
+        await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
+        fixture.CrashAfterWrite = null;
+        var task = fixture.Tasks.First();
+        var metadata = fixture.Rows["product"]["metadata"]!.AsObject();
+        if (conflict == "graph") metadata["publication_graph"] = metadata["publication_graph"]!.GetValue<string>().Replace(task.Id, "foreign-id", StringComparison.Ordinal);
+        else if (conflict == "receipt")
+        {
+            var index = fixture.Comments.FindIndex(c => c.Text.Contains(PlanningPublisher.ReleaseSchema, StringComparison.Ordinal));
+            fixture.Comments[index] = fixture.Comments[index] with { Text = fixture.Comments[index].Text.Replace(task.Id, "foreign-id", StringComparison.Ordinal) };
+        }
+        else if (conflict == "binding")
+        {
+            var key = metadata.First(p => p.Key.StartsWith("publication_create_", StringComparison.Ordinal)).Key;
+            metadata[key] = metadata[key]!.GetValue<string>().Replace(task.Id, "foreign-id", StringComparison.Ordinal);
+        }
+        else if (conflict == "missing") fixture.Rows.Remove(task.Id);
+        else if (conflict == "damaged-provenance") fixture.Rows[task.Id]["metadata"]!["publication_entry"] = 42;
+        else
+        {
+            var duplicate = fixture.Rows[task.Id].DeepClone().AsObject();
+            duplicate["id"] = "unlinked";
+            duplicate["dependencies"] = new JsonArray();
+            if (conflict == "unknown-entry-without-link") duplicate["metadata"]!["publication_entry"] = "unknown";
+            fixture.Rows["unlinked"] = duplicate;
+        }
+        var before = JsonSerializer.Serialize(fixture.Rows);
+        var writes = fixture.WriteCount + fixture.IntentWriteCount;
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.PublishWithNewPublisher);
+        Assert.Equal(before, JsonSerializer.Serialize(fixture.Rows));
+        Assert.Equal(writes, fixture.WriteCount + fixture.IntentWriteCount);
+        Assert.DoesNotContain("planned", fixture.Parent.Labels);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnlinkedDuplicateBlocksPublishedDeliveryAndGraphReconciliation(bool legacy)
+    {
+        using var fixture = new Fixture();
+        await fixture.Publish();
+        if (legacy) fixture.ConvertToLegacy();
+        var duplicate = fixture.Rows[fixture.Tasks.First().Id].DeepClone().AsObject();
+        duplicate["id"] = "duplicate";
+        duplicate["dependencies"] = new JsonArray();
+        fixture.Rows["duplicate"] = duplicate;
+        Assert.True(PlanningPublicationGate.HasProductGraphConflict(fixture.Parent, fixture.Inventory));
+        Assert.All(fixture.Tasks, t => Assert.False(PlanningPublicationGate.Allows(t, fixture.Inventory)));
+        Assert.True(await fixture.Reconcile());
+    }
+
+    [Fact]
+    public async Task CreationBindingPreventsManualAdmissionAfterChildEvidenceLoss()
+    {
+        using var fixture = new Fixture(singleTask: true) { CrashAfterIntentAt = 2 };
+        await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
+        var task = fixture.Tasks.Single();
+        fixture.Rows[task.Id]["metadata"] = new JsonObject();
+        fixture.Rows[task.Id]["dependencies"] = new JsonArray();
+        Assert.Contains("product", PlanningPublicationGate.Products(fixture.Inventory.ById[task.Id], fixture.Inventory));
+        Assert.False(PlanningPublicationGate.Allows(fixture.Inventory.ById[task.Id], fixture.Inventory));
+    }
+
+    [Fact]
+    public async Task LegacyIdWithMissingProvenanceCannotCauseANewCreate()
+    {
+        using var fixture = new Fixture(singleTask: true) { CrashAfterWrite = 1 };
+        await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
+        fixture.ConvertToLegacy();
+        fixture.Rows[fixture.Tasks.Single().Id]["metadata"] = new JsonObject();
+        fixture.CrashAfterWrite = null;
+        var before = JsonSerializer.Serialize(fixture.Rows);
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.PublishWithNewPublisher);
+        Assert.Equal(before, JsonSerializer.Serialize(fixture.Rows));
+        Assert.Equal(1, fixture.CreateAttemptCount);
+    }
+
+    [Fact]
+    public async Task TaskAppearingAfterIntentConfirmationStopsTheFirstCreate()
+    {
+        using var source = new Fixture(singleTask: true);
+        await source.Publish();
+        var seed = source.Rows[source.Tasks.Single().Id].DeepClone().AsObject();
+        seed["labels"] = new JsonArray("plan-unpublished");
+        using var fixture = new Fixture(singleTask: true);
+        fixture.BeforeInventoryRead = () =>
+        {
+            if (fixture.IntentWriteCount != 1) return;
+            fixture.BeforeInventoryRead = null;
+            fixture.Rows["native-1"] = seed;
+        };
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+        Assert.Equal(0, fixture.CreateAttemptCount);
+        Assert.Contains("plan-unpublished", fixture.Tasks.Single().Labels);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ConflictingLegacyIdentityStopsAdoptionBeforeAnyWrite(bool retainBinding, bool otherRevision)
+    {
+        using var fixture = new Fixture(singleTask: true) { CrashAfterIntentAt = 2 };
+        await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
+        fixture.CrashAfterIntentAt = null;
+        var task = fixture.Tasks.Single();
+        var revision = PlanningPublisher.Metadata(task, "publication_revision")!;
+        var entry = PlanningPublisher.Metadata(task, "publication_entry")!;
+        var id = PlanningPublisher.TaskId("product", otherRevision ? "another-revision" : revision,
+            otherRevision ? entry : "another-entry");
+        var row = fixture.Rows[task.Id];
+        fixture.Rows.Remove(task.Id);
+        row["id"] = id;
+        foreach (var edge in row["dependencies"]!.AsArray()) edge!["issue_id"] = id;
+        fixture.Rows[id] = row;
+        var metadata = fixture.Rows["product"]["metadata"]!.AsObject();
+        if (retainBinding)
+        {
+            var stored = Assert.Single(metadata);
+            var binding = JsonNode.Parse(stored.Value!.GetValue<string>())!.AsObject();
+            binding["task"] = id;
+            metadata[stored.Key] = binding.ToJsonString();
+        }
+        else metadata.Clear();
+        Assert.False(fixture.Rows.ContainsKey(PlanningPublisher.TaskId("product", revision, entry)));
+        Assert.Null(PlanningPublisher.Metadata(fixture.Parent, "publication_graph"));
+        var before = JsonSerializer.Serialize(fixture.Rows);
+        var comments = JsonSerializer.Serialize(fixture.Comments);
+        var writes = fixture.WriteCount + fixture.IntentWriteCount;
+
+        var failure = await Assert.ThrowsAsync<AgentStageInputException>(fixture.PublishWithNewPublisher);
+
+        Assert.Contains("Legacy task identity conflicts", failure.Message);
+        Assert.Contains(id, failure.Message);
+        Assert.Equal(before, JsonSerializer.Serialize(fixture.Rows));
+        Assert.Equal(comments, JsonSerializer.Serialize(fixture.Comments));
+        Assert.Equal(writes, fixture.WriteCount + fixture.IntentWriteCount);
+        Assert.Equal(1, fixture.CreateAttemptCount);
+        Assert.Contains("plan-unpublished", fixture.Tasks.Single().Labels);
+        Assert.DoesNotContain("planned", fixture.Parent.Labels);
+    }
+    [Theory]
     [InlineData("intent")]
     [InlineData("graph")]
     [InlineData("receipt")]
@@ -349,6 +578,7 @@ public sealed class PlanningPublicationTests
         // One initial revalidation observation and fresh authority before each of
         // graph mutations and creation-intent boundaries. Read-only graph checks need no extra sweep.
         Assert.InRange(fixture.GroundingReadCount - before, 1, 15);
+        Assert.Equal(9, fixture.InventoryReadCount);
         Assert.Equal(8, fixture.WriteCount);
         Assert.All(fixture.Tasks, task => Assert.True(PlanningPublicationGate.Allows(task, fixture.Inventory)));
     }
@@ -833,6 +1063,31 @@ public sealed class PlanningPublicationTests
         internal Action? BeforeCreate { get; set; }
         internal Func<ProcessRequest, Task>? BeforeCommand { get; set; }
         internal bool DeferCreate { get; set; }
+        internal string CreateResponse { get; set; } = "";
+        internal void ConvertToLegacy(bool retainIntents = false)
+        {
+            var map = Tasks.ToDictionary(t => t.Id, t => PlanningPublisher.TaskId("product",
+                PlanningPublisher.Metadata(t, "publication_revision")!, PlanningPublisher.Metadata(t, "publication_entry")!));
+            string Replace(string text)
+            {
+                foreach (var pair in map) text = text.Replace(pair.Key, pair.Value, StringComparison.Ordinal);
+                return text;
+            }
+            var rows = Rows.Values.Select(r => JsonNode.Parse(Replace(r.ToJsonString()))!.AsObject()).ToArray();
+            Rows.Clear();
+            foreach (var row in rows) Rows[row["id"]!.GetValue<string>()] = row;
+            var metadata = Rows["product"]["metadata"]!.AsObject();
+            foreach (var key in metadata.Select(p => p.Key).Where(k => k.StartsWith("publication_create_", StringComparison.Ordinal)).ToArray())
+            {
+                if (!retainIntents) { metadata.Remove(key); continue; }
+                var intent = JsonNode.Parse(metadata[key]!.GetValue<string>())!.AsObject();
+                intent["task"] = PlanningPublisher.TaskId("product", intent["revision"]!.GetValue<string>(), intent["entry"]!.GetValue<string>());
+                metadata[key] = intent.ToJsonString();
+            }
+            for (var i = 0; i < Edges.Count; i++) Edges[i] = Edges[i] with
+                { IssueId = Replace(Edges[i].IssueId), DependsOnId = Replace(Edges[i].DependsOnId) };
+            for (var i = 0; i < Comments.Count; i++) Comments[i] = Comments[i] with { Text = Replace(Comments[i].Text) };
+        }
         private ProcessRequest? deferredCreate;
         internal Task<ProcessResult> FinishDeferredCreate()
         {
@@ -843,6 +1098,7 @@ public sealed class PlanningPublicationTests
         internal Task<AgentStageResult> PublishWithStaleSession() => new PlanningPublisher(runner)
             .PublishAsync(session with { PublicationVersion = "initial claim" }, TestContext.Current.CancellationToken);
         internal int GroundingReadCount => runner.Requests.Count(r => r.FileName == "git" && r.Arguments.Contains("status"));
+        internal int InventoryReadCount => runner.Requests.Count(r => r.FileName == "bd" && r.Arguments.Contains("list") && !r.Arguments.Contains("dep"));
         internal Action<string>? BeforeDependencyRead { get; set; }
         internal Action<string>? BeforeDetailRead { get; set; }
         private readonly AgentStageSession session;
@@ -960,14 +1216,15 @@ public sealed class PlanningPublicationTests
                     throw new IOException("The response was lost while the create can still finish later.");
                 }
                 BeforeCreate?.Invoke();
-                var id = Value("--id");
+                Assert.DoesNotContain("--id", args);
+                var id = "native-" + (CreateCount + 1);
                 Assert.False(Rows.ContainsKey(id), "A create must never be replayed after an uncertain write.");
                 CreateCount++;
                 Rows[id] = new JsonObject { ["id"] = id, ["title"] = Value("--title"), ["issue_type"] = "task",
                     ["description"] = Value("--description"), ["acceptance_criteria"] = Value("--acceptance"),
                     ["status"] = "open", ["priority"] = 2, ["created_at"] = "2026-11-13T00:00:00Z",
                     ["labels"] = new JsonArray("plan-unpublished"), ["metadata"] = JsonNode.Parse(Value("--metadata")) };
-                Edges.Add(new(id, "product", "discovered-from")); output = "";
+                Edges.Add(new(id, "product", "discovered-from")); output = CreateResponse;
             }
             else if (args.Contains("dep"))
             {

@@ -17,12 +17,17 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
     private static readonly JsonSerializerOptions IntentJson = new(PlanningEvidence.JsonOptions)
     { RespectRequiredConstructorParameters = true, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow };
     private sealed class Authority(string? version) { internal string? Version = version; }
-    private sealed record CreationIntent(string Schema, string Product, string Revision, string Entry, string Task, bool Resolved);
+    internal sealed record CreationIntent(string Schema, string Product, string Revision, string Entry, string Task, bool Resolved);
     private readonly BeadsReader reader = new(runner);
     private readonly PlanningEvidence evidence = new(runner);
 
+    // Compatibility lookup only. New creates let Beads allocate the public ID.
     internal static string TaskId(string product, string revision, string entry) =>
         product + "-p" + PlanningEvidence.Hash(revision + "\n" + entry)[..20];
+
+    internal static bool IsLegacyTaskId(string id, string product) =>
+        id.Length == product.Length + 22 && id.StartsWith(product + "-p", StringComparison.Ordinal)
+        && id[(product.Length + 2)..].All(Uri.IsHexDigit);
 
     internal static string Description(PlanningTask task, PlanningDocument plan) =>
         $"## Outcome\n{task.Outcome}\n\n## Relevant code and contracts\n{task.Context}\n\n"
@@ -59,13 +64,6 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         var invalid = PlanningEvidence.ValidateCandidate(plan);
         if (invalid is not null) throw Refuse(invalid);
         var tasks = plan.Tasks!;
-        var ids = tasks.ToDictionary(t => t.Id, t => TaskId(session.BeadId, approval.PlanRevision, t.Id), StringComparer.Ordinal);
-        var graph = tasks.Select(t => new PublishedPlanningTask(ids[t.Id], t.Title, Description(t, plan),
-            string.Join("\n", t.AcceptanceCriteria), t.DependsOn.Select(d => ids[d]).ToArray())).ToArray();
-        var graphJson = JsonSerializer.Serialize(graph, PlanningEvidence.JsonOptions);
-        var receipt = JsonSerializer.Serialize(new { schema = ReleaseSchema, product = session.BeadId,
-            revision = approval.PlanRevision, tasks = ids }, PlanningEvidence.JsonOptions);
-        var releasing = comments.Any(c => c.Text == receipt);
 
         var initial = await evidence.ObserveAsync(session, token);
         CheckOwnership(session, initial.Product, authority);
@@ -77,38 +75,37 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
 
         // Unmapped children are never adopted, overwritten, or removed.
         var initialInventory = await reader.ReadSnapshotAsync(session.Repository, token);
-        foreach (var task in tasks)
-        {
-            var binding = new CreationIntent(IntentSchema, session.BeadId, approval.PlanRevision, task.Id, ids[task.Id], true);
-            var matches = Matches(initialInventory, binding).ToArray();
-            if (matches.Length > 1 || matches.Length == 1 && matches[0].Id != binding.Task)
-                throw IntentFailure(binding, initialInventory, "The task binding is not unique and exact");
-        }
+        var ids = ResolveIds(session.BeadId, approval.PlanRevision, plan, initialInventory, comments, out var releasing);
         await CheckChildrenAsync(session, ids.Values, token);
         foreach (var task in tasks)
         {
             await CheckAuthorityAsync(session, approval, authority, token);
-            var id = ids[task.Id];
             var inventory = await reader.ReadSnapshotAsync(session.Repository, token);
-            if (!inventory.ById.ContainsKey(id))
+            ids = ResolveIds(session.BeadId, approval.PlanRevision, plan, inventory, comments, out _);
+            if (!ids.TryGetValue(task.Id, out var id))
             {
-                if (releasing) throw Refuse($"Verified task '{id}' disappeared; human-guided replanning is required.");
-                var intent = new CreationIntent(IntentSchema, session.BeadId, approval.PlanRevision, task.Id, id, false);
+                if (releasing) throw Refuse($"Verified entry '{task.Id}' disappeared; human-guided replanning is required.");
+                var intent = new CreationIntent(IntentSchema, session.BeadId, approval.PlanRevision, task.Id, "", false);
                 var intentProduct = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
                 var retainedIntent = await ReadIntentAsync(session, intentProduct, intent, token);
                 if (retainedIntent is not null || Matches(inventory, intent).Any())
                     throw IntentFailure(intent, inventory, "The intended task is missing or its binding conflicts");
                 await WriteIntentAsync(session, approval, authority, intent, token);
+                inventory = await reader.ReadSnapshotAsync(session.Repository, token);
+                if (Matches(inventory, intent).Any() || inventory.ById.ContainsKey(TaskId(session.BeadId, approval.PlanRevision, task.Id)))
+                    throw IntentFailure(intent, inventory, "A task appeared after creation intent confirmation");
                 // A confirmed intent does not carry authority across reads or a pause.
                 intentProduct = await CheckAuthorityAsync(session, approval, authority, token);
                 if (await ReadIntentAsync(session, intentProduct, intent, token) != intent)
                     throw IntentFailure(intent, inventory, "The creation intent changed before launch");
-                await WriteUncertainAsync(session, ["create", "--id", id, "--type", "task", "--title", task.Title,
+                await WriteUncertainAsync(session, ["create", "--type", "task", "--title", task.Title,
                     "--description", Description(task, plan), "--acceptance", string.Join("\n", task.AcceptanceCriteria),
                     "--labels", "plan-unpublished", "--deps", "discovered-from:" + session.BeadId,
                     "--metadata", JsonSerializer.Serialize(new { publication_product = session.BeadId,
                         publication_revision = approval.PlanRevision, publication_entry = task.Id }), "--json"], token);
                 inventory = await reader.ReadSnapshotAsync(session.Repository, token);
+                ids = ResolveIds(session.BeadId, approval.PlanRevision, plan, inventory, comments, out _);
+                id = ids[task.Id];
             }
             // A full fresh inventory reconciles a command whose response or ID was lost.
             var binding = new CreationIntent(IntentSchema, session.BeadId, approval.PlanRevision, task.Id, id, true);
@@ -122,13 +119,22 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
                 || !BeadsReader.ParseDownDependencies(dependencies, bead.Id)
                 .Contains(new BeadDependency(id, session.BeadId, "discovered-from")))
                 throw IntentFailure(binding, inventory, "The native Product link is missing");
-            if (BeadsReader.ParseDownDependencies(dependencies, bead.Id).Except(Edges(session.BeadId, task, ids)).Any())
+            if (BeadsReader.ParseDownDependencies(dependencies, bead.Id).Except(
+                new[] { new BeadDependency(id, session.BeadId, "discovered-from") }.Concat(task.DependsOn
+                    .Where(ids.ContainsKey).Select(d => new BeadDependency(id, ids[d], "blocks")))).Any())
                 throw IntentFailure(binding, inventory, "The task has conflicting dependencies");
             var intentParent = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
             var existingIntent = await ReadIntentAsync(session, intentParent, binding, token);
             if (existingIntent != binding)
                 await WriteIntentAsync(session, approval, authority, binding, token);
         }
+
+        await CheckChildrenAsync(session, ids.Values, token);
+        var graph = tasks.Select(t => new PublishedPlanningTask(ids[t.Id], t.Title, Description(t, plan),
+            string.Join("\n", t.AcceptanceCriteria), t.DependsOn.Select(d => ids[d]).ToArray())).ToArray();
+        var graphJson = JsonSerializer.Serialize(graph, PlanningEvidence.JsonOptions);
+        var receipt = JsonSerializer.Serialize(new { schema = ReleaseSchema, product = session.BeadId,
+            revision = approval.PlanRevision, tasks = ids }, PlanningEvidence.JsonOptions);
 
         foreach (var task in tasks)
         {
@@ -242,6 +248,9 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         // inventory verifies the entire graph without repeated process/database
         // startup per node. It is never reused across a mutation.
         var inventory = await reader.ReadSnapshotAsync(session.Repository, token);
+        var resolved = ResolveIds(session.BeadId, approval.PlanRevision, plan, inventory, [], out _);
+        if (ids.Count != resolved.Count || ids.Any(pair => resolved.GetValueOrDefault(pair.Key) != pair.Value))
+            throw Refuse("The retained task bindings changed during graph verification.");
         var intended = ids.Values.ToHashSet(StringComparer.Ordinal);
         var edges = inventory.ById.Values.SelectMany(bead => bead.Payload.TryGetProperty("dependencies", out var dependencies)
             ? BeadsReader.ParseDownDependencies(dependencies, bead.Id) : Array.Empty<BeadDependency>()).ToArray();
@@ -289,6 +298,125 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
 
     private static string IntentKey(CreationIntent intent) => "publication_create_" + PlanningEvidence.Hash(intent.Revision + "\n" + intent.Entry);
 
+    internal static CreationIntent[] ReadIntents(BeadSnapshot parent)
+    {
+        if (!parent.Payload.TryGetProperty("metadata", out var metadata)) return [];
+        if (metadata.ValueKind != JsonValueKind.Object) throw Refuse("Product metadata is malformed.");
+        return metadata.EnumerateObject().Where(p => p.Name.StartsWith("publication_create_", StringComparison.Ordinal))
+            .Select(p =>
+            {
+                CreationIntent? intent = null;
+                try
+                {
+                    if (p.Value.ValueKind == JsonValueKind.String)
+                        intent = JsonSerializer.Deserialize<CreationIntent>(p.Value.GetString()!, IntentJson);
+                }
+                catch (JsonException) { }
+                if (intent is null || intent.Schema != IntentSchema || intent.Product != parent.Id
+                    || string.IsNullOrWhiteSpace(intent.Revision) || string.IsNullOrWhiteSpace(intent.Entry)
+                    || intent.Task is null || intent.Resolved && string.IsNullOrWhiteSpace(intent.Task)
+                    || p.Name != IntentKey(intent)) throw Refuse($"Creation evidence '{p.Name}' is malformed or conflicting.");
+                return intent;
+            }).ToArray();
+    }
+
+    // Merge independent identity evidence before adopting any row. Absence after
+    // a durable intent is uncertainty, never permission for another create.
+    private static Dictionary<string, string> ResolveIds(string product, string revision, PlanningDocument plan,
+        BeadsInventory inventory, IReadOnlyList<BeadCommentSnapshot> comments, out bool releasing)
+    {
+        var parent = inventory.ById[product];
+        var intents = ReadIntents(parent);
+        var ids = new Dictionary<string, string>(StringComparer.Ordinal);
+        var entries = plan.Tasks!.Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
+        var fallback = new CreationIntent(IntentSchema, product, revision, "unknown", "", false);
+        foreach (var bead in inventory.ById.Values.Where(b => Metadata(b, "publication_product") == product))
+            if (Metadata(bead, "publication_revision") != revision || Metadata(bead, "publication_entry") is not { } entry
+                || !entries.Contains(entry))
+                throw IntentFailure(fallback with { Task = bead.Id }, inventory, "Task provenance conflicts with the approved graph");
+        void Bind(string entry, string id)
+        {
+            if (IsLegacyTaskId(id, product) && id != TaskId(product, revision, entry))
+                throw IntentFailure(fallback with { Entry = entry, Task = id }, inventory, "Legacy task identity conflicts with the approved entry");
+            if (!entries.Contains(entry) || string.IsNullOrWhiteSpace(id)
+                || ids.TryGetValue(entry, out var previous) && previous != id
+                || ids.Any(p => p.Key != entry && p.Value == id))
+                throw IntentFailure(fallback with { Entry = entry, Task = id }, inventory, "Retained task bindings conflict");
+            ids[entry] = id;
+        }
+        foreach (var intent in intents)
+        {
+            if (intent.Revision != revision || !entries.Contains(intent.Entry))
+                throw IntentFailure(intent, inventory, "Creation evidence conflicts with the approved graph");
+            if (intent.Task.Length > 0) Bind(intent.Entry, intent.Task);
+        }
+        releasing = false;
+        foreach (var comment in comments)
+        {
+            JsonDocument document;
+            try { document = JsonDocument.Parse(comment.Text); }
+            catch (JsonException) { continue; }
+            using (document)
+            {
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("schema", out var schema)
+                    || schema.ValueKind != JsonValueKind.String || schema.GetString() != ReleaseSchema) continue;
+                if (!root.TryGetProperty("product", out var owner) || owner.ValueKind != JsonValueKind.String || owner.GetString() != product
+                    || !root.TryGetProperty("revision", out var version) || version.ValueKind != JsonValueKind.String || version.GetString() != revision
+                    || !root.TryGetProperty("tasks", out var map) || map.ValueKind != JsonValueKind.Object
+                    || map.EnumerateObject().Count() != entries.Count
+                    || map.EnumerateObject().Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != entries.Count)
+                    throw IntentFailure(fallback, inventory, "Release evidence conflicts with the approved graph");
+                foreach (var pair in map.EnumerateObject())
+                {
+                    if (pair.Value.ValueKind != JsonValueKind.String)
+                        throw IntentFailure(fallback, inventory, "Release task identity is malformed");
+                    Bind(pair.Name, pair.Value.GetString()!);
+                }
+                releasing = true;
+            }
+        }
+        foreach (var task in plan.Tasks!)
+        {
+            var intent = fallback with { Entry = task.Id, Task = ids.GetValueOrDefault(task.Id) ?? "" };
+            var legacy = TaskId(product, revision, task.Id);
+            var matches = Matches(inventory, intent).ToArray();
+            if (inventory.ById.ContainsKey(legacy)) Bind(task.Id, legacy);
+            if (matches.Length > 1)
+                throw IntentFailure(intent, inventory, "The task binding is not unique and exact");
+            if (matches.Length == 1) Bind(task.Id, matches[0].Id);
+            if (ids.TryGetValue(task.Id, out var id))
+            {
+                var binding = intent with { Task = id };
+                if (!inventory.ById.TryGetValue(id, out var bead)
+                    || Metadata(bead, "publication_product") != product || Metadata(bead, "publication_revision") != revision
+                    || Metadata(bead, "publication_entry") != task.Id)
+                    throw IntentFailure(binding, inventory, "The intended task is missing or its provenance conflicts");
+            }
+            else if (intents.Any(i => i.Entry == task.Id) || releasing)
+                throw IntentFailure(intent, inventory, "The intended task is missing or its binding conflicts");
+        }
+        var retainedRevision = Metadata(parent, "publication_revision");
+        if (parent.Payload.TryGetProperty("metadata", out var parentMetadata)
+            && parentMetadata.TryGetProperty("publication_revision", out _) && retainedRevision != revision)
+            throw IntentFailure(fallback, inventory, "Retained publication revision conflicts");
+        if (parent.Payload.TryGetProperty("metadata", out var metadata) && metadata.TryGetProperty("publication_graph", out _))
+        {
+            try
+            {
+                var graph = JsonSerializer.Deserialize<PublishedPlanningTask[]>(Metadata(parent, "publication_graph") ?? "null", PlanningEvidence.JsonOptions);
+                var expected = plan.Tasks.Select(t => new PublishedPlanningTask(ids[t.Id], t.Title, Description(t, plan),
+                    string.Join("\n", t.AcceptanceCriteria), t.DependsOn.Select(d => ids[d]).ToArray())).ToArray();
+                if (graph is null || JsonSerializer.Serialize(graph, PlanningEvidence.JsonOptions)
+                    != JsonSerializer.Serialize(expected, PlanningEvidence.JsonOptions))
+                    throw IntentFailure(fallback, inventory, "Retained graph membership conflicts");
+            }
+            catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException)
+            { throw IntentFailure(fallback, inventory, "Retained graph membership is malformed or incomplete"); }
+        }
+        return ids;
+    }
+
     private async Task ValidateRetainedIntentsAsync(AgentStageSession session, BeadSnapshot parent,
         PlanningApproval approval, PlanningTask[] tasks, CancellationToken token)
     {
@@ -307,7 +435,7 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
             catch (JsonException) { }
             if (intent is not null && intent.Schema == IntentSchema && intent.Product == session.BeadId
                 && intent.Revision == approval.PlanRevision && tasks.Any(t => t.Id == intent.Entry)
-                && intent.Task == TaskId(session.BeadId, approval.PlanRevision, intent.Entry)
+                && intent.Task is not null && (!intent.Resolved || !string.IsNullOrWhiteSpace(intent.Task))
                 && property.Name == IntentKey(intent)) continue;
             var diagnostic = fallback with { Entry = intent?.Entry ?? property.Name, Task = intent?.Task ?? "" };
             throw IntentFailure(diagnostic, await reader.ReadSnapshotAsync(session.Repository, token),
@@ -325,7 +453,8 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         {
             var actual = raw.ValueKind == JsonValueKind.String
                 ? JsonSerializer.Deserialize<CreationIntent>(raw.GetString()!, IntentJson) : null;
-            if (actual is not null && (actual with { Resolved = expected.Resolved }) == expected) return actual;
+            if (actual is not null && (actual with { Resolved = expected.Resolved, Task = expected.Task }) == expected
+                && (actual.Task == expected.Task || !actual.Resolved && actual.Task == "")) return actual;
         }
         catch (JsonException) { }
         throw Refuse("Creation evidence is malformed or conflicting");
@@ -344,7 +473,7 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
     private static IEnumerable<BeadSnapshot> Matches(BeadsInventory inventory, CreationIntent intent) =>
         inventory.ById.Values.Where(b => b.Id == intent.Task || Metadata(b, "publication_product") == intent.Product
             && Metadata(b, "publication_revision") == intent.Revision
-            && (intent.Task.Length == 0 || Metadata(b, "publication_entry") == intent.Entry));
+            && Metadata(b, "publication_entry") == intent.Entry);
 
     private static AgentStageInputException IntentFailure(CreationIntent intent, BeadsInventory inventory, string check) =>
         Refuse($"Product '{intent.Product}', revision '{intent.Revision}', entry '{intent.Entry}', observed IDs [{string.Join(", ", Matches(inventory, intent).Select(b => b.Id))}]: {check}. Maintainer: inspect the evidence and reconcile the task binding before guarded Retry.");

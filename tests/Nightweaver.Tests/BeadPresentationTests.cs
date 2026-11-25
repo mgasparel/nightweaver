@@ -141,7 +141,7 @@ public sealed class BeadPresentationTests
             new PublishedPlanningTask(null!, "Other", "Description", "Acceptance", [])
         });
         var parentMetadata = JsonSerializer.Serialize(new { publication_revision = "revision", publication_graph = graph });
-        var taskMetadata = JsonSerializer.Serialize(new { publication_product = "product", publication_revision = "revision" });
+        var taskMetadata = JsonSerializer.Serialize(new { publication_product = "product", publication_revision = "revision", publication_entry = "entry" });
         var partial = scenario.StartsWith("partial", StringComparison.Ordinal);
         if (scenario == "partial-revision-conflict")
             taskMetadata = JsonSerializer.Serialize(new { publication_product = "product", publication_revision = "old" });
