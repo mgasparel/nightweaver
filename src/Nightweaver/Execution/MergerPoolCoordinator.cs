@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Nightweaver.ActivityFeed;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 using Nightweaver.Planning;
@@ -85,6 +86,7 @@ internal sealed class MergerPoolCoordinator
     private readonly MergerPoolSnapshotReader readSnapshot;
     private readonly MergerPoolSlotRunner runSlot;
     private readonly PoolObservation? observation;
+    private readonly ActivityPoolObservation? activity;
     private readonly object admissionSync = new();
     private Task admissionTail = Task.CompletedTask;
     private readonly object stateGate = new();
@@ -105,12 +107,14 @@ internal sealed class MergerPoolCoordinator
         EnvironmentReservations? environments = null,
         ICompletedEnvironmentQueue? cleanupQueue = null,
         PoolObservation? observation = null,
+        ActivityPoolObservation? activity = null,
         CancellationToken slotLifetimeToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(processRunner);
+        this.activity = activity;
         this.paths = paths;
         this.project = project;
         this.repository = repository;
@@ -176,6 +180,7 @@ internal sealed class MergerPoolCoordinator
         catch
         {
             observation?.Unknown(WaitCensor.Failure);
+            activity?.Unknown();
             throw;
         }
         var diagnostics = new List<MergerPoolDiagnostic>();
@@ -212,6 +217,11 @@ internal sealed class MergerPoolCoordinator
             _ = Task.Run(() => RunReservedSlotAsync(reservation), CancellationToken.None);
         }
 
+        if (stopGate?.IsStopRequested != true)
+        {
+            var waiting = diagnostics.Count(item => item.Code == MergerPoolDiagnosticCode.CapacityReached);
+            activity?.Observe(waiting > 0 ? ActivityReason.Capacity : ActivityReason.None, waiting, capacityLimit);
+        }
         return new MergerPoolEvaluation(CapacityLimit, admitted, diagnostics.ToArray(), ActiveReservations);
     }
 

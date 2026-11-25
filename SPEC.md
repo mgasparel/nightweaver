@@ -638,6 +638,16 @@ worksheet performs no upgrade IO or lifecycle action; public mutation and native
 proof belong to subsequent implementation slices. Production operations require
 separate explicit authorization.
 
+Continuous runtime Activity producers observe the existing fresh Planning,
+Delivery and Merger admission results. Planning backpressure records the exact
+active Plan Bead count and configured limit. Fixed per-pool state suppresses
+unchanged waits while preserving changed reasons and numeric detail. Source loss
+and stale gaps break continuity; re-observation cannot complete an unknown wait.
+Runtime starting, running, failure, drain and confirmed stop use their actual
+boundaries. The bounded Project journal is independent of OTLP export. Failed
+feed persistence cannot stop factory execution. These observations add no tracker
+commands or lifecycle authority. See [Activity evidence](docs/design/activity-feed.md).
+
 ## 8. Out of Scope
 
 - **Multi-Project Management UI**: A project-agnostic UI for creating/editing **Project** configurations, viewing/interacting with each **Project**'s `bd` tracker, and starting/monitoring/stopping per-**Project** **Orchestrator** processes is deferred to a separate effort.

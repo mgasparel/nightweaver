@@ -27,6 +27,17 @@ and checks the separate comparison of runtime observations on an open stream.
 The repair adds one journal comparison per examined cache row. It adds no native
 journey, fixture publication, source read or tracker command.
 
+Activity wait and health producers add six controlled helper cases, two discovery
+drain cases and one large-inventory gate case. Existing Planning, Delivery and Merger coordinator cases
+now assert Activity records beside unchanged admission results and source read
+counts. Planning threshold cases check the observed count and configured limit.
+Ten thousand same-reason updates retain one state and one row. Source failure,
+stale coverage, recovery and submission loss do not complete an unknown wait.
+No native journey or fixture publication is added. Existing native concurrency
+and journal storage coverage retain those boundaries. Production adds fixed
+state per pool, one nonblocking submission per change, and the existing bounded
+journal worker. It adds no tracker command. Unchanged polling adds no disk write.
+
 Activity journal tests add controlled storage and clock cases plus disposable-file
 read, write, rotation, cursor, corruption, identity and sentinel checks. One short
 junction command and one hard-link call prove actual Windows path safety. They
