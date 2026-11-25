@@ -9,6 +9,39 @@ namespace Nightweaver.Tests;
 
 public sealed class ContinuousDiscoveryCoordinatorTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DrainObservationFollowsClosedAdmissionAndPrecedesSlotDrain(bool fail)
+    {
+        using var lifetime = new CancellationTokenSource();
+        var stopGate = new ContinuousStopGate();
+        var entered = NewSignal();
+        List<string> events = [];
+        var completions = Channel.CreateUnbounded<DeliveryPoolCompletion>();
+        var ticks = Channel.CreateUnbounded<bool>();
+        var coordinator = new ContinuousDiscoveryCoordinator(
+            [Registration(ContinuousPoolKind.Delivery, _ =>
+            {
+                entered.TrySetResult(true);
+                if (fail) throw new IOException("controlled failure");
+                return EmptyDiagnostics();
+            }, completions.Reader, drain: _ => { events.Add("slots"); return Task.CompletedTask; })],
+            _ => Task.CompletedTask, TextWriter.Null, TextWriter.Null,
+            token => ReadTicksAsync(ticks.Reader, token), stopGate: stopGate,
+            onInfrastructureFailure: () => { events.Add("failure"); return Task.CompletedTask; },
+            onDraining: () => { Assert.True(stopGate.IsStopRequested); events.Add("draining"); });
+        var run = coordinator.RunAsync(lifetime.Token);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        if (fail) await Assert.ThrowsAsync<IOException>(() => run);
+        else
+        {
+            lifetime.Cancel();
+            Assert.True(await run.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        }
+        Assert.Equal(fail ? "failure,draining,slots" : "draining,slots", string.Join(',', events));
+    }
+
     [Fact]
     public async Task BurstsCoalesceAndActivityDuringEvaluationLeavesOnePendingPass()
     {

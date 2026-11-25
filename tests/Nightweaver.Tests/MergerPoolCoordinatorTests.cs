@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Nightweaver.Application;
+using Nightweaver.ActivityFeed;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
 using Nightweaver.Inspection;
@@ -551,6 +552,8 @@ public sealed class MergerPoolCoordinatorTests
     public async Task WaitingObservationUsesAdmissionSelectionAndBreaksOnReadFailure()
     {
         var clock = new WorkflowTimingTests.Clock();
+        List<ActivityEvidence> rows = [];
+        var activity = new ActivityPoolObservation(ActivityPhase.Merger, e => { rows.Add(e); return true; }, clock);
         List<double> samples = [];
         var observation = new PoolObservation("merger", 1, clock, samples.Add, (_, _) => { });
         var current = Snapshot([Row("a", labels: ["stage:merge"]), Row("b", labels: ["stage:merge"]),
@@ -563,7 +566,7 @@ public sealed class MergerPoolCoordinatorTests
             reads++;
             if (fail) throw new IOException("controlled tracker failure");
             return Task.FromResult(current);
-        }, async (_, _, _, _, _, _) => { await release.Task; return Outcome(MergerSlotDisposition.Refused); }, observation: observation);
+        }, async (_, _, _, _, _, _) => { await release.Task; return Outcome(MergerSlotDisposition.Refused); }, observation: observation, activity: activity);
         var first = await pool.EvaluateAsync(TestContext.Current.CancellationToken);
         try
         {
@@ -581,19 +584,24 @@ public sealed class MergerPoolCoordinatorTests
             Assert.Equal(0, Assert.Single(observation.Read("queued")).Value);
             Assert.Equal(4, reads);
             Assert.Empty(samples);
+            Assert.Equal(new[] { ActivityKind.WaitStarted, ActivityKind.EvidenceUnavailable, ActivityKind.HealthChanged }, rows.Select(r => r.Kind));
+            Assert.Equal(ActivityReason.Capacity, rows[0].Reason);
+            Assert.Equal(1, rows[0].Count);
+            Assert.Equal(ActivityReason.SourceFailed, rows[1].Reason);
+            Assert.Equal(ActivityReason.Recovered, rows[2].Reason);
         }
         finally { release.TrySetResult(true); await Task.WhenAll(first.Admitted.Select(item => item.Completion)); }
     }
 
     private static MergerPoolCoordinator CreatePool(Func<Task<MergerPoolSnapshot>> snapshotReader,
-        MergerPoolSlotRunner slotRunner, int maxConcurrentDelivery = 1, ContinuousStopGate? stopGate = null, PoolObservation? observation = null)
+        MergerPoolSlotRunner slotRunner, int maxConcurrentDelivery = 1, ContinuousStopGate? stopGate = null, PoolObservation? observation = null, ActivityPoolObservation? activity = null)
     {
         var host = new HostPaths(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "merger-pool-host")));
         var target = new ValidatedTargetRepository(Path.GetFullPath(Path.Combine(Path.GetTempPath(), "merger-pool-target")), "main");
         var project = CreateProject(target, maxConcurrentDelivery);
         var runner = new RecordingProcessRunner((_, _) => Task.FromResult(new ProcessResult(0, "", "")));
         return new MergerPoolCoordinator(host, project, target, runner,
-            (_, _, _) => snapshotReader(), slotRunner, observation: observation, stopGate: stopGate);
+            (_, _, _) => snapshotReader(), slotRunner, activity: activity, observation: observation, stopGate: stopGate);
     }
 
     private static ProjectConfig CreateProject(ValidatedTargetRepository target, int maxConcurrentDelivery)

@@ -16,7 +16,8 @@ internal sealed class ContinuousDiscoveryCoordinator(
     Func<Action, CancellationToken, Task>? journalWatcher = null,
     ContinuousStopGate? stopGate = null,
     Action? onDiscoveryRequested = null,
-    Func<Task>? onInfrastructureFailure = null)
+    Func<Task>? onInfrastructureFailure = null,
+    Action? onDraining = null)
 {
     internal static readonly TimeSpan DiscoveryInterval = TimeSpan.FromSeconds(30);
 
@@ -97,6 +98,7 @@ internal sealed class ContinuousDiscoveryCoordinator(
             // This closes reservation and native-launch boundaries before helper cancellation.
             stopGate?.RequestStop();
             runtimeCancellation.Cancel();
+            onDraining?.Invoke();
             try
             {
                 await Task.WhenAll(worker, timer, journalTask)

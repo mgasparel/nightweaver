@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Nightweaver.ActivityFeed;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 using Nightweaver.Planning;
@@ -103,6 +104,7 @@ internal sealed class PlanningPoolCoordinator
     private readonly PlanningPoolSnapshotReader readSnapshot;
     private readonly PlanningPoolSlotRunner runSlot;
     private readonly PoolObservation? observation;
+    private readonly ActivityPoolObservation? activity;
     private readonly object admissionSync = new();
     private Task admissionTail = Task.CompletedTask;
     private readonly object stateGate = new();
@@ -122,6 +124,7 @@ internal sealed class PlanningPoolCoordinator
         EnvironmentReservations? environments = null,
         Action<string>? onPublished = null,
         PoolObservation? observation = null,
+        ActivityPoolObservation? activity = null,
         CancellationToken slotLifetimeToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
@@ -130,6 +133,7 @@ internal sealed class PlanningPoolCoordinator
         ArgumentNullException.ThrowIfNull(processRunner);
 
         this.onPublished = onPublished;
+        this.activity = activity;
         this.paths = paths;
         this.project = project;
         this.repository = repository;
@@ -198,13 +202,15 @@ internal sealed class PlanningPoolCoordinator
         catch
         {
             observation?.Unknown(WaitCensor.Failure);
+            activity?.Unknown();
             throw;
         }
 
         var diagnostics = new List<PlanningPoolDiagnostic>();
-        var eligible = SelectEligible(snapshot, diagnostics);
+        var activeTasks = PlanningPoolPlanner.CountActiveTasks(snapshot.Inventory);
+        var eligible = SelectEligible(snapshot, diagnostics, activeTasks);
         lock (stateGate) observation?.Observe(eligible.Select(bead => bead.Id),
-            PlanningPoolPlanner.CountActiveTasks(snapshot.Inventory) >= project.Concurrency.MaxActivePlanBeads);
+            activeTasks >= project.Concurrency.MaxActivePlanBeads);
         var admitted = new List<PlanningPoolAdmission>();
         for (var index = 0; index < eligible.Count; index++)
         {
@@ -233,6 +239,13 @@ internal sealed class PlanningPoolCoordinator
             _ = Task.Run(() => RunReservedSlotAsync(reservation), CancellationToken.None);
         }
 
+        if (stopGate?.IsStopRequested != true)
+        {
+            var waiting = diagnostics.Count(item => item.Code == PlanningPoolDiagnosticCode.CapacityReached);
+            var backpressure = activeTasks >= project.Concurrency.MaxActivePlanBeads;
+            activity?.Observe(backpressure ? ActivityReason.Backpressure : waiting > 0 ? ActivityReason.Capacity : ActivityReason.None,
+                backpressure ? activeTasks : waiting, backpressure ? project.Concurrency.MaxActivePlanBeads : capacityLimit);
+        }
         return new PlanningPoolEvaluation(capacityLimit, admitted, diagnostics.ToArray(), ActiveReservations);
     }
 
@@ -258,10 +271,9 @@ internal sealed class PlanningPoolCoordinator
         await accounted.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private List<BeadSnapshot> SelectEligible(PlanningPoolSnapshot snapshot, List<PlanningPoolDiagnostic> diagnostics)
+    private List<BeadSnapshot> SelectEligible(PlanningPoolSnapshot snapshot, List<PlanningPoolDiagnostic> diagnostics, int activeTasks)
     {
         var eligible = new List<BeadSnapshot>();
-        var activeTasks = PlanningPoolPlanner.CountActiveTasks(snapshot.Inventory);
         foreach (var bead in snapshot.Inventory.ById.Values)
         {
             if (bead.IssueType is not ("feature" or "bug"))

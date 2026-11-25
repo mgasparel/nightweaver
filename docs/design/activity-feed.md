@@ -6,10 +6,48 @@ pause change, or a repair-budget change. A consumer must use the existing guarde
 command path. This contract adds a pure model in `Activity/ActivityModel.cs`.
 It adds no active writer, producer hook, route, file scan, or browser behavior.
 
-The dependent [Activity journal module](activity-journal.md) now implements
-bounded storage and shared reads. It remains separate from runtime producers.
-The additive [Activity read API](activity-api.md) now
-connects one shared Web reader to finite history and reconnectable SSE.
+The dependent [Activity journal module](activity-journal.md) implements bounded
+storage and shared reads. Continuous runtime producers now submit pool wait and
+runtime health observations. Console routes remain a separate slice.
+The additive [Activity read API](activity-api.md) connects one shared Web reader
+to finite history and reconnectable SSE.
+
+## Pool waits and runtime health
+
+Each continuous runtime owns one Project journal, independent of OTLP export.
+The runtime uses its existing identity. The journal worker performs projection,
+serialization and storage. Producer calls only try the bounded queue.
+Continuous startup reads `remote.origin.url` once through the scrubbed Git
+command path and parses the repository identity for the journal. Missing,
+unsupported or failed origin reads disable only the journal and emit a fixed
+diagnostic. Cancellation still stops startup. This adds one Git command per
+runtime startup and no tracker command or per-poll origin read.
+
+Each pool keeps one suppression state and one current numeric detail record.
+No per-Bead keys or diagnostic text enter this state. Planning uses the exact
+`PlanningPoolPlanner.CountActiveTasks` count and configured `MaxActivePlanBeads`
+from the same fresh admission inventory. Backpressure entry records both values,
+including when no Product is ready. Capacity waits use the existing
+`CapacityReached` decisions. A changed reason emits `WaitChanged`; release emits
+`WaitEnded`. Repeated reasons update current count/limit detail without another
+row. Existing raw diagnostics remain unchanged. The three pool states cannot
+evict each other and retain no inventory, so inventory size cannot grow suppression
+memory. Numeric detail above the schema ceiling stays unknown in feed records.
+
+A failed admission source emits one `EvidenceUnavailable` record. Detail counts
+become unknown immediately. After 60 monotonic seconds without coverage, current
+detail is stale. The next observation emits the stale gap before recovery.
+Recovery means a successful new source observation. It does not complete the
+previous wait. A later wait has a new causal identity. Failed queue submissions
+do not establish suppression coverage; journal loss reporting remains active.
+
+Runtime health records distinguish starting, running, infrastructure failure,
+drain after admission closes, and successful stop after pool accounting and
+cleanup completion settlement. Failed drain or cleanup reports failure. These
+records never assert approval or merge. Force stop prevents new producer writes.
+A dead runtime cannot write its own stop; reader freshness and replacement belong
+to the API slice. Journal shutdown keeps its existing two-second bound. No tracker
+read, capacity change, retry change, polling change or workflow write is added.
 
 One runtime-owned Project journal will supply Web. It must work with OTLP export
 disabled. Keep it under the Nightweaver Project runtime root, outside the Target

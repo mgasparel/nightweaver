@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Nightweaver.ActivityFeed;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 using Nightweaver.Planning;
@@ -101,6 +102,7 @@ internal sealed class DeliveryPoolCoordinator
     private readonly DeliveryPoolSnapshotReader readSnapshot;
     private readonly DeliveryPoolSlotRunner runSlot;
     private readonly PoolObservation? observation;
+    private readonly ActivityPoolObservation? activity;
     private readonly object admissionSync = new();
     private Task admissionTail = Task.CompletedTask;
     private readonly object stateGate = new();
@@ -119,6 +121,7 @@ internal sealed class DeliveryPoolCoordinator
         FactoryTelemetryPublisher? telemetry = null,
         EnvironmentReservations? environments = null,
         PoolObservation? observation = null,
+        ActivityPoolObservation? activity = null,
         CancellationToken slotLifetimeToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
@@ -126,6 +129,7 @@ internal sealed class DeliveryPoolCoordinator
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(processRunner);
 
+        this.activity = activity;
         this.paths = paths;
         this.project = project;
         this.repository = repository;
@@ -196,6 +200,7 @@ internal sealed class DeliveryPoolCoordinator
         catch
         {
             observation?.Unknown(WaitCensor.Failure);
+            activity?.Unknown();
             OperationalTelemetry.Current?.Telemetry.Lifecycle.Unknown(LifecycleLoss.Failure);
             throw;
         }
@@ -232,6 +237,11 @@ internal sealed class DeliveryPoolCoordinator
             _ = Task.Run(() => RunReservedSlotAsync(reservation), CancellationToken.None);
         }
 
+        if (stopGate?.IsStopRequested != true)
+        {
+            var waiting = diagnostics.Count(item => item.Code == DeliveryPoolDiagnosticCode.CapacityReached);
+            activity?.Observe(waiting > 0 ? ActivityReason.Capacity : ActivityReason.None, waiting, capacityLimit);
+        }
         return new DeliveryPoolEvaluation(capacityLimit, admitted, diagnostics.ToArray(), ActiveReservations);
     }
 

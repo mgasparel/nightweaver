@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Nightweaver.ActivityFeed;
 using Nightweaver.Cli;
 using Nightweaver.Configuration;
 using Nightweaver.Execution;
@@ -18,7 +19,8 @@ internal static class ContinuousApplication
         RuntimeShutdownSignals? shutdownSignals,
         CancellationToken cancellationToken,
         Func<FactoryTelemetryPublisher, ProjectConfig, HostPaths, ValidatedTargetRepository, CancellationToken, Task>? onRuntimeReady = null,
-        Func<Task>? onRuntimeFailure = null)
+        Func<Task>? onRuntimeFailure = null,
+        Action<HostPaths, ProjectSlug, ValidatedTargetRepository>? acquireRuntime = null)
     {
         var startupTimestamp = Stopwatch.GetTimestamp();
         var selector = options.Selector ?? throw new InvalidOperationException("A Project selector is required");
@@ -42,7 +44,7 @@ internal static class ContinuousApplication
             .ValidateAsync(project.TargetRepository, project.ConfigFilePath, cancellationToken).ConfigureAwait(false);
 
         // The process-owned lock precedes startup recovery and every live Delivery admission.
-        UpgradeInterlock.AcquireRuntime(hostPaths, project.Name, repository);
+        (acquireRuntime ?? UpgradeInterlock.AcquireRuntime)(hostPaths, project.Name, repository);
         EnsureInitialRoots(hostPaths, project.Name);
 
         var beadsReader = new BeadsReader(processRunner);
@@ -61,6 +63,16 @@ internal static class ContinuousApplication
 
         using var slotLifetime = new CancellationTokenSource();
         var stopGate = shutdownSignals?.StopGate ?? new ContinuousStopGate();
+        var activityOrigin = await ReadActivityOriginAsync(processRunner, repository, cancellationToken).ConfigureAwait(false);
+        if (activityOrigin is null)
+            environment.Err.WriteLine("nightweaver: Activity journal unavailable: repository origin identity is unavailable.");
+        await using var activityJournal = activityOrigin is { } origin
+            ? new ActivityJournal(new ActivityJournalFiles(hostPaths, project.Name, repository.Path, origin),
+                origin, Guid.Parse(telemetry.RuntimeId)) : null;
+        bool SubmitActivity(ActivityEvidence evidence) => !stopGate.IsForceStopRequested
+            && activityJournal?.TrySubmit(evidence) == true;
+        var activity = new ActivityRuntimeObservation(SubmitActivity);
+        activity.Observe(ActivityReason.RuntimeStarting);
         var environments = new EnvironmentReservations();
         using var cleanup = new CompletedEnvironmentWorker(hostPaths, project, repository, processRunner,
             environments, stopGate, telemetry.RuntimeId, message => environment.Err.WriteLine("nightweaver: " + message));
@@ -69,15 +81,18 @@ internal static class ContinuousApplication
         var cleanupTask = Task.Run(() => cleanup.RunAsync(cleanupLifetime.Token), CancellationToken.None);
         var planningPool = new PlanningPoolCoordinator(hostPaths, project, repository, processRunner,
             slotLifetimeToken: slotLifetime.Token, stopGate: stopGate, telemetry: telemetry, environments: environments,
-            onPublished: cleanup.PlanningCompleted);
+            onPublished: cleanup.PlanningCompleted,
+            activity: new(ActivityPhase.Planning, SubmitActivity));
         var pool = new DeliveryPoolCoordinator(hostPaths, project, repository, processRunner,
             slotLifetimeToken: slotLifetime.Token,
             stopGate: stopGate,
-            telemetry: telemetry, environments: environments);
+            telemetry: telemetry, environments: environments,
+            activity: new(ActivityPhase.Delivery, SubmitActivity));
         var mergerPool = new MergerPoolCoordinator(hostPaths, project, repository, processRunner,
             slotLifetimeToken: slotLifetime.Token,
             stopGate: stopGate,
-            telemetry: telemetry, environments: environments, cleanupQueue: cleanup);
+            telemetry: telemetry, environments: environments, cleanupQueue: cleanup,
+            activity: new(ActivityPhase.Merger, SubmitActivity));
         var configuredPools = new[]
         {
             new ContinuousPoolRegistration(
@@ -132,15 +147,23 @@ internal static class ContinuousApplication
             journalWatcher: (requestDiscovery, token) => new BeadsJournalWatcher(
                 new BeadsJournalClient(processRunner), requestDiscovery, environment.Err)
                 .RunAsync(repository, token),
-            stopGate: stopGate, onDiscoveryRequested: cleanup.Wake, onInfrastructureFailure: onRuntimeFailure);
+            stopGate: stopGate, onDiscoveryRequested: cleanup.Wake,
+            onInfrastructureFailure: async () =>
+            {
+                activity.Observe(ActivityReason.RuntimeFailed);
+                if (onRuntimeFailure is not null) await onRuntimeFailure().ConfigureAwait(false);
+            },
+            onDraining: () => activity.Observe(ActivityReason.RuntimeDraining));
 
         environment.Out.WriteLine($"Continuous Planning and Delivery runtime starting with singleton Merger for Project '{project.Name.Value}' and Target Repository '{repository.Path}'.");
         environment.Out.WriteLine($"Planning capacity: {planningPool.CapacityLimit}; Delivery capacity: {pool.CapacityLimit}; Merger capacity: {mergerPool.CapacityLimit}; periodic discovery: 30 seconds; press Ctrl+C to stop.");
         operationalTelemetry?.RecordOperation(OperationalOperation.HostStart, OperationalOutcome.Success,
             Stopwatch.GetElapsedTime(startupTimestamp).TotalSeconds);
+        var drained = false;
         try
         {
-            var drained = await runtime.RunAsync(cancellationToken).ConfigureAwait(false);
+            activity.Observe(ActivityReason.RuntimeRunning);
+            drained = await runtime.RunAsync(cancellationToken).ConfigureAwait(false);
             return drained ? ExitCodes.Success : ExitCodes.InspectionFailure;
         }
         finally
@@ -157,9 +180,12 @@ internal static class ContinuousApplication
                 if (!stopGate.IsForceStopRequested)
                     await cleanup.FlushCompletionsAsync(CancellationToken.None).ConfigureAwait(false);
                 shutdownOutcome = OperationalOutcome.Success;
+                activity.Observe(drained ? ActivityReason.RuntimeStopped : ActivityReason.RuntimeFailed);
             }
             finally
             {
+                if (shutdownOutcome != OperationalOutcome.Success)
+                    activity.Observe(ActivityReason.RuntimeFailed);
                 if (operationalTelemetry is not null)
                 {
                     if (!stopGate.IsForceStopRequested)
@@ -168,6 +194,23 @@ internal static class ContinuousApplication
                     await operationalTelemetry.StopAsync(stopGate.IsForceStopRequested).ConfigureAwait(false);
                 }
             }
+        }
+    }
+
+    private static async Task<GitHubRepositoryIdentity?> ReadActivityOriginAsync(
+        IProcessRunner processRunner, ValidatedTargetRepository repository, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await processRunner.RunAsync(
+                GitCommand.Create(["config", "--get", "remote.origin.url"], repository.Path), cancellationToken)
+                .ConfigureAwait(false);
+            return result.ExitCode == 0 ? GitHubRepositoryIdentity.ParseRemoteUrl(result.StandardOutput.Trim()) : null;
+        }
+        catch (ToolExecutionException)
+        {
+            // Observation identity failure must not prevent factory execution.
+            return null;
         }
     }
 
