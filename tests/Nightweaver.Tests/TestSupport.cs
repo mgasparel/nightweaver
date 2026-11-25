@@ -326,6 +326,8 @@ internal sealed class BeadsFixture : IDisposable
     internal IReadOnlyDictionary<string, int> ToolRunCounts => toolRunCounts.ToDictionary(pair => pair.Key, pair => pair.Value,
         StringComparer.OrdinalIgnoreCase);
 
+    internal void PreserveForFailure() => temp.PreserveForFailure();
+
     internal BeadsFixture(string relativePath = "repo") : this(relativePath, initializeTemplate: false) { }
     internal BeadsFixture(string relativePath, string preparedTemplatePath, string controlBeadId)
         : this(relativePath, initializeTemplate: false, preparedTemplatePath, controlBeadId) { }

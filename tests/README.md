@@ -1,5 +1,39 @@
 # Test suite
 
+Pause handoff repair removes one redundant inventory command after a successful
+diagnostic write and final workflow check. The guarded claim release uses that
+immediately preceding check. Failed or cancelled verification still requires a
+fresh read before release. The separate ten-second release bound stays unchanged.
+Two controlled cases check success without a read inside that bound and refusal
+after a pause change during the diagnostic write. The existing second-signal
+native journey retains its dirty-worktree, foreign-claim, process-settlement and
+pause assertions. No native journey or fixture publication is added. Six threads
+and all deadlines stay unchanged. See the
+[publication proof](../docs/acceptance/planning-publication-native.md#hosted-pause-handoff-repair)
+for the failure boundary and evidence limits.
+
+Standalone Web host teardown waits for the native process signal before fixture
+deletion. Managed exit can precede Windows handle rundown and leave the
+process-lifetime `web-payload.lock` open. The existing environment/command-line
+and configured-target journeys now require exclusive payload access after exit.
+They retain their live-lock and cleanup assertions. This repair adds three
+exclusive file opens across existing cases. It adds no native journey, fixture
+publication or production work. Deadlines and six threads stay unchanged.
+
+Publication native proof adds two tests in `PlanningPublicationNativeTests`.
+One test shares a copied Beads template, an isolated host and one detached
+Planning checkout across response-loss recovery, provenance conflict and legacy
+partial-graph recovery. The second test calls the existing cross-process,
+cross-Project, cross-host and physical-alias exclusion scenario, which previously
+had no test entry point. Both reuse existing immutable fixture publications.
+Native database semantics and OS mutex ownership cannot be proved by injected
+responses. Detailed fault and concurrency cases remain controlled tests.
+The focused XML costs are 69.058 seconds for publication and 26.235 seconds for
+process exclusion. Their collection starts early at that measured weight; the
+six-thread cap and deadlines stay unchanged. No production code changes.
+See [publication proof](../docs/acceptance/planning-publication-native.md) for
+native evidence, concurrency limits and complete candidate cost.
+
 Legacy ID adoption repair adds four controlled publication cases. They reject an
 ID for another entry or revision, with and without a retained binding, before any
 publication write. They preserve the task and its publication hold. The repair
