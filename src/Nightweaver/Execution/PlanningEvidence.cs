@@ -21,11 +21,15 @@ internal sealed record PlanningApproval(string PlanCommentId, string PlanRevisio
     string ReviewRevision, PlanningGrounding Grounding);
 internal sealed record PlanningObservation(PlanningGrounding Grounding, BeadSnapshot Product,
     IReadOnlyList<BeadCommentSnapshot> Comments);
+internal sealed class PlanningContextTooLargeException(string message) : NightweaverException(message);
 
 /// <summary>Recoverable Beads-native Planning evidence and conservative grounding validation.</summary>
 internal sealed class PlanningEvidence(IProcessRunner runner)
 {
     internal static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const int MaximumContextBytes = 128 * 1024;
+    private const int RecentDiscussionLimit = 12;
+    private const int DiscussionExcerptLength = 240;
     internal const string CandidateSchema = "nightweaver-plan-v1";
     internal const string ReviewSchema = "nightweaver-plan-review-v1";
     internal const string QuestionSchema = "nightweaver-plan-question-v1";
@@ -71,20 +75,63 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
     {
         var (bead, comments) = await reader.ReadDetailWithCommentsAsync(session.Repository, session.BeadId, token);
         var candidate = LatestCandidate(comments);
-        var context = JsonSerializer.Serialize(new
+        var product = bead.Payload.EnumerateObject().Where(p => ProductFields.Contains(p.Name, StringComparer.Ordinal))
+            .ToDictionary(p => p.Name, p => p.Value);
+        var discussion = comments.Where(c => !IsProtocol(c.Text))
+            .OrderBy(c => c.CreatedAt).ThenBy(c => c.Id, StringComparer.Ordinal).ToArray();
+        var guidance = discussion.Where(c => IsHumanGuidance(c.Text)).ToArray();
+        var guidanceIds = guidance.Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
+        var ordinary = discussion.Where(c => !guidanceIds.Contains(c.Id)).ToArray();
+
+        string SerializeContext(IEnumerable<BeadCommentSnapshot> included, int omitted,
+            IEnumerable<BeadCommentSnapshot>? excerpts = null) => JsonSerializer.Serialize(new
         {
-            // Discussion/evidence has its own bounded context below; do not send
-            // the embedded show comments a second time inside the Product.
-            product = bead.Payload.EnumerateObject().Where(p => p.Name != "comments")
-                .ToDictionary(p => p.Name, p => p.Value),
-            discussion = comments.Where(c => !IsProtocol(c.Text)).Select(c => new { c.Id, c.Text }),
+            product,
+            discussion = included.Select(c => new { c.Id, c.Text }),
+            omittedDiscussionCount = omitted,
+            olderDiscussionExcerpts = excerpts?.Select(c => new { c.Id, c.Text }) ?? [],
             candidateCommentId = candidate?.Comment.Id,
             candidateText = candidate?.Comment.Text
         }, JsonOptions);
-        if (Encoding.UTF8.GetByteCount(context) > 128 * 1024)
-            throw new AgentStageInputException("Planning Product and candidate context exceeds the bounded classification input.");
-        return context;
+
+        var context = SerializeContext(discussion, 0);
+        if (Encoding.UTF8.GetByteCount(context) <= MaximumContextBytes) return context;
+
+        var omitted = ordinary.Length;
+        context = SerializeContext(guidance, omitted);
+        var requiredBytes = Encoding.UTF8.GetByteCount(context);
+        if (requiredBytes > MaximumContextBytes)
+            throw new PlanningContextTooLargeException(
+                $"Required Planning context is {requiredBytes} UTF-8 bytes (limit {MaximumContextBytes}). "
+                + "Consolidate the Product requirements or human guidance, or prepare a smaller candidate preserving the requirements, then choose Reset Budget & Retry in Attention Desk.");
+
+        IEnumerable<BeadCommentSnapshot> included = guidance;
+        for (var count = Math.Min(RecentDiscussionLimit, ordinary.Length); count > 0; count--)
+        {
+            var recent = guidance.Concat(ordinary.TakeLast(count)).OrderBy(c => c.CreatedAt).ThenBy(c => c.Id, StringComparer.Ordinal);
+            var withRecent = SerializeContext(recent, ordinary.Length - count);
+            if (Encoding.UTF8.GetByteCount(withRecent) > MaximumContextBytes) continue;
+            omitted = ordinary.Length - count;
+            context = withRecent;
+            included = recent;
+            break;
+        }
+
+        var excerpts = ordinary.Take(omitted).TakeLast(RecentDiscussionLimit)
+            .Select(c => c with { Text = DiscussionExcerpt(c.Text) });
+        var withExcerpts = SerializeContext(included, omitted, excerpts);
+        return Encoding.UTF8.GetByteCount(withExcerpts) <= MaximumContextBytes ? withExcerpts : context;
     }
+
+    private static string DiscussionExcerpt(string text)
+    {
+        text = text.TrimStart();
+        if (text.Length <= DiscussionExcerptLength) return text;
+        var length = char.IsHighSurrogate(text[DiscussionExcerptLength - 1]) ? DiscussionExcerptLength - 1 : DiscussionExcerptLength;
+        return text[..length];
+    }
+
+    private static bool IsHumanGuidance(string text) => ReadSchema(text, out _) == "nightweaver-human-guidance-v1";
 
     internal static string Hash(string value) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
@@ -97,16 +144,27 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
         return sha;
     }
 
-    internal static bool IsProtocol(string text)
+    internal static bool IsProtocol(string text) => ReadSchema(text, out var diagnosticCause) switch
     {
+        CandidateSchema or ReviewSchema or QuestionSchema or "nightweaver-planning-outcome-v1" or PlanningPublisher.ReleaseSchema => true,
+        "nightweaver-needs-human-v1" => diagnosticCause == "planning-context-too-large",
+        _ => false
+    };
+
+    private static string? ReadSchema(string text, out string? diagnosticCause)
+    {
+        diagnosticCause = null;
         try
         {
             using var json = JsonDocument.Parse(text);
-            return json.RootElement.TryGetProperty("schema", out var schema)
-                && schema.GetString() is CandidateSchema or ReviewSchema or QuestionSchema
-                    or "nightweaver-planning-outcome-v1" or PlanningPublisher.ReleaseSchema;
+            if (!json.RootElement.TryGetProperty("schema", out var schema)) return null;
+            var name = schema.GetString();
+            if (name == "nightweaver-needs-human-v1" && json.RootElement.TryGetProperty("cause", out var cause)
+                && cause.ValueKind == JsonValueKind.String)
+                diagnosticCause = cause.GetString();
+            return name;
         }
-        catch (Exception exception) when (exception is JsonException or InvalidOperationException) { return false; }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException) { return null; }
     }
 
     internal static PlanningDocument? Parse(string text)

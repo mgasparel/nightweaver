@@ -182,6 +182,7 @@ public sealed class CommentPresentationTests
     [InlineData("repair-budget-exhausted")]
     [InlineData("environment-blocked")]
     [InlineData("delivery-outcome-failure")]
+    [InlineData("planning-context-too-large")]
     public void EveryProducerCauseRemainsReadable(string cause)
     {
         var message = CommentPresenter.Project(Comment(Diagnostic().Replace("delivery-outcome-failure", cause, StringComparison.Ordinal)), Bead());

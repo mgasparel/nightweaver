@@ -157,9 +157,10 @@ internal static class DispatchApplication
             if (outcome.Status == OperationalRetryStatus.Escalated)
             {
                 var failure = outcome.StageResult.Failure;
+                var invocationReference = string.IsNullOrEmpty(outcome.StageResult.InvocationId)
+                    ? "" : $"; invocation '{outcome.StageResult.InvocationId}'";
                 environment.Err.WriteLine($"nightweaver: Escalated to needs-human for Bead '{beadId}' after {outcome.AttemptCount} attempt(s) "
-                    + $"({outcome.EscalationCause}); latest failure: {failure?.Kind}: {failure?.Reason}; "
-                    + $"invocation '{outcome.StageResult.InvocationId}'");
+                    + $"({outcome.EscalationCause}); latest failure: {failure?.Kind}: {failure?.Reason}{invocationReference}");
                 WriteLogReference(environment.Err, outcome.StageResult.LogFilePath);
                 return ExitCodes.InspectionFailure;
             }

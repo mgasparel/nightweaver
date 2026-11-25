@@ -8,6 +8,50 @@ namespace Nightweaver.Tests;
 public sealed class PlanningExecutionTests
 {
     [Fact]
+    public async Task OversizedDiscussionFallsBackToRecentCommentsAndKeepsExactCandidateAndGuidance()
+    {
+        using var fixture = new PlanningFixture("approval") { DependencyText = new string('d', 135_000) };
+        fixture.Comments.Add(new("old", new string('x', 135_000), DateTimeOffset.UnixEpoch));
+        fixture.Comments.Add(new("guidance", BeadsWriter.CreateHumanGuidanceComment("note_only", "Keep this decision"), DateTimeOffset.UnixEpoch.AddSeconds(1)));
+        fixture.Comments.Add(new("recent", "Keep recent discussion", DateTimeOffset.UnixEpoch.AddSeconds(2)));
+        var result = await fixture.RunAsync();
+        Assert.True(result.Succeeded);
+        using var context = JsonDocument.Parse(result.StageResult.PlanningContext!);
+        Assert.Equal(1, context.RootElement.GetProperty("omittedDiscussionCount").GetInt32());
+        var excerpt = Assert.Single(context.RootElement.GetProperty("olderDiscussionExcerpts").EnumerateArray());
+        Assert.Equal("old", excerpt.GetProperty("id").GetString());
+        Assert.Equal(new string('x', 240), excerpt.GetProperty("text").GetString());
+        Assert.Contains("Keep this decision", result.StageResult.PlanningContext, StringComparison.Ordinal);
+        Assert.Contains("Keep recent discussion", result.StageResult.PlanningContext, StringComparison.Ordinal);
+        Assert.Equal(fixture.Comments.Single(c => c.Id == "1").Text,
+            context.RootElement.GetProperty("candidateText").GetString());
+        Assert.False(context.RootElement.GetProperty("product").TryGetProperty("dependencies", out _));
+    }
+
+    [Fact]
+    public async Task OversizedRequiredContextPausesAndReleasesWithoutRunningTheAgent()
+    {
+        using var fixture = new PlanningFixture("approval") { Description = new string('d', 135_000) };
+        var groundingBeforePause = await fixture.CaptureAsync();
+        var result = await fixture.RunAsync();
+        Assert.Equal(OperationalRetryStatus.Escalated, result.Status);
+        Assert.True(result.Escalation?.ClaimReleased);
+        Assert.Equal(0, result.AttemptCount);
+        Assert.Equal(0, fixture.Executions);
+        Assert.Equal("stage:plan-challenge", fixture.State.Stage);
+        Assert.Equal(0, fixture.State.RepairCycles);
+        Assert.True(fixture.State.NeedsHuman);
+        Assert.Equal("open", fixture.State.Status);
+        Assert.Null(fixture.Owner);
+        Assert.Equal(2, fixture.Comments.Count);
+        Assert.Contains("131072", fixture.Comments[1].Text, StringComparison.Ordinal);
+        Assert.Contains("planning-context-too-large", fixture.Comments[1].Text, StringComparison.Ordinal);
+        Assert.NotNull(PlanningEvidence.LatestCandidate(fixture.Comments));
+        Assert.Contains("already planned or paused", await fixture.ReadAdmissionRefusalAsync(), StringComparison.Ordinal);
+        Assert.Equal(groundingBeforePause.ProductInputs, (await fixture.CaptureAsync()).ProductInputs);
+    }
+
+    [Fact]
     public async Task GroundingOverlapsIndependentGitReadsBeforeObservingTracker()
     {
         using var fixture = new PlanningFixture("draft");
@@ -259,6 +303,8 @@ public sealed class PlanningExecutionTests
         internal NeedsHumanRequest? Escalation { get; private set; }
         internal int Executions { get; private set; }
         internal int PublishWrites { get; private set; }
+        internal string Description { get; init; } = "Persist outcomes";
+        internal string? DependencyText { get; init; }
         internal Func<ProcessRequest, CancellationToken, Task<ProcessResult>>? GitRead { get; set; }
         internal Action? BeforeTrackerRead { get; set; }
         internal string Sentinel { get; }
@@ -293,8 +339,11 @@ public sealed class PlanningExecutionTests
         private string Inventory() => JsonSerializer.Serialize(new[] { new
         {
             id = State.Id, issue_type = State.IssueType, status = State.Status, assignee = Owner, priority = 2,
-            created_at = "2026-11-13T00:00:00Z", title = "Persistence", description = "Persist outcomes",
-            labels = new[] { State.Stage, "ready-for-planning" }.Concat(State.ProductDecisionRequired ? ["product-decision-required"] : Array.Empty<string>()), metadata = new { repair_cycles = State.RepairCycles },
+            created_at = "2026-11-13T00:00:00Z", title = "Persistence", description = Description,
+            dependencies = DependencyText is null ? Array.Empty<object>() : [new { id = "dependency", dependency_type = "blocks", description = DependencyText }],
+            labels = new[] { State.Stage, "ready-for-planning" }
+                .Concat(State.ProductDecisionRequired ? ["product-decision-required"] : Array.Empty<string>())
+                .Concat(State.NeedsHuman ? ["needs-human"] : Array.Empty<string>()), metadata = new { repair_cycles = State.RepairCycles },
             comments = Comments.Select(c => new { id = c.Id, issue_id = "product", text = c.Text, created_at = c.CreatedAt })
         } });
 
@@ -325,11 +374,13 @@ public sealed class PlanningExecutionTests
                 PublishWrites++;
                 Assert.Equal(Owner, Value("--if-assignee"));
                 Assert.Equal(State.Status, Value("--if-status"));
-                var label = Value("--add-label");
-                State = State with { Stage = label.StartsWith("stage:", StringComparison.Ordinal) ? label : State.Stage,
-                    ProductDecisionRequired = label == "product-decision-required", Status = Value("--status"),
+                var label = args.Contains("--add-label") ? Value("--add-label") : null;
+                State = State with { Stage = label?.StartsWith("stage:", StringComparison.Ordinal) == true ? label : State.Stage,
+                    ProductDecisionRequired = label == "product-decision-required", NeedsHuman = State.NeedsHuman || label == "needs-human",
+                    Status = args.Contains("--status") ? Value("--status") : State.Status,
                     RepairCycles = args.Contains("--set-metadata") ? State.RepairCycles + 1 : State.RepairCycles };
-                Owner = Value("--assignee"); if (Owner.Length == 0) Owner = null;
+                if (args.Contains("--assignee")) Owner = Value("--assignee");
+                if (Owner?.Length == 0) Owner = null;
                 output = Inventory();
             }
             else output = Inventory();
@@ -352,7 +403,7 @@ public sealed class PlanningExecutionTests
                     else
                     {
                         // Existing candidate is a prior turn; the fixture exposes it before comment-ID capture below.
-                        var candidate = Comments[0];
+                        var candidate = Comments.Single(c => c.Id == "1");
                         if (scenario is "question" or "invalid-question")
                             Comments.Add(Comment("2", new(PlanningEvidence.QuestionSchema, Grounding,
                                 Questions: [new("Which retention period?", "Thirty days", scenario == "question" ? "Storage cost versus history" : "")])));
@@ -383,10 +434,19 @@ public sealed class PlanningExecutionTests
                 escalate: (_, _, _, request, _) =>
                 {
                     Escalation = request;
-                    return Task.FromResult(new NeedsHumanEscalationResult(true, true, true, true, []));
+                    return request.Cause == NeedsHumanCause.PlanningContextTooLarge
+                        ? new NeedsHumanEscalator(runner).EscalateAsync(paths, project, new(RepositoryPath, "main"), request, TestContext.Current.CancellationToken)
+                        : Task.FromResult(new NeedsHumanEscalationResult(true, true, true, true, []));
                 });
             return await coordinator.RunAsync(paths, project, new(RepositoryPath, "main"), "product", role,
                 "nightweaver:demo", TestContext.Current.CancellationToken);
+        }
+
+        internal async Task<string?> ReadAdmissionRefusalAsync()
+        {
+            var snapshot = await new BeadsReader(runner).ReadSnapshotWithReadinessAsync(
+                new(RepositoryPath, "main"), project.RecoveryActor, TestContext.Current.CancellationToken);
+            return PlanningSlotCoordinator.ValidateAdmission(snapshot.Inventory.ById[State.Id], State, snapshot.Readiness);
         }
 
         internal Task<PlanningGrounding> CaptureAsync() => new PlanningEvidence(runner).CaptureAsync(
