@@ -1,5 +1,13 @@
 # Test suite
 
+Studio Activity adds eleven controlled client model cases. A 6,000-record burst
+checks the 500-row bound. Other cases cover pause, cursor replay, older rows,
+filters, evidence links and delayed times. The opt-in Activity browser journey
+reuses the isolated QA invocation fixture and connects its production executor
+hooks to the journal. It adds no native journey or fixture publication to this
+normal suite. Overview adds only a link; Activity reads begin on route entry.
+See [Studio Activity](../docs/design/studio-activity.md).
+
 Cleanup Activity repair adds three controlled finalizer cases for successful queue
 entry, failed queue entry and direct cleanup failure. Existing native direct
 cleanup and deferred worker failure checks remain. The repair adds no native

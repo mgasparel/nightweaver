@@ -508,7 +508,10 @@ The [Activity evidence contract](docs/design/activity-feed.md) defines the pure
 event model, evidence strengths, safe fields, journal order, loss states and
 finite limits for the local Project Activity feed. The additive read API serves
 finite history and reconnectable SSE through one shared Web collector.
-Console views remain a separate slice. See [Activity read API](docs/design/activity-api.md).
+The [Studio Activity route](docs/design/studio-activity.md) adds bounded live
+browsing, exact Bead and level filters, pause and cursor catch-up controls,
+safe evidence links and explicit source, retention and replacement states.
+Catch Up remains the summary after absence. See [Activity read API](docs/design/activity-api.md).
 The additive journal module provides
 bounded local storage and reads. See [Activity journal](docs/design/activity-journal.md).
 The continuous runtime now submits confirmed progress and observed pause changes

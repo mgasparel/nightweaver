@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Default', 'Commands', 'Invocation', 'Recovery', 'Presentation')][string]$Group = 'Default',
+    [ValidateSet('Default', 'Commands', 'Invocation', 'Recovery', 'Presentation', 'Activity')][string]$Group = 'Default',
     [string[]]$Only = @(),
     [string]$OutputDirectory = ''
 )
@@ -13,6 +13,7 @@ $previousUrl = $env:NIGHTWEAVER_QA_URL
 $previousConfig = $env:NIGHTWEAVER_QA_CONFIG
 $previousOutput = $env:NIGHTWEAVER_QA_OUTPUT
 $probes = switch ($Group) {
+    Activity { @('activity-qa') }
     Default { @('studio-qa', 'smoke', 'studio-attention-qa', 'workspace-base-qa', 'operations-qa', 'studio-explorer-qa', 'digest-qa', 'digest-merge-qa', 'read-timeout-qa', 'refresh-timeout-qa', 'runtime-refresh-qa') }
     Commands { @('planning-readiness-qa', 'cleanup-qa') }
     Invocation { @('factory-qa', 'planning-telemetry-qa', 'telemetry') }
@@ -24,7 +25,7 @@ if ($Only.Count) {
     $probes = @($probes | Where-Object { $_ -in $Only })
 }
 try {
-    $env:NIGHTWEAVER_QA_SCENARIO = if ($Group -eq 'Commands') { 'cleanup' } else { $null }
+    $env:NIGHTWEAVER_QA_SCENARIO = if ($Group -eq 'Activity') { 'activity' } elseif ($Group -eq 'Commands') { 'cleanup' } else { $null }
     aspire start --isolated --non-interactive --apphost $apphost
     if ($LASTEXITCODE -ne 0) { throw 'Isolated AppHost start failed' }
     aspire wait web --non-interactive --apphost $apphost
