@@ -70,9 +70,10 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         var initial = await evidence.ObserveAsync(session, token);
         CheckOwnership(session, initial.Product, authority);
         authority.Version = Version(initial.Product);
+        await ValidateRetainedIntentsAsync(session, initial.Product, approval, tasks, token);
         var grounding = initial.Grounding;
         if (grounding != approval.Grounding && PlanningEvidence.ApprovalStillCurrent(approval, approval.Grounding, comments))
-            return await RevalidateAsync(session, releaseRevalidationClaim, token);
+            return await RevalidateAsync(session, authority, releaseRevalidationClaim, token);
 
         // Unmapped children are never adopted, overwritten, or removed.
         await CheckChildrenAsync(session, ids.Values, token);
@@ -99,9 +100,9 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
                     "--labels", "plan-unpublished", "--deps", "discovered-from:" + session.BeadId,
                     "--metadata", JsonSerializer.Serialize(new { publication_product = session.BeadId,
                         publication_revision = approval.PlanRevision, publication_entry = task.Id }), "--json"], token);
+                inventory = await reader.ReadSnapshotAsync(session.Repository, token);
             }
             // A full fresh inventory reconciles a command whose response or ID was lost.
-            inventory = await reader.ReadSnapshotAsync(session.Repository, token);
             var binding = new CreationIntent(IntentSchema, session.BeadId, approval.PlanRevision, task.Id, id, true);
             var matches = Matches(inventory, binding).ToArray();
             if (matches.Length != 1 || matches[0].Id != id)
@@ -201,14 +202,13 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
             PlanningApproval: approval);
     }
 
-    private async Task<AgentStageResult> RevalidateAsync(AgentStageSession session, bool releaseClaim, CancellationToken token)
+    private async Task<AgentStageResult> RevalidateAsync(AgentStageSession session, Authority authority, bool releaseClaim, CancellationToken token)
     {
         // Guidance after explicit Resume changes grounding, even when it leaves the
         // candidate intact. Review that same candidate again; never replay Planner
         // creation or silently treat guidance as approval of changed requirements.
         var before = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
-        if (BeadWorkflowState.Parse(before) != session.InitialState || before.Assignee != session.InitialAssignee)
-            throw Refuse("Workflow or ownership changed before targeted Challenger revalidation.");
+        CheckOwnership(session, before, authority);
         var args = new[] { "update", session.BeadId, "--add-label", "stage:plan-challenge", "--remove-label", "stage:plan-approved",
             "--status", releaseClaim ? "open" : "in_progress", "--assignee", releaseClaim ? "" : session.InitialAssignee!,
             "--if-status", "in_progress", "--if-assignee", session.InitialAssignee!, "--json" };
@@ -279,6 +279,32 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
 
     private static string IntentKey(CreationIntent intent) => "publication_create_" + PlanningEvidence.Hash(intent.Revision + "\n" + intent.Entry);
 
+    private async Task ValidateRetainedIntentsAsync(AgentStageSession session, BeadSnapshot parent,
+        PlanningApproval approval, PlanningTask[] tasks, CancellationToken token)
+    {
+        if (!parent.Payload.TryGetProperty("metadata", out var metadata)) return;
+        var fallback = new CreationIntent(IntentSchema, session.BeadId, approval.PlanRevision, "unknown", "", false);
+        if (metadata.ValueKind != JsonValueKind.Object)
+            throw IntentFailure(fallback, await reader.ReadSnapshotAsync(session.Repository, token), "Product metadata is malformed");
+        foreach (var property in metadata.EnumerateObject().Where(p => p.Name.StartsWith("publication_create_", StringComparison.Ordinal)))
+        {
+            CreationIntent? intent = null;
+            try
+            {
+                if (property.Value.ValueKind == JsonValueKind.String)
+                    intent = JsonSerializer.Deserialize<CreationIntent>(property.Value.GetString()!, IntentJson);
+            }
+            catch (JsonException) { }
+            if (intent is not null && intent.Schema == IntentSchema && intent.Product == session.BeadId
+                && intent.Revision == approval.PlanRevision && tasks.Any(t => t.Id == intent.Entry)
+                && intent.Task == TaskId(session.BeadId, approval.PlanRevision, intent.Entry)
+                && property.Name == IntentKey(intent)) continue;
+            var diagnostic = fallback with { Entry = intent?.Entry ?? property.Name, Task = intent?.Task ?? "" };
+            throw IntentFailure(diagnostic, await reader.ReadSnapshotAsync(session.Repository, token),
+                $"Retained creation evidence '{property.Name}' is malformed or conflicts with the approved graph");
+        }
+    }
+
     private static CreationIntent? ReadIntent(BeadSnapshot parent, CreationIntent expected)
     {
         if (!parent.Payload.TryGetProperty("metadata", out var metadata)) return null;
@@ -307,7 +333,8 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
 
     private static IEnumerable<BeadSnapshot> Matches(BeadsInventory inventory, CreationIntent intent) =>
         inventory.ById.Values.Where(b => b.Id == intent.Task || Metadata(b, "publication_product") == intent.Product
-            && Metadata(b, "publication_revision") == intent.Revision && Metadata(b, "publication_entry") == intent.Entry);
+            && Metadata(b, "publication_revision") == intent.Revision
+            && (intent.Task.Length == 0 || Metadata(b, "publication_entry") == intent.Entry));
 
     private static AgentStageInputException IntentFailure(CreationIntent intent, BeadsInventory inventory, string check) =>
         Refuse($"Product '{intent.Product}', revision '{intent.Revision}', entry '{intent.Entry}', observed IDs [{string.Join(", ", Matches(inventory, intent).Select(b => b.Id))}]: {check}. Maintainer: inspect the evidence and reconcile the task binding before guarded Retry.");

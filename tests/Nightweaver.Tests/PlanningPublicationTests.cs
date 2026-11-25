@@ -10,6 +10,46 @@ namespace Nightweaver.Tests;
 
 public sealed class PlanningPublicationTests
 {
+    [Theory]
+    [InlineData("malformed")]
+    [InlineData("other-revision")]
+    [InlineData("missing-field")]
+    public async Task InvalidRetainedCreationEvidenceStopsBeforeAnyWrite(string change)
+    {
+        using var fixture = new Fixture(singleTask: true) { CrashAfterIntentAt = 1 };
+        await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
+        fixture.CrashAfterIntentAt = null;
+        var metadata = fixture.Rows["product"]["metadata"]!.AsObject();
+        var stored = Assert.Single(metadata);
+        var value = JsonNode.Parse(stored.Value!.GetValue<string>())!.AsObject();
+        metadata.Remove(stored.Key);
+        if (change == "other-revision") value["revision"] = "other approved revision";
+        if (change == "missing-field") value.Remove("resolved");
+        var key = change == "missing-field" ? stored.Key : "publication_create_foreign";
+        metadata[key] = change == "malformed" ? "{" : value.ToJsonString();
+        var before = JsonSerializer.Serialize(fixture.Rows);
+        var failure = await Assert.ThrowsAsync<AgentStageInputException>(fixture.PublishWithNewPublisher);
+        Assert.Contains(key, failure.Message);
+        Assert.Equal(before, JsonSerializer.Serialize(fixture.Rows));
+        Assert.Equal(1, fixture.IntentWriteCount);
+        Assert.Equal(0, fixture.CreateAttemptCount);
+    }
+
+    [Fact]
+    public async Task RevalidationCannotUseAReusedOwnerAfterInitialObservation()
+    {
+        using var fixture = new Fixture(singleTask: true);
+        fixture.Rows["product"]["notes"] = "Guidance requires revalidation";
+        var reads = 0;
+        fixture.BeforeDetailRead = id =>
+        {
+            if (id == "product" && ++reads == 2) fixture.Rows["product"]["updated_at"] = "new claim";
+        };
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+        Assert.Equal(0, fixture.WriteCount);
+        Assert.Equal(0, fixture.IntentWriteCount);
+    }
+
     [Fact]
     public async Task InterruptedIntentBeforeLaunchStaysUnresolvedAcrossPublisherRestart()
     {
@@ -143,7 +183,7 @@ public sealed class PlanningPublicationTests
             if (fixture.IntentWriteCount == 1 && request.Arguments.Contains("--include-comments"))
             {
                 fixture.BeforeCommand = null;
-                action!();
+                action();
             }
             return Task.CompletedTask;
         };
