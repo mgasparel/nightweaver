@@ -1,0 +1,125 @@
+{
+  "records": [
+    {
+      "schema": 1,
+      "position": {
+        "journal": "9bf13fe8-22c1-461f-81e3-13b66b16b3b1",
+        "offset": 1,
+        "runtime": "df72fb55-9b19-4575-bce8-64a1903a4146",
+        "sequence": 1
+      },
+      "observedAt": "2026-11-25T23:43:26.351661+00:00",
+      "kind": "InvocationStarted",
+      "source": "Invocation",
+      "phase": "Delivery",
+      "cause": "5f145e5d-17b5-4078-b61d-a7342d2984d2",
+      "sourceReference": "20261125T2343263141906Z-implementer",
+      "bead": "qa-live-1",
+      "invocation": "20261125T2343263141906Z-implementer",
+      "sourceTime": "2026-11-25T23:43:26.3511131+00:00",
+      "freshness": "Fresh",
+      "reason": "None",
+      "count": null,
+      "limit": null,
+      "detail": "Invocation",
+      "role": "Implementer",
+      "observedPublication": null,
+      "merge": null,
+      "strength": "Observed",
+      "message": "Agent invocation started."
+    },
+    {
+      "schema": 1,
+      "position": {
+        "journal": "9bf13fe8-22c1-461f-81e3-13b66b16b3b1",
+        "offset": 2,
+        "runtime": "df72fb55-9b19-4575-bce8-64a1903a4146",
+        "sequence": 2
+      },
+      "observedAt": "2026-11-25T23:43:26.3541106+00:00",
+      "kind": "InvocationStarted",
+      "source": "Invocation",
+      "phase": "Delivery",
+      "cause": "32b69cf0-d04d-45f6-8eaf-9048034adc1f",
+      "sourceReference": "20261125T2343263142901Z-implementer",
+      "bead": "qa-live-2",
+      "invocation": "20261125T2343263142901Z-implementer",
+      "sourceTime": "2026-11-25T23:43:26.3541095+00:00",
+      "freshness": "Fresh",
+      "reason": "None",
+      "count": null,
+      "limit": null,
+      "detail": "Invocation",
+      "role": "Implementer",
+      "observedPublication": null,
+      "merge": null,
+      "strength": "Observed",
+      "message": "Agent invocation started."
+    },
+    {
+      "schema": 1,
+      "position": {
+        "journal": "9bf13fe8-22c1-461f-81e3-13b66b16b3b1",
+        "offset": 3,
+        "runtime": "df72fb55-9b19-4575-bce8-64a1903a4146",
+        "sequence": 3
+      },
+      "observedAt": "2026-11-25T23:43:26.3607726+00:00",
+      "kind": "InvocationStarted",
+      "source": "Invocation",
+      "phase": "Planning",
+      "cause": "0d82b87c-eed1-4c7f-89b1-684eca649cca",
+      "sourceReference": "20261125T2343263145022Z-planner",
+      "bead": "qa-live-planning",
+      "invocation": "20261125T2343263145022Z-planner",
+      "sourceTime": "2026-11-25T23:43:26.3607707+00:00",
+      "freshness": "Fresh",
+      "reason": "None",
+      "count": null,
+      "limit": null,
+      "detail": "Invocation",
+      "role": "Planner",
+      "observedPublication": null,
+      "merge": null,
+      "strength": "Observed",
+      "message": "Agent invocation started."
+    }
+  ],
+  "cursor": "1.9bf13fe822c1461f81e313b66b16b3b1.3",
+  "oldest": 1,
+  "newest": 3,
+  "loadedThrough": 3,
+  "loading": false,
+  "state": "Ready",
+  "journalHealth": "Fresh",
+  "attemptedAt": "2026-11-25T23:43:31.4671923+00:00",
+  "observedAt": "2026-11-25T23:43:31.5871571+00:00",
+  "runtimeHealth": "Live",
+  "runtimeId": "df72fb559b194575bce864a1903a4146",
+  "runtimeObservedAt": "2026-11-25T23:43:30.3700733+00:00",
+  "runtimeReplaced": false,
+  "examinedBytes": 2067,
+  "details": [
+    {
+      "id": "1.9bf13fe822c1461f81e313b66b16b3b1.1",
+      "availability": "available",
+      "workspace": null,
+      "invocation": "/api/telemetry/stream?runtime_id=df72fb559b194575bce864a1903a4146&slot_id=delivery-1&invocation_id=20261125T2343263141906Z-implementer",
+      "pullRequest": null
+    },
+    {
+      "id": "1.9bf13fe822c1461f81e313b66b16b3b1.2",
+      "availability": "available",
+      "workspace": null,
+      "invocation": "/api/telemetry/stream?runtime_id=df72fb559b194575bce864a1903a4146&slot_id=delivery-2&invocation_id=20261125T2343263142901Z-implementer",
+      "pullRequest": null
+    },
+    {
+      "id": "1.9bf13fe822c1461f81e313b66b16b3b1.3",
+      "availability": "available",
+      "workspace": null,
+      "invocation": "/api/telemetry/stream?runtime_id=df72fb559b194575bce864a1903a4146&slot_id=planning-1&invocation_id=20261125T2343263145022Z-planner",
+      "pullRequest": null
+    }
+  ]
+}

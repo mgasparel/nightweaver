@@ -1,5 +1,13 @@
 # Test suite
 
+Activity pause repair adds five held-response cases to the existing opt-in
+browser journey. They check Pause and page suspension during initial history
+and Return to latest, plus row focus during Return to latest. Rows, open evidence
+and scroll position stay fixed until another explicit return. The repair adds
+no normal-suite native journey, fixture publication or Studio model case.
+Production checks current pause intent before it applies a history response.
+It adds no request, timer, tracker command or lifecycle write.
+
 Studio Activity adds sixteen controlled client model cases. A 6,000-record burst
 checks the 500-row bound. Other cases cover pause, cursor replay, older rows,
 filters, evidence links and delayed times. The opt-in Activity browser journey

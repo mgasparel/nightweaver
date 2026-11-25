@@ -1,0 +1,103 @@
+{
+  "native": {
+    "journal": "9bf13fe8-22c1-461f-81e3-13b66b16b3b1",
+    "runtime": "df72fb55-9b19-4575-bce8-64a1903a4146",
+    "invocation": "20261125T2343263141906Z-implementer",
+    "startedCursor": "1.9bf13fe822c1461f81e313b66b16b3b1.1",
+    "realCompletionAfterSubscription": true,
+    "exactInvocationOutput": true
+  },
+  "presentation": {
+    "boundedRows": 500,
+    "pendingCount": "500+",
+    "olderAnchorDelta": 0.375,
+    "focusHeld": true,
+    "keyboard": true,
+    "filtersAndDirectReload": true,
+    "emptyAndUnavailable": true,
+    "sourceAndRuntimeHealth": true,
+    "verifiedAndUnsupportedMerge": true,
+    "reconnectAndSuspension": true,
+    "streamDisposal": true,
+    "olderCapacity": {
+      "rows": 500,
+      "firstOffset": 51,
+      "lastOffset": 550,
+      "openEvidenceHeld": true,
+      "capacityAnchorDelta": -0.28125
+    },
+    "replacements": [
+      {
+        "transport": "SSE",
+        "paused": false,
+        "laterMatchingVisible": true
+      },
+      {
+        "transport": "SSE",
+        "paused": true,
+        "laterMatchingVisible": true
+      },
+      {
+        "transport": "history",
+        "paused": false,
+        "laterMatchingVisible": true
+      },
+      {
+        "transport": "history",
+        "paused": true,
+        "laterMatchingVisible": true
+      }
+    ],
+    "heldHistory": [
+      {
+        "mode": "initial",
+        "intent": "pause",
+        "retainedRows": 0,
+        "retainedEvidence": 0,
+        "scrollDelta": 0,
+        "explicitReturn": true
+      },
+      {
+        "mode": "initial",
+        "intent": "suspend",
+        "retainedRows": 0,
+        "retainedEvidence": 0,
+        "scrollDelta": 0,
+        "explicitReturn": true
+      },
+      {
+        "mode": "return",
+        "intent": "pause",
+        "retainedRows": 80,
+        "retainedEvidence": 1,
+        "scrollDelta": 0,
+        "explicitReturn": true
+      },
+      {
+        "mode": "return",
+        "intent": "suspend",
+        "retainedRows": 80,
+        "retainedEvidence": 1,
+        "scrollDelta": 0,
+        "explicitReturn": true
+      },
+      {
+        "mode": "return",
+        "intent": "focus",
+        "retainedRows": 80,
+        "retainedEvidence": 1,
+        "scrollDelta": 0,
+        "explicitReturn": true
+      }
+    ]
+  },
+  "captures": [
+    "activity-expanded-1440.png",
+    "activity-expanded-720.png",
+    "activity-expanded-375.png"
+  ],
+  "complete": true,
+  "wallSeconds": 14.0327064,
+  "errors": [],
+  "mutations": []
+}

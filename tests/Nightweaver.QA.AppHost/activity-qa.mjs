@@ -89,8 +89,10 @@ try {
     const after = cursor?.[1] === journal.replaceAll('-', '') ? Number(cursor.at(-1)) : 0;
     return records.filter(r => r.position.offset > after && (!q.get('bead') || r.bead === q.get('bead')) && (!q.get('level') || levelOf(r) === q.get('level'))).slice(0, 100);
   };
+  let holdHistory;
   await page.route('**/api/activity/v1/projects/qa/history?*', async route => {
     const rows = unavailable ? [] : select(new URL(route.request().url()).search);
+    if (holdHistory) { const hold = holdHistory; holdHistory = undefined; await hold(); }
     await route.fulfill({ json: { ...status(rows), records: rows, cursor: idOf(rows.at(-1) ?? row(records.length)) } });
   });
   await page.addInitScript(() => {
@@ -229,6 +231,47 @@ try {
   assert.equal(await page.locator('.activity-row').last().getAttribute('data-activity-id'), newestId);
   assert(await page.getByRole('button', { name: 'Load older records' }).isDisabled());
   await page.screenshot({ path: join(output, 'repair-older-1440.png') });
+  // A later pause owns browsing even when a history response is still pending.
+  const heldHistory = [];
+  for (const mode of ['initial', 'return']) for (const intent of ['pause', 'suspend', ...(mode === 'return' ? ['focus'] : [])]) {
+    records = Array.from({ length: 80 }, (_, i) => row(i + 1));
+    replaced = false;
+    let release, requested;
+    const pending = new Promise(resolve => { requested = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const hold = () => { requested(); return gate; };
+    if (mode === 'initial') holdHistory = hold;
+    await page.goto(`${url}${base}/activity`);
+    if (mode === 'return') {
+      await until(async () => await page.locator('.activity-row').count() === 80, 'Held-return setup missing.');
+      await page.locator('.activity-row').first().getByRole('button', { name: 'Show evidence' }).click();
+      holdHistory = hold;
+      records.push(row(81));
+      await page.getByRole('button', { name: 'Return to latest' }).click();
+    }
+    await pending;
+    if (intent === 'pause') await page.getByRole('button', { name: 'Pause live follow' }).click();
+    if (intent === 'focus') await page.locator('.activity-row').first().getByRole('button', { name: 'Hide evidence' }).focus();
+    if (intent === 'suspend') await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
+    const ids = await page.locator('.activity-row').evaluateAll(nodes => nodes.map(node => node.dataset.activityId));
+    const evidence = await page.locator('.activity-evidence').count();
+    const top = await page.locator('.activity-scroll').evaluate(node => node.scrollTop);
+    release();
+    await until(async () => await page.getByRole('button', { name: 'Return to latest' }).isEnabled(), 'Held history did not settle.');
+    if (intent === 'suspend') await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')); });
+    await page.getByText('Browsing paused', { exact: true }).waitFor({ timeout: 3000 });
+    records.push(row(records.length + 1));
+    await emit([records.at(-1)]);
+    assert.deepEqual(await page.locator('.activity-row').evaluateAll(nodes => nodes.map(node => node.dataset.activityId)), ids);
+    assert.equal(await page.locator('.activity-evidence').count(), evidence);
+    assert.equal(await page.locator('.activity-scroll').evaluate(node => node.scrollTop), top);
+    if (intent === 'focus') assert(await page.locator('.activity-row').first().getByRole('button', { name: 'Hide evidence' }).evaluate(node => node === document.activeElement));
+    await page.getByRole('button', { name: 'Return to latest' }).click();
+    await page.getByText('Following latest', { exact: true }).waitFor();
+    await until(async () => await page.locator('.activity-row').count() === records.length, 'Explicit return did not catch up.');
+    assert.equal(await page.locator('.activity-evidence').count(), 0);
+    heldHistory.push({ mode, intent, retainedRows: ids.length, retainedEvidence: evidence, scrollDelta: 0, explicitReturn: true });
+  }
   // Empty replacement scans must not hide the first later matching record.
   const replacements = [];
   for (const transport of ['SSE', 'history']) for (const paused of [false, true]) {
@@ -264,7 +307,7 @@ try {
   results.presentation = { boundedRows: 500, pendingCount: '500+', olderAnchorDelta: after - before, focusHeld: true,
     keyboard: true, filtersAndDirectReload: true, emptyAndUnavailable: true, sourceAndRuntimeHealth: true,
     verifiedAndUnsupportedMerge: true, reconnectAndSuspension: true, streamDisposal: true,
-    olderCapacity: { rows: 500, firstOffset: 51, lastOffset: 550, openEvidenceHeld: true, capacityAnchorDelta }, replacements };
+    olderCapacity: { rows: 500, firstOffset: 51, lastOffset: 550, openEvidenceHeld: true, capacityAnchorDelta }, replacements, heldHistory };
   assert.deepEqual(errors, []); assert.deepEqual(mutations, []);
   results.complete = true;
 } finally {

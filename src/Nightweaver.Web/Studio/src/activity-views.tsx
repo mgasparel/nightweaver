@@ -107,7 +107,8 @@ function ActivitySession({ project, filters }: { project: string; filters: { lev
     async function load(older = false) {
       if (working) return;
       working = true; close(); setBusy(true); setError('');
-      if (older) buffer.paused = true;
+      // Only the request starts follow. Later interaction or suspension owns pause.
+      buffer.paused = older || document.hidden;
       try {
         let page: Page;
         if (older && lower != null && buffer.cursor) {
@@ -136,18 +137,25 @@ function ActivitySession({ project, filters }: { project: string; filters: { lev
           lower = buffer.page({ ...page, records: historyRows, details: historyDetails }, true) ?? start;
         } else {
           // Resume after the last displayed scan. This detects loss over the unseen range.
+          let resetHistory = false;
           try { page = await read(buffer.cursor); }
           catch (failure) {
             if (!buffer.cursor || controller.signal.aborted) throw failure;
             page = await read(); buffer.gap = true;
-            buffer.rows = []; buffer.details.clear(); buffer.cursor = undefined;
+            resetHistory = true;
           }
-          if (!buffer.cursor && page.cursor && page.loadedThrough != null) {
+          if ((!buffer.cursor || resetHistory) && page.cursor && page.loadedThrough != null) {
             const start = Math.max((page.oldest ?? 1) - 1, page.loadedThrough - 100);
             if (start > (page.oldest ?? 1) - 1) page = await read(atOffset(page.cursor, start));
             lower = start;
           }
-          buffer.paused = false; buffer.pending = 0; buffer.expanded.clear();
+          if (stopped) return;
+          if (buffer.paused) {
+            // Keep displayed rows, evidence and cursor for the next explicit return.
+            buffer.page(page); setStatus(page); setNow(Date.now()); update(); return;
+          }
+          if (resetHistory) { buffer.rows = []; buffer.details.clear(); buffer.cursor = undefined; }
+          buffer.pending = 0; buffer.expanded.clear();
           resetOlder(page.cursor);
           buffer.page(page);
           // Each turn is finite. SSE continues cursor catch-up, including initial source loading.
