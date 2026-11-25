@@ -87,6 +87,7 @@ public sealed class Program
             services.GetRequiredService<HostPaths>(), services.GetRequiredService<ProjectConfig>(), services.GetRequiredService<TimeProvider>()));
 
         builder.Services.AddOperationalObservations();
+        builder.Services.AddActivity();
 
         var app = builder.Build();
         // Resolve before listening, after all host configuration providers have been applied.
@@ -121,6 +122,7 @@ public sealed class Program
         });
         app.MapOperationalObservations();
         app.MapFactoryTelemetry();
+        app.MapActivity();
         app.MapCleanup();
         app.MapGet("/api/beads", async (HttpContext context, TrackerBridge explorer, ILogger<Program> logger) =>
         {

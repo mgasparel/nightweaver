@@ -7,8 +7,9 @@ command path. This contract adds a pure model in `Activity/ActivityModel.cs`.
 It adds no active writer, producer hook, route, file scan, or browser behavior.
 
 The dependent [Activity journal module](activity-journal.md) now implements
-bounded storage and shared reads. It remains separate from runtime producers
-and console routes.
+bounded storage and shared reads. It remains separate from runtime producers.
+The additive [Activity read API](activity-api.md) now
+connects one shared Web reader to finite history and reconnectable SSE.
 
 One runtime-owned Project journal will supply Web. It must work with OTLP export
 disabled. Keep it under the Nightweaver Project runtime root, outside the Target
