@@ -36,7 +36,11 @@ export function mergeRows(current: ActivityRow[], incoming: ActivityRow[], older
   // Journal order is independent of source and observation clocks. Never mix journals.
   const journal = current[0]?.position.journal ?? incoming[0]?.position.journal;
   const ordered = rows.filter(row => row.position.journal === journal).sort((a, b) => a.position.offset - b.position.offset);
-  return older ? ordered.slice(0, ROW_LIMIT) : ordered.slice(-ROW_LIMIT);
+  if (!older) return ordered.slice(-ROW_LIMIT);
+  const ids = new Set(current.map(rowId));
+  const capacity = Math.max(0, ROW_LIMIT - current.length);
+  const additions = capacity ? ordered.filter(row => !ids.has(rowId(row))).slice(-capacity) : [];
+  return [...current, ...additions].sort((a, b) => a.position.offset - b.position.offset);
 }
 export class ActivityBuffer {
   rows: ActivityRow[] = [];
@@ -48,12 +52,27 @@ export class ActivityBuffer {
   paused = false;
   gap = false;
   replaced = false;
+  displayedJournal?: string;
+  // Received scan progress and displayed history can differ while browsing is paused.
+  display(journal: string) {
+    if (this.displayedJournal && this.displayedJournal !== journal) {
+      this.rows = []; this.details.clear(); this.expanded.clear(); this.gap = true;
+    }
+    this.displayedJournal = journal;
+  }
+  advance(cursor: string) {
+    const next = cursorParts(cursor);
+    if (!next) return;
+    if (this.displayedJournal && this.displayedJournal !== next.journal) this.gap = true;
+    this.received = cursor;
+    if (!this.paused) { this.display(next.journal); this.cursor = cursor; }
+  }
   accept(row: ActivityRow, detail?: Detail) {
     const id = rowId(row), next = cursorParts(id)!, prior = cursorParts(this.received);
     if (prior?.journal === next.journal && prior.offset >= next.offset) return;
     this.received = id;
     if (this.paused) { this.pending = Math.min(ROW_LIMIT + 1, this.pending + 1); return; }
-    if (prior && prior.journal !== next.journal) { this.rows = []; this.details.clear(); this.expanded.clear(); this.gap = true; }
+    this.display(next.journal);
     this.rows = mergeRows(this.rows, [row]);
     if (this.rows.length === ROW_LIMIT) this.gap = true;
     this.cursor = id;
@@ -62,15 +81,21 @@ export class ActivityBuffer {
   }
   page(page: Page, older = false) {
     this.status(page);
-    if (!older && this.rows[0] && page.records[0] && this.rows[0].position.journal !== page.records[0].position.journal) {
-      this.rows = []; this.details.clear(); this.expanded.clear(); this.gap = true;
-    }
+    const journal = cursorParts(page.cursor)?.journal ?? cursorParts(page.records[0] && rowId(page.records[0]))?.journal;
+    if (!older && this.paused) { if (page.cursor) this.advance(page.cursor); return; }
+    if (older && journal && this.displayedJournal && journal !== this.displayedJournal) { this.gap = true; return; }
+    if (!older && journal) this.display(journal);
     const before = this.rows.length;
     this.rows = mergeRows(this.rows, page.records, older);
     if (!older && before + page.records.length > ROW_LIMIT) this.gap = true;
     for (const detail of page.details) this.details.set(detail.id, detail);
     if (!older && page.cursor) this.cursor = this.received = page.cursor;
     this.trim();
+    if (older) {
+      const ids = new Set(this.rows.map(rowId));
+      const excluded = page.records.filter(row => !ids.has(rowId(row)));
+      if (excluded.length) return Math.max(...excluded.map(row => row.position.offset));
+    }
   }
   status(status: ActivityStatus) {
     if (/Gap|Expired|Truncated|Invalid/.test(status.state) || status.reconnectGap) this.gap = true;

@@ -54,6 +54,12 @@ function ActivitySession({ project, filters }: { project: string; filters: { lev
     let stopped = false, timer: ReturnType<typeof setTimeout> | undefined;
     let detailBatch = new Map<string, Detail>();
     let lower: number | undefined;
+    const resetOlder = (cursor?: string) => {
+      const journal = cursorParts(cursor)?.journal;
+      if (journal && buffer.displayedJournal && journal !== buffer.displayedJournal) {
+        lower = undefined; setOlderBound(undefined);
+      }
+    };
     const base = `/api/activity/v1/projects/${encodeURIComponent(project)}`;
     const query = (cursor?: string) => {
       const values = new URLSearchParams();
@@ -85,11 +91,12 @@ function ActivitySession({ project, filters }: { project: string; filters: { lev
       stream.addEventListener('activity', event => {
         if (stopped) return;
         const row: ActivityRow = JSON.parse((event as MessageEvent).data);
+        resetOlder(rowId(row));
         buffer.accept(row, detailBatch.get(rowId(row))); update();
       });
       stream.addEventListener('cursor', event => {
         const cursor = (event as MessageEvent).lastEventId;
-        if (cursorParts(cursor)) { buffer.received = cursor; if (!buffer.paused) buffer.cursor = cursor; }
+        if (!stopped && cursorParts(cursor)) { resetOlder(cursor); buffer.advance(cursor); update(); }
       });
       stream.onerror = () => {
         close();
@@ -104,21 +111,29 @@ function ActivitySession({ project, filters }: { project: string; filters: { lev
       try {
         let page: Page;
         if (older && lower != null && buffer.cursor) {
-          const start = Math.max(0, lower - 100);
+          const bound = lower;
+          const start = Math.max(0, bound - Math.min(100, ROW_LIMIT - buffer.rows.length));
           page = await read(atOffset(buffer.cursor, start));
+          if (cursorParts(page.cursor)?.journal !== buffer.displayedJournal) {
+            resetOlder(page.cursor); buffer.status(page); buffer.gap = true;
+            setStatus(page); update(); return;
+          }
           // A filtered scan may pass the older window. Keep only its earlier rows.
-          const historyRows = page.records.filter(row => row.position.offset <= lower!);
+          const historyRows = page.records.filter(row => row.position.offset <= bound);
           const historyDetails = [...page.details];
-          for (let turn = 0; turn < 100 && page.cursor && Number(cursorParts(page.cursor)!.offset) < lower; turn++) {
+          for (let turn = 0; turn < 100 && page.cursor && Number(cursorParts(page.cursor)!.offset) < bound; turn++) {
             const previous = page.cursor;
             page = await read(previous);
-            historyRows.push(...page.records.filter(row => row.position.offset <= lower!));
+            if (cursorParts(page.cursor)?.journal !== buffer.displayedJournal) {
+              resetOlder(page.cursor); buffer.status(page); buffer.gap = true;
+              setStatus(page); update(); return;
+            }
+            historyRows.push(...page.records.filter(row => row.position.offset <= bound));
             historyDetails.push(...page.details);
             if (page.cursor === previous) break;
           }
           rememberAnchor();
-          buffer.page({ ...page, records: historyRows, details: historyDetails }, true);
-          lower = start;
+          lower = buffer.page({ ...page, records: historyRows, details: historyDetails }, true) ?? start;
         } else {
           // Resume after the last displayed scan. This detects loss over the unseen range.
           try { page = await read(buffer.cursor); }
@@ -133,6 +148,7 @@ function ActivitySession({ project, filters }: { project: string; filters: { lev
             lower = start;
           }
           buffer.paused = false; buffer.pending = 0; buffer.expanded.clear();
+          resetOlder(page.cursor);
           buffer.page(page);
           // Each turn is finite. SSE continues cursor catch-up, including initial source loading.
           lower ??= (page.oldest ?? 1) - 1;
@@ -179,11 +195,11 @@ function ActivitySession({ project, filters }: { project: string; filters: { lev
       {buffer.gap && <p className="activity-notice">History gap. Retention, source loss or client limits removed part of the record. The displayed position stays under your control.</p>}
       <div className="activity-retention"><span>{buffer.rows.length} / {ROW_LIMIT} client rows · {buffer.expanded.size} / {EXPANSION_LIMIT} evidence sections</span><span>Retained offsets: {status?.oldest ?? 'unknown'}–{status?.newest ?? 'unknown'}{status?.loading ? ' · History still loading' : ''}</span><span>Journal observed: {stamp(status?.observedAt)}</span></div>
       <button className="button activity-older" disabled={busy || olderBound == null || olderBound <= (status?.oldest ?? 1) - 1 || buffer.rows.length >= ROW_LIMIT} onClick={() => void action.current(true)}>Load older records</button>
-      {buffer.rows.length >= ROW_LIMIT && <p className="activity-notice">Client row limit reached. Use a Bead or level filter to browse a smaller range.</p>}
       {!buffer.rows.length && <p className="bead-empty">{!status || ['Unavailable', 'Unknown'].includes(status.journalHealth) ? 'Activity source unavailable. Other console views remain available.' : status.loading ? 'Loading retained history…' : 'No matching records in the loaded history.'}</p>}
       <div className="activity-scroll" ref={viewport} tabIndex={0} role="region" aria-label="Activity records" onFocusCapture={event => { if ((event.target as HTMLElement).closest('[data-activity-id]')) pause(); }} onWheel={event => { if (event.deltaY < 0) pause(); }} onKeyDown={event => { if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) pause(); }} onScroll={event => { if (!buffer.paused && event.currentTarget.scrollHeight - event.currentTarget.scrollTop - event.currentTarget.clientHeight > 48) pause(); }}>
         <ol className="activity-rows">{buffer.rows.map(row => <ActivityItem key={rowId(row)} row={row} project={project} detail={buffer.details.get(rowId(row))} open={buffer.expanded.has(rowId(row))} disabled={!buffer.expanded.has(rowId(row)) && buffer.expanded.size >= EXPANSION_LIMIT} toggle={() => { buffer.toggle(rowId(row)); update(); }} />)}</ol>
       </div>
+      {buffer.rows.length >= ROW_LIMIT && <p className="activity-notice">Client row limit reached. Use a Bead or level filter to browse a smaller range.</p>}
       <p className="activity-footnote">This journal has finite retention. Observations grant no lifecycle authority. <Link to={`/projects/${encodeURIComponent(project)}/delivery`}>Invocation output and diagnostics</Link> remain on the Delivery floor and in each Bead Workspace.</p>
     </Panel>
   </div>;

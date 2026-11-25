@@ -52,7 +52,8 @@ try {
   await page.getByRole('heading', { name: 'Catch up', level: 1, exact: true }).waitFor();
 
   // Presentation substitutions are separate from the native evidence above.
-  const journal = '11111111-1111-1111-1111-111111111111', runtime = '22222222-2222-2222-2222-222222222222';
+  let journal = '11111111-1111-1111-1111-111111111111';
+  const runtime = '22222222-2222-2222-2222-222222222222';
   let records = [], unavailable = false, replaced = false;
   const phases = ['Planning', 'Delivery', 'Qa', 'Merger', 'Runtime'];
   const examples = [
@@ -67,7 +68,7 @@ try {
     ['HealthChanged', 'Observed', 'Runtime health changed.', 'RuntimeFailed'],
   ];
   const row = offset => {
-    const [kind, strength, message, reason] = examples[(offset - 1) % examples.length];
+    const [kind, strength, message, reason] = examples[Math.max(0, offset - 1) % examples.length];
     return { schema: 1, position: { journal, runtime, offset, sequence: offset }, kind, strength, message, reason,
       phase: phases[(offset - 1) % phases.length], bead: offset % 2 ? 'qa-visible.1' : 'qa-visible.2', invocation: null,
       merge: kind === 'MergeVerified' ? { pullRequest: 'https://github.com/nightweaver-qa/fixture/pull/1' } : null,
@@ -83,7 +84,9 @@ try {
     journalHealth: unavailable ? 'Unavailable' : 'Fresh', runtimeHealth: unavailable ? 'Unavailable' : 'Live',
     runtimeId: replaced ? journal : runtime, runtimeReplaced: replaced, observedAt: new Date().toISOString(), runtimeObservedAt: new Date().toISOString(), details: rows.map(detail) });
   const select = search => {
-    const q = new URLSearchParams(search), after = Number(q.get('cursor')?.split('.').at(-1) ?? 0);
+    const q = new URLSearchParams(search);
+    const cursor = q.get('cursor')?.split('.');
+    const after = cursor?.[1] === journal.replaceAll('-', '') ? Number(cursor.at(-1)) : 0;
     return records.filter(r => r.position.offset > after && (!q.get('bead') || r.bead === q.get('bead')) && (!q.get('level') || levelOf(r) === q.get('level'))).slice(0, 100);
   };
   await page.route('**/api/activity/v1/projects/qa/history?*', async route => {
@@ -200,9 +203,68 @@ try {
   assert.equal(await page.evaluate(() => window.__activitySources.filter(s => !s.closed).length), 0);
   await page.goBack();
   await page.getByRole('heading', { name: 'Activity', exact: true, level: 1 }).waitFor();
+  // Repair regression: 450 displayed rows plus a 100-offset older window.
+  replaced = false; records = Array.from({ length: 200 }, (_, i) => row(i + 1));
+  await page.goto(`${url}${base}/activity`);
+  await until(async () => await page.locator('.activity-row').count() === 100, 'Initial older regression rows missing.');
+  const arrivals = Array.from({ length: 350 }, (_, i) => row(i + 201));
+  records.push(...arrivals);
+  for (let i = 0; i < arrivals.length; i += 100) await emit(arrivals.slice(i, i + 100));
+  await until(async () => await page.locator('.activity-row').count() === 450, '450-row setup did not settle.');
+  const newestId = idOf(row(550));
+  const newest = page.locator(`[data-activity-id="${newestId}"]`);
+  await newest.getByRole('button', { name: 'Show evidence' }).click();
+  await newest.scrollIntoViewIfNeeded();
+  const visibleBefore = await page.getByLabel('Activity records', { exact: true }).evaluate(host =>
+    [...host.querySelectorAll('[data-activity-id]')].find(node => node.getBoundingClientRect().bottom > host.getBoundingClientRect().top).dataset.activityId);
+  const visible = page.locator(`[data-activity-id="${visibleBefore}"]`);
+  const visibleTop = await visible.evaluate(node => node.getBoundingClientRect().top);
+  // A programmatic click keeps the viewport on its newest visible row.
+  await page.getByRole('button', { name: 'Load older records' }).evaluate(button => button.click());
+  await until(async () => await page.locator('.activity-row').count() === 500, 'Capacity-limited older load failed.');
+  const capacityAnchorDelta = await visible.evaluate(node => node.getBoundingClientRect().top) - visibleTop;
+  assert(Math.abs(capacityAnchorDelta) < 3, `Capacity load moved anchor by ${capacityAnchorDelta}px`);
+  assert.equal(await newest.getByRole('button', { name: 'Hide evidence' }).count(), 1);
+  assert.equal(await page.locator('.activity-row').first().getAttribute('data-activity-id'), idOf(row(51)));
+  assert.equal(await page.locator('.activity-row').last().getAttribute('data-activity-id'), newestId);
+  assert(await page.getByRole('button', { name: 'Load older records' }).isDisabled());
+  await page.screenshot({ path: join(output, 'repair-older-1440.png') });
+  // Empty replacement scans must not hide the first later matching record.
+  const replacements = [];
+  for (const transport of ['SSE', 'history']) for (const paused of [false, true]) {
+    records = Array.from({ length: 200 }, (_, i) => row(i + 1));
+    await page.goto(`${url}${base}/activity`);
+    await until(async () => await page.locator('.activity-row').count() === 100, 'Replacement setup missing.');
+    const held = page.locator('.activity-row').last();
+    const heldId = await held.getAttribute('data-activity-id');
+    if (paused) await held.getByRole('button', { name: 'Show evidence' }).click();
+    journal = `${String(3 + replacements.length).repeat(8)}-3333-3333-3333-333333333333`;
+    records = []; replaced = true;
+    if (transport === 'SSE') {
+      await emit([]);
+      await page.evaluate(cursor => window.__activitySources.findLast(s => !s.closed).emit('cursor', {}, cursor), idOf(row(0)));
+      if (paused) {
+        assert.equal(await page.locator('.activity-row').last().getAttribute('data-activity-id'), heldId);
+        assert.equal(await held.getByRole('button', { name: 'Hide evidence' }).count(), 1);
+        assert(await page.getByRole('button', { name: 'Load older records' }).isDisabled());
+      } else await until(async () => await page.locator('.activity-row').count() === 0, 'Empty SSE replacement retained old rows while following.');
+    } else {
+      await page.getByRole('button', { name: 'Return to latest' }).click();
+      await until(async () => await page.locator('.activity-row').count() === 0, 'Empty history replacement retained old rows.');
+    }
+    const matching = row(1); records.push(matching); await emit([matching]);
+    if (transport === 'SSE' && paused) {
+      assert.equal(await page.locator('.activity-row').last().getAttribute('data-activity-id'), heldId);
+      await page.getByRole('button', { name: 'Return to latest' }).click();
+    }
+    await page.locator(`[data-activity-id="${idOf(matching)}"]`).waitFor();
+    assert.equal(await page.locator('.activity-row').count(), 1);
+    replacements.push({ transport, paused, laterMatchingVisible: true });
+  }
   results.presentation = { boundedRows: 500, pendingCount: '500+', olderAnchorDelta: after - before, focusHeld: true,
     keyboard: true, filtersAndDirectReload: true, emptyAndUnavailable: true, sourceAndRuntimeHealth: true,
-    verifiedAndUnsupportedMerge: true, reconnectAndSuspension: true, streamDisposal: true };
+    verifiedAndUnsupportedMerge: true, reconnectAndSuspension: true, streamDisposal: true,
+    olderCapacity: { rows: 500, firstOffset: 51, lastOffset: 550, openEvidenceHeld: true, capacityAnchorDelta }, replacements };
   assert.deepEqual(errors, []); assert.deepEqual(mutations, []);
   results.complete = true;
 } finally {

@@ -1,6 +1,6 @@
 # Test suite
 
-Studio Activity adds eleven controlled client model cases. A 6,000-record burst
+Studio Activity adds sixteen controlled client model cases. A 6,000-record burst
 checks the 500-row bound. Other cases cover pause, cursor replay, older rows,
 filters, evidence links and delayed times. The opt-in Activity browser journey
 reuses the isolated QA invocation fixture and connects its production executor

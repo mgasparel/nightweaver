@@ -36,11 +36,17 @@ catch up over unseen records, with duplicate suppression and bounded eviction.
 The control closes evidence and starts live follow. Source gaps and client
 eviction remain explicit. A replacement journal resets rows only during follow
 or an explicit return; paused rows stay readable. Runtime replacement remains
-visible. Prior-runtime records retain their original evidence.
+visible. Prior-runtime records retain their original evidence. Displayed journal
+identity is separate from received scan progress. An empty replacement scan clears
+old rows during follow. During pause, it holds the old rows and open evidence
+until Return to latest. A journal change cancels the old older-page continuation.
 
 Initial history selects the latest 100 retained offsets currently loaded by the
 shared reader. SSE continues progressive source loading. Load older records
-examines the preceding 100-offset window through finite API pages. Filtered
+examines at most the preceding 100 offsets through finite API pages. The window
+shrinks to the remaining row capacity. Older additions preserve all displayed
+rows and open evidence. If a page exceeds capacity, the continuation retains the
+excluded offsets. Filtered
 scans can pass the window; those later rows do not enter the older page. The
 500-row limit stops older loading and asks the operator to narrow the filters.
 Empty loaded matches, loading history and unavailable storage have separate text.
@@ -72,7 +78,7 @@ expired output stays unavailable. Activity adds no transcript access path.
 
 ## Verification and cost
 
-`Studio/test/activity.test.mjs` adds eleven controlled cases. They cover a
+`Studio/test/activity.test.mjs` adds sixteen controlled cases. They cover a
 6,000-record burst, row/detail/expansion bounds, paused duplicate replay, cursor
 catch-up, older identity preservation, replacement, empty scans, safe links and
 delayed times. They add no native process or fixture publication.

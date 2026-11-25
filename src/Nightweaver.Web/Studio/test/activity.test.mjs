@@ -80,3 +80,39 @@ test('cursor parsing preserves full decimal offset precision', () => {
   assert.equal(cursorParts('1.' + journal.replaceAll('-', '') + '.9223372036854775807').offset, 9223372036854775807n);
   assert.equal(cursorParts('1.foreign.2'), undefined);
 });
+
+for (const transport of ['history', 'SSE']) for (const paused of [false, true]) {
+  test(`empty ${transport} replacement keeps later matching rows; paused=${paused}`, () => {
+    const b = new ActivityBuffer(); b.page(page([row(1), row(2)]));
+    b.toggle(rowId(row(2))); b.paused = paused;
+    const changed = offset => row(offset, { position: { journal: runtime, runtime, offset, sequence: offset } });
+    const empty = page([], { cursor: rowId(changed(10)) });
+    if (transport === 'history') b.page(empty);
+    else b.advance(empty.cursor);
+    if (paused) {
+      assert.equal(b.rows[0].position.journal, journal);
+      assert(b.expanded.has(rowId(row(2))));
+    } else assert.equal(b.rows.length, 0);
+    b.accept(changed(11));
+    if (paused) {
+      assert.equal(b.rows[0].position.journal, journal);
+      b.paused = false; b.page(empty); b.accept(changed(11));
+    }
+    assert.deepEqual(b.rows.map(rowId), [rowId(changed(11))]);
+    assert(b.gap);
+  });
+}
+
+test('older overflow preserves all displayed rows, evidence and continuation', () => {
+  const b = new ActivityBuffer();
+  b.page(page(Array.from({ length: 450 }, (_, i) => row(i + 101))));
+  b.toggle(rowId(row(550)));
+  const continuation = b.page(page(Array.from({ length: 100 }, (_, i) => row(i + 1))), true);
+  assert.equal(b.rows.length, 500);
+  assert.deepEqual(b.rows.map(r => r.position.offset), Array.from({ length: 500 }, (_, i) => i + 51));
+  assert(b.expanded.has(rowId(row(550))));
+  assert(b.details.has(rowId(row(550))));
+  assert.equal(b.cursor, rowId(row(550)));
+  assert.equal(continuation, 50);
+  assert.equal(b.page(page([row(50)]), true), 50);
+});
