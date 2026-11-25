@@ -284,7 +284,7 @@ public sealed class ActivityApiTests
         Assert.False(ActivityEndpoints.TryRequest(context.Request, true, out _, out _));
     }
 
-    private static async Task<WebApplication> App(ActivityReadService service)
+    private static async Task<WebApplication> App(ActivityReadService service, TaskCompletionSource? requestSettled = null)
     {
         var builder = WebApplication.CreateBuilder(); builder.WebHost.UseTestServer();
         using var directory = new TempDirectory();
@@ -295,7 +295,13 @@ public sealed class ActivityApiTests
             """), null, paths);
         builder.Services.AddSingleton(config); builder.Services.AddSingleton(service);
         builder.Services.AddSingleton(TimeProvider.System);
-        var app = builder.Build(); app.MapActivity();
+        var app = builder.Build();
+        app.Use(async (context, next) =>
+        {
+            try { await next(context); }
+            finally { requestSettled?.TrySetResult(); }
+        });
+        app.MapActivity();
         await app.StartAsync(TestContext.Current.CancellationToken); return app;
     }
 
@@ -342,11 +348,14 @@ public sealed class ActivityApiTests
     public async Task HttpCancellationReleasesStreamAdmission()
     {
         using var service = new ActivityReadService(new Source(), TimeProvider.System, new(), "test");
-        await using var app = await App(service); using var client = app.GetTestClient();
+        var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var app = await App(service, settled); using var client = app.GetTestClient();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         using var response = await client.GetAsync("/api/activity/v1/projects/test/events", HttpCompletionOption.ResponseHeadersRead, cancellation.Token);
         cancellation.Cancel(); response.Dispose();
-        // A subsequent request is ordered after server request cancellation settles.
+        // Client disposal initiates cancellation. Observe endpoint settlement
+        // before checking the released capacity; host stop alone is not that proof.
+        await settled.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await app.StopAsync(TestContext.Current.CancellationToken);
         for (var i = 0; i < 16; i++) Assert.True(service.TryEnterStream());
         Assert.False(service.TryEnterStream());
