@@ -1,5 +1,19 @@
 # Test suite
 
+Publication native proof adds two tests in `PlanningPublicationNativeTests`.
+One test shares a copied Beads template, an isolated host and one detached
+Planning checkout across response-loss recovery, provenance conflict and legacy
+partial-graph recovery. The second test calls the existing cross-process,
+cross-Project, cross-host and physical-alias exclusion scenario, which previously
+had no test entry point. Both reuse existing immutable fixture publications.
+Native database semantics and OS mutex ownership cannot be proved by injected
+responses. Detailed fault and concurrency cases remain controlled tests.
+The focused XML costs are 69.058 seconds for publication and 26.235 seconds for
+process exclusion. Their collection starts early at that measured weight; the
+six-thread cap and deadlines stay unchanged. No production code changes.
+See [publication proof](../docs/acceptance/planning-publication-native.md) for
+native evidence, concurrency limits and complete candidate cost.
+
 Legacy ID adoption repair adds four controlled publication cases. They reject an
 ID for another entry or revision, with and without a retained binding, before any
 publication write. They preserve the task and its publication hold. The repair

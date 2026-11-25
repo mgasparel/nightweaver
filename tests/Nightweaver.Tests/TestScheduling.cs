@@ -16,6 +16,9 @@ public sealed class IntegrationFirstCollectionOrderer : ITestCollectionOrderer
 {
     private static readonly (string Name, double Seconds)[] MeasuredCollectionWeights =
     [
+        // Native publication proof plus the existing cross-host exclusion scenario:
+        // focused XML observations are 69.058s and 26.235s. Keep their serial tail early.
+        (nameof(PlanningPublicationNativeTests), 95.293),
         (nameof(UpgradeReplacementTests), 38.491),
         (nameof(AgentStageDeliveryIntegrationTests), 114.906),
         (nameof(ManualDeliveryPilotSecondSignalTests), 125.621),
