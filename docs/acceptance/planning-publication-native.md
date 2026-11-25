@@ -82,9 +82,57 @@ The process test recorded 26.235 seconds. The publication fixture recorded 330
 publisher/grounding commands, four publisher creates and 24 publisher writes.
 Setup and explicit readbacks added 32 Beads commands and three Git commands.
 Two later native-ready readbacks and four partial-release admission readbacks
-add six Beads commands. No new fixture publish is required. The complete candidate measurement and retained artifact identities
-are recorded in the implementation evidence comment for
-`ns-nll-pbd28ec1512a40fd2b7bd`.
+add six Beads commands. No new fixture publish is required.
+
+The complete candidate is `3a0dfcb2d297047bc094e407f4ddcdec7b9e321e`, tree
+`c1cee4214cba6616d9d6cf0493fdda72f8a35995`. Clean source passed all 2292 tests,
+with zero failures and skips, in **194.0329532 seconds**. Archive checks passed
+66 cases. Collector checks passed 102 cases. Normal build, fixture publishing,
+execution and teardown used six threads. Correctness passed. The below-240-second
+operating target passed. The below-300-second hard limit passed. No measurement
+error or resource capture trigger occurred.
+
+All candidate artifacts are under
+`H:/Nightweaver/prod/tmp/nightshift/ns-nll-pbd28ec1512a40fd2b7bd/20261125T0215342362320Z-implementer`:
+
+| Artifact | Identity |
+| --- | --- |
+| Complete result | `a26782a620d24cac8c73e97ce0e6de3a/result.json`; SHA256 `E47E4A1B4B186A4EBA747C707224F80B97D1E0EAF8AAC007E01EFD661CB377E1` |
+| Raw complete output and XML | `a26782a620d24cac8c73e97ce0e6de3a/suite.log` and `report-1.xml` |
+| Native command/readback proof | `publication-native-proof-complete.json`; SHA256 `FDD3DC579A4630C5CB4959690D25ECA5F3805236C567B97DF8123F14D22A8A6D` |
+| Accepted baseline copy | `accepted-main-baseline.json`; SHA256 `E288394060885CEA76625CF5C06A71C9FD681AAEC6AD6388DE73365D8194B477` |
+
+The complete-run native XML costs are 122.035 seconds for publication and 27.599
+seconds for process exclusion. Their serial collection sum is 149.634 seconds;
+it overlaps other collections and is not an outer-suite delta. The publication
+trace contains 162 Beads commands (90.459976 summed seconds) and 168 Git commands
+(14.8479033 summed seconds). Independent grounding Git reads overlap. Setup and
+explicit native readbacks add 38 Beads commands and three Git commands. The
+fixture records four publisher creates and 24 publisher writes. The process
+scenario starts six published host processes and one junction command. It uses
+the existing immutable published fixtures. Production adds no work.
+
+The complete-run inventory records these actual task maps:
+
+| Product | `first` | `second` | Result |
+| --- | --- | --- | --- |
+| `fixture-4lf` | `fixture-ri8` | `fixture-c1o` | Response-loss recovery reuses `first`; exact graph and receipt pass. |
+| `fixture-brm` | `fixture-brm-pe0944ce9d74954f713c8` | `fixture-6bo` | Legacy ID, membership and receipt row remain unchanged on recovery. |
+
+Both maps retain the exact revision
+`5b57ae23aae246ea606190a8cb80ba522d99d911185da4f245a789751a4350ec`.
+Each second task blocks on its first task. Native readiness includes each first
+task and excludes each second task. Four native readbacks after individual hold
+removal confirm denied Delivery admission before parent publication. Final
+admission passes for both complete graphs.
+
+Product `fixture-eh2` retains conflicting tasks `fixture-q3z` and `fixture-poj`
+for entry `first` at the same revision. Recovery makes zero writes. Both tasks
+remain held, and no release receipt exists. The retained diagnostic states:
+
+```text
+Planning publication stopped: Product 'fixture-eh2', revision '5b57ae23aae246ea606190a8cb80ba522d99d911185da4f245a789751a4350ec', entry 'first', observed IDs [fixture-q3z, fixture-poj]: The task binding is not unique and exact. Maintainer: inspect the evidence and reconcile the task binding before guarded Retry.
+```
 
 The comparison baseline is latest main
 `a38dacef9b76c1f26e62e3009245ee83cb245ae7`: 2290 passing tests in 198.7498432
