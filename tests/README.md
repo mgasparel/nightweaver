@@ -1,5 +1,12 @@
 # Test suite
 
+Activity journal tests add controlled storage and clock cases plus disposable-file
+read, write, rotation, cursor, corruption, identity and sentinel checks. One short
+junction command and one hard-link call prove actual Windows path safety. They
+add no factory, Agent, tracker or browser journey and no fixture publication.
+The storage slice adds no active production work. See
+[Activity journal](../docs/design/activity-journal.md) for format and failure rules.
+
 Activity evidence uses in-memory projection, schema and replay cases in
 `ActivityModelTests`. They cover all event families, evidence strength, absent or
 conflicting merge proof, stale sources, unsafe links, secret sentinels, Unicode

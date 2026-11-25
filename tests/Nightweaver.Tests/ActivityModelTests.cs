@@ -40,6 +40,7 @@ public sealed class ActivityModelTests
         Assert.Equal(rule.Strength, record.Strength);
         Assert.Equal(rule.Message, record.Message);
         var bytes = ActivityProjector.Serialize(record);
+        Assert.Equal(record.Kind, ActivityProjector.Deserialize(bytes, Repository).Kind);
         Assert.InRange(bytes.Length, 1, ActivityLimits.RecordBytes);
         using var json = JsonDocument.Parse(bytes);
         Assert.Equal(1, json.RootElement.GetProperty("schema").GetInt32());
@@ -74,6 +75,7 @@ public sealed class ActivityModelTests
         Assert.Equal(ActivityStrength.Unknown, record.Strength);
         Assert.Null(record.Merge);
         Assert.Equal(conflict ? ActivityReason.ConflictingEvidence : ActivityReason.MissingEvidence, record.Reason);
+        Assert.Equal(record.Reason, ActivityProjector.Deserialize(ActivityProjector.Serialize(record), Repository).Reason);
     }
 
     [Theory]
