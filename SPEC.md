@@ -504,6 +504,11 @@ The optional top-level `decisions_api_key` (legacy alias `openai_api_key`) accep
 
 ### 7.3 Shared operational observations
 
+The [Activity evidence contract](docs/design/activity-feed.md) defines the pure
+event model, evidence strengths, safe fields, journal order, loss states and
+finite limits for the local Project Activity feed. This contract adds no active
+runtime writer or console route. Activity records grant no lifecycle authority.
+
 The [supervision v1 model and store](docs/design/supervision-v1.md) define
 bounded operational recovery intent, attempt reservations and incident retention.
 The background lifecycle integrates durable stop/start intent and explicit token/revision
