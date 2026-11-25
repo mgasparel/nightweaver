@@ -1,5 +1,11 @@
 # Test suite
 
+Legacy ID adoption repair adds four controlled publication cases. They reject an
+ID for another entry or revision, with and without a retained binding, before any
+publication write. They preserve the task and its publication hold. The repair
+adds one in-memory identity check per binding. It adds no native command, journey
+or fixture publication.
+
 Actual task ID publication adds 26 controlled publication cases. They check native
 allocation, invalid or missing create responses, legacy partial creation and
 release, changed entries, retained graph and receipt conflicts, unlinked duplicates, damaged

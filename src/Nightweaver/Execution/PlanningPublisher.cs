@@ -336,6 +336,8 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
                 throw IntentFailure(fallback with { Task = bead.Id }, inventory, "Task provenance conflicts with the approved graph");
         void Bind(string entry, string id)
         {
+            if (IsLegacyTaskId(id, product) && id != TaskId(product, revision, entry))
+                throw IntentFailure(fallback with { Entry = entry, Task = id }, inventory, "Legacy task identity conflicts with the approved entry");
             if (!entries.Contains(entry) || string.IsNullOrWhiteSpace(id)
                 || ids.TryGetValue(entry, out var previous) && previous != id
                 || ids.Any(p => p.Key != entry && p.Value == id))

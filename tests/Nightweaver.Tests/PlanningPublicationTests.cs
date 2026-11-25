@@ -192,6 +192,53 @@ public sealed class PlanningPublicationTests
         Assert.Equal(0, fixture.CreateAttemptCount);
         Assert.Contains("plan-unpublished", fixture.Tasks.Single().Labels);
     }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ConflictingLegacyIdentityStopsAdoptionBeforeAnyWrite(bool retainBinding, bool otherRevision)
+    {
+        using var fixture = new Fixture(singleTask: true) { CrashAfterIntentAt = 2 };
+        await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
+        fixture.CrashAfterIntentAt = null;
+        var task = fixture.Tasks.Single();
+        var revision = PlanningPublisher.Metadata(task, "publication_revision")!;
+        var entry = PlanningPublisher.Metadata(task, "publication_entry")!;
+        var id = PlanningPublisher.TaskId("product", otherRevision ? "another-revision" : revision,
+            otherRevision ? entry : "another-entry");
+        var row = fixture.Rows[task.Id];
+        fixture.Rows.Remove(task.Id);
+        row["id"] = id;
+        foreach (var edge in row["dependencies"]!.AsArray()) edge!["issue_id"] = id;
+        fixture.Rows[id] = row;
+        var metadata = fixture.Rows["product"]["metadata"]!.AsObject();
+        if (retainBinding)
+        {
+            var stored = Assert.Single(metadata);
+            var binding = JsonNode.Parse(stored.Value!.GetValue<string>())!.AsObject();
+            binding["task"] = id;
+            metadata[stored.Key] = binding.ToJsonString();
+        }
+        else metadata.Clear();
+        Assert.False(fixture.Rows.ContainsKey(PlanningPublisher.TaskId("product", revision, entry)));
+        Assert.Null(PlanningPublisher.Metadata(fixture.Parent, "publication_graph"));
+        var before = JsonSerializer.Serialize(fixture.Rows);
+        var comments = JsonSerializer.Serialize(fixture.Comments);
+        var writes = fixture.WriteCount + fixture.IntentWriteCount;
+
+        var failure = await Assert.ThrowsAsync<AgentStageInputException>(fixture.PublishWithNewPublisher);
+
+        Assert.Contains("Legacy task identity conflicts", failure.Message);
+        Assert.Contains(id, failure.Message);
+        Assert.Equal(before, JsonSerializer.Serialize(fixture.Rows));
+        Assert.Equal(comments, JsonSerializer.Serialize(fixture.Comments));
+        Assert.Equal(writes, fixture.WriteCount + fixture.IntentWriteCount);
+        Assert.Equal(1, fixture.CreateAttemptCount);
+        Assert.Contains("plan-unpublished", fixture.Tasks.Single().Labels);
+        Assert.DoesNotContain("planned", fixture.Parent.Labels);
+    }
     [Theory]
     [InlineData("intent")]
     [InlineData("graph")]
