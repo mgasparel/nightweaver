@@ -11,6 +11,35 @@ namespace Nightweaver.Tests;
 public sealed class PlanningPublicationTests
 {
     [Theory]
+    [InlineData("intent")]
+    [InlineData("graph")]
+    [InlineData("receipt")]
+    public async Task ConfirmationCannotAdoptANewClaimWithTheSameAssignee(string boundary)
+    {
+        using var fixture = new Fixture(singleTask: true);
+        var changed = false;
+        fixture.BeforeDetailRead = id =>
+        {
+            if (id != "product" || changed) return;
+            var parent = fixture.Rows["product"];
+            var ready = boundary switch
+            {
+                "intent" => fixture.IntentWriteCount == 1,
+                "graph" => parent["metadata"]!["publication_graph"] is not null,
+                _ => fixture.Comments.Any(c => c.Text.Contains(PlanningPublisher.ReleaseSchema, StringComparison.Ordinal))
+            };
+            if (!ready) return;
+            changed = true;
+            parent["updated_at"] = "new claim with the same assignee";
+        };
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+        Assert.True(changed);
+        Assert.Equal(boundary == "intent" ? 0 : 1, fixture.CreateAttemptCount);
+        Assert.All(fixture.Tasks, task => Assert.Contains("plan-unpublished", task.Labels));
+        Assert.DoesNotContain("planned", fixture.Parent.Labels);
+    }
+
+    [Theory]
     [InlineData("malformed")]
     [InlineData("other-revision")]
     [InlineData("missing-field")]
@@ -140,12 +169,17 @@ public sealed class PlanningPublicationTests
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
-    public async Task UncertainIntentWritesResolveOnlyFromConfirmedEvidence(int lost)
+    public async Task UncertainIntentWritesPreserveEvidenceWithoutAdoptingReadbackAuthority(int lost)
     {
         using var fixture = new Fixture(singleTask: true) { LoseIntentResponseAt = lost };
-        Assert.True((await fixture.Publish()).Succeeded);
-        Assert.Equal(1, fixture.CreateAttemptCount);
-        Assert.Equal(2, fixture.IntentWriteCount);
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+        Assert.Equal(lost == 1 ? 0 : 1, fixture.CreateAttemptCount);
+        Assert.All(fixture.Tasks, task => Assert.Contains("plan-unpublished", task.Labels));
+        fixture.LoseIntentResponseAt = null;
+        if (lost == 1)
+            await Assert.ThrowsAsync<AgentStageInputException>(fixture.PublishWithNewPublisher);
+        else Assert.True((await fixture.PublishWithNewPublisher()).Succeeded);
+        Assert.Equal(lost == 1 ? 0 : 1, fixture.CreateAttemptCount);
     }
 
     [Fact]
@@ -210,10 +244,20 @@ public sealed class PlanningPublicationTests
             var task = fixture.Rows.Values.Last().DeepClone().AsObject();
             task["id"] = "duplicate";
             fixture.Rows["duplicate"] = task;
+            fixture.Edges.Add(new("duplicate", "product", "discovered-from"));
         }
         var before = JsonSerializer.Serialize(fixture.Rows);
         var failure = await Assert.ThrowsAsync<AgentStageInputException>(fixture.PublishWithNewPublisher);
         Assert.Contains("Maintainer: inspect the evidence and reconcile the task binding before guarded Retry.", failure.Message);
+        if (change == "duplicate")
+        {
+            Assert.Contains("Product 'product'", failure.Message);
+            Assert.Contains("revision '" + PlanningPublisher.Metadata(fixture.Tasks.First(), "publication_revision") + "'", failure.Message);
+            Assert.Contains("entry 'first'", failure.Message);
+            Assert.Contains("duplicate", failure.Message);
+            Assert.Contains(fixture.Tasks.First().Id, failure.Message);
+            Assert.Contains("The task binding is not unique and exact", failure.Message);
+        }
         Assert.Equal(before, JsonSerializer.Serialize(fixture.Rows));
         Assert.All(fixture.Tasks, task => Assert.Contains("plan-unpublished", task.Labels));
         Assert.Equal(1, fixture.CreateAttemptCount);
@@ -222,7 +266,7 @@ public sealed class PlanningPublicationTests
     [Fact]
     public async Task ConfirmedGraphPublicationExportsMilestoneWithoutCountingASecondApproval()
     {
-        using var fixture = new Fixture(largeGraph: true) { LoseResponseAt = 8 };
+        using var fixture = new Fixture(largeGraph: true) { LoseResponseAt = 9 };
         await using var receiver = await OperationalTelemetryTests.Receiver.StartAsync();
         await using var telemetry = new OperationalTelemetry(OperationalHost.Runtime, new(receiver.Endpoint, "", 1),
             _ => { }, metricIntervalMilliseconds: 100);
@@ -250,6 +294,12 @@ public sealed class PlanningPublicationTests
     {
         using var fixture = new Fixture(largeGraph: true) { LoseResponseAt = lostResponse };
         fixture.Rows["product"]["metadata"]!["operator"] = "keep me";
+        if (lostResponse == 8)
+        {
+            await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+            Assert.All(fixture.Tasks, task => Assert.Contains("plan-unpublished", task.Labels));
+            fixture.LoseResponseAt = null;
+        }
         Assert.True((await fixture.Publish()).VerifiedState!.Planned);
         Assert.Equal(7, fixture.CreateCount);
         Assert.Equal("keep me", fixture.Rows["product"]["metadata"]!["operator"]!.GetValue<string>());
@@ -476,6 +526,12 @@ public sealed class PlanningPublicationTests
     public async Task LostResponsesReconcileActualEffectsWithoutRepeatingWrites(int lost)
     {
         using var fixture = new Fixture { LoseResponseAt = lost };
+        if (lost == 4)
+        {
+            await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+            Assert.All(fixture.Tasks, task => Assert.Contains("plan-unpublished", task.Labels));
+            fixture.LoseResponseAt = null;
+        }
         var result = await fixture.Publish();
         Assert.True(result.Succeeded);
         Assert.True(result.VerifiedState!.Planned);
@@ -953,7 +1009,10 @@ public sealed class PlanningPublicationTests
                     var patch = JsonNode.Parse(stream)!.AsObject();
                     foreach (var pair in patch) row["metadata"]![pair.Key] = pair.Value?.DeepClone();
                 }
-                row["status"] = Value("--status"); row["assignee"] = Value("--assignee") is "" ? null : Value("--assignee"); output = "";
+                row["status"] = Value("--status"); row["assignee"] = Value("--assignee") is "" ? null : Value("--assignee");
+                if (row["id"]!.GetValue<string>() == "product")
+                    row["updated_at"] = "mutation " + (IntentWriteCount + WriteCount + 1);
+                output = JsonSerializer.Serialize(new[] { row });
             }
             else if (args.Contains("show"))
             {

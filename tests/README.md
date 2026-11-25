@@ -1,5 +1,17 @@
 # Test suite
 
+Publication confirmation repair adds three controlled cases for a reused assignee
+at intent, membership and receipt confirmation. The existing publication fixture
+now advances the Product version on ordinary updates and returns native-shaped
+mutation responses. Lost-update cases require preserved holds and fresh recovery
+authority. The duplicate case includes its native Product link and checks every
+required diagnostic field. The existing isolated metadata transport journey also
+checks returned versions and the unchanged Product version after a comment. It
+adds two native commands (comment and show), no new journey or fixture publish.
+These native version semantics cannot be proved by an injected runner. Production
+adds one complete inventory read per publication call before the generic child
+check. It adds no grounding sweep or write to a successful publication.
+
 Shared-read candidate evidence adds eleven cheap Node checks for actual Overview
 resource selection, section receipts and native command families. The opt-in native boundary trial checks cold shared base
 reads, confirmed absence, journal refusal, backup audit recovery and failed

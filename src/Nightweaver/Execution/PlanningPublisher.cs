@@ -76,6 +76,14 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
             return await RevalidateAsync(session, authority, releaseRevalidationClaim, token);
 
         // Unmapped children are never adopted, overwritten, or removed.
+        var initialInventory = await reader.ReadSnapshotAsync(session.Repository, token);
+        foreach (var task in tasks)
+        {
+            var binding = new CreationIntent(IntentSchema, session.BeadId, approval.PlanRevision, task.Id, ids[task.Id], true);
+            var matches = Matches(initialInventory, binding).ToArray();
+            if (matches.Length > 1 || matches.Length == 1 && matches[0].Id != binding.Task)
+                throw IntentFailure(binding, initialInventory, "The task binding is not unique and exact");
+        }
         await CheckChildrenAsync(session, ids.Values, token);
         foreach (var task in tasks)
         {
@@ -153,11 +161,11 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         await CheckAuthorityAsync(session, approval, authority, token);
         if (Metadata(retained, "publication_graph") != graphJson || Metadata(retained, "publication_revision") != approval.PlanRevision)
         {
-            await WritePublicationMetadataAsync(session, approval.PlanRevision, graphJson, ["update", session.BeadId,
+            var write = await WritePublicationMetadataAsync(session, approval.PlanRevision, graphJson, ["update", session.BeadId,
                 "--status", "in_progress", "--assignee", session.InitialAssignee!,
                 "--if-status", "in_progress", "--if-assignee", session.InitialAssignee!, "--json"], token);
             retained = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
-            authority.Version = Version(retained);
+            ConfirmMutationAuthority(session, authority, write, retained);
             if (Metadata(retained, "publication_graph") != graphJson || Metadata(retained, "publication_revision") != approval.PlanRevision)
                 throw Refuse("Independent publication membership was not confirmed; all remaining holds are preserved.");
         }
@@ -167,7 +175,9 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
             await WriteUncertainAsync(session, ["comments", "add", session.BeadId, receipt], token);
             if (!(await reader.ReadCommentsAsync(session.Repository, session.BeadId, token)).Any(c => c.Text == receipt))
                 throw Refuse("Complete graph release evidence was not confirmed.");
-            authority.Version = Version(await reader.ReadDetailAsync(session.Repository, session.BeadId, token));
+            // A comment response does not attest a new Product version. Never adopt
+            // an unrelated claim version from the subsequent confirmation read.
+            CheckOwnership(session, await reader.ReadDetailAsync(session.Repository, session.BeadId, token), authority);
         }
         foreach (var task in tasks)
         {
@@ -347,12 +357,32 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         await JsonSerializer.SerializeAsync(file.Stream, new Dictionary<string, string>
         { [IntentKey(intent)] = JsonSerializer.Serialize(intent, PlanningEvidence.JsonOptions) }, PlanningEvidence.JsonOptions, token);
         await file.Stream.FlushAsync(token);
-        await WriteUncertainAsync(session, ["update", session.BeadId, "--status", "in_progress", "--assignee", session.InitialAssignee!,
+        var write = await WriteUncertainAsync(session, ["update", session.BeadId, "--status", "in_progress", "--assignee", session.InitialAssignee!,
             "--if-status", "in_progress", "--if-assignee", session.InitialAssignee!, "--metadata", "@" + file.Stream.Name, "--json"], token);
         var parent = await reader.ReadDetailAsync(session.Repository, session.BeadId, token);
         if (await ReadIntentAsync(session, parent, intent, token) != intent)
             throw IntentFailure(intent, await reader.ReadSnapshotAsync(session.Repository, token), "The creation intent was not confirmed");
-        authority.Version = Version(parent);
+        ConfirmMutationAuthority(session, authority, write, parent);
+    }
+
+    private static void ConfirmMutationAuthority(AgentStageSession session, Authority authority,
+        ProcessResult? write, BeadSnapshot parent)
+    {
+        // Only the exact native mutation response can attribute an advanced version
+        // to this invocation. Readback alone proves content, not continuing ownership.
+        var expected = authority.Version;
+        if (write is { ExitCode: 0 })
+        {
+            try
+            {
+                var published = BeadsReader.ParsePublicationResult(write.StandardOutput, session.BeadId);
+                CheckOwnership(session, published, new Authority(null));
+                expected = Version(published) ?? expected;
+            }
+            catch (Exception exception) when (exception is JsonException or FormatException) { }
+        }
+        CheckOwnership(session, parent, new Authority(expected));
+        authority.Version = expected;
     }
 
     internal static PlanningApproval ReadApproval(IReadOnlyList<BeadCommentSnapshot> comments)
@@ -396,7 +426,7 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
 
     private static string? Field(BeadSnapshot bead, string key) => bead.Payload.TryGetProperty(key, out var value) ? value.GetString() : null;
 
-    private async Task WritePublicationMetadataAsync(AgentStageSession session, string revision, string graph,
+    private async Task<ProcessResult?> WritePublicationMetadataAsync(AgentStageSession session, string revision, string graph,
         string[] args, CancellationToken token)
     {
         using var file = InvocationRuntimeFiles.CreatePlanningPublicationMetadataFile(
@@ -406,15 +436,15 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         await JsonSerializer.SerializeAsync(file.Stream, new { publication_revision = revision, publication_graph = graph },
             PlanningEvidence.JsonOptions, token);
         await file.Stream.FlushAsync(token);
-        await WriteUncertainAsync(session, [.. args, "--metadata", "@" + file.Stream.Name], token);
+        return await WriteUncertainAsync(session, [.. args, "--metadata", "@" + file.Stream.Name], token);
     }
 
     // A failed or lost response is uncertainty, never permission to repeat a create.
     // The caller immediately checks the exact intended effect through fresh reads.
-    private async Task WriteUncertainAsync(AgentStageSession session, string[] args, CancellationToken token)
+    private async Task<ProcessResult?> WriteUncertainAsync(AgentStageSession session, string[] args, CancellationToken token)
     {
-        try { await runner.RunAsync(BeadsCommand.CreateWrite(session.Repository.Path, args, session.InitialAssignee), token); }
-        catch (Exception exception) when (exception is ToolExecutionException or IOException) { }
+        try { return await runner.RunAsync(BeadsCommand.CreateWrite(session.Repository.Path, args, session.InitialAssignee), token); }
+        catch (Exception exception) when (exception is ToolExecutionException or IOException) { return null; }
     }
 
     private static AgentStageInputException Refuse(string reason) => new("Planning publication stopped: " + reason);
