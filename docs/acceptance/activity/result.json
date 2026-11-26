@@ -1,0 +1,32 @@
+{
+  "native": {
+    "journal": "7f192824-2e49-496e-a85f-5c5bfaf8bc3e",
+    "runtime": "adbbb867-67ac-487b-b49d-8eb9c527a7e3",
+    "invocation": "20261125T2310592972978Z-implementer",
+    "startedCursor": "1.7f1928242e49496ea85f5c5bfaf8bc3e.1",
+    "realCompletionAfterSubscription": true,
+    "exactInvocationOutput": true
+  },
+  "presentation": {
+    "boundedRows": 500,
+    "pendingCount": "500+",
+    "olderAnchorDelta": 0.375,
+    "focusHeld": true,
+    "keyboard": true,
+    "filtersAndDirectReload": true,
+    "emptyAndUnavailable": true,
+    "sourceAndRuntimeHealth": true,
+    "verifiedAndUnsupportedMerge": true,
+    "reconnectAndSuspension": true,
+    "streamDisposal": true
+  },
+  "captures": [
+    "activity-expanded-1440.png",
+    "activity-expanded-720.png",
+    "activity-expanded-375.png"
+  ],
+  "complete": true,
+  "wallSeconds": 10.2200685,
+  "errors": [],
+  "mutations": []
+}

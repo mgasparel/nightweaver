@@ -1,5 +1,15 @@
 # QA AppHost
 
+Run `studio-cutover.ps1 -Group Activity -OutputDirectory <fresh-path>` for the
+focused Activity journey. Its opt-in fixture connects real invocation start and
+completion hooks to journal storage, API, SSE and browser rows. A held invocation
+completes after subscription. Exact invocation output is checked separately.
+Substituted presentation checks cover bursts, older-page anchors, focused and
+expanded rows, filters, gaps, replacement, source health, reconnect, suspension
+and disposal. Captures use 1440, 720 and 375 CSS pixels. `result.json` records
+probe wall time and separates native from presentation evidence. The exact stack
+stops in `finally`. See [Studio Activity](../../docs/design/studio-activity.md).
+
 `studio-cutover.ps1 -Only workspace-base-qa -OutputDirectory <fresh-path>` checks
 Workspace base rendering while all section receipts are held. It then checks
 independent recovery, failed base refresh, native pause removal and deletion,

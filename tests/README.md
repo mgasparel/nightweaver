@@ -1,5 +1,30 @@
 # Test suite
 
+Activity count and loading repair adds two cheap model cases. They check unseen
+history matches, replay, scan progress and the count cap without retaining unseen
+rows. The existing five held-response browser cases now check the response count,
+duplicate replay, later arrival and explicit return. The same opt-in journey checks
+initial loading, empty success and failed history, including transport open after
+failure. Production counts each bounded response before advancing scan progress
+and keeps initial history failure separate from transport state. The repair adds
+no normal-suite native journey, fixture publication, request or tracker command.
+
+Activity pause repair adds five held-response cases to the existing opt-in
+browser journey. They check Pause and page suspension during initial history
+and Return to latest, plus row focus during Return to latest. Rows, open evidence
+and scroll position stay fixed until another explicit return. The repair adds
+no normal-suite native journey, fixture publication or Studio model case.
+Production checks current pause intent before it applies a history response.
+It adds no request, timer, tracker command or lifecycle write.
+
+Studio Activity adds sixteen controlled client model cases. A 6,000-record burst
+checks the 500-row bound. Other cases cover pause, cursor replay, older rows,
+filters, evidence links and delayed times. The opt-in Activity browser journey
+reuses the isolated QA invocation fixture and connects its production executor
+hooks to the journal. It adds no native journey or fixture publication to this
+normal suite. Overview adds only a link; Activity reads begin on route entry.
+See [Studio Activity](../docs/design/studio-activity.md).
+
 Cleanup Activity repair adds three controlled finalizer cases for successful queue
 entry, failed queue entry and direct cleanup failure. Existing native direct
 cleanup and deferred worker failure checks remain. The repair adds no native
@@ -38,7 +63,10 @@ repository validation, recovery, pool setup and file-backed journal creation.
 HTTPS and SSH origins produce stored runtime and Planning gate records. Missing,
 invalid and failed origin reads preserve admission and report journal loss.
 Only process-lifetime exclusion is substituted; its native coverage remains.
-The fixture refuses native watcher setup. No native process, journey or fixture
+The fixture holds watcher setup until cancellation. A setup failure would request
+another discovery pass before the test can stop. The held setup keeps the single
+startup pass deterministic and prevents a native journal reader. Admission and
+Activity assertions remain unchanged. No native process, journey or fixture
 publication is added. Production adds one scrubbed Git origin read per startup.
 Tracker reads and scheduling limits remain unchanged.
 

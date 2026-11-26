@@ -8,6 +8,7 @@ using Nightweaver.Telemetry;
 using Nightweaver.Tests.AgentInvocationFixture;
 using Nightweaver.Tests.ManualDeliveryPilotFixture;
 using Nightweaver.QA;
+using Nightweaver.ActivityFeed;
 
 var fixture = Path.Combine(Path.GetTempPath(), "nightweaver-qa-" + Guid.NewGuid().ToString("N"));
 var repository = Path.Combine(fixture, "repo");
@@ -22,6 +23,7 @@ ManualDeliveryPilotFixture? manualPilot = null;
 CancellationTokenSource? manualRuntimeControlStop = null;
 Task? manualRuntimeControl = null;
 FactoryTelemetryPublisher? telemetry = null;
+ActivityJournal? activityJournal = null;
 CleanupQaFixture? cleanupFixture = null;
 Task<AgentExecutionResult>[] telemetryRuns = [];
 string[] telemetryReleaseFiles = [];
@@ -128,6 +130,13 @@ try
             new ValidatedTargetRepository(repository, "main"), project.Concurrency.MaxConcurrentDelivery,
             ConcurrencyConfig.MergerSlots);
         await telemetry.StartAsync(cancellationToken);
+        if (Environment.GetEnvironmentVariable("NIGHTWEAVER_QA_SCENARIO") == "activity")
+        {
+            await RunAsync("git", repository, userHome, cancellationToken, "remote", "add", "origin", "https://github.com/nightweaver-qa/fixture.git");
+            var identity = new GitHubRepositoryIdentity("github.com", "nightweaver-qa", "fixture");
+            activityJournal = new ActivityJournal(new ActivityJournalFiles(paths, project.Name, repository, identity),
+                identity, Guid.Parse(telemetry.RuntimeId));
+        }
         if (cleanupScenario)
         {
             var cleanupRepository = new ValidatedTargetRepository(repository, "main") { GitCommonDirectory = Path.Combine(repository, ".git") };
@@ -166,7 +175,7 @@ try
             telemetryRuns[index] = RunTelemetryFixtureAsync(paths, project,
                 new ValidatedTargetRepository(repository, "main"), telemetry, preparer,
                 item.Slot, item.Bead, item.Label, worktree, readinessFiles[index], telemetryReleaseFiles[index],
-                cancellationToken);
+                cancellationToken, activityJournal);
         }
 
         await WaitForFilesAsync(readinessFiles, TimeSpan.FromSeconds(30), cancellationToken);
@@ -236,6 +245,7 @@ finally
         telemetry.Release("planning", "planning-1", "qa-live-planning");
         await telemetry.DisposeAsync();
     }
+    if (activityJournal is not null) await activityJournal.DisposeAsync();
 
     if (manualPilot is not null)
     {
@@ -294,8 +304,9 @@ finally
 static async Task<AgentExecutionResult> RunTelemetryFixtureAsync(HostPaths paths, ProjectConfig project,
     ValidatedTargetRepository repository, FactoryTelemetryPublisher telemetry, AgentInvocationPreparer preparer,
     string slot, string beadId, string label, string worktree, string readyFile, string releaseFile,
-    CancellationToken cancellationToken)
+    CancellationToken cancellationToken, ActivityJournal? activityJournal = null)
 {
+    using var activity = activityJournal is null ? null : new ActivityRuntime((evidence, proof) => activityJournal.TrySubmit(evidence, proof));
     var planning = slot.StartsWith("planning-", StringComparison.Ordinal);
     using var launch = ContinuousAgentLaunchContext.Enter(null, telemetry, planning ? "planning" : "delivery", slot, beadId);
     var dispatch = new AgentDispatchContext(beadId, planning ? "feature" : "task", planning ? "stage:plan" : "stage:qa", 0);

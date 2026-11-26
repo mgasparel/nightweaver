@@ -1,5 +1,12 @@
 # Nightweaver
 
+The Web Console now has a current-Project **Activity** view. Open Activity in
+the sidebar or use **Follow Project activity** on Overview. Filter by record
+level or exact Bead ID. Pause to read older records or expand source evidence;
+**Return to latest** catches up and starts live follow. Source health, history
+gaps and finite retention remain visible. Catch Up remains the summary after
+absence. See [Activity controls and limits](docs/design/studio-activity.md).
+
 Optional operational export for the runtime and Web host is documented in
 [Operational telemetry v1](docs/design/operational-telemetry.md). Export is off by
 default and never replaces local Factory snapshots or invocation logs.

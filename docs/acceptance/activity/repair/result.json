@@ -1,0 +1,61 @@
+{
+  "native": {
+    "journal": "dc39194d-8f29-4677-8b41-e3b873ecbffb",
+    "runtime": "def83be9-3409-4ad1-b882-c6c9eb7741d0",
+    "invocation": "20261125T2328363737769Z-implementer",
+    "startedCursor": "1.dc39194d8f2946778b41e3b873ecbffb.1",
+    "realCompletionAfterSubscription": true,
+    "exactInvocationOutput": true
+  },
+  "presentation": {
+    "boundedRows": 500,
+    "pendingCount": "500+",
+    "olderAnchorDelta": 0.375,
+    "focusHeld": true,
+    "keyboard": true,
+    "filtersAndDirectReload": true,
+    "emptyAndUnavailable": true,
+    "sourceAndRuntimeHealth": true,
+    "verifiedAndUnsupportedMerge": true,
+    "reconnectAndSuspension": true,
+    "streamDisposal": true,
+    "olderCapacity": {
+      "rows": 500,
+      "firstOffset": 51,
+      "lastOffset": 550,
+      "openEvidenceHeld": true,
+      "capacityAnchorDelta": -0.28125
+    },
+    "replacements": [
+      {
+        "transport": "SSE",
+        "paused": false,
+        "laterMatchingVisible": true
+      },
+      {
+        "transport": "SSE",
+        "paused": true,
+        "laterMatchingVisible": true
+      },
+      {
+        "transport": "history",
+        "paused": false,
+        "laterMatchingVisible": true
+      },
+      {
+        "transport": "history",
+        "paused": true,
+        "laterMatchingVisible": true
+      }
+    ]
+  },
+  "captures": [
+    "activity-expanded-1440.png",
+    "activity-expanded-720.png",
+    "activity-expanded-375.png"
+  ],
+  "complete": true,
+  "wallSeconds": 12.0938225,
+  "errors": [],
+  "mutations": []
+}

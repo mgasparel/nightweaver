@@ -40,7 +40,7 @@ public sealed class ContinuousApplicationTests
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var completedTurn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var readinessReads = 0;
-        var runner = new RecordingProcessRunner((request, _) =>
+        var runner = new RecordingProcessRunner(async (request, cancellationToken) =>
         {
             string output;
             if (request.FileName == "git")
@@ -56,17 +56,21 @@ public sealed class ContinuousApplicationTests
                     "rev-parse" => common + "\n",
                     _ => throw new InvalidOperationException(string.Join(' ', request.Arguments))
                 };
-                return Task.FromResult(new ProcessResult(origin == "missing" && request.Arguments[0] == "config" ? 1 : 0, output, ""));
+                return new ProcessResult(origin == "missing" && request.Arguments[0] == "config" ? 1 : 0, output, "");
             }
             Assert.Equal("bd", request.FileName);
             if (request.Arguments.SequenceEqual(BeadsCommand.Create(target).Arguments)) output = inventory;
             else if (request.Arguments.Contains("branch")) output = "\"main\"";
-            // Refuse watcher setup so this controlled test cannot launch the native journal reader.
-            else if (request.Arguments.Contains("config")) return Task.FromResult(new ProcessResult(1, "", "watcher disabled"));
+            // Park watcher setup until shutdown. A setup failure requests another discovery pass.
+            else if (request.Arguments.Contains("config"))
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return new ProcessResult(0, "", "");
+            }
             else output = "[]";
             if (request.Arguments.Contains("--ready") && Interlocked.Increment(ref readinessReads) == 3)
                 completedTurn.TrySetResult();
-            return Task.FromResult(new ProcessResult(0, output, ""));
+            return new ProcessResult(0, output, "");
         });
         var error = new StringWriter();
         var acquired = false;

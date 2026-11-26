@@ -22,10 +22,12 @@ import { Explorer } from "./explorer";
 import { DeliveryView, RuntimeSummary } from "./delivery-views";
 import { CatchUpPreview, CatchUpView } from "./digest-views";
 import { CleanupView, ProductIntake } from "./product-views";
+import { ActivityView } from "./activity-views";
 
 const sections = [
   ["overview", "Overview"],
   ["delivery", "Delivery floor"],
+  ["activity", "Activity"],
   ["attention", "Attention"],
   ["catch-up", "Catch up"],
   ["beads", "Beads"],
@@ -300,7 +302,7 @@ function ProjectRoutes({
         <Route
           key={id}
           path={id}
-          element={id === "delivery" ? <DeliveryView project={context.projectId} /> : id === "attention" ? <AttentionView project={context.projectId} /> : id === "beads" ? <><Explorer project={context.projectId} /><ProductIntake project={context.projectId} /></> : id === "catch-up" ? <CatchUpView project={context.projectId} /> : id === "cleanup" ? <CleanupView project={context.projectId} /> : <NotFound base={base} />}
+          element={id === "activity" ? <ActivityView project={context.projectId} /> : id === "delivery" ? <DeliveryView project={context.projectId} /> : id === "attention" ? <AttentionView project={context.projectId} /> : id === "beads" ? <><Explorer project={context.projectId} /><ProductIntake project={context.projectId} /></> : id === "catch-up" ? <CatchUpView project={context.projectId} /> : id === "cleanup" ? <CleanupView project={context.projectId} /> : <NotFound base={base} />}
         />
       ))}
       <Route path="beads/:beadId" element={<BeadWorkspace project={context.projectId} />} />
@@ -339,6 +341,7 @@ function Overview({
       <div className="overview-summary" aria-label="Observation availability">
         <AttentionMetric projectId={context.projectId} />
         <RuntimeSummary project={context.projectId} />
+        <Link className="text-link" to={`${base}/activity`}>Follow Project activity <Icon name="arrow" /></Link>
       </div>
       <div className="studio-overview">
         <section aria-label="Your attention" className="panel attention-panel"><div className="panel-body">
