@@ -239,6 +239,23 @@ public sealed class AgentInvocationExecutorTests
     }
 
     [Fact]
+    public async Task CancellationCleanupWaitsForExecutionAfterReadinessFailure()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var execution = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failure = new IOException("PID publication failed");
+        var cleanup = RunWithCancellationCleanupAsync(execution.Task, cancellation,
+            () => Task.FromException(failure));
+        try
+        {
+            Assert.True(cancellation.IsCancellationRequested);
+            Assert.False(cleanup.IsCompleted);
+        }
+        finally { execution.TrySetCanceled(cancellation.Token); }
+        Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => cleanup));
+    }
+
+    [Fact]
     public async Task CallerCancellationWaitsForProcessTerminationAndUsesCallerToken()
     {
         using var fixture = new ExecutionFixture();
@@ -247,22 +264,24 @@ public sealed class AgentInvocationExecutorTests
         var invocation = fixture.Invocation("spawn-hold", "small payload", TimeSpan.FromMinutes(2), ready, release, "0");
         using var cancellation = new CancellationTokenSource();
         var execution = AgentInvocationExecutor.ExecuteAsync(fixture.Paths, fixture.Project, invocation, cancellation.Token);
-        await WaitForFileAsync(ready, TimeSpan.FromSeconds(10));
-        await WaitForFileAsync(ready + ".child", TimeSpan.FromSeconds(10));
-        using var root = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(ready + ".root", TestContext.Current.CancellationToken), CultureInfo.InvariantCulture));
-        using var child = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(ready + ".child", TestContext.Current.CancellationToken), CultureInfo.InvariantCulture));
-        using var grandchild = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(ready, TestContext.Current.CancellationToken), CultureInfo.InvariantCulture));
-        Assert.False(root.HasExited);
-        Assert.False(child.HasExited);
-        Assert.False(grandchild.HasExited);
-        cancellation.Cancel();
+        await RunWithCancellationCleanupAsync(execution, cancellation, async () =>
+        {
+            using var grandchild = Process.GetProcessById(await WaitForProcessIdAsync(ready, TimeSpan.FromSeconds(10)));
+            using var child = Process.GetProcessById(await WaitForProcessIdAsync(ready + ".child", TimeSpan.FromSeconds(10)));
+            using var root = Process.GetProcessById(await WaitForProcessIdAsync(ready + ".root", TimeSpan.FromSeconds(10)));
+            Assert.False(root.HasExited);
+            Assert.False(child.HasExited);
+            Assert.False(grandchild.HasExited);
+            cancellation.Cancel();
 
-        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken));
-        Assert.Equal(cancellation.Token, exception.CancellationToken);
-        Assert.True(root.HasExited);
-        Assert.True(child.HasExited);
-        Assert.True(grandchild.HasExited);
-        Assert.True(File.Exists(invocation.LogFilePath));
+            var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken));
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+            Assert.True(root.HasExited);
+            Assert.True(child.HasExited);
+            Assert.True(grandchild.HasExited);
+            Assert.True(File.Exists(invocation.LogFilePath));
+        });
+        using var log = new FileStream(invocation.LogFilePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
     }
 
     [Fact]
@@ -542,6 +561,18 @@ public sealed class AgentInvocationExecutorTests
     {
         try { await task.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken); }
         catch (OperationCanceledException) { }
+    }
+
+    private static async Task RunWithCancellationCleanupAsync(Task execution,
+        CancellationTokenSource cancellation, Func<Task> assertions)
+    {
+        try { await assertions(); }
+        finally
+        {
+            cancellation.Cancel();
+            try { await execution.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken); }
+            catch (OperationCanceledException exception) when (exception.CancellationToken == cancellation.Token) { }
+        }
     }
 
     private static async Task<int> WaitForProcessIdAsync(string path, TimeSpan timeout)
