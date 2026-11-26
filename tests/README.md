@@ -63,7 +63,10 @@ repository validation, recovery, pool setup and file-backed journal creation.
 HTTPS and SSH origins produce stored runtime and Planning gate records. Missing,
 invalid and failed origin reads preserve admission and report journal loss.
 Only process-lifetime exclusion is substituted; its native coverage remains.
-The fixture refuses native watcher setup. No native process, journey or fixture
+The fixture holds watcher setup until cancellation. A setup failure would request
+another discovery pass before the test can stop. The held setup keeps the single
+startup pass deterministic and prevents a native journal reader. Admission and
+Activity assertions remain unchanged. No native process, journey or fixture
 publication is added. Production adds one scrubbed Git origin read per startup.
 Tracker reads and scheduling limits remain unchanged.
 
