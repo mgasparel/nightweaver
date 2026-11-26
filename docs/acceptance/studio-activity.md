@@ -54,6 +54,48 @@ probe edit. The corrected probe keeps all assertions. Both exact stacks stopped.
 The evidence root is
 `H:/Nightweaver/prod/tmp/nightshift/ns-ejr-p95942f1ecde1d100ce8d/20261125T2357061362590Z-implementer`.
 
+Complete measurement `4fe5e51ab896431393690326f5e290e1` tested clean revision
+`f35cf66f377bf6b0acfd492e56e36a2cf661e55a`, tree
+`7b41bcdfa4443cd7483b644b8cf4fce98cb68402`. Base revision was
+`cdc378599d8edceac118f98713e34f860e070632`. All 2,447 tests passed. Failed 0.
+Skipped 0. XML errors and not-run counts are 0. Outer time was 268.8387538
+seconds. Normal build, fixture publication, execution and teardown used six
+threads. Archive fixtures passed 66 cases. Collector fixtures passed 102 cases.
+Measurement errors are empty. The result records invocationId as null. The
+launch environment did not supply NIGHTWEAVER_INVOCATION_ID. The current
+invocation path and this report bind the evidence to this dispatch.
+
+The evidence root above retains `complete-candidate/4fe5e51ab896431393690326f5e290e1/`
+with `result.json`, `suite.log` and `report-1.xml`. Result SHA256 is
+`6394E586D2931383D44C8DDE9E567F1AD8C2DE88713929456B3D9FD6C341A111`.
+The command was `dotnet test --solution Nightweaver.slnx --minimum-expected-tests 995 --report-xunit-xml --report-xunit-xml-filename 4fe5e51ab896431393690326f5e290e1.xml --show-slowest-tests 20`.
+
+The explicit accepted baseline is
+`H:/Nightweaver/prod/tmp/nightshift/ns-ejr-p0576c5b4432a78c1fd65/20261125T2225078340478Z-merger/accepted-main-baseline.json`.
+Its SHA256 remains `9293ECEF95CE9CEDE382FDF40EA75A53CB52D08DD3C46CB4CEADB87DE0E494AA`.
+Evidence `ab8d48a5d1c3491683e279e94dd54db4` tested the exact base, tree
+`6e4c855745ec6024ad6f9e8afde5c7a7a9d5be4d`, and passed the same 2,447 cases in
+213.3012778 seconds. Machine, normalized boot time, tools, production identity
+and six-thread scheduling match. Preparation, tempRoot, TEMP and TMP differ.
+Comparison is unavailable. Delta and ratio stay unknown. No resource capture
+trigger occurred. No raw result changed. The unchanged baseline was not rerun.
+
+Cost review: Correctness and the 300-second hard limit passed. The 240-second
+operating target was missed by 28.8387538 seconds. The unchanged native
+publication case took 179.380 seconds. The unchanged second-signal case took
+73.972 seconds. The unchanged Delivery handoff case took 65.890 seconds. These
+cases overlap; their times are not additive. Archive and collector checks took
+6.5502157 and 6.6911697 seconds. The .NET runner reported 246.892 seconds.
+This repair changes no .NET test or runtime path used by those cases. It adds a
+bounded scan over each paused history response and one local history-failure
+flag. The two new model cases and controlled browser checks add no normal-suite
+native work, request, timer or tracker command. No attributable material
+regression is established. Reviewer must assess this evidence. Merger must run
+fresh synchronized-head and latest-main measurements. If the target miss persists,
+retain native publication, handoff and setup timings for cost diagnosis. Only
+this acceptance report changes after the complete measurement. All six source
+hashes still match the tested candidate.
+
 ## Pending history pause repair
 
 The remaining Review finding passes. A pending history response cannot cancel a
