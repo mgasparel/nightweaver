@@ -11,6 +11,7 @@ namespace Nightweaver.Tests;
 
 public sealed class ManualDeliveryPilotSecondSignalTests
 {
+#if NIGHTWEAVER_EXTENDED_NATIVE_TESTS
     [Fact]
     public async Task SecondConsoleSignalForceStopsHeldAgentAndRestartPreservesWorktreeAndForeignClaim()
     {
@@ -119,6 +120,7 @@ public sealed class ManualDeliveryPilotSecondSignalTests
             }
         }
     }
+#endif
 }
 
 internal static class ManualDeliveryPilotTestHelpers

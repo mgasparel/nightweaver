@@ -156,6 +156,7 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         Assert.DoesNotContain(runner.Requests, request => request.Arguments[0] is "update-ref" or "push");
     }
 
+#if NIGHTWEAVER_EXTENDED_NATIVE_TESTS
     [Fact]
     public async Task QaRetainedArtifactsRecoverAfterLostClosureAndLockedTmpRetryAcrossRestart()
     {
@@ -274,6 +275,8 @@ public sealed class MergerCompletionFinalizerTests : AgentStageIntegrationTestSu
         target.RunTarget("git", ["worktree", "remove", "--force", unrelatedPath]);
         target.RunTarget("git", ["branch", "-D", "unrelated-checkout"]);
     }
+
+#endif
 
     [Fact]
     public async Task LocalBranchMovedAfterValidationSurvivesConditionalDeletion()

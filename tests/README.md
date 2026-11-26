@@ -125,17 +125,36 @@ They retain their live-lock and cleanup assertions. This repair adds three
 exclusive file opens across existing cases. It adds no native journey, fixture
 publication or production work. Deadlines and six threads stay unchanged.
 
-Publication native proof adds two tests in `PlanningPublicationNativeTests`.
+Four extended native journeys run on demand. Use this command to build and run
+the four exact methods:
+
+```powershell
+dotnet test --project tests/Nightweaver.Tests -p:NightweaverExtendedNativeTests=true `
+  --filter-method Nightweaver.Tests.PlanningPublicationNativeTests.NativePublicationRecoversLostCreatePreservesConflictsAndResumesLegacyGraph `
+  --filter-method Nightweaver.Tests.ManualDeliveryPilotSecondSignalTests.SecondConsoleSignalForceStopsHeldAgentAndRestartPreservesWorktreeAndForeignClaim `
+  --filter-method Nightweaver.Tests.PoolConcurrencyIntegrationTests.DeliveryCompletesWhileMergerPreparationIsHeld `
+  --filter-method Nightweaver.Tests.MergerCompletionFinalizerTests.QaRetainedArtifactsRecoverAfterLostClosureAndLockedTmpRetryAcrossRestart `
+  --minimum-expected-tests 4
+```
+
+The normal suite retains controlled publication recovery, Delivery and Merger
+pool coordination, and completed-environment cleanup cases. Its native tests
+still cover writer exclusion, published runtime force stop, Delivery handoff,
+and verified Merger completion. The four extended journeys add the full
+response-loss and legacy publication matrix, a second-signal restart, progress
+during held Merger preparation, and recovery from lost closure with locked
+temporary files.
+
+Publication native proof has two tests in `PlanningPublicationNativeTests`.
 One test shares a copied Beads template, an isolated host and one detached
 Planning checkout across response-loss recovery, provenance conflict and legacy
-partial-graph recovery. The second test calls the existing cross-process,
+partial-graph recovery. Run this test on demand with the command in the linked proof. The normal suite retains the existing cross-process,
 cross-Project, cross-host and physical-alias exclusion scenario, which previously
 had no test entry point. Both reuse existing immutable fixture publications.
 Native database semantics and OS mutex ownership cannot be proved by injected
 responses. Detailed fault and concurrency cases remain controlled tests.
-The focused XML costs are 69.058 seconds for publication and 26.235 seconds for
-process exclusion. Their collection starts early at that measured weight; the
-six-thread cap and deadlines stay unchanged. No production code changes.
+The original focused XML costs were 69.058 seconds for publication and 26.235 seconds for
+process exclusion. The normal suite uses six threads and the existing deadlines.
 See [publication proof](../docs/acceptance/planning-publication-native.md) for
 native evidence, concurrency limits and complete candidate cost.
 

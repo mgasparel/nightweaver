@@ -26,4 +26,7 @@
   <ItemGroup>
     <Compile Include="../ManualDeliveryPilotFixture/ManualDeliveryPilotFixture.cs" Link="ManualDeliveryPilotFixture/ManualDeliveryPilotFixture.cs" />
   </ItemGroup>
+  <PropertyGroup Condition="'$(NightweaverExtendedNativeTests)' == 'true'">
+    <DefineConstants>$(DefineConstants);NIGHTWEAVER_EXTENDED_NATIVE_TESTS</DefineConstants>
+  </PropertyGroup>
 </Project>
