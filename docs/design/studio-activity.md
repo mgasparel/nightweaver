@@ -27,7 +27,9 @@ the first visible row's position. Open evidence retains its row identity.
 The client holds at most 500 rows, their detail links and 20 open evidence
 sections. Exact invocation output uses the existing 2,000-line / 256-KiB
 controller. The stream holds only its latest bounded detail batch. Paused arrival
-retains a saturating count, displayed as `500+`, and one received cursor. It stores
+retains a saturating count, displayed as `500+`, and one received cursor. A paused
+history response counts unseen matching records before it advances that cursor.
+History replay and SSE replay do not count the same record twice. It stores
 no pending row list. Only control-state changes use status announcements; the
 record list is not a live announcement region.
 
@@ -56,6 +58,8 @@ excluded offsets. Filtered
 scans can pass the window; those later rows do not enter the older page. The
 500-row limit stops older loading and asks the operator to narrow the filters.
 Empty loaded matches, loading history and unavailable storage have separate text.
+The first pending read shows loading. A failed first read shows unavailable.
+Opening the stream alone cannot clear that failure state.
 The view shows source retention bounds and its client limit. It makes no claim
 to an unlimited audit history.
 
@@ -84,7 +88,7 @@ expired output stays unavailable. Activity adds no transcript access path.
 
 ## Verification and cost
 
-`Studio/test/activity.test.mjs` adds sixteen controlled cases. They cover a
+`Studio/test/activity.test.mjs` adds eighteen controlled cases. They cover a
 6,000-record burst, row/detail/expansion bounds, paused duplicate replay, cursor
 catch-up, older identity preservation, replacement, empty scans, safe links and
 delayed times. They add no native process or fixture publication.

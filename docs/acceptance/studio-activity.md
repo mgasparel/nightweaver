@@ -1,5 +1,59 @@
 # Activity console acceptance
 
+## Paused count and initial loading repair
+
+Both findings from Review at 2026-11-25 23:56 pass. This repair starts at
+`d2769ade9ee784a4c92029cec6894b078a12d164`. Paused history counts unseen matching
+records before scan progress advances. Replay does not increase the count.
+The count stays capped at `500+`. Rows, evidence, displayed cursor and pause
+intent stay fixed. Initial pending history shows loading. Empty success shows
+no matching records. Failed initial history shows unavailable, even if the
+transport opens without source evidence.
+
+Two new cheap model cases fail against the retained original model: expected
+counts 1 and 501 were both 0. The repaired Studio passes all 106 cases, with
+zero failures or skips, in 1.9207858 seconds. The new cases took 0.2655 and
+1.5877 milliseconds. The Studio build and solution build pass. The solution
+build reports zero warnings and errors. Measurement policy passes 460 cases.
+Publisher contracts pass 16 cases in PowerShell 7 and 16 in Windows PowerShell.
+
+Command: `pwsh -NoProfile -File tests/Nightweaver.QA.AppHost/studio-cutover.ps1 -Group Activity -OutputDirectory <invocation-TEMP>/count-loading-after-3`.
+The direct Web URL was `http://localhost:30898`. The Node process took 15.1025295
+seconds. Probe assertions took 14.6130386 seconds. Both exclude AppHost start
+and stop. The exact stack stopped successfully in `finally`.
+
+The [result](activity/count-loading-repair/result.json) checks all five existing
+held-response cases before any later SSE arrival. Initial paused reads count
+80 records. Held Return reads count one. Replay keeps those counts. A later
+arrival increases each by one. Explicit return clears the count and catches up.
+Rows, evidence, scroll position and row focus stay fixed while paused. Three
+initial states have distinct text. Transport open preserves history failure.
+Prior replacement, older-capacity, burst, keyboard and reconnect checks pass.
+No page errors or lifecycle mutations occurred.
+
+Real executor-to-journal-to-API-to-SSE-to-browser start and completion checks
+pass. Completion occurs after subscription. Exact invocation output passes.
+[Native history](activity/count-loading-repair/native-history.json) binds journal
+`6b97f1c3-2acb-4c2b-a89a-89faaaf70f2b`, runtime
+`28ef0415-03ed-4132-818d-7729b2c4456b` and invocation
+`20261126T0003197363502Z-implementer`. The fixture reuses existing native
+processes. The new cases use controlled responses in the same opt-in journey.
+They add no normal-suite native journey or fixture publication.
+
+I inspected [1440](activity/count-loading-repair/activity-expanded-1440.png),
+[720](activity/count-loading-repair/activity-expanded-720.png) and
+[375](activity/count-loading-repair/activity-expanded-375.png) CSS-pixel captures.
+Controls remain visible. Evidence wraps without page or feed overflow.
+[Source hashes](activity/count-loading-repair/sources.json) bind all six tested
+production, model and fixture files to the candidate.
+
+Original evidence stays unchanged. This invocation retains two failed browser
+runs in `count-loading-after` and `count-loading-after-2`. The first used the
+wrong expected count text. The second used damaged UTF-8 punctuation after a
+probe edit. The corrected probe keeps all assertions. Both exact stacks stopped.
+The evidence root is
+`H:/Nightweaver/prod/tmp/nightshift/ns-ejr-p95942f1ecde1d100ce8d/20261125T2357061362590Z-implementer`.
+
 ## Pending history pause repair
 
 The remaining Review finding passes. A pending history response cannot cancel a

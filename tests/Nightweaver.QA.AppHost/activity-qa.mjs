@@ -89,10 +89,11 @@ try {
     const after = cursor?.[1] === journal.replaceAll('-', '') ? Number(cursor.at(-1)) : 0;
     return records.filter(r => r.position.offset > after && (!q.get('bead') || r.bead === q.get('bead')) && (!q.get('level') || levelOf(r) === q.get('level'))).slice(0, 100);
   };
-  let holdHistory;
+  let holdHistory, failHistory = false;
   await page.route('**/api/activity/v1/projects/qa/history?*', async route => {
     const rows = unavailable ? [] : select(new URL(route.request().url()).search);
     if (holdHistory) { const hold = holdHistory; holdHistory = undefined; await hold(); }
+    if (failHistory) { await route.fulfill({ status: 503, body: 'History unavailable' }); return; }
     await route.fulfill({ json: { ...status(rows), records: rows, cursor: idOf(rows.at(-1) ?? row(records.length)) } });
   });
   await page.addInitScript(() => {
@@ -260,8 +261,14 @@ try {
     await until(async () => await page.getByRole('button', { name: 'Return to latest' }).isEnabled(), 'Held history did not settle.');
     if (intent === 'suspend') await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')); });
     await page.getByText('Browsing paused', { exact: true }).waitFor({ timeout: 3000 });
+    const pendingCount = mode === 'initial' ? 80 : 1;
+    await page.getByText(`${pendingCount} new matching records`, { exact: true }).waitFor();
+    // Replayed response rows must not count twice after reconnect.
+    await emit([records.at(-1)]);
+    assert.equal(await page.getByText(`${pendingCount} new matching records`, { exact: true }).count(), 1);
     records.push(row(records.length + 1));
     await emit([records.at(-1)]);
+    await page.getByText(`${pendingCount + 1} new matching records`, { exact: true }).waitFor();
     assert.deepEqual(await page.locator('.activity-row').evaluateAll(nodes => nodes.map(node => node.dataset.activityId)), ids);
     assert.equal(await page.locator('.activity-evidence').count(), evidence);
     assert.equal(await page.locator('.activity-scroll').evaluate(node => node.scrollTop), top);
@@ -270,8 +277,33 @@ try {
     await page.getByText('Following latest', { exact: true }).waitFor();
     await until(async () => await page.locator('.activity-row').count() === records.length, 'Explicit return did not catch up.');
     assert.equal(await page.locator('.activity-evidence').count(), 0);
-    heldHistory.push({ mode, intent, retainedRows: ids.length, retainedEvidence: evidence, scrollDelta: 0, explicitReturn: true });
+    assert.equal(await page.getByText(/\d+ new matching records/).count(), 0);
+    heldHistory.push({ mode, intent, retainedRows: ids.length, retainedEvidence: evidence, scrollDelta: 0,
+      responsePendingCount: pendingCount, duplicatePendingCount: pendingCount, laterPendingCount: pendingCount + 1, explicitReturn: true });
   }
+  // A healthy pending first read, empty success and failed first read are distinct.
+  records = [];
+  let releaseInitial, requestedInitial;
+  const initialRequest = new Promise(resolve => { requestedInitial = resolve; });
+  const initialGate = new Promise(resolve => { releaseInitial = resolve; });
+  holdHistory = () => { requestedInitial(); return initialGate; };
+  await page.goto(`${url}${base}/activity`);
+  await initialRequest;
+  await page.getByText('Loading retained history…', { exact: true }).waitFor();
+  assert.equal(await page.getByText('Activity source unavailable. Other console views remain available.', { exact: true }).count(), 0);
+  releaseInitial();
+  await page.getByText('No matching records in the loaded history.', { exact: true }).waitFor();
+  assert.equal(await page.getByText('Loading retained history…', { exact: true }).count(), 0);
+  failHistory = true;
+  await page.goto(`${url}${base}/activity`);
+  await page.getByText('Activity source unavailable. Other console views remain available.', { exact: true }).waitFor();
+  // An open transport alone cannot turn a failed history read into loading.
+  await page.evaluate(() => window.__activitySources.filter(s => !s.closed).at(-1).emit('open', {}));
+  assert.equal(await page.getByText('Activity source unavailable. Other console views remain available.', { exact: true }).count(), 1);
+  assert.equal(await page.getByText('Loading retained history…', { exact: true }).count(), 0);
+  failHistory = false;
+  const initialStates = { pending: 'Loading retained history…', empty: 'No matching records in the loaded history.',
+    failed: 'Activity source unavailable. Other console views remain available.', transportOpenKeepsFailure: true };
   // Empty replacement scans must not hide the first later matching record.
   const replacements = [];
   for (const transport of ['SSE', 'history']) for (const paused of [false, true]) {
@@ -307,7 +339,7 @@ try {
   results.presentation = { boundedRows: 500, pendingCount: '500+', olderAnchorDelta: after - before, focusHeld: true,
     keyboard: true, filtersAndDirectReload: true, emptyAndUnavailable: true, sourceAndRuntimeHealth: true,
     verifiedAndUnsupportedMerge: true, reconnectAndSuspension: true, streamDisposal: true,
-    olderCapacity: { rows: 500, firstOffset: 51, lastOffset: 550, openEvidenceHeld: true, capacityAnchorDelta }, replacements, heldHistory };
+    olderCapacity: { rows: 500, firstOffset: 51, lastOffset: 550, openEvidenceHeld: true, capacityAnchorDelta }, replacements, heldHistory, initialStates };
   assert.deepEqual(errors, []); assert.deepEqual(mutations, []);
   results.complete = true;
 } finally {

@@ -23,6 +23,7 @@ function ActivitySession({ project, filters }: { project: string; filters: { lev
   const [status, setStatus] = useState<ActivityStatus>();
   const [connection, setConnection] = useState('Connecting');
   const [error, setError] = useState('');
+  const [historyFailed, setHistoryFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [olderBound, setOlderBound] = useState<number>();
   const [now, setNow] = useState(Date.now());
@@ -106,7 +107,7 @@ function ActivitySession({ project, filters }: { project: string; filters: { lev
     let working = false;
     async function load(older = false) {
       if (working) return;
-      working = true; close(); setBusy(true); setError('');
+      working = true; close(); setBusy(true); setError(''); setHistoryFailed(false);
       // Only the request starts follow. Later interaction or suspension owns pause.
       buffer.paused = older || document.hidden;
       try {
@@ -164,7 +165,7 @@ function ActivitySession({ project, filters }: { project: string; filters: { lev
         if (stopped) return;
         setOlderBound(lower); setStatus(page); setNow(Date.now()); update();
       } catch (failure) {
-        if (!stopped) { buffer.paused = true; setError(String(failure)); update(); }
+        if (!stopped) { buffer.paused = true; setHistoryFailed(true); setError(String(failure)); update(); }
       } finally {
         working = false;
         if (!stopped) { setBusy(false); connect(); }
@@ -186,6 +187,7 @@ function ActivitySession({ project, filters }: { project: string; filters: { lev
   }, [buffer, project, filters.level, filters.bead]);
   const sourceOld = !status?.observedAt || now - Date.parse(status.observedAt) > 60000;
   const runtimeOld = !status?.runtimeObservedAt || now - Date.parse(status.runtimeObservedAt) > 10000;
+  const historyLoading = !status ? !historyFailed : status.loading && !['Unavailable', 'Unknown'].includes(status.journalHealth);
   return <div className="activity-view">
     <div className="page-heading"><p className="eyebrow">Current project / Studio</p><h1 tabIndex={-1} ref={heading}>Activity</h1><p>Live Project observations, in journal order. <Link to={`/projects/${encodeURIComponent(project)}/catch-up`}>Catch up after an absence</Link>.</p></div>
     <Panel title="Project journal" accessory={<Status tone={buffer.paused ? 'warn' : 'accent'}>{buffer.paused ? 'Browsing paused' : 'Following latest'}</Status>}>
@@ -203,7 +205,7 @@ function ActivitySession({ project, filters }: { project: string; filters: { lev
       {buffer.gap && <p className="activity-notice">History gap. Retention, source loss or client limits removed part of the record. The displayed position stays under your control.</p>}
       <div className="activity-retention"><span>{buffer.rows.length} / {ROW_LIMIT} client rows · {buffer.expanded.size} / {EXPANSION_LIMIT} evidence sections</span><span>Retained offsets: {status?.oldest ?? 'unknown'}–{status?.newest ?? 'unknown'}{status?.loading ? ' · History still loading' : ''}</span><span>Journal observed: {stamp(status?.observedAt)}</span></div>
       <button className="button activity-older" disabled={busy || olderBound == null || olderBound <= (status?.oldest ?? 1) - 1 || buffer.rows.length >= ROW_LIMIT} onClick={() => void action.current(true)}>Load older records</button>
-      {!buffer.rows.length && <p className="bead-empty">{!status || ['Unavailable', 'Unknown'].includes(status.journalHealth) ? 'Activity source unavailable. Other console views remain available.' : status.loading ? 'Loading retained history…' : 'No matching records in the loaded history.'}</p>}
+      {!buffer.rows.length && <p className="bead-empty">{historyLoading ? 'Loading retained history…' : !status || ['Unavailable', 'Unknown'].includes(status.journalHealth) ? 'Activity source unavailable. Other console views remain available.' : 'No matching records in the loaded history.'}</p>}
       <div className="activity-scroll" ref={viewport} tabIndex={0} role="region" aria-label="Activity records" onFocusCapture={event => { if ((event.target as HTMLElement).closest('[data-activity-id]')) pause(); }} onWheel={event => { if (event.deltaY < 0) pause(); }} onKeyDown={event => { if (['PageUp', 'ArrowUp', 'Home'].includes(event.key)) pause(); }} onScroll={event => { if (!buffer.paused && event.currentTarget.scrollHeight - event.currentTarget.scrollTop - event.currentTarget.clientHeight > 48) pause(); }}>
         <ol className="activity-rows">{buffer.rows.map(row => <ActivityItem key={rowId(row)} row={row} project={project} detail={buffer.details.get(rowId(row))} open={buffer.expanded.has(rowId(row))} disabled={!buffer.expanded.has(rowId(row)) && buffer.expanded.size >= EXPANSION_LIMIT} toggle={() => { buffer.toggle(rowId(row)); update(); }} />)}</ol>
       </div>

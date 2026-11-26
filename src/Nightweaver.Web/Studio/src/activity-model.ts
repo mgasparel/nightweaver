@@ -82,7 +82,13 @@ export class ActivityBuffer {
   page(page: Page, older = false) {
     this.status(page);
     const journal = cursorParts(page.cursor)?.journal ?? cursorParts(page.records[0] && rowId(page.records[0]))?.journal;
-    if (!older && this.paused) { if (page.cursor) this.advance(page.cursor); return; }
+    if (!older && this.paused) {
+      // Count matching unseen rows before the scan cursor skips over them.
+      for (const row of page.records) this.accept(row);
+      const next = cursorParts(page.cursor), prior = cursorParts(this.received);
+      if (page.cursor && next && (prior?.journal !== next.journal || prior.offset < next.offset)) this.advance(page.cursor);
+      return;
+    }
     if (older && journal && this.displayedJournal && journal !== this.displayedJournal) { this.gap = true; return; }
     if (!older && journal) this.display(journal);
     const before = this.rows.length;

@@ -1,5 +1,14 @@
 # Test suite
 
+Activity count and loading repair adds two cheap model cases. They check unseen
+history matches, replay, scan progress and the count cap without retaining unseen
+rows. The existing five held-response browser cases now check the response count,
+duplicate replay, later arrival and explicit return. The same opt-in journey checks
+initial loading, empty success and failed history, including transport open after
+failure. Production counts each bounded response before advancing scan progress
+and keeps initial history failure separate from transport state. The repair adds
+no normal-suite native journey, fixture publication, request or tracker command.
+
 Activity pause repair adds five held-response cases to the existing opt-in
 browser journey. They check Pause and page suspension during initial history
 and Return to latest, plus row focus during Return to latest. Rows, open evidence

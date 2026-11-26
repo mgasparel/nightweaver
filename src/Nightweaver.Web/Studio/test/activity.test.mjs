@@ -29,6 +29,30 @@ test('cursor catch-up retains order and deduplicates records after reconnect', (
   assert.deepEqual(b.rows.map(r => r.position.offset), [2, 3, 4, 5]);
   assert.equal(b.cursor, rowId(row(5)));
 });
+
+test('paused history counts unseen matches once before advancing scan progress', () => {
+  const b = new ActivityBuffer(); b.page(page([row(79), row(80)])); b.toggle(rowId(row(79)));
+  const retained = b.rows, cursor = b.cursor;
+  const held = page([row(80), row(81)], { cursor: rowId(row(85)) });
+  b.page(held);
+  assert.equal(b.pending, 1); assert.equal(b.received, rowId(row(85)));
+  b.page(held); b.accept(row(81));
+  assert.equal(b.pending, 1);
+  b.accept(row(86)); b.page(held); b.accept(row(86));
+  assert.equal(b.pending, 2); assert.equal(b.received, rowId(row(86)));
+  assert.equal(b.rows, retained); assert.equal(b.cursor, cursor);
+  assert(b.paused); assert(b.expanded.has(rowId(row(79)))); assert.equal(b.details.size, 2);
+  b.paused = false; b.pending = 0; b.page(page([row(81), row(86)]));
+  assert.deepEqual(b.rows.map(r => r.position.offset), [79, 80, 81, 86]);
+  assert.equal(b.pending, 0);
+});
+
+test('paused history keeps a capped count without retaining unseen rows or details', () => {
+  const b = new ActivityBuffer(); b.page(page([row(1)])); b.paused = true;
+  for (let start = 2; start < 1002; start += 100) b.page(page(Array.from({ length: 100 }, (_, i) => row(start + i))));
+  assert.equal(b.pending, 501); assert.equal(b.rows.length, 1); assert.equal(b.details.size, 1);
+  assert.equal(b.cursor, rowId(row(1))); assert.equal(b.received, rowId(row(1001)));
+});
 test('older pages keep the visible identities and do not advance live cursor', () => {
   const b = new ActivityBuffer(); b.page(page([row(100), row(101)])); b.toggle(rowId(row(100)));
   b.page(page([row(99), row(100)]), true);

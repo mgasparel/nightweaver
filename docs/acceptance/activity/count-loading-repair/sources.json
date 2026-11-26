@@ -1,0 +1,26 @@
+[
+    {
+        "sha256":  "7D34D9364DA12EDD36FB4E2E699DF519B40BBA108E7FA30D3D2CF25B052C10BE",
+        "path":  "src/Nightweaver.Web/Studio/src/activity-model.ts"
+    },
+    {
+        "sha256":  "F83C39302482B833BDB5977C495E167AA65F637AA0DBAE6E9743F48E6C8E09E2",
+        "path":  "src/Nightweaver.Web/Studio/src/activity-views.tsx"
+    },
+    {
+        "sha256":  "2430E17E1946DBF62DC1C2F85E837484446C29DADF74B6D3A0D19296C8967146",
+        "path":  "src/Nightweaver.Web/Studio/test/activity.test.mjs"
+    },
+    {
+        "sha256":  "898387E479378D21F503C31ECDD26E11672FE0B20879EDBB4A88F361FEB8768D",
+        "path":  "tests/Nightweaver.QA.AppHost/activity-qa.mjs"
+    },
+    {
+        "sha256":  "12218DF96B64919ED20FCB8908D903AC3BC19034EA6ACB140F7BA5B3708B187C",
+        "path":  "tests/Nightweaver.QA.AppHost/Program.cs"
+    },
+    {
+        "sha256":  "B3DC1A70746A4E9E3430890C6C19D83C3E674625D6BEBE1068632279E1C70245",
+        "path":  "tests/Nightweaver.QA.AppHost/studio-cutover.ps1"
+    }
+]
