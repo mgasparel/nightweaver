@@ -5,6 +5,11 @@ provenance refusal and legacy partial publication. It changes no production code
 It uses disposable Git repositories, copied Beads databases and host roots.
 It does not change `ns-5gg`, an installed host or a live publication.
 
+The combined native recovery test runs on demand because it performs three
+multi-step publications against real Git and Beads. The normal suite exercises
+the recovery rules in `PlanningPublicationTests`, retains the published native
+Planner and Challenger journey, and runs the competing-writer process test below.
+
 ## Reproduce and retain evidence
 
 Run from the repository root. Set `NIGHTWEAVER_PUBLICATION_EVIDENCE` to an absolute
@@ -12,7 +17,7 @@ JSON file in the current invocation's temporary directory to retain commands,
 native output, inventories, receipts, graph membership and command cost.
 
 ```powershell
-dotnet test --project tests/Nightweaver.Tests --filter-class Nightweaver.Tests.PlanningPublicationNativeTests --minimum-expected-tests 2 --report-xunit-xml --report-xunit-xml-filename publication-native.xml
+dotnet test --project tests/Nightweaver.Tests -p:NightweaverExtendedNativeTests=true --filter-class Nightweaver.Tests.PlanningPublicationNativeTests --minimum-expected-tests 2 --report-xunit-xml --report-xunit-xml-filename publication-native.xml
 ```
 
 The fixture acquires the physical repository mutex before it calls the supported

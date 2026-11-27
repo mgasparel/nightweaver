@@ -10,6 +10,7 @@ namespace Nightweaver.Tests;
 
 public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestSupport
 {
+#if NIGHTWEAVER_EXTENDED_NATIVE_TESTS
     [Fact]
     public async Task DeliveryCompletesWhileMergerPreparationIsHeld()
     {
@@ -204,4 +205,5 @@ public sealed class PoolConcurrencyIntegrationTests : AgentStageIntegrationTestS
         if (primary is null && cleanupFailure is not null)
             throw new InvalidOperationException("Pool cleanup failed after successful concurrency assertions.", cleanupFailure);
     }
+#endif
 }

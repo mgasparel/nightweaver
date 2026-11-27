@@ -14,6 +14,7 @@ public sealed class PlanningPublicationNativeTests(PublishedCliArtifactFixture p
     public Task CompetingProjectsAndHostRootsCannotWriteUntilTheOwnerProcessExits() =>
         DispatchScenarioSupport.PublishedDispatchExcludesCompetingProjectsAcrossHostRootsAndRecoversAfterProcessDeath(published);
 
+#if NIGHTWEAVER_EXTENDED_NATIVE_TESTS
     [Fact]
     public async Task NativePublicationRecoversLostCreatePreservesConflictsAndResumesLegacyGraph()
     {
@@ -279,4 +280,5 @@ public sealed class PlanningPublicationNativeTests(PublishedCliArtifactFixture p
 
         public void Dispose() { host.Dispose(); target.Dispose(); }
     }
+#endif
 }
