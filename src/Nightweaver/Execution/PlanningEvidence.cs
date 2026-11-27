@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Nightweaver.Configuration;
 using Nightweaver.Inspection;
 
@@ -8,7 +9,12 @@ namespace Nightweaver.Execution;
 
 internal sealed record PlanningGrounding(string CheckoutRevision, string DefaultRevision, string ProductInputs, string? ObservedRemoteRevision = null);
 internal sealed record PlanningTask(string Id, string Title, string Outcome, string Context,
-    string Approach, string[] AcceptanceCriteria, string Verification, string[] DependsOn);
+    string Approach, string[] AcceptanceCriteria, string Verification, string[] DependsOn,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string[]? LocalInputIds = null);
+internal sealed record PlanningInputSource(string Identity, string? Revision = null, string? ExportCommand = null);
+internal sealed record PlanningInputStore(string Project, string RepositoryIdentity);
+internal sealed record PlanningLocalInput(string Id, string SourcePath, PlanningInputSource Source,
+    string ExpectedSha256, PlanningInputStore Store, string Locator);
 internal sealed record PlanningConstraint(string Requirement, string Source);
 internal sealed record PlanningCoverage(string Requirement, string[] TaskIds, string? SatisfiedEvidence, string? AuthorizedExclusion);
 internal sealed record PlanningQuestion(string Question, string RecommendedAnswer, string Tradeoffs);
@@ -16,7 +22,8 @@ internal sealed record PlanningFinding(string Violation, string Evidence, string
 internal sealed record PlanningDocument(string Schema, PlanningGrounding Grounding,
     PlanningTask[]? Tasks = null, PlanningConstraint[]? Constraints = null, PlanningCoverage[]? Coverage = null,
     string? PlanCommentId = null, string? PlanRevision = null, string? Assessment = null,
-    string? Revalidation = null, PlanningFinding[]? Findings = null, PlanningQuestion[]? Questions = null);
+    string? Revalidation = null, PlanningFinding[]? Findings = null, PlanningQuestion[]? Questions = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PlanningLocalInput[]? LocalInputs = null);
 internal sealed record PlanningApproval(string PlanCommentId, string PlanRevision, string ReviewCommentId,
     string ReviewRevision, PlanningGrounding Grounding);
 internal sealed record PlanningObservation(PlanningGrounding Grounding, BeadSnapshot Product,
@@ -33,6 +40,7 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
     internal const string CandidateSchema = "nightweaver-plan-v1";
     internal const string ReviewSchema = "nightweaver-plan-review-v1";
     internal const string QuestionSchema = "nightweaver-plan-question-v1";
+    internal const string InputReceiptSchema = "nightweaver-plan-input-receipt-v1";
     private readonly BeadsReader reader = new(runner);
     private static readonly string[] ProductFields = ["title", "description", "design", "acceptance_criteria", "notes"];
 
@@ -146,7 +154,7 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
 
     internal static bool IsProtocol(string text) => ReadSchema(text, out var diagnosticCause) switch
     {
-        CandidateSchema or ReviewSchema or QuestionSchema or "nightweaver-planning-outcome-v1" or PlanningPublisher.ReleaseSchema => true,
+        CandidateSchema or ReviewSchema or QuestionSchema or InputReceiptSchema or "nightweaver-planning-outcome-v1" or PlanningPublisher.ReleaseSchema => true,
         "nightweaver-needs-human-v1" => diagnosticCause == "planning-context-too-large",
         _ => false
     };
@@ -194,6 +202,8 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
             return "Task identities must be unique.";
         var tasks = plan.Tasks.ToDictionary(t => t.Id, StringComparer.Ordinal);
         if (tasks.Count != plan.Tasks.Length) return "Task identities must be unique.";
+        var inputError = ValidateLocalInputs(plan);
+        if (inputError is not null) return inputError;
         if (plan.Constraints.Any(c => c is null || !Text(c.Requirement, c.Source))) return "Hard constraints require authoritative sources.";
         if (plan.Coverage.Any(c => c is null || !Text(c.Requirement) || c.TaskIds is null
             || c.TaskIds.Any(id => !tasks.ContainsKey(id))
@@ -211,6 +221,48 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
         }
         return tasks.Keys.All(Visit) ? null : "Task dependencies must reference known tasks and form an acyclic graph.";
     }
+
+    private static string? ValidateLocalInputs(PlanningDocument plan)
+    {
+        var inputs = plan.LocalInputs ?? [];
+        if (inputs.Length > 64) return "A plan can declare at most 64 local inputs.";
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var input in inputs)
+        {
+            if (input is null || !InputId(input.Id) || !ids.Add(input.Id))
+                return "Local input IDs must be unique lowercase tokens of at most 64 characters.";
+            if (!BoundedText(input.SourcePath, 4096) || input.Source is null
+                || !BoundedText(input.Source.Identity, 1024)
+                || input.Source.Revision is not null && !BoundedText(input.Source.Revision, 1024)
+                || input.Source.ExportCommand is not null && !BoundedText(input.Source.ExportCommand, 4096))
+                return "Local inputs require a bounded source path and reported source identity.";
+            if (!Sha256(input.ExpectedSha256) || input.Store is null
+                || !BoundedText(input.Store.Project, 128) || !Sha256(input.Store.RepositoryIdentity))
+                return "Local inputs require lowercase SHA-256 and a Project and physical repository store binding.";
+            if (input.Locator != "sha256/" + input.ExpectedSha256)
+                return "Local input locators must be sha256/<expectedSha256>.";
+        }
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var task in plan.Tasks!)
+        {
+            var references = task.LocalInputIds ?? [];
+            if (references.Length > 64 || references.Any(id => id is null || !ids.Contains(id))
+                || references.Distinct(StringComparer.Ordinal).Count() != references.Length)
+                return "Task local input IDs must be unique references to declared inputs (at most 64).";
+            used.UnionWith(references);
+        }
+        return ids.SetEquals(used) ? null : "Each declared local input must be used by a task.";
+    }
+
+    private static bool InputId(string? value) => value is { Length: > 0 and <= 64 }
+        && value[0] is >= 'a' and <= 'z'
+        && value.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
+
+    private static bool Sha256(string? value) => value is { Length: 64 }
+        && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static bool BoundedText(string? value, int limit) => !string.IsNullOrWhiteSpace(value)
+        && value.Length <= limit && !value.Any(char.IsControl);
 
     internal static (string? Error, PlanningApproval? Approval) Verify(
         AgentStageResult invocation, AgentOutcomeChoice outcome, PlanningGrounding current,

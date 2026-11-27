@@ -6,6 +6,117 @@ Planning uses complete raw JSON comments on the Product. These are evidence, not
 
 `nightweaver-plan-v1` contains `grounding`, `tasks`, `constraints`, `coverage`. Tasks contain `id`, `title`, `outcome`, `context`, `approach`, `acceptanceCriteria` (array), `verification`, `dependsOn` (IDs). Constraints contain `requirement`, `source`. Coverage entries contain `requirement`, `taskIds`, `satisfiedEvidence`, `authorizedExclusion`; use null for unused alternatives. Task IDs are unique and dependencies must form a known acyclic graph. Acceptance criteria describe observable behavior; concrete implementation instructions belong in approach, and hard constraints require authoritative sources.
 
+## Local input contract
+
+A candidate can declare `localInputs`. Each task can declare `localInputIds`.
+Absent, null and empty arrays mean no local inputs. Old candidates retain their
+parse, approval and task-description behavior. No dependency is inferred from prose.
+The Planner must declare every local file needed by Delivery. The Challenger must
+check the declarations, source claims and task use against the Product requirements.
+Use synthetic data in tests. Never put raw exports or input bytes in Git or comments.
+
+Each input has this structure:
+
+```json
+{
+  "id": "tracker-export",
+  "sourcePath": "evidence/export.json",
+  "source": {
+    "identity": "synthetic tracker export",
+    "revision": "reported tracker revision",
+    "exportCommand": "bd export"
+  },
+  "expectedSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "store": {
+    "project": "demo",
+    "repositoryIdentity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "locator": "sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
+```
+
+`id` is unique within the candidate. It starts with a lowercase ASCII letter.
+It contains only lowercase ASCII letters, digits and `-`, with at most 64 characters.
+Each declared input must be used by at least one task. Task references are unique,
+case-sensitive IDs from this list. The plan and each task can name at most 64 inputs.
+The existing 64 KiB UTF-8 candidate parse limit still applies.
+
+`sourcePath` records the original file location. A relative path is relative to the
+Planning checkout. An absolute path records a location outside that checkout.
+It is not a store path or a Delivery fallback. It has at most 4096 characters.
+`source.identity` describes the reported origin, such as a tracker or dataset.
+It has at most 1024 characters. Optional `revision` and `exportCommand` record
+reported source facts, with limits of 1024 and 4096 characters. Supplied text must
+be nonblank and contain no control characters. Commands are descriptions and must
+never be executed by input resolution. A reported revision is not a verified
+tracker revision. The host must not assert a source revision it did not verify.
+
+`expectedSha256` is exactly 64 lowercase hexadecimal characters. It names the
+expected bytes. Validation does not read files or prove this hash. The store
+binding contains the configured Project slug (nonblank, at most 128 characters,
+no control characters) and `repositoryIdentity`. The latter is the lowercase
+SHA-256 of the UTF-8 physical Git common-directory identity returned by
+`ProcessLifetimeTargetRepositoryLock.ResolveIdentity`. It binds aliases and
+worktrees to the same physical repository. Future host checks must compare both
+values to the current Project and repository; pure candidate validation checks
+their format only. The store namespace is this pair. Project names alone do not
+identify a repository.
+
+`locator` is exactly `sha256/` followed by `expectedSha256`. No absolute path,
+backslash, URL, encoding, traversal, suffix or other locator form is allowed.
+The locator is logical and does not contain an invocation directory. The host
+chooses the physical store root outside the Target Repository, worktrees and
+invocation temporary directories. A locator grants no access outside its namespace.
+
+### Storage and handoff requirements
+
+This change defines the contract. It does not activate storage, file reads,
+publication barriers or Delivery resolution. The dependent storage and integration
+tasks must implement the following requirements before inputs are operational:
+
+- Before publication, read each declared regular file under restricted access.
+  Reject links, reparse traversal and unstable or unreadable files. Limit each
+  input to 16 MiB and the candidate's input bytes to 64 MiB. Verify the bytes
+  against `expectedSha256`. Retain the source record as reported facts.
+- Store immutable bytes and a manifest in the bound namespace. Restrict access
+  to the host account and its authorized Delivery processes. Write to a temporary
+  sibling, verify, then publish atomically without overwriting conflicting bytes.
+  On restart, reuse only a complete manifest and bytes that pass all identity,
+  size and hash checks. Preserve conflicting or partial evidence for inspection.
+- The verified manifest records `schema: nightweaver-local-input-v1`, `store`,
+  `locator`, `sha256` and `sizeBytes`. These are verified byte and store facts.
+  The manifest also retains `sourcePath` and `source` as reported facts.
+- Before removing publication holds, retain a handoff record with
+  `schema: nightweaver-plan-input-handoff-v1`, `product`, `planCommentId`,
+  `planRevision` (the exact candidate comment hash), `store` and `inputs`.
+  Each input entry records `id`, `locator`, `sha256`, `sizeBytes`, `sourcePath`,
+  `source` and the approved task entry IDs that use it. Group records by store
+  binding if a candidate names more than one binding; host verification must
+  reject any binding foreign to the current Project and repository.
+- A `nightweaver-plan-input-receipt-v1` comment may cite the handoff identity and
+  verified input IDs. It is protocol evidence and is excluded from Product
+  discussion grounding. It is not a candidate, review, approval, release or Resume
+  command. Missing or malformed receipts cannot prove byte availability. Receipts
+  must not carry raw bytes. The host must verify the retained record and bytes.
+- Delivery resolves only the declared task IDs through the retained handoff and
+  current bound store. It verifies Product, exact candidate revision, task use,
+  locator, size, restricted access and SHA-256 before use. It must still resolve
+  after normal Planning cleanup. It must not fall back to `sourcePath`. A missing,
+  foreign or corrupt input stops publication or Delivery with the Product, candidate
+  revision, input ID, locator and failed check. The maintainer must inspect and
+  reconcile the evidence before an authorized Retry. Keep raw bytes out of diagnostics.
+
+Task materialization appends `## Local inputs` only for a task with input references.
+Its JSON array contains the exact declared input records in `localInputIds` order.
+It includes no runtime path or receipt. Resolution must not edit the approved
+candidate or published task text. Normal exact candidate approval, creation intents,
+immutable graph checks, publication holds and the final parent barrier still apply.
+Receipts do not grant lifecycle authority or permit graph replacement. Cleanup
+retains the external store and logs without broader pruning or branch authority.
+This contract concerns prevention. It does not replace or resume the `ns-ptxz` graph.
+
+## Approval and publication
+
 `nightweaver-plan-review-v1` contains current `grounding`, `planCommentId`, `planRevision` (SHA-256 of the exact persisted candidate comment's UTF-8 text), `assessment`, `revalidation`, `findings`, `questions`. Each finding contains `violation`, `evidence`, `direction`. Approval requires no unresolved findings/questions. Changed grounding requires targeted revalidation, documenting affected portions and preserved unaffected work. Semantic checks (full Product coverage, authoritative sources, executable context, implementation assumptions) use the role-specific classifier; structural and identity checks are deterministic. Classification never grants authority by itself.
 
 `nightweaver-plan-question-v1` contains current `grounding` and nonempty `questions`, each with `question`, `recommendedAnswer`, `tradeoffs`. A material product gap pauses; routine omissions receive bounded repair. Findings about disproven assumptions require revision of the affected plan.

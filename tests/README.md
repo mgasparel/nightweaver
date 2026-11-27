@@ -1,5 +1,12 @@
 # Test suite
 
+Local input references add controlled schema, approval, protocol and task-description
+cases in `PlanningExecutionTests` and `PlanningPublicationTests`. They use synthetic
+strings and perform no input file reads, native journeys, fixture publication or
+tracker commands. Production adds bounded validation and description serialization
+only when inputs are declared. Old plans take the empty-input path. The complete
+candidate measurement must report the retained baseline and actual added case count.
+
 The invocation cancellation test cancels and waits for execution in `finally`,
 including when readiness or an assertion fails. It reads each PID only after
 the writer closes. Its existing native journey keeps the caller-token and
