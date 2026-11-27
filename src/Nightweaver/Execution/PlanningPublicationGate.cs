@@ -141,4 +141,6 @@ internal static class PlanningPublicationGate
 }
 
 internal sealed record PublishedPlanningTask(string Id, string Title, string Description,
-    string AcceptanceCriteria, string[] Dependencies);
+    string AcceptanceCriteria, string[] Dependencies,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    PlanningLocalInput[]? LocalInputs = null);

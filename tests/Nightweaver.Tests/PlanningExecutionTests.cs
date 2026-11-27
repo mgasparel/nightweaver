@@ -7,6 +7,22 @@ namespace Nightweaver.Tests;
 
 public sealed class PlanningExecutionTests
 {
+    [Theory]
+    [InlineData("nightweaver-plan-input-handoff-v1")]
+    [InlineData("nightweaver-plan-input-receipt-v1")]
+    public async Task InputProtocolRecordsDoNotChangeGroundingOrSupplyApproval(string schema)
+    {
+        using var fixture = new PlanningFixture("approval");
+        var before = await fixture.CaptureAsync();
+        var record = new BeadCommentSnapshot("record", JsonSerializer.Serialize(new { schema }), DateTimeOffset.UnixEpoch);
+        fixture.Comments.Add(record);
+        Assert.Equal(before, await fixture.CaptureAsync());
+        Assert.True(PlanningEvidence.IsProtocol(record.Text));
+        Assert.Throws<AgentStageInputException>(() => PlanningPublisher.ReadApproval(fixture.Comments));
+        fixture.Comments.Add(new("discussion", "The source must retain its original identity.", DateTimeOffset.UnixEpoch.AddSeconds(1)));
+        Assert.NotEqual(before, await fixture.CaptureAsync());
+    }
+
     internal static PlanningLocalInput SyntheticInput(string id = "export") => new(id,
         "synthetic/export.json", new("tracker export", Revision: "reported-revision", ExportCommand: "bd export"),
         new string('a', 64), new("demo", new string('b', 64)), "sha256/" + new string('a', 64));

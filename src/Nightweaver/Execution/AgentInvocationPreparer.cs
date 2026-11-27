@@ -10,6 +10,14 @@ namespace Nightweaver.Execution;
 /// <summary>Prepares prompt and launch data without creating runtime files or starting a process.</summary>
 internal sealed class AgentInvocationPreparer
 {
+    internal static PreparedAgentInvocation WithPlanningInputs(PreparedAgentInvocation invocation, ResolvedPlanningInput[] inputs) =>
+        new(invocation.Executable, invocation.Arguments, invocation.WorkingDirectory,
+            invocation.StandardInput + "\n\nVerified local inputs (read the durable path; retain the expected SHA-256; source paths are reported origin only):\n"
+                + System.Text.Json.JsonSerializer.Serialize(inputs, PlanningEvidence.JsonOptions),
+            invocation.EnvironmentOverrides, invocation.Timeout, invocation.InvocationId, invocation.TemporaryDirectory,
+            invocation.LogFilePath, invocation.Purpose, invocation.Stage, invocation.RepairCycles, invocation.MaxRepairCycles,
+            invocation.ConfiguredModel, invocation.Effort);
+
     private static readonly object IdentifierLock = new();
     private static long lastIdentifierUtcTicks = DateTime.MinValue.Ticks;
 

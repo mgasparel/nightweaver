@@ -154,7 +154,7 @@ internal sealed class PlanningEvidence(IProcessRunner runner)
 
     internal static bool IsProtocol(string text) => ReadSchema(text, out var diagnosticCause) switch
     {
-        CandidateSchema or ReviewSchema or QuestionSchema or InputReceiptSchema or "nightweaver-planning-outcome-v1" or PlanningPublisher.ReleaseSchema => true,
+        CandidateSchema or ReviewSchema or QuestionSchema or InputReceiptSchema or PlanningInputHandoff.Schema or "nightweaver-planning-outcome-v1" or PlanningPublisher.ReleaseSchema => true,
         "nightweaver-needs-human-v1" => diagnosticCause == "planning-context-too-large",
         _ => false
     };

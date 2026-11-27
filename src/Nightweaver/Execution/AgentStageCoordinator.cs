@@ -30,6 +30,7 @@ internal sealed record AgentStageSession(
     bool PreserveInheritedChanges)
 {
     internal string? PublicationVersion { get; init; }
+    internal bool RequiresPlanningInputs { get; init; }
     private readonly MergeTelemetryEmission mergeTelemetry = new();
     internal bool TryRecordMergeTelemetry() => mergeTelemetry.TryRecord();
 
@@ -50,18 +51,21 @@ internal sealed class AgentStageCoordinator
     private readonly PrepareAgentInvocation prepare;
     private readonly ExecuteAgentInvocation execute;
     private readonly AgentPostExitVerifier verifier;
+    private readonly Func<AgentStageSession, IPlanningInputStore> openInputs;
 
     internal AgentStageCoordinator(
         IProcessRunner processRunner,
         ProvisionAgentWorktree? provision = null,
         PrepareAgentInvocation? prepare = null,
-        ExecuteAgentInvocation? execute = null)
+        ExecuteAgentInvocation? execute = null,
+        Func<AgentStageSession, IPlanningInputStore>? openInputs = null)
     {
         this.processRunner = processRunner;
         beadsReader = new BeadsReader(processRunner);
         this.provision = provision ?? new WorktreeProvisioner(processRunner).ProvisionAsync;
         this.prepare = prepare ?? new AgentInvocationPreparer().PrepareAsync;
         this.execute = execute ?? AgentInvocationExecutor.ExecuteAsync;
+        this.openInputs = openInputs ?? PlanningInputHandoff.Open;
         verifier = new AgentPostExitVerifier(processRunner, beadsReader);
     }
 
@@ -156,7 +160,16 @@ internal sealed class AgentStageCoordinator
         var session = new AgentStageSession(hostPaths, project, sessionRepository, beadId, role, purpose, worktree,
             fresh.State, fresh.Bead.Assignee,
             new AgentDispatchContext(fresh.State.Id, fresh.State.IssueType, fresh.State.Stage, fresh.State.RepairCycles),
-            worktree.WasDirty) { PublicationVersion = PlanningPublisher.Version(fresh.Bead) };
+            worktree.WasDirty)
+        {
+            PublicationVersion = PlanningPublisher.Version(fresh.Bead),
+            // This is an IO prefilter only. The immutable graph declares inputs;
+            // a prose example with the same heading never creates a dependency.
+            RequiresPlanningInputs = purpose == WorktreePurpose.Delivery
+                && PlanningPublisher.Metadata(fresh.Bead, "publication_product") is not null
+                && fresh.Bead.Payload.TryGetProperty("description", out var description)
+                && description.GetString()?.Contains(PlanningInputHandoff.DescriptionPrefix, StringComparison.Ordinal) == true
+        };
         if (expectedAssignee is not null) ActivityRuntime.Current?.Admitted(session);
         return session;
     }
@@ -211,6 +224,11 @@ internal sealed class AgentStageCoordinator
                     invocation.TemporaryDirectory, invocation.LogFilePath, invocation.Purpose,
                     invocation.Stage, invocation.RepairCycles, invocation.MaxRepairCycles,
                     invocation.ConfiguredModel, invocation.Effort);
+            }
+            if (session.RequiresPlanningInputs)
+            {
+                var inputs = await PlanningInputHandoff.ResolveAsync(session, beadsReader, openInputs, cancellationToken);
+                if (inputs.Length > 0) invocation = AgentInvocationPreparer.WithPlanningInputs(invocation, inputs);
             }
             cancellationToken.ThrowIfCancellationRequested();
         }
