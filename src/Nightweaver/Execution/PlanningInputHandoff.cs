@@ -99,26 +99,32 @@ internal static class PlanningInputHandoff
         if (product is null) return [];
         var graph = PlanningPublisher.Metadata(inventory.ById[product], "publication_graph")!;
         var published = JsonSerializer.Deserialize<PublishedPlanningTask[]>(graph, PlanningEvidence.JsonOptions)!.Single(t => t.Id == task.Id);
-        // Structured graph fields declare dependencies. Never infer them from prose.
-        if (published.LocalInputs is not { Length: > 0 } inputs) return [];
         var description = published.Description;
         var revision = PlanningPublisher.Metadata(task, "publication_revision")!;
+        var comments = await reader.ReadCommentsAsync(session.Repository, product, token);
+        var candidate = comments.FirstOrDefault(c => PlanningEvidence.Hash(c.Text) == revision);
+        var plan = candidate is null ? null : PlanningEvidence.Parse(candidate.Text);
+        var entry = PlanningPublisher.Metadata(task, "publication_entry");
+        if (plan is null || PlanningEvidence.ValidateCandidate(plan) is not null
+            || plan.Tasks!.SingleOrDefault(t => t.Id == entry) is not { } approvedTask
+            || PlanningPublisher.Description(approvedTask, plan) != description)
+            throw new AgentStageInputException($"Delivery input check failed for Product '{product}', candidate '{revision}': The exact approved candidate or task use differs. The maintainer must reconcile the published evidence before an authorized Retry.");
+        // Check the structured candidate even when the optional graph field is lost.
+        // Prose alone never declares a dependency, including in legacy candidates.
+        var expectedInputs = PlanningPublisher.TaskInputs(approvedTask, plan) ?? [];
+        var inputs = published.LocalInputs ?? [];
+        if (JsonSerializer.Serialize(expectedInputs, PlanningEvidence.JsonOptions)
+            != JsonSerializer.Serialize(inputs, PlanningEvidence.JsonOptions))
+            throw new AgentStageInputException($"Delivery input check failed for Product '{product}', candidate '{revision}': Task input declarations differ from the exact approved candidate. The maintainer must reconcile the published evidence before an authorized Retry.");
+        if (inputs.Length == 0) return [];
         if (inputs.Length > 64 || inputs.Any(i => i is null)
             || inputs.Select(i => i.Id).Distinct(StringComparer.Ordinal).Count() != inputs.Length)
             throw new AgentStageInputException($"Delivery input check failed for Product '{product}', candidate '{revision}': Invalid task input declarations. The maintainer must reconcile the published evidence before an authorized Retry.");
-        var comments = await reader.ReadCommentsAsync(session.Repository, product, token);
         var handoff = Read(comments, product, revision)
             ?? throw Failure(product, revision, inputs[0], "The handoff is missing.");
         if (handoff.Store != Binding(session)) throw Failure(product, revision, inputs[0], "The handoff store is foreign.");
-        var entry = PlanningPublisher.Metadata(task, "publication_entry");
-        var candidate = comments.SingleOrDefault(c => c.Id == handoff.PlanCommentId && PlanningEvidence.Hash(c.Text) == revision);
-        var plan = candidate is null ? null : PlanningEvidence.Parse(candidate.Text);
-        if (plan is null || PlanningEvidence.ValidateCandidate(plan) is not null
-            || !MatchesPlan(handoff, plan)
-            || plan.Tasks!.SingleOrDefault(t => t.Id == entry) is not { } approvedTask
-            || PlanningPublisher.Description(approvedTask, plan) != description
-            || JsonSerializer.Serialize(PlanningPublisher.TaskInputs(approvedTask, plan), PlanningEvidence.JsonOptions)
-                != JsonSerializer.Serialize(inputs, PlanningEvidence.JsonOptions))
+        if (!comments.Any(c => c.Id == handoff.PlanCommentId && c.Text == candidate!.Text)
+            || !MatchesPlan(handoff, plan))
             throw Failure(product, revision, inputs[0], "The exact approved candidate or task use differs.");
         var required = handoff.Inputs.Where(i => i.TaskEntries.Contains(entry, StringComparer.Ordinal)).Select(i => i.Id).ToHashSet(StringComparer.Ordinal);
         if (!required.SetEquals(inputs.Select(i => i.Id))) throw Failure(product, revision, inputs[0], "Task use differs from the handoff.");

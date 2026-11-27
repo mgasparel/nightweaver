@@ -92,6 +92,32 @@ public sealed class PlanningPublicationTests
     }
 
     [Theory]
+    [InlineData("absent")]
+    [InlineData("null")]
+    [InlineData("empty")]
+    public async Task LostGraphInputDeclarationsCannotDisableDeliveryVerification(string change)
+    {
+        using var fixture = new Fixture(withInputs: true);
+        await fixture.Publish();
+        var metadata = fixture.Rows["product"]["metadata"]!.AsObject();
+        var graph = JsonNode.Parse(metadata["publication_graph"]!.GetValue<string>())!.AsArray();
+        var task = graph[0]!.AsObject();
+        if (change == "absent") task.Remove("localInputs");
+        else task["localInputs"] = change == "null" ? null : new JsonArray();
+        metadata["publication_graph"] = graph.ToJsonString(PlanningEvidence.JsonOptions);
+        fixture.Inputs.OnVerify = () => throw new IOException("Synthetic missing object");
+        var rows = JsonSerializer.Serialize(fixture.Rows);
+
+        var error = await Assert.ThrowsAsync<AgentStageInputException>(fixture.AttemptDelivery);
+
+        Assert.Contains("input declarations", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("maintainer", error.Message, StringComparison.Ordinal);
+        Assert.Contains("Retry", error.Message, StringComparison.Ordinal);
+        Assert.False(fixture.Launched);
+        Assert.Equal(rows, JsonSerializer.Serialize(fixture.Rows));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ChangedBytesBeforeHoldReleasePreserveRemainingHoldsAndParentBarrier(bool partial)
@@ -150,6 +176,16 @@ public sealed class PlanningPublicationTests
         Assert.False(fixture.Inputs.Preserved);
         var graph = PlanningPublisher.Metadata(fixture.Parent, "publication_graph")!;
         Assert.DoesNotContain("\"localInputs\"", graph, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NoInputGraphDoesNotReadTheStoreOrRequireHandoff()
+    {
+        using var fixture = new Fixture();
+        await fixture.Publish();
+        fixture.Inputs.OnVerify = () => throw new InvalidOperationException("No-input graph accessed the store");
+        Assert.Empty(await fixture.ResolveInputs());
+        Assert.False(fixture.Inputs.Preserved);
     }
 
     private sealed class InputStore : IPlanningInputStore

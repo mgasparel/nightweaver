@@ -82,8 +82,11 @@ barrier. Existing guarded graph, approval, claim and pause checks still apply.
 New graph snapshots include optional `localInputs` on tasks that use declared
 inputs. Absent fields preserve the exact legacy snapshot format. Delivery reads
 this structured field; prose cannot declare a dependency. A generated Delivery
-attempt with a local input section adds one fresh complete inventory read. A task without structured inputs
-needs no store or Product history read. A task with inputs reads Product comments,
+attempt with a local input section adds one fresh complete inventory read and reads
+Product comments. It checks the exact candidate and compares its task input
+declarations with the graph before it accepts an empty input list. Omitted, null
+or empty graph fields cannot remove required inputs. Legacy prose in a candidate
+without input declarations still needs no store or handoff. A task with inputs
 checks the exact candidate hash and task content, handoff store, task use, source,
 size, access and bytes. It appends only input IDs, verified absolute paths, expected
 hashes and sizes to the dispatch. It never falls back to a Planning path.

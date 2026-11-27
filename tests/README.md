@@ -1,5 +1,14 @@
 # Test suite
 
+Planning input declaration repair adds four controlled cases. Three cases remove,
+null or empty the graph input field after publication and make the stored object
+unavailable. Each case requires an actionable refusal before Agent launch. The
+fourth case retains no-input behavior; existing legacy prose coverage remains.
+Delivery attempts with an input section now read Product comments before the
+empty-input return to check the exact candidate contract. This adds no store read
+for legacy prose and no work for ordinary tasks without an input section. No native
+journey or fixture publication is added. Six threads and deadlines remain.
+
 Planning input handoff adds controlled publication, restart, conflict and launch
 cases in `PlanningPublicationTests`, protocol grounding cases in
 `PlanningExecutionTests` and a dispatch projection case in
