@@ -10,7 +10,7 @@ namespace Nightweaver.Execution;
 
 /// <summary>Reconciles one immutable approved graph. All writes are followed by tracker reads;
 /// the Product's final planned update is the admission barrier for the entire graph.</summary>
-internal sealed class PlanningPublisher(IProcessRunner runner)
+internal sealed class PlanningPublisher(IProcessRunner runner, Func<AgentStageSession, IPlanningInputStore>? openInputs = null)
 {
     internal const string ReleaseSchema = "nightweaver-plan-release-v1";
     internal const string IntentSchema = "nightweaver-plan-create-v1";
@@ -37,9 +37,13 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         + $"## Dependency ordering\n{string.Join("\n", task.DependsOn)}"
         + LocalInputDescription(task, plan);
 
+    internal static PlanningLocalInput[]? TaskInputs(PlanningTask task, PlanningDocument plan) =>
+        task.LocalInputIds is not { Length: > 0 } ? null
+            : task.LocalInputIds.Select(id => plan.LocalInputs!.Single(input => input.Id == id)).ToArray();
+
     private static string LocalInputDescription(PlanningTask task, PlanningDocument plan) =>
         task.LocalInputIds is not { Length: > 0 } ? ""
-        : "\n\n## Local inputs\n```json\n" + JsonSerializer.Serialize(
+        : PlanningInputHandoff.DescriptionPrefix + JsonSerializer.Serialize(
             task.LocalInputIds.Select(id => plan.LocalInputs!.Single(input => input.Id == id)),
             PlanningEvidence.JsonOptions) + "\n```";
 
@@ -83,12 +87,56 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         if (grounding != approval.Grounding && PlanningEvidence.ApprovalStillCurrent(approval, approval.Grounding, comments))
             return await RevalidateAsync(session, authority, releaseRevalidationClaim, token);
 
+        PlanningHandoff? handoff = null;
+        IPlanningInputStore? inputStore = null;
+        if (plan.LocalInputs is { Length: > 0 } inputs)
+        {
+            // Exact approval is required before file IO and again after it settles.
+            await CheckAuthorityAsync(session, approval, authority, token);
+            inputStore = (openInputs ?? PlanningInputHandoff.Open)(session);
+            PlanningInputManifest[] manifests;
+            try { manifests = inputStore.Preserve(inputs, session.Worktree.Path, token); }
+            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException
+                or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
+            {
+                var failed = inputs.FirstOrDefault(i => i.Id == error.Data["planningInputId"] as string) ?? inputs[0];
+                throw PlanningInputHandoff.Failure(session.BeadId, approval.PlanRevision, failed,
+                    "Input preservation failed: " + PlanningInputHandoff.Diagnostic(error));
+            }
+            handoff = PlanningInputHandoff.Create(session, approval, plan, manifests);
+            await CheckAuthorityAsync(session, approval, authority, token);
+            var retainedInput = PlanningInputHandoff.Read(comments, session.BeadId, approval.PlanRevision);
+            var handoffJson = PlanningInputHandoff.Encode(handoff);
+            if (retainedInput is not null && PlanningInputHandoff.Encode(retainedInput) != handoffJson)
+                throw PlanningInputHandoff.Failure(session.BeadId, approval.PlanRevision, inputs[0], "The retained handoff conflicts.");
+            if (retainedInput is null)
+            {
+                using var file = InvocationRuntimeFiles.CreatePlanningPublicationMetadataFile(session.HostPaths, session.Project.Name, session.BeadId);
+                await file.Stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(handoffJson), token);
+                await file.Stream.FlushAsync(token);
+                await WriteUncertainAsync(session, ["comments", "add", session.BeadId, "-f", file.Stream.Name], token);
+            }
+            await ConfirmInputsAsync();
+        }
+
+        async Task ConfirmInputsAsync()
+        {
+            if (handoff is null) return;
+            var current = PlanningInputHandoff.Read(await reader.ReadCommentsAsync(session.Repository, session.BeadId, token),
+                session.BeadId, approval.PlanRevision);
+            if (current is null || PlanningInputHandoff.Encode(current) != PlanningInputHandoff.Encode(handoff))
+                throw PlanningInputHandoff.Failure(session.BeadId, approval.PlanRevision, plan.LocalInputs![0], "The handoff was not confirmed.");
+            PlanningInputHandoff.Verify(handoff, plan.LocalInputs!, inputStore!, token);
+            await CheckAuthorityAsync(session, approval, authority, token);
+        }
+
         // Unmapped children are never adopted, overwritten, or removed.
         var initialInventory = await reader.ReadSnapshotAsync(session.Repository, token);
         var ids = ResolveIds(session.BeadId, approval.PlanRevision, plan, initialInventory, comments, out var releasing);
         await CheckChildrenAsync(session, ids.Values, token);
         foreach (var task in tasks)
         {
+            await ConfirmInputsAsync();
             await CheckAuthorityAsync(session, approval, authority, token);
             var inventory = await reader.ReadSnapshotAsync(session.Repository, token);
             ids = ResolveIds(session.BeadId, approval.PlanRevision, plan, inventory, comments, out _);
@@ -141,7 +189,7 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
 
         await CheckChildrenAsync(session, ids.Values, token);
         var graph = tasks.Select(t => new PublishedPlanningTask(ids[t.Id], t.Title, Description(t, plan),
-            string.Join("\n", t.AcceptanceCriteria), t.DependsOn.Select(d => ids[d]).ToArray())).ToArray();
+            string.Join("\n", t.AcceptanceCriteria), t.DependsOn.Select(d => ids[d]).ToArray(), TaskInputs(t, plan))).ToArray();
         var graphJson = JsonSerializer.Serialize(graph, PlanningEvidence.JsonOptions);
         var receipt = JsonSerializer.Serialize(new { schema = ReleaseSchema, product = session.BeadId,
             revision = approval.PlanRevision, tasks = ids }, PlanningEvidence.JsonOptions);
@@ -197,6 +245,7 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         }
         foreach (var task in tasks)
         {
+            await ConfirmInputsAsync();
             await CheckAuthorityAsync(session, approval, authority, token);
             var bead = await reader.ReadDetailAsync(session.Repository, ids[task.Id], token);
             CheckTask(bead, task, plan, session.BeadId, approval.PlanRevision, allowReleased: true);
@@ -210,6 +259,7 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         foreach (var id in ids.Values)
             if (releasedGraph.ById[id].Labels.Contains("plan-unpublished", StringComparer.Ordinal))
                 throw Refuse($"Task '{id}' still has a publication hold.");
+        await ConfirmInputsAsync();
         await CheckAuthorityAsync(session, approval, authority, token);
         // All task holds are gone, but generated-task admission still requires this
         // exact parent revision and planned state. No multi-row transaction is assumed.
@@ -416,7 +466,7 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
             {
                 var graph = JsonSerializer.Deserialize<PublishedPlanningTask[]>(Metadata(parent, "publication_graph") ?? "null", PlanningEvidence.JsonOptions);
                 var expected = plan.Tasks.Select(t => new PublishedPlanningTask(ids[t.Id], t.Title, Description(t, plan),
-                    string.Join("\n", t.AcceptanceCriteria), t.DependsOn.Select(d => ids[d]).ToArray())).ToArray();
+                    string.Join("\n", t.AcceptanceCriteria), t.DependsOn.Select(d => ids[d]).ToArray(), TaskInputs(t, plan))).ToArray();
                 if (graph is null || JsonSerializer.Serialize(graph, PlanningEvidence.JsonOptions)
                     != JsonSerializer.Serialize(expected, PlanningEvidence.JsonOptions))
                     throw IntentFailure(fallback, inventory, "Retained graph membership conflicts");

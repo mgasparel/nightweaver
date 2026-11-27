@@ -13,8 +13,15 @@ namespace Nightweaver.Execution;
 internal sealed record PlanningInputManifest(string Schema, PlanningInputStore Store, string Locator,
     string Sha256, long SizeBytes, string SourcePath, PlanningInputSource Source);
 
-// Inactive until the publication/handoff slice connects it. No cleanup ownership.
-internal sealed class PlanningInputFiles
+internal interface IPlanningInputStore
+{
+    PlanningInputManifest[] Preserve(IReadOnlyList<PlanningLocalInput> inputs, string checkout, CancellationToken cancellationToken);
+    PlanningInputManifest Verify(PlanningLocalInput input);
+    string Location(PlanningLocalInput input);
+}
+
+// No cleanup ownership. Publication and Delivery share this verification boundary.
+internal sealed class PlanningInputFiles : IPlanningInputStore
 {
     internal const long MaximumInputBytes = 16 * 1024 * 1024;
     private const long MaximumCandidateBytes = 64 * 1024 * 1024;
@@ -35,11 +42,15 @@ internal sealed class PlanningInputFiles
         if (Within(target, Root)) throw new InvalidDataException("Input storage is inside the Target Repository.");
     }
 
-    internal PlanningInputManifest[] Preserve(IReadOnlyList<PlanningLocalInput> inputs, string checkout,
+    public PlanningInputManifest[] Preserve(IReadOnlyList<PlanningLocalInput> inputs, string checkout,
         CancellationToken cancellationToken = default)
     {
         if (inputs.Count > 64) throw new InvalidDataException("Too many local inputs.");
-        foreach (var input in inputs) Validate(input);
+        foreach (var input in inputs)
+        {
+            try { Validate(input); }
+            catch (InvalidDataException error) { error.Data["planningInputId"] = input?.Id; throw; }
+        }
         if (inputs.Select(i => i.Id).Distinct(StringComparer.Ordinal).Count() != inputs.Count)
             throw new InvalidDataException("Local input IDs are not unique.");
         using var root = OpenRoot(create: true);
@@ -51,7 +62,10 @@ internal sealed class PlanningInputFiles
         foreach (var input in inputs)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var result = PreserveOne(input, checkout, MaximumCandidateBytes - total, cancellationToken);
+            PlanningInputManifest result;
+            try { result = PreserveOne(input, checkout, MaximumCandidateBytes - total, cancellationToken); }
+            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+            { error.Data["planningInputId"] = input.Id; throw; }
             total = checked(total + result.SizeBytes);
             results.Add(result);
         }
@@ -59,11 +73,17 @@ internal sealed class PlanningInputFiles
     }
 
     // Delivery verifies the object only. SourcePath is never a Delivery fallback.
-    internal PlanningInputManifest Verify(PlanningLocalInput input)
+    public PlanningInputManifest Verify(PlanningLocalInput input)
     {
         Validate(input);
         using var root = OpenRoot(create: false);
         return ReadObject(input);
+    }
+
+    public string Location(PlanningLocalInput input)
+    {
+        Validate(input);
+        return Path.Combine(ObjectPath(input), "bytes");
     }
 
     private PlanningInputManifest PreserveOne(PlanningLocalInput input, string checkout, long remaining,

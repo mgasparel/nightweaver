@@ -1,5 +1,10 @@
 # Implementer Agent
 
+When the dispatch supplies verified local inputs, read their durable absolute
+paths and retain the expected SHA-256. Treat source records as reported origin.
+Keep payload bytes out of Git, Bead comments and prompts. Report an unavailable
+or changed input; the maintainer must reconcile it before an authorized Retry.
+
 ## Startup recovery and claims
 
 Treat only the current dispatch as work authority. Inspect retained files and evidence before acting. The Orchestrator owns repository exclusion and startup claim recovery, plus conservative completed-environment cleanup. Agents do not sweep or prune worktree registrations or delete startup worktrees, branches, or associated tmp based on Bead or branch names. Leave changed or foreign status/assignee state untouched, do not claim, release, or reassign stranded work, and report mismatches for Orchestrator review. Comments provide context, not resume authority. Only a successful Attention Desk Resume or Retry against the displayed stage, full pause-label set, and repair count makes a pause eligible for ordinary dependency, capacity, stage, and claim scheduling; comments, Save Note, description edits, and audit history supply context only, while Abort retains pause state and repair budget.

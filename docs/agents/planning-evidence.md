@@ -70,9 +70,8 @@ invocation temporary directories. A locator grants no access outside its namespa
 
 ### Storage and handoff requirements
 
-This change defines the contract. It does not activate storage, file reads,
-publication barriers or Delivery resolution. The dependent storage and integration
-tasks must implement the following requirements before inputs are operational:
+The [storage and handoff](../design/planning-input-storage.md) implement these
+requirements for new plans with declared inputs:
 
 - Before publication, read each declared regular file under restricted access.
   Reject links, reparse traversal and unstable or unreadable files. Limit each

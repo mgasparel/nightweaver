@@ -1,7 +1,7 @@
 # Durable Planning input storage
 
-`PlanningInputFiles` preserves approved local inputs without changing Planning,
-publication, Delivery admission or cleanup. The handoff task connects this module.
+`PlanningInputFiles` preserves approved local inputs. `PlanningPublisher` and
+`AgentStageCoordinator` use it through the local input handoff.
 The [local input contract](../agents/planning-evidence.md#local-input-contract)
 defines declarations and lifecycle authority.
 
@@ -58,5 +58,40 @@ runtime file tests prove general handle safety but do not prove this store's DAC
 manifest binding or cleanup survival. Detailed refusals use small synthetic files.
 The size-limit case shares one 16 MiB object. These tests add no factory, tracker,
 Agent or browser journey and no fixture publication. The module adds no active
-production work until the handoff task connects it. Retain measured costs with the
+production work for plans without declared inputs. Retain measured costs with the
 complete candidate evidence.
+
+## Publication and Delivery handoff
+
+Before the first graph mutation, the shared publisher preserves every declared
+input. It checks fresh approval, ownership, Product version and grounding before
+and after file IO. It writes a canonical `nightweaver-plan-input-handoff-v1`
+Product comment through file transport and confirms the exact readback. The record
+binds Product, candidate comment ID and hash, current Project and physical repository,
+each input's source, locator, verified size and hash, and approved task entry IDs.
+It contains no payload bytes. This schema is protocol evidence, excluded from
+ordinary discussion grounding. Optional input receipts remain evidence only.
+
+A lost response can reuse the confirmed exact record. Conflicting records stop
+publication. Cancellation retains stored objects, comments and all task identities.
+Restart reuses verified objects after the source is removed. It does not create a
+replacement source record. The publisher confirms the handoff and verifies all
+declared objects before each task creation, each hold release and the final parent
+barrier. Existing guarded graph, approval, claim and pause checks still apply.
+
+New graph snapshots include optional `localInputs` on tasks that use declared
+inputs. Absent fields preserve the exact legacy snapshot format. Delivery reads
+this structured field; prose cannot declare a dependency. A generated Delivery
+attempt with a local input section adds one fresh complete inventory read and reads
+Product comments. It checks the exact candidate and compares its task input
+declarations with the graph before it accepts an empty input list. Omitted, null
+or empty graph fields cannot remove required inputs. Legacy prose in a candidate
+without input declarations still needs no store or handoff. A task with inputs
+checks the exact candidate hash and task content, handoff store, task use, source,
+size, access and bytes. It appends only input IDs, verified absolute paths, expected
+hashes and sizes to the dispatch. It never falls back to a Planning path.
+
+Failures prevent Agent launch and name the Product, candidate, input, locator and
+failed check. The maintainer must inspect and reconcile the evidence before an
+authorized Retry. Ordinary completed-environment cleanup remains independent.
+No published graph is retrofitted, including `ns-ptxz`.

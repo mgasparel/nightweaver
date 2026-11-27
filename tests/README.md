@@ -1,5 +1,27 @@
 # Test suite
 
+Planning input declaration repair adds four controlled cases. Three cases remove,
+null or empty the graph input field after publication and make the stored object
+unavailable. Each case requires an actionable refusal before Agent launch. The
+fourth case retains no-input behavior; existing legacy prose coverage remains.
+Delivery attempts with an input section now read Product comments before the
+empty-input return to check the exact candidate contract. This adds no store read
+for legacy prose and no work for ordinary tasks without an input section. No native
+journey or fixture publication is added. Six threads and deadlines remain.
+
+Planning input handoff adds controlled publication, restart, conflict and launch
+cases in `PlanningPublicationTests`, protocol grounding cases in
+`PlanningExecutionTests` and a dispatch projection case in
+`AgentInvocationPreparerTests`. These 22 added cases use synthetic metadata and an injected store.
+Existing `PlanningInputFilesTests` retain the real ACL, file identity, hash and
+cleanup-survival boundaries. No native journey, fixture publication or browser
+journey is added. New input plans add bounded store reads and one confirmed
+handoff comment. Publication verifies all objects before task creation, each hold
+release and the parent barrier. Generated Delivery attempts with an input section
+add one fresh graph inventory read; declared inputs also require Product comments and object checks.
+Legacy tasks do not read the store. Six threads and deadlines remain unchanged.
+Retain the complete candidate count and measured cost with Delivery evidence.
+
 Planning input storage adds 25 disposable-file and request-validation cases in
 `PlanningInputFilesTests`. They prove restricted ACLs, exact source records,
 restart reuse, Planning cleanup survival, size limits and retained failure data.

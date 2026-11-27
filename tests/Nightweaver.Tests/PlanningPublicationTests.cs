@@ -11,6 +11,207 @@ namespace Nightweaver.Tests;
 public sealed class PlanningPublicationTests
 {
     [Fact]
+    public async Task InputsPrecedeGraphWritesAndSurvivePublisherRestartAndLostHandoffResponse()
+    {
+        using var fixture = new Fixture(withInputs: true) { LoseResponseAt = 1, CrashAfterWrite = 3 };
+        fixture.BeforeCreate = () =>
+        {
+            Assert.True(fixture.Inputs.Preserved);
+            Assert.Single(fixture.Comments, c => c.Text.Contains(PlanningInputHandoff.Schema, StringComparison.Ordinal));
+        };
+        await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
+        var ids = fixture.Tasks.Select(t => t.Id).ToArray();
+        fixture.CrashAfterWrite = null;
+        fixture.Inputs.SourceRemoved = true;
+        Assert.True((await fixture.PublishWithNewPublisher()).Succeeded);
+        Assert.Equal(ids, fixture.Tasks.Select(t => t.Id));
+        Assert.Equal(2, fixture.CreateCount);
+        var resolved = Assert.Single(await fixture.ResolveInputs());
+        Assert.Equal("export", resolved.Id);
+        Assert.Equal(fixture.Inputs.Location(fixture.Inputs.Input!), resolved.Path);
+        Assert.Equal(7, resolved.SizeBytes);
+        Assert.All(fixture.Tasks, t => Assert.True(PlanningPublicationGate.Allows(t, fixture.Inventory)));
+    }
+
+    [Theory]
+    [InlineData("approval")]
+    [InlineData("pause")]
+    [InlineData("owner")]
+    [InlineData("cancel")]
+    [InlineData("source")]
+    public async Task PreservationCannotCarryStaleAuthorityIntoGraphMutation(string change)
+    {
+        using var fixture = new Fixture(withInputs: true);
+        fixture.Inputs.OnPreserve = () =>
+        {
+            if (change == "approval") fixture.Comments[0] = fixture.Comments[0] with { Text = fixture.Comments[0].Text + " " };
+            if (change == "pause") fixture.Rows["product"]["labels"]!.AsArray().Add("needs-human");
+            if (change == "owner") fixture.Rows["product"]["assignee"] = "foreign";
+            if (change == "cancel") throw new OperationCanceledException();
+            if (change == "source") throw new IOException("Synthetic source changed");
+        };
+        await Assert.ThrowsAnyAsync<Exception>(fixture.Publish);
+        Assert.Empty(fixture.Tasks);
+        Assert.Equal(0, fixture.WriteCount);
+        Assert.Equal(0, fixture.IntentWriteCount);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("bytes")]
+    [InlineData("size")]
+    [InlineData("source")]
+    [InlineData("foreign")]
+    [InlineData("conflict")]
+    [InlineData("candidate")]
+    [InlineData("task-use")]
+    public async Task InvalidDeliveryEvidenceStopsLaunchAndKeepsPublishedTasks(string change)
+    {
+        using var fixture = new Fixture(withInputs: true);
+        await fixture.Publish();
+        var rows = JsonSerializer.Serialize(fixture.Rows);
+        var index = fixture.Comments.FindIndex(c => c.Text.Contains(PlanningInputHandoff.Schema, StringComparison.Ordinal));
+        if (change == "missing") fixture.Comments.RemoveAt(index);
+        else if (change == "bytes") fixture.Inputs.OnVerify = () => throw new IOException("Synthetic corrupt object");
+        else if (change == "candidate") fixture.Comments[0] = fixture.Comments[0] with { Text = fixture.Comments[0].Text + " " };
+        else
+        {
+            var handoff = JsonNode.Parse(fixture.Comments[index].Text)!;
+            if (change == "size") handoff["inputs"]![0]!["sizeBytes"] = 8;
+            if (change == "source") handoff["inputs"]![0]!["sourcePath"] = "foreign.json";
+            if (change == "foreign") handoff["store"]!["project"] = "foreign";
+            if (change == "task-use") handoff["inputs"]![0]!["taskEntries"] = new JsonArray("second");
+            var changed = handoff.ToJsonString(PlanningEvidence.JsonOptions);
+            if (change == "conflict") fixture.AddComment(changed.Replace("\"sizeBytes\":7", "\"sizeBytes\":8", StringComparison.Ordinal));
+            else fixture.Comments[index] = fixture.Comments[index] with { Text = changed };
+        }
+        var error = await Assert.ThrowsAsync<AgentStageInputException>(fixture.AttemptDelivery);
+        Assert.Contains("maintainer", error.Message, StringComparison.Ordinal);
+        Assert.False(fixture.Launched);
+        Assert.Equal(rows, JsonSerializer.Serialize(fixture.Rows));
+    }
+
+    [Theory]
+    [InlineData("absent")]
+    [InlineData("null")]
+    [InlineData("empty")]
+    public async Task LostGraphInputDeclarationsCannotDisableDeliveryVerification(string change)
+    {
+        using var fixture = new Fixture(withInputs: true);
+        await fixture.Publish();
+        var metadata = fixture.Rows["product"]["metadata"]!.AsObject();
+        var graph = JsonNode.Parse(metadata["publication_graph"]!.GetValue<string>())!.AsArray();
+        var task = graph[0]!.AsObject();
+        if (change == "absent") task.Remove("localInputs");
+        else task["localInputs"] = change == "null" ? null : new JsonArray();
+        metadata["publication_graph"] = graph.ToJsonString(PlanningEvidence.JsonOptions);
+        fixture.Inputs.OnVerify = () => throw new IOException("Synthetic missing object");
+        var rows = JsonSerializer.Serialize(fixture.Rows);
+
+        var error = await Assert.ThrowsAsync<AgentStageInputException>(fixture.AttemptDelivery);
+
+        Assert.Contains("input declarations", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("maintainer", error.Message, StringComparison.Ordinal);
+        Assert.Contains("Retry", error.Message, StringComparison.Ordinal);
+        Assert.False(fixture.Launched);
+        Assert.Equal(rows, JsonSerializer.Serialize(fixture.Rows));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ChangedBytesBeforeHoldReleasePreserveRemainingHoldsAndParentBarrier(bool partial)
+    {
+        using var fixture = new Fixture(withInputs: true);
+        fixture.Inputs.OnVerify = () =>
+        {
+            if (fixture.Tasks.Count() == 2 && (!partial || fixture.Tasks.Any(t => !t.Labels.Contains("plan-unpublished"))))
+                throw new IOException("Synthetic missing object");
+        };
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.Publish);
+        Assert.Equal(2, fixture.CreateCount);
+        Assert.Equal(partial ? 1 : 2, fixture.Tasks.Count(t => t.Labels.Contains("plan-unpublished")));
+        Assert.All(fixture.Tasks, t => Assert.False(PlanningPublicationGate.Allows(t, fixture.Inventory)));
+        Assert.DoesNotContain("planned", fixture.Parent.Labels);
+        fixture.Inputs.OnVerify = null;
+        Assert.True((await fixture.PublishWithNewPublisher()).Succeeded);
+        Assert.Equal(2, fixture.CreateCount);
+    }
+
+    [Fact]
+    public async Task HandoffDoesNotChangeGroundingAndConflictsBlockRestartBeforeGraphWrites()
+    {
+        using var fixture = new Fixture(withInputs: true) { CrashAfterWrite = 1 };
+        await Assert.ThrowsAsync<OperationCanceledException>(fixture.Publish);
+        var handoff = Assert.Single(fixture.Comments, c => c.Text.Contains(PlanningInputHandoff.Schema, StringComparison.Ordinal));
+        Assert.True(PlanningEvidence.IsProtocol(handoff.Text));
+        fixture.CrashAfterWrite = null;
+        fixture.AddComment(handoff.Text.Replace("\"sizeBytes\":7", "\"sizeBytes\":8", StringComparison.Ordinal));
+        await Assert.ThrowsAsync<AgentStageInputException>(fixture.PublishWithNewPublisher);
+        Assert.Empty(fixture.Tasks);
+        Assert.Equal(1, fixture.WriteCount);
+    }
+
+    [Fact]
+    public async Task DeliveryLaunchUsesVerifiedDurablePathsAndOrdinaryHandoffDiscussionDoesNotReplaceEvidence()
+    {
+        using var fixture = new Fixture(withInputs: true);
+        await fixture.Publish();
+        fixture.AddComment("The maintainer checked nightweaver-plan-input-handoff-v1.");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(fixture.AttemptDelivery);
+        Assert.Equal("Unexpected launch", error.Message);
+        Assert.True(fixture.Launched);
+        Assert.Contains("Verified local inputs", fixture.LaunchedInput, StringComparison.Ordinal);
+        Assert.Contains("durable", fixture.LaunchedInput, StringComparison.Ordinal);
+        Assert.DoesNotContain("synthetic/export.json", fixture.LaunchedInput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LegacyGraphWithLocalInputProseDoesNotReadTheStoreOrRequireHandoff()
+    {
+        using var fixture = new Fixture(inputProse: true);
+        await fixture.Publish();
+        fixture.Inputs.OnVerify = () => throw new InvalidOperationException("Legacy graph accessed the store");
+        Assert.Empty(await fixture.ResolveInputs());
+        Assert.False(fixture.Inputs.Preserved);
+        var graph = PlanningPublisher.Metadata(fixture.Parent, "publication_graph")!;
+        Assert.DoesNotContain("\"localInputs\"", graph, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NoInputGraphDoesNotReadTheStoreOrRequireHandoff()
+    {
+        using var fixture = new Fixture();
+        await fixture.Publish();
+        fixture.Inputs.OnVerify = () => throw new InvalidOperationException("No-input graph accessed the store");
+        Assert.Empty(await fixture.ResolveInputs());
+        Assert.False(fixture.Inputs.Preserved);
+    }
+
+    private sealed class InputStore : IPlanningInputStore
+    {
+        internal bool Preserved, SourceRemoved;
+        internal Action? OnPreserve, OnVerify;
+        internal PlanningLocalInput? Input;
+        public PlanningInputManifest[] Preserve(IReadOnlyList<PlanningLocalInput> inputs, string checkout, CancellationToken cancellationToken)
+        {
+            OnPreserve?.Invoke();
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.True(!SourceRemoved || Preserved);
+            Preserved = true;
+            Input = inputs[0];
+            return inputs.Select(Verify).ToArray();
+        }
+        public PlanningInputManifest Verify(PlanningLocalInput input)
+        {
+            OnVerify?.Invoke();
+            Assert.True(Preserved);
+            return new("nightweaver-local-input-v1", input.Store, input.Locator, input.ExpectedSha256, 7, input.SourcePath, input.Source);
+        }
+        public string Location(PlanningLocalInput input) => Path.Combine(Path.GetTempPath(), "durable", input.ExpectedSha256, "bytes");
+    }
+
+    [Fact]
     public void InputDescriptionsUseOnlyDeclaredTaskInputsInApprovedOrder()
     {
         var plan = PlanningExecutionTests.InputPlan();
@@ -1073,6 +1274,24 @@ public sealed class PlanningPublicationTests
 
     private sealed class Fixture : IDisposable
     {
+        internal InputStore Inputs { get; } = new();
+        internal bool Launched { get; private set; }
+        internal string? LaunchedInput { get; private set; }
+        internal Task<ResolvedPlanningInput[]> ResolveInputs() => PlanningInputHandoff.ResolveAsync(
+            session with { BeadId = Tasks.First().Id }, new BeadsReader(runner), _ => Inputs, TestContext.Current.CancellationToken);
+        internal async Task AttemptDelivery()
+        {
+            var task = Tasks.First();
+            var state = BeadWorkflowState.Parse(task);
+            var delivery = session with { BeadId = task.Id, Role = AgentRole.Implementer, Purpose = WorktreePurpose.Delivery,
+                InitialState = state, DispatchContext = new(task.Id, "task", null, 0), RequiresPlanningInputs = true };
+            var coordinator = new AgentStageCoordinator(runner,
+                prepare: (_, _, _, _, _, _) => Task.FromResult(new PreparedAgentInvocation("agent", [], session.Worktree.Path,
+                    "prompt", new Dictionary<string, string>(), TimeSpan.FromMinutes(1), "test-implementer", "tmp", "log")),
+                execute: (_, _, invocation, _) => { Launched = true; LaunchedInput = invocation.StandardInput; throw new InvalidOperationException("Unexpected launch"); },
+                openInputs: _ => Inputs);
+            await coordinator.RunAttemptAsync(delivery, state, session.Worktree.HeadSha, TestContext.Current.CancellationToken);
+        }
         internal Action? BeforeGitRead { get; set; }
         internal Action? BeforeInventoryRead { get; set; }
         private readonly TempDirectory temp = new();
@@ -1123,7 +1342,7 @@ public sealed class PlanningPublicationTests
             DeferCreate = false;
             return Respond(deferredCreate!, TestContext.Current.CancellationToken);
         }
-        internal Task<AgentStageResult> PublishWithNewPublisher() => new PlanningPublisher(runner).PublishAsync(session, TestContext.Current.CancellationToken);
+        internal Task<AgentStageResult> PublishWithNewPublisher() => new PlanningPublisher(runner, _ => Inputs).PublishAsync(session, TestContext.Current.CancellationToken);
         internal Task<AgentStageResult> PublishWithStaleSession() => new PlanningPublisher(runner)
             .PublishAsync(session with { PublicationVersion = "initial claim" }, TestContext.Current.CancellationToken);
         internal int GroundingReadCount => runner.Requests.Count(r => r.FileName == "git" && r.Arguments.Contains("status"));
@@ -1137,7 +1356,7 @@ public sealed class PlanningPublicationTests
         internal BeadSnapshot Parent => Inventory.ById["product"];
         internal IEnumerable<BeadSnapshot> Tasks => Inventory.ById.Values.Where(b => b.IssueType == "task");
 
-        internal Fixture(bool singleTask = false, bool largeGraph = false)
+        internal Fixture(bool singleTask = false, bool largeGraph = false, bool withInputs = false, bool inputProse = false)
         {
             Rows["product"] = new JsonObject { ["id"] = "product", ["title"] = "Requested behavior", ["issue_type"] = "feature",
                 ["description"] = "Contract", ["status"] = "in_progress", ["assignee"] = "nightweaver:demo",
@@ -1155,13 +1374,20 @@ public sealed class PlanningPublicationTests
                 if (BeforeCommand is { } before) await before(request);
                 return await Respond(request, token);
             });
-            publisher = new(runner);
+            publisher = new(runner, _ => Inputs);
             var grounding = new PlanningEvidence(runner).CaptureAsync(session, CancellationToken.None).GetAwaiter().GetResult();
             var plan = new PlanningDocument(PlanningEvidence.CandidateSchema, grounding,
                 Tasks: [new("first", "First behavior", "Observable first", "Api.cs", "Advisory", ["First works"], "Check first", []),
                     new("second", "Second behavior", "Observable second", "Contract.cs", "Advisory", ["Second works"], "Check second", ["first"])],
                 Constraints: [new("Preserve data", "Product contract")], Coverage: [new("Behavior", ["first", "second"], null, null)]);
             if (singleTask) plan = plan with { Tasks = [plan.Tasks![0]], Coverage = [new("Behavior", ["first"], null, null)] };
+            if (inputProse) plan = plan with { Tasks = [plan.Tasks![0] with
+                { Approach = "Document this example:" + PlanningInputHandoff.DescriptionPrefix + "[]\n```" }, plan.Tasks[1]] };
+            if (withInputs) plan = plan with
+            {
+                LocalInputs = [PlanningExecutionTests.SyntheticInput("export") with { Store = PlanningInputHandoff.Binding(session) }],
+                Tasks = [plan.Tasks![0] with { LocalInputIds = ["export"] }, plan.Tasks[1]]
+            };
             if (largeGraph)
             {
                 var tasks = Enumerable.Range(0, 7).Select(i => new PlanningTask("entry" + i, "Behavior " + i,
@@ -1233,8 +1459,19 @@ public sealed class PlanningPublicationTests
             }
             else if (args.Contains("comments"))
             {
-                if (args.Contains("add")) { AddComment(args[^1]); output = ""; }
-                else output = JsonSerializer.Serialize(Comments.Select(c => new { id = c.Id, issue_id = "product", text = c.Text, created_at = c.CreatedAt }));
+                if (args.Contains("add"))
+                {
+                    if (args.Contains("-f"))
+                    {
+                        using var stream = new FileStream(Value("-f"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                        using var text = new StreamReader(stream);
+                        AddComment(text.ReadToEnd());
+                    }
+                    else AddComment(args[^1]);
+                    output = "";
+                }
+                else output = args[args.IndexOf("comments") + 1] != "product" ? "[]"
+                    : JsonSerializer.Serialize(Comments.Select(c => new { id = c.Id, issue_id = "product", text = c.Text, created_at = c.CreatedAt }));
             }
             else if (args.Contains("create"))
             {

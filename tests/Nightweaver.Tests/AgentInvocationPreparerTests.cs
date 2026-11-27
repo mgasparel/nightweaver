@@ -8,6 +8,28 @@ namespace Nightweaver.Tests;
 
 public sealed class AgentInvocationPreparerTests
 {
+    [Fact]
+    public async Task VerifiedPlanningInputsAppendOnlyDurableLocationsAndExpectedHashes()
+    {
+        using var temp = new TempDirectory();
+        var host = CreateHost(temp.Path);
+        var project = CreateProject();
+        var original = await new AgentInvocationPreparer().PrepareAsync(host, project, AgentRole.Implementer,
+            new("ns-xci.2", "task", null, 0), CanonicalWorktree(host, project, "ns-xci.2"), TestContext.Current.CancellationToken);
+        var path = Path.Combine(temp.Path, "evidence", "bytes");
+        var resolved = AgentInvocationPreparer.WithPlanningInputs(original, [new("export", path, new string('a', 64), 7)]);
+        Assert.StartsWith(original.StandardInput, resolved.StandardInput, StringComparison.Ordinal);
+        var json = resolved.StandardInput[(resolved.StandardInput.LastIndexOf('\n') + 1)..];
+        var input = Assert.Single(System.Text.Json.JsonSerializer.Deserialize<ResolvedPlanningInput[]>(json, PlanningEvidence.JsonOptions)!);
+        Assert.Equal(path, input.Path);
+        Assert.Equal(new string('a', 64), input.Sha256);
+        Assert.Equal(7, input.SizeBytes);
+        Assert.Equal(original.Arguments, resolved.Arguments);
+        Assert.Equal(original.EnvironmentOverrides, resolved.EnvironmentOverrides);
+        Assert.Equal(original.InvocationId, resolved.InvocationId);
+        Assert.Equal(original.LogFilePath, resolved.LogFilePath);
+    }
+
     private static readonly (AgentRole Role, string FileName)[] PromptFiles =
     [
         (AgentRole.Planner, "planner.md"),
