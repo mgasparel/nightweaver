@@ -7,6 +7,93 @@ namespace Nightweaver.Tests;
 
 public sealed class PlanningExecutionTests
 {
+    internal static PlanningLocalInput SyntheticInput(string id = "export") => new(id,
+        "synthetic/export.json", new("tracker export", Revision: "reported-revision", ExportCommand: "bd export"),
+        new string('a', 64), new("demo", new string('b', 64)), "sha256/" + new string('a', 64));
+
+    internal static PlanningDocument InputPlan()
+    {
+        var plan = Plan(new("head", "main", "inputs"));
+        return plan with { LocalInputs = [SyntheticInput()], Tasks = [plan.Tasks![0] with { LocalInputIds = ["export"] }] };
+    }
+
+    [Fact]
+    public void LocalInputsRoundTripAndBindApprovalToExactSourceAndTaskUse()
+    {
+        var plan = InputPlan();
+        var candidate = Comment("1", plan);
+        var parsed = PlanningEvidence.Parse(candidate.Text)!;
+        Assert.Null(PlanningEvidence.ValidateCandidate(parsed));
+        Assert.Equal(SyntheticInput(), Assert.Single(parsed.LocalInputs!));
+        Assert.Equal("export", Assert.Single(parsed.Tasks![0].LocalInputIds!));
+        var review = Comment("2", new(PlanningEvidence.ReviewSchema, plan.Grounding,
+            PlanCommentId: "1", PlanRevision: PlanningEvidence.Hash(candidate.Text), Assessment: "Checked declared inputs"));
+        var result = PlanningEvidence.Verify(Invocation(AgentRole.PlanChallenger, plan.Grounding, ["1"]),
+            AgentOutcomeChoice.Approved, plan.Grounding, [candidate, review]);
+        Assert.Null(result.Error);
+        Assert.True(PlanningEvidence.ApprovalStillCurrent(result.Approval!, plan.Grounding, [candidate, review]));
+        var changed = plan with { LocalInputs = [SyntheticInput() with { SourcePath = "another/export.json" }] };
+        Assert.False(PlanningEvidence.ApprovalStillCurrent(result.Approval!, plan.Grounding, [Comment("1", changed), review]));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("abc")]
+    [InlineData("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+    [InlineData("gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg")]
+    public void LocalInputsRejectMalformedHashes(string hash)
+    {
+        var input = SyntheticInput();
+        Assert.NotNull(PlanningEvidence.ValidateCandidate(InputPlan() with { LocalInputs = [input with { ExpectedSha256 = hash }] }));
+        Assert.NotNull(PlanningEvidence.ValidateCandidate(InputPlan() with { LocalInputs = [input with { Store = input.Store with { RepositoryIdentity = hash } }] }));
+    }
+
+    [Theory]
+    [InlineData("../export")]
+    [InlineData("/absolute")]
+    [InlineData("C:\\export")]
+    [InlineData("\\\\server\\export")]
+    [InlineData("https://example.test/export")]
+    [InlineData("sha256/%2e%2e/export")]
+    [InlineData("sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/extra")]
+    [InlineData("sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")]
+    public void LocalInputsRejectUnsafeOrUnboundLocators(string locator) =>
+        Assert.NotNull(PlanningEvidence.ValidateCandidate(InputPlan() with { LocalInputs = [SyntheticInput() with { Locator = locator }] }));
+
+    [Fact]
+    public void LocalInputsRejectMissingDuplicateUnknownAndUnboundedFields()
+    {
+        var plan = InputPlan();
+        PlanningLocalInput[] invalid = [null!, SyntheticInput("../bad"), SyntheticInput() with { SourcePath = "" },
+            SyntheticInput() with { Source = null! }, SyntheticInput() with { Store = null! },
+            SyntheticInput() with { Source = new(" ") }, SyntheticInput() with { SourcePath = new string('s', 4097) },
+            SyntheticInput() with { Source = new("tracker", Revision: "") },
+            SyntheticInput() with { Source = new("tracker", ExportCommand: "bd\nexport") },
+            SyntheticInput() with { Store = new("", new string('b', 64)) }];
+        foreach (var input in invalid)
+            Assert.NotNull(PlanningEvidence.ValidateCandidate(plan with { LocalInputs = [input] }));
+        Assert.NotNull(PlanningEvidence.ValidateCandidate(plan with { LocalInputs = [SyntheticInput(), SyntheticInput()] }));
+        Assert.NotNull(PlanningEvidence.ValidateCandidate(plan with { LocalInputs = Enumerable.Repeat(SyntheticInput(), 65).ToArray() }));
+        foreach (string[] references in new string[][] { ["unknown"], [null!], ["export", "export"], [], Enumerable.Repeat("export", 65).ToArray() })
+            Assert.NotNull(PlanningEvidence.ValidateCandidate(plan with { Tasks = [plan.Tasks![0] with { LocalInputIds = references }] }));
+        Assert.NotNull(PlanningEvidence.ValidateCandidate(plan with { LocalInputs = null }));
+        Assert.Null(PlanningEvidence.Parse("{\"localInputs\":\"wrong type\"}"));
+    }
+
+    [Fact]
+    public void LegacyCandidateKeepsItsWireShapeAndInputReceiptIsOnlyProtocolEvidence()
+    {
+        var plan = Plan(new("head", "main", "inputs"));
+        var candidate = Comment("1", plan);
+        Assert.DoesNotContain("localInput", candidate.Text, StringComparison.Ordinal);
+        Assert.Null(PlanningEvidence.ValidateCandidate(PlanningEvidence.Parse(candidate.Text)!));
+        var receipt = new BeadCommentSnapshot("2", "{\"schema\":\"nightweaver-plan-input-receipt-v1\"}", DateTimeOffset.UnixEpoch);
+        Assert.True(PlanningEvidence.IsProtocol(receipt.Text));
+        Assert.Equal("1", PlanningEvidence.LatestCandidate([candidate, receipt])!.Value.Comment.Id);
+        Assert.NotNull(PlanningEvidence.Verify(Invocation(AgentRole.PlanChallenger, plan.Grounding, ["1"]),
+            AgentOutcomeChoice.Approved, plan.Grounding, [candidate, receipt]).Error);
+    }
+
     [Fact]
     public async Task OversizedDiscussionFallsBackToRecentCommentsAndKeepsExactCandidateAndGuidance()
     {

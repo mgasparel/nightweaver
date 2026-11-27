@@ -34,7 +34,14 @@ internal sealed class PlanningPublisher(IProcessRunner runner)
         $"## Outcome\n{task.Outcome}\n\n## Relevant code and contracts\n{task.Context}\n\n"
         + $"## Sourced constraints\n{string.Join("\n", plan.Constraints!.Select(c => $"- {c.Requirement} (source: {c.Source})"))}\n\n"
         + $"## Advisory approach\n{task.Approach}\n\n## Verification\n{task.Verification}\n\n"
-        + $"## Dependency ordering\n{string.Join("\n", task.DependsOn)}";
+        + $"## Dependency ordering\n{string.Join("\n", task.DependsOn)}"
+        + LocalInputDescription(task, plan);
+
+    private static string LocalInputDescription(PlanningTask task, PlanningDocument plan) =>
+        task.LocalInputIds is not { Length: > 0 } ? ""
+        : "\n\n## Local inputs\n```json\n" + JsonSerializer.Serialize(
+            task.LocalInputIds.Select(id => plan.LocalInputs!.Single(input => input.Id == id)),
+            PlanningEvidence.JsonOptions) + "\n```";
 
     internal async Task<AgentStageResult> PublishAsync(AgentStageSession session, CancellationToken token,
         bool releaseRevalidationClaim = true)

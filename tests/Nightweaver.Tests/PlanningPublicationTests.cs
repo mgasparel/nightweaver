@@ -10,6 +10,31 @@ namespace Nightweaver.Tests;
 
 public sealed class PlanningPublicationTests
 {
+    [Fact]
+    public void InputDescriptionsUseOnlyDeclaredTaskInputsInApprovedOrder()
+    {
+        var plan = PlanningExecutionTests.InputPlan();
+        plan = plan with { LocalInputs = [PlanningExecutionTests.SyntheticInput("other"), plan.LocalInputs![0]] };
+        var task = plan.Tasks![0];
+        var description = PlanningPublisher.Description(task, plan);
+        var json = description.Split("```json\n", StringSplitOptions.None)[1].Split("\n```", StringSplitOptions.None)[0];
+        var inputs = JsonSerializer.Deserialize<PlanningLocalInput[]>(json, PlanningEvidence.JsonOptions)!;
+        Assert.Equal(plan.LocalInputs[1], Assert.Single(inputs));
+        Assert.Equal(description, PlanningPublisher.Description(task, PlanningEvidence.Parse(JsonSerializer.Serialize(plan, PlanningEvidence.JsonOptions))!));
+        task = task with { LocalInputIds = ["export", "other"] };
+        Assert.True(PlanningPublisher.Description(task, plan).IndexOf("\"id\":\"export\"", StringComparison.Ordinal)
+            < PlanningPublisher.Description(task, plan).IndexOf("\"id\":\"other\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void LegacyTaskDescriptionRemainsExactWithAbsentNullOrEmptyInputFields()
+    {
+        var plan = PlanningExecutionTests.Plan(new("head", "main", "inputs"));
+        const string expected = "## Outcome\nOutcome survives restart\n\n## Relevant code and contracts\nStorage contract at Store.cs\n\n## Sourced constraints\n\n\n## Advisory approach\nExtend supported storage API\n\n## Verification\nRestart component and read the saved outcome\n\n## Dependency ordering\n";
+        Assert.Equal(expected, PlanningPublisher.Description(plan.Tasks![0], plan));
+        Assert.Equal(expected, PlanningPublisher.Description(plan.Tasks[0] with { LocalInputIds = [] }, plan with { LocalInputs = [] }));
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("{")]
