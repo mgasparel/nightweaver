@@ -1,5 +1,14 @@
 # Test suite
 
+The invocation cancellation test cancels and waits for execution in `finally`,
+including when readiness or an assertion fails. It reads each PID only after
+the writer closes. Its existing native journey keeps the caller-token and
+three-process exit assertions, then checks exclusive access to the invocation
+log. One controlled task case proves that an early readiness failure waits for
+execution to settle and retains the original error. This repair adds no native
+journey, fixture publication or production work. Deadlines and six threads stay
+unchanged.
+
 Activity count and loading repair adds two cheap model cases. They check unseen
 history matches, replay, scan progress and the count cap without retaining unseen
 rows. The existing five held-response browser cases now check the response count,

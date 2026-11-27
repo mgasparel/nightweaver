@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
+import { attentionBase } from './attention-read-fixtures.mjs';
 
 const base = process.env.NIGHTWEAVER_QA_URL;
 const configPath = process.env.NIGHTWEAVER_QA_CONFIG;
@@ -269,7 +270,7 @@ try {
     const key = new URL(route.request().url()).searchParams.get('key');
     const isBase = key === `base:workspace:${created.id}`;
     const isSection = key?.startsWith(`section:${created.id}:`);
-    if (!isBase && !isSection && key !== 'attention') return route.continue();
+    if (!isBase && !isSection && key !== 'base:attention') return route.continue();
     const actual = await route.fetch();
     if (!actual.ok()) return route.fulfill({ response: actual });
     const value = await actual.json();
@@ -290,7 +291,7 @@ try {
       if (mode === 'stale') { value.health = 'stale'; value.sources.inventory.health = 'stale'; value.error = value.sources.inventory.error = { code: 'fixture-stale', message: 'Retained tracker fixture', retryable: true }; }
       if (mode === 'unavailable') { value.data = isBase ? { ...baseDetail.data, bead: null, absence: { id: created.id, inventoryRevision: baseDetail.data.inventoryRevision } } : null;
         value.synchronization.pending = false; value.health = 'unavailable'; value.error = { code: 'resource-missing', message: 'The Bead no longer exists.', retryable: false }; }
-    } else if (mode === 'empty') { value.data = []; value.health = 'fresh'; value.error = null; value.observedAt = new Date().toISOString(); }
+    } else if (mode === 'empty') { value.data = attentionBase([]); value.health = 'fresh'; value.error = null; value.observedAt = new Date().toISOString(); }
     await route.fulfill({ response: actual, json: value });
   });
   await go(created.id);
