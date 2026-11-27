@@ -1,5 +1,15 @@
 # Test suite
 
+Planning input storage adds 25 disposable-file and request-validation cases in
+`PlanningInputFilesTests`. They prove restricted ACLs, exact source records,
+restart reuse, Planning cleanup survival, size limits and retained failure data.
+Two short junction commands and hard-link calls prove actual Windows path safety.
+Existing file tests do not prove the store DACL or atomic object/manifest boundary.
+The size case shares one 16 MiB object across candidate declarations. No factory,
+tracker, Agent or browser journey or fixture publication is added. The module is
+inactive until the handoff task connects it. Six threads and deadlines remain.
+See [Planning input storage](../docs/design/planning-input-storage.md).
+
 Local input references add controlled schema, approval, protocol and task-description
 cases in `PlanningExecutionTests` and `PlanningPublicationTests`. They use synthetic
 strings and perform no input file reads, native journeys, fixture publication or
@@ -376,6 +386,20 @@ journey or command and preserve the two-second command, four-second sweep,
 45-second functional bound and six-worker scheduling. Passing instrumentation
 alone does not establish a repair for the intermittent hosted cold timeout
 tracked by ns-a3d4/ns-5uk.
+
+The combined native observer smoke admits its two fixture writes through the
+existing tracker access gate. This keeps embedded-Dolt write contention out of
+the journal-causality check. Hosted run 45935408098 recorded one canceled journal
+batch and three canceled branch reads during and after the uncoordinated writes.
+The response then came from the 60-second audit, with no mutation journal page.
+The smoke still uses real external `bd` commands with auto-commit on, the real
+journal reader and HTTP observation. It requires both native hints, post-hint
+dirty reads and the exact combined response before any tracker audit. It does
+not prove recovery from an uncoordinated external writer under hosted load.
+Controlled journal deadline, retry, admission-wait and invalidation interleaving
+cases retain those individual rules. No assertion, command deadline, functional
+bound, test thread or production path changes. The gate adds no native command
+or fixture publication. Retain the complete measurement and native smoke cost.
 
 Run the complete retained suite from the repository root with the .NET 10 Microsoft.Testing.Platform runner. The positive minimum catches mistaken test selection; use at least the committed floor of 995 tests and report the actual discovered total.
 

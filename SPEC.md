@@ -1,5 +1,11 @@
 # Nightweaver Architecture Specification
 
+The inactive [Planning input store](docs/design/planning-input-storage.md) retains
+hash-verified local bytes and source records under the host evidence root. It
+checks restricted Windows access and file identity before success. It adds no
+publication, Delivery admission, cleanup or Resume authority. The handoff task
+connects it to the local input contract.
+
 Nightweaver is a standalone, discovery-driven autonomous software factory. Operated against an external **Target Repository** via a named **Project** configuration, the **Orchestrator** monitors a Beads (`bd`) issue tracker, dispatches scoped **Agents** through headless **Agent CLI** processes to plan user-authored **Product Beads** into independently deployable **Plan Beads** (or defer under-specified ones back to humans for clarification), drives those **Plan Beads** through implementation, static review, live QA verification, and serialized merge inside isolated Git worktrees, and deterministically cleans up its execution environment.
 
 Relevant domain vocabulary is defined in [`GLOSSARY.md`](./GLOSSARY.md). Architectural trade-offs are recorded in:

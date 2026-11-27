@@ -612,6 +612,10 @@ internal sealed class InvocationRuntimeFiles : IDisposable
     internal static PinnedLogReadStream OpenExistingPackageFileForRead(string path) =>
         OpenPinnedReadOnlyFile(Path.GetFullPath(path), FileShareRead, "package file", rejectHardLinks: true);
 
+    internal static PinnedLogReadStream OpenPlanningInputLock(string path) =>
+        OpenPinnedReadOnlyFile(Path.GetFullPath(path), FileShareNone, "Planning input lock", true,
+            GenericRead | GenericWrite, OpenAlways, FileAccess.ReadWrite);
+
     // Activity readers never hold up append or retirement. Each reader validates
     // the opened segment identity and consumes only complete fixed-size slots.
     internal static PinnedLogReadStream OpenActivityFileForRead(string path) =>
