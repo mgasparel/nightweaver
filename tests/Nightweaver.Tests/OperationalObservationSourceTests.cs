@@ -2528,15 +2528,25 @@ public sealed class OperationalObservationSourceTests
         var coldSeconds = cold.Elapsed.TotalSeconds;
         var count = first.GetProperty("data").GetProperty("comments").GetArrayLength();
         var revision = first.GetProperty("revision").GetString();
-        // The fixture's default environment is for read-only probes. Model the
-        // production write profile explicitly while retaining external overlap.
+        // Keep the real write/journal/HTTP boundary, but admit fixture writes as
+        // one mutation. Uncoordinated embedded-Dolt writers can exhaust the
+        // observer's two-second command deadline and test audit fallback instead
+        // of journal causality. Gate waiting does not consume native work time.
+        var mutationGate = factory.Services.GetRequiredService<TrackerBridge>().ObservationGate;
         var mutation = Stopwatch.StartNew();
-        Trace("phase external-mutations");
-        target.Run("bd", ["--dolt-auto-commit", "on", "comments", "add", bead, "External combined observer comment marker"]);
-        measured.Enqueue($"external comment write (auto-commit on): {mutation.Elapsed.TotalMilliseconds:F1}ms");
-        mutation.Restart();
-        target.Run("bd", ["--dolt-auto-commit", "on", "dep", "add", bead, blocker]);
-        measured.Enqueue($"external dependency write (auto-commit on): {mutation.Elapsed.TotalMilliseconds:F1}ms");
+        Trace("phase mutation-admission");
+        await mutationGate.WaitAsync(token);
+        Trace($"phase external-mutations; admission {mutation.Elapsed.TotalMilliseconds:F1}ms");
+        try
+        {
+            mutation.Restart();
+            target.Run("bd", ["--dolt-auto-commit", "on", "comments", "add", bead, "External combined observer comment marker"]);
+            measured.Enqueue($"external comment write (auto-commit on): {mutation.Elapsed.TotalMilliseconds:F1}ms");
+            mutation.Restart();
+            target.Run("bd", ["--dolt-auto-commit", "on", "dep", "add", bead, blocker]);
+            measured.Enqueue($"external dependency write (auto-commit on): {mutation.Elapsed.TotalMilliseconds:F1}ms");
+        }
+        finally { mutationGate.Release(); }
         var changed = Stopwatch.StartNew();
         Trace("phase combined-visibility");
         const string commentMarker = "External combined observer comment marker";
