@@ -1,5 +1,17 @@
 # Test suite
 
+Planning input cleanup proof extends the existing native publication journey.
+Its response-loss Product now declares one small synthetic input in its canonical
+Planning temporary tree. The normal completed-environment cleanup owner removes
+that tree and its detached checkout. A fresh Delivery checkout resolves the native
+handoff, prepares an invocation and reads the durable object. It checks exact bytes,
+SHA-256, source binding, actual Windows ACLs, cleanup absence and retained logs.
+No Agent starts. Existing pause and interruption cases remain controlled tests.
+The journey shares its tracker, host and immutable publications. It adds no test
+case or fixture publication. Retain its added phase time, complete native test time
+and full-suite cost with the [acceptance proof](../docs/acceptance/planning-publication-native.md#input-access-after-planning-cleanup).
+Six threads and all deadlines remain unchanged. Production adds no work.
+
 Planning input declaration repair adds four controlled cases. Three cases remove,
 null or empty the graph input field after publication and make the stored object
 unavailable. Each case requires an actionable refusal before Agent launch. The

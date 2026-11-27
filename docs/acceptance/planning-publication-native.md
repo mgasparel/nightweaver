@@ -39,6 +39,64 @@ after the native release receipt, before hold removal. Recovery must keep the
 legacy ID, retained membership and exact receipt row. It releases the same graph
 without replacement tasks or receipt migration.
 
+## Input access after Planning cleanup
+
+The input regression occurs when an approved file exists only in a Planning
+environment. Normal completion removes that environment before Delivery reads
+the file. Storage tests prove object survival after direct directory deletion.
+Controlled publication tests prove handoff checks. Neither proves the combined
+native publication, cleanup-owner and fresh Delivery preparation boundary.
+
+The existing response-loss Product now declares one small synthetic file in its
+canonical Planning temporary tree. The approved candidate records its SHA-256
+and reported source. Production publication stores the bytes under the bound
+Project and physical repository namespace. Restart reuses the native task and
+handoff. The other conflict and legacy publication scenarios remain unchanged.
+
+After publication, `CompletedEnvironmentCleanup.ReconcileAsync` removes the exact
+detached Planning checkout and Product temporary tree. The test checks the resolved
+obligation, physical absence and native registration absence. It checks removal of
+both the source and an ordinary temporary file. Logs remain outside those trees.
+The test never deletes these resources directly to establish success.
+
+A new native Delivery checkout uses the generated task ID. A new Delivery session
+resolves inputs through `PlanningInputHandoff.ResolveAsync`, which opens a fresh
+store instance. `AgentInvocationPreparer` prepares its dispatch. The test reads
+the path from that dispatch and checks exact bytes, size and SHA-256. The source
+is already absent. No Agent starts. The store verifier checks restricted access;
+the proof also retains actual object, byte-file and manifest SDDL observations.
+The manifest must retain the exact reported source and current store binding.
+
+Use the focused publication and cleanup checks:
+
+```powershell
+$env:NIGHTWEAVER_TEST_CANDIDATE_REVISION = git rev-parse HEAD
+$env:NIGHTWEAVER_PUBLICATION_EVIDENCE = Join-Path $env:TEMP 'publication-cleanup-proof.json'
+dotnet test --project tests/Nightweaver.Tests --filter-class Nightweaver.Tests.PlanningPublicationNativeTests --filter-class Nightweaver.Tests.CompletedEnvironmentCleanupTests --filter-class Nightweaver.Tests.CompletedEnvironmentWorkerTests --minimum-expected-tests 40 --report-xunit-xml --report-xunit-xml-filename publication-cleanup.xml
+```
+
+`input-cleanup` records the obligation, diagnostics and observed absence.
+`input-delivery` records candidate code revision, Product and task, exact candidate
+and handoff comment identities/hashes, reported source, approved hash, durable
+manifest/hash, SDDL, Delivery path/hash, byte comparison, phase time and command
+count. No payload bytes enter the JSON or Git. Keep this file outside the Target
+Repository. Set a different path for each run. The complete-suite measurement
+retains code revision, tree, counts, XML, log and outer time separately.
+
+Existing `UnsafeOrChangedEnvironmentsRetainResourcesAndWorkflow` cases retain
+paused environments. `InterruptedAttemptAndPolicyDenialNeedInspectionAndNeverAutomaticallyRearm`
+retains interrupted cleanup. These controlled checks cover the refusal details
+without another native journey. The extended journey shares its existing tracker,
+host and immutable publications. It adds one Delivery worktree, cleanup Git/Beads
+reads and removal, one handoff comment and bounded object checks. It adds no test
+case, fixture publication or production work. Report measured phase cost and
+complete native test cost with the full-suite evidence; a phase time excludes
+earlier handoff publication work and is not an outer-suite delta.
+
+This proof uses disposable data only. It does not recover `ns-ptxz`, replace a
+published graph, resume paused tasks or deploy production. Comments and input
+receipts remain evidence. The Orchestrator retains lifecycle authority.
+
 ## Writer boundary and recovery limit
 
 The supported limit is one live Orchestrator per physical Git common directory,
