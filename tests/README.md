@@ -1,5 +1,15 @@
 # Test suite
 
+Planning input storage adds 25 disposable-file and request-validation cases in
+`PlanningInputFilesTests`. They prove restricted ACLs, exact source records,
+restart reuse, Planning cleanup survival, size limits and retained failure data.
+Two short junction commands and hard-link calls prove actual Windows path safety.
+Existing file tests do not prove the store DACL or atomic object/manifest boundary.
+The size case shares one 16 MiB object across candidate declarations. No factory,
+tracker, Agent or browser journey or fixture publication is added. The module is
+inactive until the handoff task connects it. Six threads and deadlines remain.
+See [Planning input storage](../docs/design/planning-input-storage.md).
+
 Local input references add controlled schema, approval, protocol and task-description
 cases in `PlanningExecutionTests` and `PlanningPublicationTests`. They use synthetic
 strings and perform no input file reads, native journeys, fixture publication or
